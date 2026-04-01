@@ -129,6 +129,14 @@ echo "explain this code" | ./bin/claude-haha -p
 ./bin/claude-haha --help
 ```
 
+### 5. 编译
+
+```bash
+bun run build
+
+```
+
+
 #### Windows
 
 > **前置要求**：必须安装 [Git for Windows](https://git-scm.com/download/win)（提供 Git Bash，项目内部 Shell 执行依赖它）。
