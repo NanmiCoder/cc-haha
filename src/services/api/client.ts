@@ -11,6 +11,7 @@ import {
   refreshGcpCredentialsIfNeeded,
 } from 'src/utils/auth.js'
 import { getUserAgent } from 'src/utils/http.js'
+import { getActiveApiSource } from 'src/utils/config.js'
 import { getSmallFastModel } from 'src/utils/model/model.js'
 import {
   getAPIProvider,
@@ -91,12 +92,14 @@ export async function getAnthropicClient({
   model,
   fetchOverride,
   source,
+  baseURL,
 }: {
   apiKey?: string
   maxRetries: number
   model?: string
   fetchOverride?: ClientOptions['fetch']
   source?: string
+  baseURL?: string
 }): Promise<Anthropic> {
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
@@ -298,16 +301,22 @@ export async function getAnthropicClient({
   }
 
   // Determine authentication method based on available tokens
+  // Check for active API source to get custom baseURL
+  const activeApiSource = getActiveApiSource()
+  const resolvedBaseURL = baseURL || (activeApiSource ? activeApiSource.baseUrl : undefined)
+  
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
     apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
     authToken: isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
-    // Set baseURL from OAuth config when using staging OAuth
-    ...(process.env.USER_TYPE === 'ant' &&
-    isEnvTruthy(process.env.USE_STAGING_OAUTH)
-      ? { baseURL: getOauthConfig().BASE_API_URL }
-      : {}),
+    // Set baseURL from active API source, OAuth config, or environment
+    ...(resolvedBaseURL
+      ? { baseURL: resolvedBaseURL }
+      : process.env.USER_TYPE === 'ant' &&
+        isEnvTruthy(process.env.USE_STAGING_OAUTH)
+        ? { baseURL: getOauthConfig().BASE_API_URL }
+        : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

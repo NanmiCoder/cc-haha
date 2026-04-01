@@ -113,6 +113,8 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 ### 4. Start
 
+#### macOS / Linux
+
 ```bash
 # Interactive TUI mode (full interface)
 ./bin/claude-haha
@@ -125,6 +127,36 @@ echo "explain this code" | ./bin/claude-haha -p
 
 # Show all options
 ./bin/claude-haha --help
+```
+
+#### Windows
+
+On Windows, **do not** use the `bin/claude-haha` script (it's a Bash script). Use Bun directly:
+
+```powershell
+# Interactive TUI mode (full interface) - requires Windows Terminal or VS Code terminal
+bun ./src/entrypoints/cli.tsx
+
+# Headless mode (single prompt)
+bun ./src/entrypoints/cli.tsx -p "your prompt here"
+
+# Pipe input
+echo "explain this code" | bun ./src/entrypoints/cli.tsx -p
+
+# Show all options
+bun ./src/entrypoints/cli.tsx --help
+```
+
+**Windows Notes:**
+- Must run in **Windows Terminal** or **VS Code integrated terminal** for full TUI
+- TUI may not render in legacy PowerShell 5
+- First launch shows trust dialog, press `Enter` to confirm
+
+**Windows Fallback Mode (if TUI doesn't display):**
+
+```powershell
+$env:CLAUDE_CODE_FORCE_RECOVERY_CLI="1"
+bun ./src/localRecoveryCli.ts
 ```
 
 ---

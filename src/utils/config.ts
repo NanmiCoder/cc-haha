@@ -180,11 +180,23 @@ export type DiffTool = 'terminal' | 'auto'
 
 export type OutputStyle = string
 
+/**
+ * API source configuration for managing multiple API endpoints
+ */
+export type ApiSource = {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  isActive?: boolean
+}
+
 export type GlobalConfig = {
   /**
    * @deprecated Use settings.apiKeyHelper instead.
    */
   apiKeyHelper?: string
+  apiSources?: ApiSource[]
   projects?: Record<string, ProjectConfig>
   numStartups: number
   installMethod?: InstallMethod
@@ -603,6 +615,7 @@ function createDefaultGlobalConfig(): GlobalConfig {
       rejected: [],
     },
     env: {},
+    apiSources: [],
     tipsHistory: {},
     memoryUsageCount: 0,
     promptQueueUseCount: 0,
@@ -1804,6 +1817,73 @@ export function getManagedClaudeRulesDir(): string {
 
 export function getUserClaudeRulesDir(): string {
   return join(getClaudeConfigHomeDir(), 'rules')
+}
+
+/**
+ * Get the currently active API source from config
+ * Returns null if no source is marked as active
+ */
+export function getActiveApiSource(): ApiSource | null {
+  const config = getGlobalConfig()
+  const sources = config.apiSources
+  if (!sources || sources.length === 0) {
+    return null
+  }
+  return sources.find(s => s.isActive === true) || null
+}
+
+/**
+ * Get all configured API sources
+ */
+export function getAllApiSources(): ApiSource[] {
+  const config = getGlobalConfig()
+  return config.apiSources || []
+}
+
+/**
+ * Activate an API source by setting isActive flag
+ * Returns the activated source or null if not found
+ */
+export function activateApiSource(sourceId: string): ApiSource | null {
+  const config = getGlobalConfig()
+  const sources = config.apiSources || []
+  
+  // Check if source exists
+  const sourceExists = sources.some(s => s.id === sourceId)
+  if (!sourceExists) {
+    return null
+  }
+  
+  // Update all sources: set the selected one as active, others as inactive
+  const updatedSources = sources.map(s => ({
+    ...s,
+    isActive: s.id === sourceId,
+  }))
+  
+  saveGlobalConfig(current => ({
+    ...current,
+    apiSources: updatedSources,
+  }))
+  
+  return updatedSources.find(s => s.id === sourceId) || null
+}
+
+/**
+ * Deactivate all API sources
+ */
+export function deactivateAllApiSources(): void {
+  const config = getGlobalConfig()
+  const sources = config.apiSources || []
+  
+  const updatedSources = sources.map(s => ({
+    ...s,
+    isActive: false,
+  }))
+  
+  saveGlobalConfig(current => ({
+    ...current,
+    apiSources: updatedSources,
+  }))
 }
 
 // Exported for testing only

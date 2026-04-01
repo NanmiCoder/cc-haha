@@ -45,6 +45,7 @@ import {
   type AccountInfo,
   checkHasTrustDialogAccepted,
   getGlobalConfig,
+  getActiveApiSource,
   saveGlobalConfig,
 } from './config.js'
 import { logAntError, logForDebugging } from './debug.js'
@@ -209,6 +210,7 @@ export type ApiKeySource =
   | 'ANTHROPIC_API_KEY'
   | 'apiKeyHelper'
   | '/login managed key'
+  | 'apiSource'
   | 'none'
 
 export function getAnthropicApiKey(): null | string {
@@ -245,6 +247,15 @@ export function getAnthropicApiKeyWithSource(
       }
     }
     return { key: null, source: 'none' }
+  }
+
+  // Check for active API source first (user configured via /connect source)
+  const activeApiSource = getActiveApiSource()
+  if (activeApiSource) {
+    return {
+      key: activeApiSource.apiKey,
+      source: 'apiSource',
+    }
   }
 
   // On homespace, don't use ANTHROPIC_API_KEY (use Console key instead)

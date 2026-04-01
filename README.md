@@ -113,6 +113,8 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 ### 4. 启动
 
+#### macOS / Linux
+
 ```bash
 # 交互 TUI 模式（完整界面）
 ./bin/claude-haha
@@ -125,6 +127,36 @@ echo "explain this code" | ./bin/claude-haha -p
 
 # 查看所有选项
 ./bin/claude-haha --help
+```
+
+#### Windows
+
+Windows 上 **不要** 使用 `bin/claude-haha` 脚本（它是 Bash 脚本），直接使用 Bun 运行：
+
+```powershell
+# 交互 TUI 模式（完整界面）- 需要 Windows Terminal 或 VS Code 终端
+bun ./src/entrypoints/cli.tsx
+
+# 无头模式（单次问答）
+bun ./src/entrypoints/cli.tsx -p "your prompt here"
+
+# 管道输入
+echo "explain this code" | bun ./src/entrypoints/cli.tsx -p
+
+# 查看所有选项
+bun ./src/entrypoints/cli.tsx --help
+```
+
+**Windows 注意事项：**
+- 必须在 **Windows Terminal** 或 **VS Code 集成终端** 中运行才能获得完整 TUI 界面
+- 在旧版 PowerShell 5 中 TUI 可能无法渲染
+- 首次启动会显示信任对话框，按 `Enter` 确认即可
+
+**Windows 降级模式（如果 TUI 无法显示）：**
+
+```powershell
+$env:CLAUDE_CODE_FORCE_RECOVERY_CLI="1"
+bun ./src/localRecoveryCli.ts
 ```
 
 ---
