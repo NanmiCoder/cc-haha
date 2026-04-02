@@ -6,8 +6,8 @@ cd "$ROOT_DIR"
 
 # Force recovery CLI (simple readline REPL, no Ink TUI)
 if [[ "${CLAUDE_CODE_FORCE_RECOVERY_CLI:-0}" == "1" ]]; then
-  exec bun --env-file=.env ./src/localRecoveryCli.ts "$@"
+  exec bun --env-file=.env --preload=./preload.ts ./src/localRecoveryCli.ts "$@"
 fi
 
 # Default: full CLI with Ink TUI
-exec bun --env-file=.env ./src/entrypoints/cli.tsx "$@"
+exec bun --env-file=.env --preload=./preload.ts ./src/entrypoints/cli.tsx "$@"

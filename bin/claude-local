@@ -1,0 +1,30 @@
+###
+ # @Author: micoin_simith 467441151@qq.com
+ # @Date: 2026-04-01 12:32:04
+ # @LastEditors: micoin_simith 467441151@qq.com
+ # @LastEditTime: 2026-04-01 14:04:25
+ # @FilePath: /claude-code-local/bin/claude-local
+ # Copyright (c) 2026 by ${git_name_email || ''}, All Rights Reserved.
+###
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. 自动获取项目源码的绝对路径（无论你在哪调用，这行都能找回源码位置）
+# 针对你的路径：~/Desktop/Workspace/claude-code-repos/claude-code-local
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 2. 预设一些必要的环境变量（可选）
+# 告诉 Bun 在哪里找 .env，但保持当前工作目录 (CWD) 不变
+ENV_PATH="$SOURCE_DIR/.env"
+
+# 3. 预加载文件路径
+PRELOAD_PATH="$SOURCE_DIR/preload.ts"
+
+# 4. 运行程序
+# 注意：这里直接指向源码文件的绝对路径，但不使用 cd 命令
+if [[ "${CLAUDE_CODE_FORCE_RECOVERY_CLI:-0}" == "1" ]]; then
+  exec bun --env-file="$ENV_PATH" --preload="$PRELOAD_PATH" "$SOURCE_DIR/src/localRecoveryCli.ts" "$@"
+fi
+
+# 正常模式启动
+exec bun --env-file="$ENV_PATH" --preload="$PRELOAD_PATH" "$SOURCE_DIR/src/entrypoints/cli.tsx" "$@"

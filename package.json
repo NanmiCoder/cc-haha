@@ -7,8 +7,8 @@
     "claude-haha": "./bin/claude-haha"
   },
   "scripts": {
-    "claude-haha": "bun run ./bin/claude-haha",
-    "start": "bun run ./bin/claude-haha"
+    "claude-haha": "./bin/claude-haha",
+    "start": "./bin/claude-haha"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.44",

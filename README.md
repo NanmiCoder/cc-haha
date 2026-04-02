@@ -155,6 +155,30 @@ echo "explain this code" | ./bin/claude-haha -p
 
 # 查看所有选项
 ./bin/claude-haha --help
+
+### 5. 配置别名（可选）
+
+为了方便在任意目录下使用 `claude-local` 命令，可以将以下别名添加到你的 shell 配置文件（如 `~/.bashrc`、`~/.zshrc` 或 `~/.bash_profile`）：
+
+```bash
+# 设置 claude-code-haha-path 环境变量为项目根目录路径
+export claude-code-haha-path="/path/to/claude-code-local"
+
+# 添加别名
+alias claude-local='($claude-code-haha-path)/bin/claude-local'
+```
+
+替换 `/path/to/claude-code-local` 为你的项目实际绝对路径（例如 `/Users/username/Desktop/Workspace/claude-code-repos/claude-code-local`）。
+
+设置完成后，重新加载配置文件或重启终端：
+
+```bash
+source ~/.zshrc  # 如果你使用 Zsh
+# 或
+source ~/.bashrc # 如果你使用 Bash
+```
+
+之后，你可以在任意目录下直接使用 `claude-local` 命令启动 Claude Code Haha。
 ```
 
 #### Windows
