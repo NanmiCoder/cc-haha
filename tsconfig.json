@@ -7,18 +7,13 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@ant/claude-for-chrome-mcp": [
-        "./stubs/ant-claude-for-chrome-mcp.ts"
-      ],
-      "color-diff-napi": [
-        "./stubs/color-diff-napi.ts"
-      ],
-      "src/*": [
-        "./src/*"
-      ]
+      "@ant/claude-for-chrome-mcp": ["./stubs/ant-claude-for-chrome-mcp.ts"],
+      "color-diff-napi": ["./stubs/color-diff-napi.ts"],
+      "src/*": ["./src/*"]
     },
-    "types": [
-      "bun-types"
-    ]
+    "types": ["bun-types", "./src/types/global.d.ts"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "strict": false
   }
 }
