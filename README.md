@@ -1,4 +1,4 @@
-# Claude Code Haha
+﻿# Claude Code Haha
 
 <p align="right"><strong>中文</strong> | <a href="./README.en.md">English</a></p>
 
@@ -201,6 +201,39 @@ bun --env-file=.env ./src/localRecoveryCli.ts
 | `API_TIMEOUT_MS` | 否 | API 请求超时，默认 600000 (10min) |
 | `DISABLE_TELEMETRY` | 否 | 设为 `1` 禁用遥测 |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 否 | 设为 `1` 禁用非必要网络请求 |
+
+### Azure OpenAI (Codex)
+
+```env
+CLAUDE_CODE_USE_AZURE_OPENAI=1
+AZURE_OPENAI_BASE_URL=https://<resource>.cognitiveservices.azure.com
+AZURE_OPENAI_API_VERSION=2025-04-01-preview
+AZURE_OPENAI_API_KEY=...
+```
+
+AZURE_OPENAI_CODEX_DEPLOYMENT=...
+```
+
+也可以只用一个默认 deployment：
+
+```env
+AZURE_OPENAI_CODEX_DEPLOYMENT=...
+```
+
+或在 `~/.claude/settings.json` 中按模型映射：
+
+`~/.claude/settings.json`:
+
+```json
+{
+  "modelOverrides": {
+    "gpt-5.2-codex": "codex-deployment-52",
+    "gpt-5.3-codex": "codex-deployment-53",
+    "gpt-5.4-codex": "codex-deployment-54"
+  }
+}
+```
+
 
 ---
 

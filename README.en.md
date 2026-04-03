@@ -1,6 +1,6 @@
-# Claude Code Haha
+﻿# Claude Code Haha
 
-<p align="right"><a href="./README.md">中文</a> | <strong>English</strong></p>
+<p align="right"><a href="./README.md">涓枃</a> | <strong>English</strong></p>
 
 A **locally runnable version** repaired from the leaked Claude Code source, with support for any Anthropic-compatible API endpoint such as MiniMax and OpenRouter.
 
@@ -163,7 +163,7 @@ echo "explain this code" | ./bin/claude-haha -p
 
 The startup script `bin/claude-haha` is a bash script and cannot run directly in cmd or PowerShell. Use one of the following methods:
 
-**Option 1: PowerShell / cmd — call Bun directly (recommended)**
+**Option 1: PowerShell / cmd 鈥?call Bun directly (recommended)**
 
 ```powershell
 # Interactive TUI mode
@@ -202,6 +202,56 @@ bun --env-file=.env ./src/localRecoveryCli.ts
 | `DISABLE_TELEMETRY` | No | Set to `1` to disable telemetry |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | No | Set to `1` to disable non-essential network traffic |
 
+### Azure OpenAI (Codex)
+
+```env
+CLAUDE_CODE_USE_AZURE_OPENAI=1
+AZURE_OPENAI_BASE_URL=https://<resource>.cognitiveservices.azure.com
+AZURE_OPENAI_API_VERSION=2025-04-01-preview
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_CODEX_DEPLOYMENT=...
+```
+
+You can either set a single default deployment via env:
+
+```env
+AZURE_OPENAI_CODEX_DEPLOYMENT=...
+```
+
+Or map Codex models to deployments via settings (example `~/.claude/settings.json`):
+
+```json
+{
+  "modelOverrides": {
+    "gpt-5.2-codex": "codex-deployment-52",
+    "gpt-5.3-codex": "codex-deployment-53",
+    "gpt-5.4-codex": "codex-deployment-54"
+  }
+}
+```
+
+
+### Azure OpenAI (Codex)
+
+Set these env vars to route requests to Azure OpenAI:
+
+```env
+CLAUDE_CODE_USE_AZURE_OPENAI=1
+AZURE_OPENAI_BASE_URL=https://<resource>.cognitiveservices.azure.com
+AZURE_OPENAI_API_VERSION=2025-04-01-preview
+AZURE_OPENAI_API_KEY=...
+```
+
+Map the Codex model to your deployment name via settings (example `~/.claude/settings.json`):
+
+```json
+{
+  "modelOverrides": {
+    "gpt-5.2-codex": "my-codex-deployment"
+  }
+}
+```
+
 ---
 
 ## Fallback Mode
@@ -236,19 +286,19 @@ bin/claude-haha          # Entry script
 preload.ts               # Bun preload (sets MACRO globals)
 .env.example             # Environment variable template
 src/
-├── entrypoints/cli.tsx  # Main CLI entry
-├── main.tsx             # Main TUI logic (Commander.js + React/Ink)
-├── localRecoveryCli.ts  # Fallback Recovery CLI
-├── setup.ts             # Startup initialization
-├── screens/REPL.tsx     # Interactive REPL screen
-├── ink/                 # Ink terminal rendering engine
-├── components/          # UI components
-├── tools/               # Agent tools (Bash, Edit, Grep, etc.)
-├── commands/            # Slash commands (/commit, /review, etc.)
-├── skills/              # Skill system
-├── services/            # Service layer (API, MCP, OAuth, etc.)
-├── hooks/               # React hooks
-└── utils/               # Utility functions
+鈹溾攢鈹€ entrypoints/cli.tsx  # Main CLI entry
+鈹溾攢鈹€ main.tsx             # Main TUI logic (Commander.js + React/Ink)
+鈹溾攢鈹€ localRecoveryCli.ts  # Fallback Recovery CLI
+鈹溾攢鈹€ setup.ts             # Startup initialization
+鈹溾攢鈹€ screens/REPL.tsx     # Interactive REPL screen
+鈹溾攢鈹€ ink/                 # Ink terminal rendering engine
+鈹溾攢鈹€ components/          # UI components
+鈹溾攢鈹€ tools/               # Agent tools (Bash, Edit, Grep, etc.)
+鈹溾攢鈹€ commands/            # Slash commands (/commit, /review, etc.)
+鈹溾攢鈹€ skills/              # Skill system
+鈹溾攢鈹€ services/            # Service layer (API, MCP, OAuth, etc.)
+鈹溾攢鈹€ hooks/               # React hooks
+鈹斺攢鈹€ utils/               # Utility functions
 ```
 
 ---

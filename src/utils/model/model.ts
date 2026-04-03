@@ -176,6 +176,10 @@ export function getRuntimeMainLoopModel(params: {
  * @returns The default model setting to use
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
+  if (getAPIProvider() === 'azureOpenAI') {
+    return 'gpt-5.2-codex'
+  }
+
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
   if (process.env.USER_TYPE === 'ant') {
     return (
