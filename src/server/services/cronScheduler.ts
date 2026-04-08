@@ -246,6 +246,8 @@ export class CronScheduler {
     string,
     { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string }
   >()
+  /** Track which minute each task last fired (prevents same-process duplicate within a minute). */
+  private lastFiredMinuteKey = new Map<string, string>()
   private cronService: CronService
   private sessionService: SessionService
 
@@ -254,10 +256,19 @@ export class CronScheduler {
     this.sessionService = new SessionService()
   }
 
+  /** Return a string key representing the calendar minute of `date`. */
+  private static minuteKey(date: Date): string {
+    return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`
+  }
+
   /** Start the scheduler (called on server boot). */
   start(): void {
     if (this.intervalId) return // already running
     console.log('[CronScheduler] Starting — checking every 60 s')
+    // Clean up stale "running" entries left by previously crashed processes
+    this.cleanupStaleRuns().catch((err) =>
+      console.error('[CronScheduler] Error cleaning up stale runs:', err),
+    )
     this.intervalId = setInterval(() => this.tick(), 60_000)
     // Immediate first check
     this.tick()
@@ -285,15 +296,28 @@ export class CronScheduler {
     try {
       const tasks = await this.cronService.listTasks()
       const now = new Date()
+      const currentKey = CronScheduler.minuteKey(now)
 
       for (const task of tasks) {
         // Skip disabled tasks
         if (task.enabled === false) continue
 
-        // Skip if already running
+        // Skip if already running (in-memory guard — same process)
         if (this.runningTasks.has(task.id)) continue
 
+        // Skip if this process already fired the task in the current minute
+        if (this.lastFiredMinuteKey.get(task.id) === currentKey) continue
+
+        // Skip if ANY process already fired the task in the current minute
+        // (cross-process guard via file-persisted lastFiredAt)
+        if (task.lastFiredAt) {
+          const lastFiredKey = CronScheduler.minuteKey(new Date(task.lastFiredAt))
+          if (lastFiredKey === currentKey) continue
+        }
+
         if (cronMatches(task.cron, now)) {
+          // Record the minute key BEFORE firing to prevent double-fire
+          this.lastFiredMinuteKey.set(task.id, currentKey)
           // Fire and forget — don't await; we want all matching tasks to start
           this.executeTask(task).catch((err) => {
             console.error(
@@ -358,6 +382,10 @@ export class CronScheduler {
       prompt: task.prompt,
       sessionId,
     }
+
+    // Update lastFiredAt IMMEDIATELY so other scheduler processes see it
+    // and skip this task in the current minute (cross-process dedup).
+    await this.cronService.updateLastFired(task.id, startedAt)
 
     // Persist the "running" state
     await appendRun(run)
@@ -478,9 +506,6 @@ export class CronScheduler {
 
       await updateRun(completedRun)
 
-      // Update lastFiredAt on the task
-      await this.cronService.updateLastFired(task.id, startedAt)
-
       // If non-recurring, disable after first run
       if (!task.recurring) {
         await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
@@ -504,9 +529,42 @@ export class CronScheduler {
       }
 
       await updateRun(failedRun)
-      await this.cronService.updateLastFired(task.id, startedAt)
 
       return failedRun
+    }
+  }
+
+  // ─── Cleanup ───────────────────────────────────────────────────────────────
+
+  /**
+   * Mark stale "running" entries as "failed" on startup.
+   * These are leftover from previous process instances that crashed or were
+   * killed before they could update the run log.
+   */
+  private async cleanupStaleRuns(): Promise<void> {
+    const data = await readRunsFile()
+    let changed = false
+    const now = Date.now()
+
+    for (const run of data.runs) {
+      if (run.status !== 'running') continue
+      const startedAt = new Date(run.startedAt).getTime()
+      // If "running" for longer than the task timeout + 1-minute buffer,
+      // the owning process is certainly dead.
+      if (now - startedAt > TASK_TIMEOUT_MS + 60_000) {
+        run.status = 'failed'
+        run.error = 'Process terminated before task could complete'
+        run.completedAt = new Date().toISOString()
+        run.durationMs = now - startedAt
+        changed = true
+        console.log(
+          `[CronScheduler] Cleaned up stale run ${run.id} for task ${run.taskId}`,
+        )
+      }
+    }
+
+    if (changed) {
+      await writeRunsFile(data)
     }
   }
 
