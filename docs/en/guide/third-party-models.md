@@ -172,17 +172,27 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 ### MiniMax (pre-configured in .env.example)
 
+MiniMax provides an Anthropic-compatible API endpoint and can be connected directly without any proxy. Available models:
+
+| Model | Description |
+|-------|-------------|
+| `MiniMax-M2.7` | Default recommended, excellent overall performance |
+| `MiniMax-M2.7-highspeed` | Faster responses, suitable for latency-sensitive use cases |
+
 ```env
-ANTHROPIC_AUTH_TOKEN=your_token_here
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
-ANTHROPIC_MODEL=MiniMax-M2.7-highspeed
-ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.7-highspeed
+ANTHROPIC_AUTH_TOKEN=your_minimax_api_key_here
+# International users: api.minimax.io; China users may use api.minimaxi.com
+ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
+ANTHROPIC_MODEL=MiniMax-M2.7
+ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.7
 ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.7-highspeed
-ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.7-highspeed
+ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.7
 API_TIMEOUT_MS=3000000
 DISABLE_TELEMETRY=1
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 ```
+
+> **Get API Key**: Visit [MiniMax Open Platform](https://platform.minimax.io) to register and obtain an API key.
 
 ---
 

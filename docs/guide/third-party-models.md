@@ -172,17 +172,27 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 ### MiniMax（已在 .env.example 中配置）
 
+MiniMax 提供 Anthropic 兼容接口，支持直接接入，无需代理。可用模型：
+
+| 模型 | 说明 |
+|------|------|
+| `MiniMax-M2.7` | 默认推荐，综合性能优秀 |
+| `MiniMax-M2.7-highspeed` | 响应更快，适合对速度有要求的场景 |
+
 ```env
-ANTHROPIC_AUTH_TOKEN=your_token_here
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
-ANTHROPIC_MODEL=MiniMax-M2.7-highspeed
-ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.7-highspeed
+ANTHROPIC_AUTH_TOKEN=your_minimax_api_key_here
+# 海外用户使用 api.minimax.io，国内用户可改为 api.minimaxi.com
+ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
+ANTHROPIC_MODEL=MiniMax-M2.7
+ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.7
 ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.7-highspeed
-ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.7-highspeed
+ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.7
 API_TIMEOUT_MS=3000000
 DISABLE_TELEMETRY=1
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 ```
+
+> **获取 API Key**：访问 [MiniMax 开放平台](https://platform.minimax.io) 注册并获取 API Key。
 
 ---
 
