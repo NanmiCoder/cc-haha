@@ -266,9 +266,42 @@ function getOpusPlanOption(): ModelOption {
   }
 }
 
+function getAzureOpenAICodexOption(): ModelOption {
+  return {
+    value: 'gpt-5.2-codex',
+    label: 'GPT-5.2 Codex',
+    description: 'Azure OpenAI Codex model',
+    descriptionForModel: 'GPT-5.2 Codex via Azure OpenAI',
+  }
+}
+
+function getAzureOpenAICodexOptions(): ModelOption[] {
+  return [
+    {
+      value: 'gpt-5.2-codex',
+      label: 'GPT-5.2 Codex',
+      description: 'Azure OpenAI Codex model',
+    },
+    {
+      value: 'gpt-5.3-codex',
+      label: 'GPT-5.3 Codex',
+      description: 'Azure OpenAI Codex model',
+    },
+    {
+      value: 'gpt-5.4-codex',
+      label: 'GPT-5.4 Codex',
+      description: 'Azure OpenAI Codex model',
+    },
+  ]
+}
+
 // @[MODEL LAUNCH]: Update the model picker lists below to include/reorder options for the new model.
 // Each user tier (ant, Max/Team Premium, Pro/Team Standard/Enterprise, PAYG 1P, PAYG 3P) has its own list.
 function getModelOptionsBase(fastMode = false): ModelOption[] {
+  if (getAPIProvider() === 'azureOpenAI') {
+    return [getDefaultOptionForUser(), ...getAzureOpenAICodexOptions()]
+  }
+
   if (process.env.USER_TYPE === 'ant') {
     // Build options from antModels config
     const antModelOptions: ModelOption[] = getAntModels().map(m => ({

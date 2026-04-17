@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 node_modules
+openspec
 
 # Computer Use runtime (auto-generated)
 .runtime/

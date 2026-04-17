@@ -35,6 +35,69 @@ export async function validateModel(
     }
   }
 
+  if (getAPIProvider() === 'azureOpenAI') {
+    const endpoint =
+      process.env.AZURE_OPENAI_BASE_URL || process.env.AZURE_OPENAI_ENDPOINT
+    if (!endpoint) {
+      return {
+        valid: false,
+        error:
+          'AZURE_OPENAI_BASE_URL is required when using Azure OpenAI provider',
+      }
+    }
+    if (
+      !process.env.AZURE_OPENAI_API_KEY &&
+      !process.env.CLAUDE_CODE_SKIP_AZURE_OPENAI_AUTH
+    ) {
+      return {
+        valid: false,
+        error:
+          'AZURE_OPENAI_API_KEY is required when using Azure OpenAI provider',
+      }
+    }
+    const lower = normalizedModel.toLowerCase()
+    if (lower === 'gpt-5.2-codex') {
+      if (process.env.AZURE_OPENAI_CODEX_DEPLOYMENT) {
+        return { valid: true }
+      }
+      const mapped = getModelStrings().gpt52codex
+      if (!mapped || mapped === 'gpt-5.2-codex') {
+        return {
+          valid: false,
+          error:
+            'Missing Azure OpenAI deployment mapping for gpt-5.2-codex. Set AZURE_OPENAI_CODEX_DEPLOYMENT or settings.modelOverrides[\"gpt-5.2-codex\"] to your deployment name.',
+        }
+      }
+    }
+    if (lower === 'gpt-5.3-codex') {
+      if (process.env.AZURE_OPENAI_CODEX_DEPLOYMENT) {
+        return { valid: true }
+      }
+      const mapped = getModelStrings().gpt53codex
+      if (!mapped || mapped === 'gpt-5.3-codex') {
+        return {
+          valid: false,
+          error:
+            'Missing Azure OpenAI deployment mapping for gpt-5.3-codex. Set AZURE_OPENAI_CODEX_DEPLOYMENT or settings.modelOverrides[\"gpt-5.3-codex\"] to your deployment name.',
+        }
+      }
+    }
+    if (lower === 'gpt-5.4-codex') {
+      if (process.env.AZURE_OPENAI_CODEX_DEPLOYMENT) {
+        return { valid: true }
+      }
+      const mapped = getModelStrings().gpt54codex
+      if (!mapped || mapped === 'gpt-5.4-codex') {
+        return {
+          valid: false,
+          error:
+            'Missing Azure OpenAI deployment mapping for gpt-5.4-codex. Set AZURE_OPENAI_CODEX_DEPLOYMENT or settings.modelOverrides[\"gpt-5.4-codex\"] to your deployment name.',
+        }
+      }
+    }
+    return { valid: true }
+  }
+
   // Check if it's a known alias (these are always valid)
   const lowerModel = normalizedModel.toLowerCase()
   if ((MODEL_ALIASES as readonly string[]).includes(lowerModel)) {
