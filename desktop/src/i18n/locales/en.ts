@@ -243,6 +243,8 @@ export const en = {
   'settings.about.starHint': 'If this project helps you, consider giving it a Star',
   'settings.about.author': 'Author',
   'settings.about.socialMedia': 'Social Media',
+  'settings.about.updates': 'App Updates',
+  'settings.about.updatesDesc': 'Check GitHub Releases, download the installer, and relaunch after install.',
 
   // Settings > Computer Use
   'settings.tab.computerUse': 'Computer Use',
@@ -576,10 +578,20 @@ export const en = {
 
   // ─── Update Checker ──────────────────────────────────────
   'update.available': 'v{version} available',
+  'update.availableLabel': 'Available',
+  'update.checking': 'Checking for updates...',
+  'update.checkNow': 'Check now',
+  'update.checkedAt': 'Last checked {time}',
+  'update.currentVersionUnknown': 'Unknown',
   'update.newVersion': 'New version v{version} available',
   'update.downloading': 'Downloading...',
+  'update.idle': 'Check for updates to compare your installed version with the latest GitHub Release.',
   'update.now': 'Update now',
   'update.later': 'Later',
+  'update.progress': 'Downloading update... {progress}%',
+  'update.releaseNotes': 'Release Notes',
+  'update.restarting': 'Restarting to finish update...',
+  'update.upToDate': 'You are up to date on v{version}.',
   'update.failed': 'Update failed: {error}',
 
   // ─── Active Session ──────────────────────────────────────

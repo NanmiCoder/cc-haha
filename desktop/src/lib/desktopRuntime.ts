@@ -1,6 +1,6 @@
 import { getDefaultBaseUrl, setBaseUrl } from '../api/client'
 
-function isTauriRuntime() {
+export function isTauriRuntime() {
   if (typeof window === 'undefined') return false
   return '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 }

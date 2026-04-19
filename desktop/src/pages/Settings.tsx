@@ -21,6 +21,7 @@ import { SkillDetail } from '../components/skills/SkillDetail'
 import { ComputerUseSettings } from './ComputerUseSettings'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
 import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
+import { useUpdateStore } from '../stores/updateStore'
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('providers')
@@ -1218,14 +1219,52 @@ const SOCIAL_LINKS = [
 function AboutSettings() {
   const t = useTranslation()
   const [version, setVersion] = useState('')
+  const updateStatus = useUpdateStore((s) => s.status)
+  const availableVersion = useUpdateStore((s) => s.availableVersion)
+  const releaseNotes = useUpdateStore((s) => s.releaseNotes)
+  const progressPercent = useUpdateStore((s) => s.progressPercent)
+  const error = useUpdateStore((s) => s.error)
+  const checkedAt = useUpdateStore((s) => s.checkedAt)
+  const checkForUpdates = useUpdateStore((s) => s.checkForUpdates)
+  const installUpdate = useUpdateStore((s) => s.installUpdate)
+  const initialize = useUpdateStore((s) => s.initialize)
 
   useEffect(() => {
     import('@tauri-apps/api/app').then((mod) => mod.getVersion()).then(setVersion).catch(() => setVersion('0.1.0'))
   }, [])
 
+  useEffect(() => {
+    void initialize()
+  }, [initialize])
+
   const openUrl = (url: string) => {
     import('@tauri-apps/plugin-shell').then((mod) => mod.open(url)).catch(() => window.open(url, '_blank'))
   }
+
+  const checkedAtText =
+    checkedAt
+      ? new Date(checkedAt).toLocaleString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+          month: 'short',
+          day: 'numeric',
+        })
+      : null
+
+  const updateDescription =
+    updateStatus === 'checking'
+      ? t('update.checking')
+      : updateStatus === 'downloading'
+        ? t('update.progress', { progress: String(progressPercent) })
+        : updateStatus === 'restarting'
+          ? t('update.restarting')
+          : updateStatus === 'available' && availableVersion
+            ? t('update.newVersion', { version: availableVersion })
+            : updateStatus === 'up-to-date'
+              ? t('update.upToDate', { version: version || t('update.currentVersionUnknown') })
+              : error
+                ? t('update.failed', { error })
+                : t('update.idle')
 
   return (
     <div className="w-full min-w-0 max-w-lg mx-auto flex flex-col items-center py-6">
@@ -1249,6 +1288,94 @@ function AboutSettings() {
           </div>
           <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">open_in_new</span>
         </button>
+      </div>
+
+      <div className="mt-4 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.about.updates')}</div>
+            <div className="text-xs text-[var(--color-text-tertiary)] mt-1">
+              {t('settings.about.updatesDesc')}
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void checkForUpdates()}
+            loading={updateStatus === 'checking'}
+          >
+            {t('update.checkNow')}
+          </Button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
+                {t('settings.about.version')}
+              </div>
+              <div className="text-sm font-medium text-[var(--color-text-primary)] mt-1">
+                {version || t('update.currentVersionUnknown')}
+              </div>
+            </div>
+
+            {availableVersion && (
+              <div className="text-right">
+                <div className="text-xs uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
+                  {t('update.availableLabel')}
+                </div>
+                <div className="text-sm font-medium text-[var(--color-text-primary)] mt-1">
+                  {availableVersion}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <p className={`mt-3 text-sm ${error ? 'text-[var(--color-error)]' : 'text-[var(--color-text-secondary)]'}`}>
+            {updateDescription}
+          </p>
+
+          {checkedAtText && (
+            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+              {t('update.checkedAt', { time: checkedAtText })}
+            </p>
+          )}
+
+          {(updateStatus === 'downloading' || updateStatus === 'restarting') && (
+            <div className="mt-3">
+              <div className="h-1.5 bg-[var(--color-surface-container-low)] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[var(--color-text-accent)] transition-all duration-300"
+                  style={{ width: `${Math.min(progressPercent, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {releaseNotes && availableVersion && (
+            <div className="mt-3 rounded-lg bg-[var(--color-surface-container-low)] px-3 py-2">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
+                {t('update.releaseNotes')}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)] whitespace-pre-wrap">
+                {releaseNotes}
+              </p>
+            </div>
+          )}
+
+          {availableVersion && (
+            <div className="mt-3 flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => void installUpdate()}
+                loading={updateStatus === 'downloading' || updateStatus === 'restarting'}
+                disabled={updateStatus === 'checking'}
+              >
+                {updateStatus === 'restarting' ? t('update.restarting') : t('update.now')}
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Divider */}

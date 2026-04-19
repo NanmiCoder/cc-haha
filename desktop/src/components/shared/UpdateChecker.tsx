@@ -1,110 +1,83 @@
-import { useEffect, useState } from 'react'
-import { useUIStore } from '../../stores/uiStore'
+import { useEffect } from 'react'
 import { useTranslation } from '../../i18n'
-
-type UpdateInfo = {
-  version: string
-  downloading: boolean
-  progress: number
-}
-
-let isTauri = false
-try {
-  isTauri = '__TAURI_INTERNALS__' in window
-} catch {
-  // not in Tauri
-}
+import { isTauriRuntime } from '../../lib/desktopRuntime'
+import { useUpdateStore } from '../../stores/updateStore'
 
 export function UpdateChecker() {
-  const [update, setUpdate] = useState<UpdateInfo | null>(null)
-  const addToast = useUIStore((s) => s.addToast)
   const t = useTranslation()
+  const status = useUpdateStore((s) => s.status)
+  const availableVersion = useUpdateStore((s) => s.availableVersion)
+  const releaseNotes = useUpdateStore((s) => s.releaseNotes)
+  const progressPercent = useUpdateStore((s) => s.progressPercent)
+  const error = useUpdateStore((s) => s.error)
+  const shouldPrompt = useUpdateStore((s) => s.shouldPrompt)
+  const initialize = useUpdateStore((s) => s.initialize)
+  const installUpdate = useUpdateStore((s) => s.installUpdate)
+  const dismissPrompt = useUpdateStore((s) => s.dismissPrompt)
 
   useEffect(() => {
-    if (!isTauri) return
+    void initialize()
+  }, [initialize])
 
-    const checkForUpdate = async () => {
-      try {
-        const { check } = await import('@tauri-apps/plugin-updater')
-        const available = await check()
-        if (available) {
-          setUpdate({ version: available.version, downloading: false, progress: 0 })
-          addToast({
-            type: 'info',
-            message: t('update.newVersion', { version: available.version }),
-            duration: 0, // persist until dismissed
-          })
-        }
-      } catch {
-        // Updater not configured or no network — silently ignore
-      }
-    }
+  if (!isTauriRuntime()) return null
 
-    // Check after a short delay so UI loads first
-    const timer = setTimeout(checkForUpdate, 5000)
-    return () => clearTimeout(timer)
-  }, [addToast])
+  const showPopup =
+    shouldPrompt && !!availableVersion && ['available', 'downloading', 'restarting'].includes(status)
 
-  if (!update || !isTauri) return null
+  if (!showPopup) return null
 
-  const handleUpdate = async () => {
-    try {
-      const { check } = await import('@tauri-apps/plugin-updater')
-      const { relaunch } = await import('@tauri-apps/plugin-process')
-      const available = await check()
-      if (!available) return
-
-      setUpdate((u) => u && { ...u, downloading: true })
-
-      await available.downloadAndInstall((event) => {
-        if (event.event === 'Started' && event.data.contentLength) {
-          setUpdate((u) => u && { ...u, progress: 0 })
-        } else if (event.event === 'Progress') {
-          setUpdate((u) => {
-            if (!u) return u
-            return { ...u, progress: Math.min(u.progress + (event.data.chunkLength ?? 0), 100) }
-          })
-        } else if (event.event === 'Finished') {
-          setUpdate((u) => u && { ...u, progress: 100 })
-        }
-      })
-
-      await relaunch()
-    } catch (err) {
-      addToast({
-        type: 'error',
-        message: t('update.failed', { error: err instanceof Error ? err.message : String(err) }),
-      })
-      setUpdate((u) => u && { ...u, downloading: false })
-    }
-  }
+  const statusText =
+    status === 'restarting'
+      ? t('update.restarting')
+      : status === 'downloading'
+        ? t('update.downloading')
+        : null
 
   return (
-    <div className="fixed top-4 right-4 z-[200] max-w-xs">
+    <div className="fixed top-4 right-4 z-[200] max-w-sm">
       <div className="bg-[var(--color-surface-container-low)] border border-[var(--color-border)] rounded-[var(--radius-lg)] shadow-[var(--shadow-dropdown)] p-4">
         <p className="text-sm font-medium text-[var(--color-text-primary)]">
-          {t('update.available', { version: update.version })}
+          {t('update.available', { version: availableVersion })}
         </p>
-        {update.downloading ? (
-          <div className="mt-2">
+
+        {releaseNotes && (
+          <p className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] whitespace-pre-wrap line-clamp-5">
+            {releaseNotes}
+          </p>
+        )}
+
+        {(status === 'downloading' || status === 'restarting') && (
+          <div className="mt-3">
             <div className="h-1.5 bg-[var(--color-surface)] rounded-full overflow-hidden">
               <div
                 className="h-full bg-[var(--color-text-accent)] transition-all duration-300"
-                style={{ width: `${Math.min(update.progress, 100)}%` }}
+                style={{ width: `${Math.min(progressPercent, 100)}%` }}
               />
             </div>
-            <p className="text-xs text-[var(--color-text-tertiary)] mt-1">{t('update.downloading')}</p>
+            {statusText && (
+              <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                {statusText} {status === 'downloading' ? `${progressPercent}%` : ''}
+              </p>
+            )}
           </div>
-        ) : (
-          <div className="mt-2 flex gap-2">
+        )}
+
+        {error && (
+          <p className="mt-2 text-xs text-[var(--color-error)]">
+            {t('update.failed', { error })}
+          </p>
+        )}
+
+        {status === 'available' && (
+          <div className="mt-3 flex gap-2">
             <button
-              onClick={handleUpdate}
+              onClick={() => void installUpdate()}
               className="px-3 py-1 text-xs font-medium rounded-[var(--radius-md)] bg-[var(--color-text-accent)] text-white hover:opacity-90 transition-opacity"
             >
               {t('update.now')}
             </button>
             <button
-              onClick={() => setUpdate(null)}
+              onClick={dismissPrompt}
               className="px-3 py-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors"
             >
               {t('update.later')}
