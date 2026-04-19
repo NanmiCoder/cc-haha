@@ -19,6 +19,16 @@ const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
 const RATE_LIMIT_MAX_ATTEMPTS = 5
 const failedAttempts = new Map<string, { count: number; firstAttempt: number }>()
 
+// Periodically evict expired rate-limit records to prevent unbounded growth.
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, rec] of failedAttempts) {
+    if (now - rec.firstAttempt > RATE_LIMIT_WINDOW_MS) {
+      failedAttempts.delete(key)
+    }
+  }
+}, 60_000).unref()
+
 function isRateLimited(userId: string | number): boolean {
   const key = String(userId)
   const record = failedAttempts.get(key)
@@ -53,6 +63,21 @@ function readConfigFile(): Record<string, any> {
   } catch {
     return {}
   }
+}
+
+// Cached read — refreshes every 5 seconds so hot paths (isAllowedUser) avoid
+// repeated synchronous disk I/O while still reacting quickly to config changes.
+const CONFIG_CACHE_TTL_MS = 5_000
+let configCache: { data: Record<string, any>; ts: number } | null = null
+
+function readConfigFileCached(): Record<string, any> {
+  const now = Date.now()
+  if (configCache && now - configCache.ts < CONFIG_CACHE_TTL_MS) {
+    return configCache.data
+  }
+  const data = readConfigFile()
+  configCache = { data, ts: now }
+  return data
 }
 
 function writeConfigFile(data: Record<string, any>): void {
@@ -134,6 +159,7 @@ export function tryPair(
   file[platform] = { ...platformConfig, pairedUsers }
   file.pairing = { code: null, expiresAt: null, createdAt: null } // 一次性使用
   writeConfigFile(file)
+  configCache = null // invalidate cache so isAllowedUser sees the new user immediately
 
   return true
 }
@@ -141,7 +167,7 @@ export function tryPair(
 /** 统一的用户授权检查（供各 adapter 调用） */
 export function isAllowedUser(platform: 'telegram' | 'feishu', userId: string | number): boolean {
   try {
-    const cfgFile = readConfigFile()
+    const cfgFile = readConfigFileCached()
     return isPaired(platform, userId, cfgFile)
   } catch {
     return false

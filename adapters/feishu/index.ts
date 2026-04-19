@@ -57,6 +57,12 @@ const media = new FeishuMediaService(larkClient, attachmentStore)
 attachmentStore.gc().catch((err) => {
   console.warn('[Feishu] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
 })
+// Run GC every 24 hours to prevent unbounded disk growth.
+setInterval(() => {
+  attachmentStore.gc().catch((err) => {
+    console.warn('[Feishu] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
+  })
+}, 24 * 60 * 60 * 1000).unref()
 
 // One streaming card lifecycle per chatId (CardKit main + patch fallback).
 const streamingCards = new Map<string, StreamingCard>()
@@ -117,6 +123,11 @@ function getUploadedKeys(chatId: string): Map<string, string> {
   if (!m) {
     m = new Map()
     uploadedImageKeys.set(chatId, m)
+  }
+  // Evict the oldest entry when the per-chat cache reaches its size limit.
+  if (m.size >= 500) {
+    const oldest = m.keys().next().value
+    if (oldest !== undefined) m.delete(oldest)
   }
   return m
 }
