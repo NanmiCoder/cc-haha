@@ -15,6 +15,7 @@ export class MessageBuffer {
   private timer: ReturnType<typeof setTimeout> | null = null
   private flushing = false
   private pendingComplete = false
+  private flushResolvers: Array<() => void> = []
 
   constructor(
     private onFlush: FlushCallback,
@@ -39,8 +40,9 @@ export class MessageBuffer {
       this.timer = null
     }
     if (this.flushing) {
-      // A flush is in-flight; mark pending so it fires after current flush finishes
-      this.pendingComplete = true
+      // A flush is in-flight; wait for it to finish, then do the final flush.
+      await new Promise<void>((resolve) => this.flushResolvers.push(resolve))
+      await this.flush(true)
       return
     }
     await this.flush(true)
@@ -81,7 +83,10 @@ export class MessageBuffer {
       console.error('[MessageBuffer] Flush error:', err)
     } finally {
       this.flushing = false
-      // If complete() was called while we were flushing, do the final flush now
+      // Notify any callers waiting in complete() for this flush to finish.
+      const resolvers = this.flushResolvers.splice(0)
+      for (const resolve of resolvers) resolve()
+      // Legacy pendingComplete path (belt-and-suspenders for any edge case).
       if (this.pendingComplete) {
         this.pendingComplete = false
         await this.flush(true)

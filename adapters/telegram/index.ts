@@ -49,6 +49,12 @@ const media = new TelegramMediaService(bot, attachmentStore)
 attachmentStore.gc().catch((err) => {
   console.warn('[Telegram] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
 })
+// Run GC every 24 hours to prevent unbounded disk growth.
+setInterval(() => {
+  attachmentStore.gc().catch((err) => {
+    console.warn('[Telegram] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
+  })
+}, 24 * 60 * 60 * 1000).unref()
 
 // Track placeholder messages for streaming updates
 const placeholders = new Map<string, { chatId: string; messageId: number }>()

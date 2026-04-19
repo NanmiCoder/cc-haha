@@ -44,8 +44,6 @@ export class MessageDedup {
     for (const [key, ts] of this.store) {
       if (now - ts >= this.ttlMs) {
         this.store.delete(key)
-      } else {
-        break // Map preserves insertion order; once fresh, rest is fresh
       }
     }
   }
