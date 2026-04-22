@@ -33,6 +33,7 @@ See [Environment Variables](./env-vars.md) for the full reference.
 ./bin/claude-haha                          # Interactive TUI mode
 ./bin/claude-haha -p "your prompt here"    # Headless mode
 ./bin/claude-haha --help                   # Show all options
+./bin/claude-haha-desktop                  # Start the desktop dev server, local API server, and browser together
 ```
 
 ### Windows
@@ -53,6 +54,9 @@ Add `bin/` to your PATH to run from any directory. See [Global Usage Guide](./gl
 
 ```bash
 export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
+
+claude-haha
+claude-haha-desktop
 ```
 
 ## 5. Recovery Mode

@@ -33,6 +33,7 @@ cp .env.example .env
 ./bin/claude-haha                          # 交互 TUI 模式
 ./bin/claude-haha -p "your prompt here"    # 无头模式
 ./bin/claude-haha --help                   # 查看所有选项
+./bin/claude-haha-desktop                 # 一键启动 desktop dev server + 本地 API + 浏览器
 ```
 
 ### Windows
@@ -53,6 +54,9 @@ bun --env-file=.env ./src/entrypoints/cli.tsx
 
 ```bash
 export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
+
+claude-haha
+claude-haha-desktop
 ```
 
 ## 5. 降级模式

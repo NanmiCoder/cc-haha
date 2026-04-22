@@ -1,7 +1,7 @@
 # 全局使用（任意目录启动）
 
 
-如果你希望在任意项目目录直接运行 `claude-haha`，可以通过以下方式配置。配置完成后，`claude-haha` 会自动识别你当前所在的工作目录。
+如果你希望在任意项目目录直接运行 `claude-haha` 或 `claude-haha-desktop`，可以通过以下方式配置。配置完成后，`claude-haha` 会自动识别你当前所在的工作目录，而 `claude-haha-desktop` 会一键拉起本地 desktop 开发环境。
 
 ## macOS / Linux
 
@@ -13,6 +13,7 @@ export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
 
 # 方式二：alias
 alias claude-haha="$HOME/path/to/claude-code-haha/bin/claude-haha"
+alias claude-haha-desktop="$HOME/path/to/claude-code-haha/bin/claude-haha-desktop"
 ```
 
 然后重新加载配置：
@@ -37,4 +38,7 @@ export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
 cd ~/your-other-project
 claude-haha
 # 启动后询问「当前目录是什么？」，应显示 ~/your-other-project
+
+claude-haha-desktop
+# 应自动拉起 3456 后端、2024 前端，并打开浏览器
 ```
