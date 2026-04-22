@@ -385,6 +385,95 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('merges trailing streamed punctuation into the previous assistant bubble on completion', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: {
+          messages: [
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: '你好',
+              timestamp: 1,
+            },
+          ],
+          chatState: 'streaming',
+          connectionState: 'connected',
+          streamingText: '。',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      {
+        type: 'assistant_text',
+        content: '你好。',
+      },
+    ])
+  })
+
+  it('merges streamed tail text when status changes out of streaming', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: {
+          messages: [
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: '分析完成',
+              timestamp: 1,
+            },
+          ],
+          chatState: 'streaming',
+          connectionState: 'connected',
+          streamingText: '。',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'status',
+      state: 'idle',
+      tokens: 3,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      {
+        type: 'assistant_text',
+        content: '分析完成。',
+      },
+    ])
+  })
+
   it('flushes the previous assistant draft before starting a new user turn', () => {
     useChatStore.setState({
       sessions: {

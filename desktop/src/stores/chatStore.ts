@@ -108,6 +108,29 @@ const pendingTaskToolUseIds = new Set<string>()
 let msgCounter = 0
 const nextId = () => `msg-${++msgCounter}-${Date.now()}`
 
+function appendAssistantTextMessage(messages: UIMessage[], content: string): UIMessage[] {
+  if (!content) return messages
+  const last = messages[messages.length - 1]
+  if (last?.type === 'assistant_text') {
+    return [
+      ...messages.slice(0, -1),
+      {
+        ...last,
+        content: last.content + content,
+      },
+    ]
+  }
+  return [
+    ...messages,
+    {
+      id: nextId(),
+      type: 'assistant_text',
+      content,
+      timestamp: Date.now(),
+    },
+  ]
+}
+
 // Streaming throttle for content_delta
 let pendingDelta = ''
 let flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -218,15 +241,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const pendingAssistantText = `${session.streamingText}${bufferedDelta}`.trim()
 
       const newMessages = pendingAssistantText
-        ? [
-            ...session.messages,
-            {
-              id: nextId(),
-              type: 'assistant_text' as const,
-              content: pendingAssistantText,
-              timestamp: Date.now(),
-            },
-          ]
+        ? appendAssistantTextMessage(session.messages, pendingAssistantText)
         : [...session.messages]
       if (!isMemberSession && allTasksDone) {
         newMessages.push({
@@ -392,6 +407,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
 
       case 'status':
+        // Flush any pending delta before processing status change
+        if (flushTimer && msg.state !== 'streaming') {
+          clearTimeout(flushTimer)
+          flushTimer = null
+        }
+        if (pendingDelta && msg.state !== 'streaming') {
+          const deltaText = pendingDelta
+          pendingDelta = ''
+          set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + deltaText })) }))
+        }
         update((session) => {
           const pendingText = session.streamingText.trim()
           const shouldFlush = pendingText && session.chatState === 'streaming' && msg.state !== 'streaming'
@@ -401,7 +426,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ...(msg.tokens ? { tokenUsage: { ...session.tokenUsage, output_tokens: msg.tokens } } : {}),
             ...(msg.state === 'idle' ? { activeThinkingId: null, statusVerb: '' } : {}),
             ...(shouldFlush ? {
-              messages: [...session.messages, { id: nextId(), type: 'assistant_text' as const, content: pendingText, timestamp: Date.now() }],
+              messages: appendAssistantTextMessage(session.messages, pendingText),
               streamingText: '',
             } : {}),
           }
@@ -423,7 +448,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const pendingText = session.streamingText.trim()
         if (pendingText) {
           update((s) => ({
-            messages: [...s.messages, { id: nextId(), type: 'assistant_text' as const, content: pendingText, timestamp: Date.now() }],
+            messages: appendAssistantTextMessage(s.messages, pendingText),
             streamingText: '',
           }))
         }
@@ -460,7 +485,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         update((s) => {
           const pendingText = s.streamingText.trim()
           const base = pendingText
-            ? [...s.messages, { id: nextId(), type: 'assistant_text' as const, content: pendingText, timestamp: Date.now() }]
+            ? appendAssistantTextMessage(s.messages, pendingText)
             : s.messages
           const last = base[base.length - 1]
           if (last && last.type === 'thinking') {
@@ -553,13 +578,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
 
       case 'message_complete': {
+        // Flush any pending delta before processing complete
+        if (flushTimer) {
+          clearTimeout(flushTimer)
+          flushTimer = null
+        }
+        if (pendingDelta) {
+          const deltaText = pendingDelta
+          pendingDelta = ''
+          set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + deltaText })) }))
+        }
         const session = get().sessions[sessionId]
         if (!session) break
-        const text = session.streamingText
+        const text = session.streamingText.trim()
         if (text) {
-          update((s) => ({
-            messages: [...s.messages, { id: nextId(), type: 'assistant_text', content: text, timestamp: Date.now() }],
-            streamingText: '',
+          set((s) => ({
+            sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+              messages: appendAssistantTextMessage(sess.messages, text),
+              streamingText: '',
+            })),
           }))
         }
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
@@ -579,7 +616,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const pendingText = s.streamingText.trim()
           const newMessages = [...s.messages]
           if (pendingText) {
-            newMessages.push({ id: nextId(), type: 'assistant_text' as const, content: pendingText, timestamp: Date.now() })
+            newMessages.splice(0, newMessages.length, ...appendAssistantTextMessage(newMessages, pendingText))
           }
           newMessages.push({ id: nextId(), type: 'error', message: msg.message, code: msg.code, timestamp: Date.now() })
           return {
