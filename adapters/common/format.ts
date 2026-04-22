@@ -2,6 +2,8 @@
  * 消息格式化工具
  */
 
+import type { SessionListItem } from './http-client.js'
+
 type AdapterChatState =
   | 'idle'
   | 'thinking'
@@ -27,6 +29,7 @@ type ImStatusSummary = {
 
 const IM_HELP_LINES = [
   '/new [项目] — 新建会话或切换项目',
+  '/resume [会话] — 恢复已有会话',
   '/projects — 查看最近项目',
   '/status — 查看当前会话状态',
   '/clear — 清空当前会话上下文',
@@ -226,4 +229,27 @@ function formatAdapterChatState(
 
 function shortSessionId(sessionId: string): string {
   return sessionId.length > 12 ? `${sessionId.slice(0, 8)}…` : sessionId
+}
+
+/** Format a list of sessions for the /resume picker. */
+export function formatSessionList(sessions: SessionListItem[], currentSessionId?: string): string {
+  const lines = sessions.map((s, i) => {
+    const marker = s.id === currentSessionId ? ' ✦' : ''
+    const title = truncate(s.title || '(无标题)', 50)
+    const shortId = shortSessionId(s.id)
+    const relTime = formatRelativeTime(s.modifiedAt)
+    return `${i + 1}. ${title}${marker}\n   ${s.workDir} · ${s.messageCount}条消息 · ${relTime}`
+  })
+
+  return `选择会话（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 也可直接 /resume <会话ID或关键词>`
+}
+
+function formatRelativeTime(iso: string): string {
+  const now = Date.now()
+  const then = new Date(iso).getTime()
+  const diffSec = Math.floor((now - then) / 1000)
+  if (diffSec < 60) return '刚刚'
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}分钟前`
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}小时前`
+  return `${Math.floor(diffSec / 86400)}天前`
 }
