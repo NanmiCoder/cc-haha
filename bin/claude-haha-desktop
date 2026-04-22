@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
+SERVER_PORT="${SERVER_PORT:-3456}"
+DESKTOP_HOST="${DESKTOP_HOST:-127.0.0.1}"
+DESKTOP_PORT="${DESKTOP_PORT:-2024}"
+DESKTOP_URL="http://${DESKTOP_HOST}:${DESKTOP_PORT}"
+HEALTH_URL="http://${SERVER_HOST}:${SERVER_PORT}/health"
+SERVER_PID=""
+DESKTOP_PID=""
+
+cleanup() {
+  local exit_code=$?
+  trap - EXIT INT TERM
+
+  if [[ -n "$DESKTOP_PID" ]] && kill -0 "$DESKTOP_PID" 2>/dev/null; then
+    kill "$DESKTOP_PID" 2>/dev/null || true
+    wait "$DESKTOP_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+
+  exit "$exit_code"
+}
+
+port_in_use() {
+  local host=$1
+  local port=$2
+
+  python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.settimeout(0.5)
+    sys.exit(0 if sock.connect_ex((host, port)) == 0 else 1)
+PY
+}
+
+ensure_port_available() {
+  local name=$1
+  local host=$2
+  local port=$3
+
+  if port_in_use "$host" "$port"; then
+    echo "[desktop] ${name} 端口已被占用：${host}:${port}" >&2
+    exit 1
+  fi
+}
+
+open_browser() {
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$DESKTOP_URL" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    open "$DESKTOP_URL" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c start "" "$DESKTOP_URL" >/dev/null 2>&1
+    return 0
+  fi
+
+  echo "[desktop] 请手动打开：$DESKTOP_URL"
+}
+
+wait_for_server() {
+  local attempts=0
+
+  until curl --silent --fail "$HEALTH_URL" >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+
+    if [[ "$attempts" -ge 60 ]]; then
+      echo "[desktop] 后端启动超时：$HEALTH_URL" >&2
+      return 1
+    fi
+
+    if [[ -n "$SERVER_PID" ]] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "[desktop] 后端进程已提前退出" >&2
+      return 1
+    fi
+
+    sleep 1
+  done
+}
+
+trap cleanup EXIT INT TERM
+
+cd "$ROOT_DIR"
+
+ensure_port_available "后端" "$SERVER_HOST" "$SERVER_PORT"
+ensure_port_available "前端" "$DESKTOP_HOST" "$DESKTOP_PORT"
+
+echo "[desktop] 启动后端：http://${SERVER_HOST}:${SERVER_PORT}"
+SERVER_HOST="$SERVER_HOST" SERVER_PORT="$SERVER_PORT" bun run src/server/index.ts &
+SERVER_PID=$!
+
+wait_for_server
+
+echo "[desktop] 启动前端：http://${DESKTOP_HOST}:${DESKTOP_PORT}"
+(
+  cd "$ROOT_DIR/desktop"
+  bun run dev --host "$DESKTOP_HOST" --port "$DESKTOP_PORT"
+) &
+DESKTOP_PID=$!
+
+open_browser
+
+echo "[desktop] 已启动，按 Ctrl+C 关闭服务"
+
+wait "$SERVER_PID" "$DESKTOP_PID"

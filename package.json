@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "bin": {
-    "claude-haha": "./bin/claude-haha"
+    "claude-haha": "./bin/claude-haha",
+    "claude-haha-desktop": "./bin/claude-haha-desktop"
   },
   "scripts": {
     "claude-haha": "bun run ./bin/claude-haha",
+    "claude-haha-desktop": "bun run ./bin/claude-haha-desktop",
     "start": "bun run ./bin/claude-haha",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
