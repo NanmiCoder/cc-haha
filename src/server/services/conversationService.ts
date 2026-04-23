@@ -684,8 +684,11 @@ export class ConversationService {
     const cliCommand = process.env.CLAUDE_CLI_PATH || this.resolveBundledCliPath()
     if (!cliCommand) {
       if (process.platform === 'win32') {
+        const preloadPath = path.resolve(import.meta.dir, '../../../preload.ts')
         return [
           process.execPath,
+          '--preload',
+          preloadPath,
           path.resolve(import.meta.dir, '../../entrypoints/cli.tsx'),
           ...baseArgs,
         ]

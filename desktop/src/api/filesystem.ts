@@ -13,6 +13,10 @@ type BrowseResult = {
   query?: string
 }
 
+type DrivesResult = {
+  drives: DirEntry[]
+}
+
 export const filesystemApi = {
   browse(path?: string, options?: { includeFiles?: boolean }) {
     const q = new URLSearchParams()
@@ -20,6 +24,10 @@ export const filesystemApi = {
     if (options?.includeFiles) q.set('includeFiles', 'true')
     const qs = q.toString()
     return api.get<BrowseResult>(`/api/filesystem/browse${qs ? `?${qs}` : ''}`)
+  },
+
+  getDrives() {
+    return api.get<DrivesResult>('/api/filesystem/drives')
   },
 
   search(query: string, cwd?: string) {
