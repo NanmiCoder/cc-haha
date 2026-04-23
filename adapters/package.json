@@ -1,0 +1,23 @@
+{
+  "name": "claude-code-im-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "telegram": "bun run telegram/index.ts",
+    "feishu": "bun run feishu/index.ts",
+    "test": "bun test",
+    "test:common": "bun test common/",
+    "test:telegram": "bun test telegram/",
+    "test:feishu": "bun test feishu/"
+  },
+  "dependencies": {
+    "grammy": "^1.42.0",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "bun-types": "latest"
+  }
+}

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#Get your current working directory and export it as an environment variable.
+export CALLER_DIR="${CALLER_DIR:-$(pwd -W 2>/dev/null || pwd)}"
+
+cd "$ROOT_DIR"
+
+# When spawned by the desktop/web server as a child CLI process,
+# skip .env loading — the server has already set the correct env
+# via cc-haha/settings.json. Loading .env would re-inject stale
+# provider keys (e.g., a MiniMax key as ANTHROPIC_API_KEY) that
+# override the active provider config.
+if [[ "${CC_HAHA_SKIP_DOTENV:-0}" == "1" ]]; then
+  # Bun auto-loads .env by default; explicitly point to /dev/null to suppress.
+  ENV_FILE_FLAG="--env-file=/dev/null"
+elif [[ -f .env ]]; then
+  ENV_FILE_FLAG="--env-file=.env"
+else
+  ENV_FILE_FLAG=""
+fi
+
+# Force recovery CLI (simple readline REPL, no Ink TUI)
+if [[ "${CLAUDE_CODE_FORCE_RECOVERY_CLI:-0}" == "1" ]]; then
+  exec bun $ENV_FILE_FLAG ./src/localRecoveryCli.ts "$@"
+fi
+
+# Default: full CLI with Ink TUI
+exec bun $ENV_FILE_FLAG ./src/entrypoints/cli.tsx "$@"

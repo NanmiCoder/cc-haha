@@ -1,0 +1,77 @@
+{
+  "input": [
+    [
+      {
+        "type": "text",
+        "text": "<system-reminder>\nPlan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.\n\n## Plan File Info:\nNo plan file exists yet. You should create your plan at [CONFIG_HOME]/plans/elegant-weaving-map.md using the Write tool.\nYou should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.\n\n## Plan Workflow\n\n### Phase 1: Initial Understanding\nGoal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the Explore subagent type.\n\n1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.\n\n2. **Launch up to 3 Explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.\n   - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.\n   - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.\n   - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)\n   - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns\n\n### Phase 2: Design\nGoal: Design an implementation approach.\n\nLaunch Plan agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.\n\nYou can launch up to 1 agent(s) in parallel.\n\n**Guidelines:**\n- **Default**: Launch at least 1 Plan agent for most tasks - it helps validate your understanding and consider alternatives\n- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes, simple renames)\n\nIn the agent prompt:\n- Provide comprehensive background context from Phase 1 exploration including filenames and code path traces\n- Describe requirements and constraints\n- Request a detailed implementation plan\n\n### Phase 3: Review\nGoal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.\n1. Read the critical files identified by agents to deepen your understanding\n2. Ensure that the plans align with the user's original request\n3. Use AskUserQuestion to clarify any remaining questions with the user\n\n### Phase 4: Final Plan\nGoal: Write your final plan to the plan file (the only file you can edit).\n- Begin with a **Context** section: explain why this change is being made — the problem or need it addresses, what prompted it, and the intended outcome\n- Include only your recommended approach, not all alternatives\n- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively\n- Include the paths of critical files to be modified\n- Reference existing functions and utilities you found that should be reused, with their file paths\n- Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)\n\n### Phase 5: Call ExitPlanMode\nAt the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call ExitPlanMode to indicate to the user that you are done planning.\nThis is critical - your turn should only end with either using the AskUserQuestion tool OR calling ExitPlanMode. Do not stop unless it's for these 2 reasons\n\n**Important:** Use AskUserQuestion ONLY to clarify requirements or choose between approaches. Use ExitPlanMode to request plan approval. Do NOT ask about plan approval in any other way - no text questions, no AskUserQuestion. Phrases like \"Is this plan okay?\", \"Should I proceed?\", \"How does this plan look?\", \"Any changes before we start?\", or similar MUST use ExitPlanMode.\n\nNOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications using the AskUserQuestion tool. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.\n</system-reminder>\n"
+      },
+      {
+        "type": "text",
+        "text": "Hello"
+      }
+    ]
+  ],
+  "output": [
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "id": "",
+          "type": "message",
+          "role": "assistant",
+          "content": [],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          },
+          "service_tier": "standard"
+        }
+      },
+      "ttftMs": 716
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      }
+    },
+    {
+      "uuid": "UUID-2",
+      "requestId": "REQUEST_ID",
+      "timestamp": "2026-04-08T09:37:43.983Z",
+      "message": {
+        "id": "062554e2bc7e76b93ee40ad7127ce5e8",
+        "type": "message",
+        "role": "assistant",
+        "model": "MiniMax-M2.7",
+        "content": [
+          {
+            "thinking": "The user has sent a simple greeting \"Hello\". Since plan mode is active and I need to follow the plan workflow, but this is just a greeting, I should respond in a friendly way and see what they need help with. This is not an implementation task yet, so I don't need to create a plan file or launch agents.\n\nLet me just greet them and ask what they need help with.",
+            "signature": "298588bc9e80b3bb0b7d761ee217342ecb2d7db8f2eff3be84d9a827a81fdaf1",
+            "type": "thinking"
+          },
+          {
+            "text": "Hello! I'm ready to help you with software engineering tasks. What would you like to work on?",
+            "type": "text",
+            "citations": []
+          }
+        ],
+        "usage": {
+          "input_tokens": 152,
+          "output_tokens": 104,
+          "cache_creation_input_tokens": 24050,
+          "cache_read_input_tokens": 0
+        },
+        "stop_reason": "end_turn",
+        "base_resp": {
+          "status_code": 0,
+          "status_msg": ""
+        }
+      },
+      "type": "assistant"
+    }
+  ]
+}

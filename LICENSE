@@ -1,0 +1,38 @@
+DISCLAIMER AND LICENSE
+
+Copyright (c) 2026 Anthropic, PBC. All rights reserved for the original source code.
+
+This repository is based on the Claude Code source code leaked from the Anthropic
+npm registry on 2026-03-31. All original source code copyrights belong to Anthropic.
+
+THIS SOFTWARE IS PROVIDED FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY.
+
+The purpose of this repository is to facilitate the study and research of AI Agent
+engineering, including but not limited to:
+- Agent architecture and design patterns
+- Tool use and function calling mechanisms
+- Multi-agent orchestration
+- Terminal UI (TUI) implementation for AI applications
+- MCP (Model Context Protocol) integration
+
+RESTRICTIONS:
+
+1. This software SHALL NOT be used for any commercial purposes.
+2. This software SHALL NOT be used to compete with or replicate Anthropic's
+   commercial products or services.
+3. This software SHALL NOT be redistributed, sublicensed, or sold in any form.
+4. Users SHALL comply with all applicable laws and regulations in their jurisdiction.
+
+NO WARRANTY:
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+By using this software, you acknowledge that:
+- You understand this is leaked source code and all original rights belong to Anthropic.
+- You will use it solely for learning and research of Agent engineering.
+- You assume all legal risks and responsibilities arising from the use of this software.

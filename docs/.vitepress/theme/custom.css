@@ -1,0 +1,34 @@
+:root {
+  --vp-c-brand-1: #D97757;
+  --vp-c-brand-2: #c5684a;
+  --vp-c-brand-3: #b15a3e;
+  --vp-c-brand-soft: rgba(217, 119, 87, 0.14);
+  --vp-sidebar-width: 280px;
+}
+
+.dark {
+  --vp-c-brand-1: #D97757;
+  --vp-c-brand-2: #e08868;
+  --vp-c-brand-3: #ea9a7a;
+  --vp-c-brand-soft: rgba(217, 119, 87, 0.16);
+}
+
+/* Hero image larger */
+.VPHero .image-container {
+  max-width: 500px !important;
+  max-height: 500px !important;
+}
+
+.VPHero .image-container .image-src {
+  max-width: 500px !important;
+  max-height: 500px !important;
+}
+
+/* medium-zoom overlay */
+.medium-zoom-overlay {
+  z-index: 30;
+}
+
+.medium-zoom-image--opened {
+  z-index: 31;
+}

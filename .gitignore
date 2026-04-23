@@ -1,0 +1,64 @@
+.env
+.env.*
+!.env.example
+node_modules
+.DS_Store
+
+# Computer Use runtime (auto-generated)
+.runtime/
+extracted-natives/
+
+# Adapter attachment cache (created at runtime by AttachmentStore when
+# running adapter tests or the feishu/telegram adapters locally)
+.lark-attachments/
+.tg-attachments/
+
+# Playwright MCP snapshots & logs
+.playwright-mcp/
+
+# OMX state/logs
+.omx/
+
+# E2E screenshots
+e2e-*.png
+
+# Desktop build output
+desktop/dist/
+desktop/build-artifacts/
+desktop/src-tauri/binaries/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/package-lock.json
+
+# Desktop brand asset candidates (keep only selected ones in public/)
+desktop/brand-assets/
+
+# Claude local config & auto-generated
+.claude/
+
+# Superpowers plans & specs (local only)
+docs/superpowers/
+
+# Temp server/web logs
+.tmp-*.log
+
+# Debug / temp screenshots (root dir only)
+/*.png
+bug_attachments/
+
+# Private keys & credentials
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# TS build cache
+*.tsbuildinfo
+
+# Temp markdown snapshots
+sidebar-snapshot.md
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/cache
+runtime/__pycache__
