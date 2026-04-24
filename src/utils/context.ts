@@ -13,7 +13,7 @@ export const COMPACT_MAX_OUTPUT_TOKENS = 20_000
 
 // Default max output tokens
 const MAX_OUTPUT_TOKENS_DEFAULT = 32_000
-const MAX_OUTPUT_TOKENS_UPPER_LIMIT = 64_000
+const MAX_OUTPUT_TOKENS_UPPER_LIMIT = 200_000
 
 // Capped default for slot-reservation optimization. BQ p99 output = 4,911
 // tokens, so 32k/64k defaults over-reserve 8-16× slot capacity. With the cap
@@ -22,7 +22,7 @@ const MAX_OUTPUT_TOKENS_UPPER_LIMIT = 64_000
 // claude.ts:getMaxOutputTokensForModel to avoid the growthbook→betas→context
 // import cycle.
 export const CAPPED_DEFAULT_MAX_TOKENS = 8_000
-export const ESCALATED_MAX_TOKENS = 64_000
+export const ESCALATED_MAX_TOKENS = 200_000
 
 /**
  * Check if 1M context is disabled via environment variable.

@@ -701,8 +701,11 @@ export class ConversationService {
 
     if (!launcher) {
       if (process.platform === 'win32') {
+        const preloadPath = path.resolve(import.meta.dir, '../../../preload.ts')
         return [
           process.execPath,
+          '--preload',
+          preloadPath,
           path.resolve(import.meta.dir, '../../entrypoints/cli.tsx'),
           ...baseArgs,
         ]

@@ -20,6 +20,16 @@ function isTauriRuntime() {
   return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
 }
 
+function isWindows(): boolean {
+  if (typeof process !== 'undefined' && process.platform === 'win32') {
+    return true
+  }
+  if (typeof navigator !== 'undefined') {
+    return navigator.platform.toLowerCase().includes('win')
+  }
+  return false
+}
+
 export function DirectoryPicker({ value, onChange }: Props) {
   const t = useTranslation()
   const [isOpen, setIsOpen] = useState(false)
@@ -30,6 +40,8 @@ export function DirectoryPicker({ value, onChange }: Props) {
   const [browseParent, setBrowseParent] = useState('')
   const [loading, setLoading] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; direction: 'up' | 'down' } | null>(null)
+  const [drives, setDrives] = useState<DirEntry[]>([])
+  const [showDrives, setShowDrives] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
@@ -95,6 +107,7 @@ export function DirectoryPicker({ value, onChange }: Props) {
 
   const loadBrowseDir = async (path?: string) => {
     setLoading(true)
+    setShowDrives(false)
     try {
       const result = await filesystemApi.browse(path)
       setBrowsePath(result.currentPath)
@@ -104,10 +117,43 @@ export function DirectoryPicker({ value, onChange }: Props) {
     setLoading(false)
   }
 
+  const loadDrives = async () => {
+    setLoading(true)
+    try {
+      const result = await filesystemApi.getDrives()
+      if (result.drives && result.drives.length > 0) {
+        setDrives(result.drives)
+        setShowDrives(true)
+      } else {
+        setDrives([])
+        setShowDrives(false)
+      }
+    } catch {
+      setDrives([])
+      setShowDrives(false)
+    }
+    setLoading(false)
+  }
+
+  const handleBrowseMode = () => {
+    setMode('browse')
+    // On Windows, load drives when browsing from root
+    if (isWindows()) {
+      setShowDrives(true)
+      loadDrives()
+      setBrowsePath('')
+      setBrowseEntries([])
+    } else {
+      setShowDrives(false)
+      loadBrowseDir('/')
+    }
+  }
+
   const handleSelect = (path: string) => {
     onChange(path)
     setIsOpen(false)
     setMode('recent')
+    setShowDrives(false)
     // Invalidate cache so next open reflects the new selection
     cachedProjects = null
   }
@@ -129,8 +175,7 @@ export function DirectoryPicker({ value, onChange }: Props) {
       }
     } else {
       // Web browser: directory tree via backend API
-      setMode('browse')
-      loadBrowseDir(value || undefined)
+      handleBrowseMode()
     }
   }
 
@@ -258,16 +303,30 @@ export function DirectoryPicker({ value, onChange }: Props) {
                 <button onClick={() => setMode('recent')} className="text-xs text-[var(--color-text-accent)] hover:underline mr-2">
                   {'← ' + t('dirPicker.recent')}
                 </button>
-                <button onClick={() => loadBrowseDir('/')} className="text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">/</button>
-                {browsePath.split('/').filter(Boolean).map((seg, i, arr) => (
-                  <span key={i} className="flex items-center gap-1">
-                    <span className="text-[10px] text-[var(--color-text-tertiary)]">/</span>
-                    <button
-                      onClick={() => loadBrowseDir('/' + arr.slice(0, i + 1).join('/'))}
-                      className="text-[10px] text-[var(--color-text-accent)] hover:underline"
-                    >{seg}</button>
-                  </span>
-                ))}
+                {isWindows() && showDrives ? (
+                  <button onClick={() => loadDrives()} className="text-[10px] text-[var(--color-text-accent)] hover:underline">
+                    {t('dirPicker.computerDrives') || 'Drives'}
+                  </button>
+                ) : (
+                  <>
+                    {isWindows() ? (
+                      <button onClick={() => { setShowDrives(true); loadDrives() }} className="text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">
+                        {'..'}
+                      </button>
+                    ) : (
+                      <button onClick={() => loadBrowseDir('/')} className="text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">/</button>
+                    )}
+                    {browsePath && browsePath.split(/[/\\]/).filter(Boolean).map((seg, i, arr) => (
+                      <span key={i} className="flex items-center gap-1">
+                        <span className="text-[10px] text-[var(--color-text-tertiary)]">/</span>
+                        <button
+                          onClick={() => loadBrowseDir('/' + arr.slice(0, i + 1).join('/'))}
+                          className="text-[10px] text-[var(--color-text-accent)] hover:underline"
+                        >{seg}</button>
+                      </span>
+                    ))}
+                  </>
+                )}
               </div>
 
               <div className="max-h-[240px] overflow-y-auto">
@@ -275,26 +334,50 @@ export function DirectoryPicker({ value, onChange }: Props) {
                   <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('common.loading')}</div>
                 ) : (
                   <>
-                    {browseParent && browseParent !== browsePath && (
-                      <button onClick={() => loadBrowseDir(browseParent)} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]">
-                        <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">arrow_upward</span>
-                        <span className="text-xs text-[var(--color-text-secondary)]">..</span>
-                      </button>
-                    )}
-                    {browseEntries.length === 0 ? (
-                      <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('dirPicker.noSubdirs')}</div>
-                    ) : browseEntries.map((entry) => (
-                      <button
-                        key={entry.path}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]"
-                      >
-                        <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]" onClick={() => loadBrowseDir(entry.path)}>folder</span>
-                        <span className="text-xs text-[var(--color-text-primary)] flex-1" onClick={() => loadBrowseDir(entry.path)}>{entry.name}</span>
-                        <button onClick={() => handleSelect(entry.path)} className="px-2 py-0.5 text-[10px] font-semibold text-[var(--color-brand)] hover:bg-[var(--color-primary-fixed)] rounded transition-colors">
-                          {t('common.select')}
+                    {/* Show drives on Windows when at root */}
+                    {isWindows() && showDrives && drives.length > 0 ? (
+                      drives.map((drive) => (
+                        <button
+                          key={drive.path}
+                          onClick={() => loadBrowseDir(drive.path)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">hard_disk</span>
+                          <span className="text-xs text-[var(--color-text-primary)] flex-1">{drive.name}</span>
+                          <button onClick={() => handleSelect(drive.path)} className="px-2 py-0.5 text-[10px] font-semibold text-[var(--color-brand)] hover:bg-[var(--color-primary-fixed)] rounded transition-colors">
+                            {t('common.select')}
+                          </button>
                         </button>
-                      </button>
-                    ))}
+                      ))
+                    ) : (
+                      <>
+                        {browseParent && browseParent !== browsePath ? (
+                          <button onClick={() => loadBrowseDir(browseParent)} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]">
+                            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">arrow_upward</span>
+                            <span className="text-xs text-[var(--color-text-secondary)]">..</span>
+                          </button>
+                        ) : isWindows() ? (
+                          <button onClick={() => { setShowDrives(true); loadDrives() }} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]">
+                            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">arrow_upward</span>
+                            <span className="text-xs text-[var(--color-text-secondary)]">Back to Drives</span>
+                          </button>
+                        ) : null}
+                        {browseEntries.length === 0 ? (
+                          <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('dirPicker.noSubdirs')}</div>
+                        ) : browseEntries.map((entry) => (
+                          <button
+                            key={entry.path}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]"
+                          >
+                            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]" onClick={() => loadBrowseDir(entry.path)}>folder</span>
+                            <span className="text-xs text-[var(--color-text-primary)] flex-1" onClick={() => loadBrowseDir(entry.path)}>{entry.name}</span>
+                            <button onClick={() => handleSelect(entry.path)} className="px-2 py-0.5 text-[10px] font-semibold text-[var(--color-brand)] hover:bg-[var(--color-primary-fixed)] rounded transition-colors">
+                              {t('common.select')}
+                            </button>
+                          </button>
+                        ))}
+                      </>
+                    )}
                   </>
                 )}
               </div>
