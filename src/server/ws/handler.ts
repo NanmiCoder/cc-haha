@@ -18,9 +18,13 @@ import { sessionService } from '../services/sessionService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import { deriveTitle, generateTitle, saveAiTitle } from '../services/titleService.js'
+import { normalizeModelRouting, toModelEnv } from '../services/modelRoutingService.js'
+import { patchSettingsEnv } from '../services/settingsSyncService.js'
+import { getXiaomuModelCatalog } from '../services/xiaomuModelService.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
+const XIAOMU_CONFIG_FALLBACK_DIR = '.xiaomu-ai'
 
 /**
  * Cache slash commands from CLI init messages, keyed by sessionId.
@@ -193,12 +197,20 @@ async function handleUserMessage(
   // Send thinking status
   sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
 
+  const runtimeSettings = await getRuntimeSettings()
+  const hasSession = conversationService.hasSession(sessionId)
+  const shouldRestartForRuntime =
+    hasSession && conversationService.needsRestartForRuntimeOptions(sessionId, runtimeSettings)
+
   // 启动 CLI 子进程（如果还没有）
-  if (!conversationService.hasSession(sessionId)) {
+  if (!hasSession || shouldRestartForRuntime) {
     try {
       // Resolve the session's actual working directory
       try {
-        const resolved = await sessionService.getSessionWorkDir(sessionId)
+        const resolved =
+          shouldRestartForRuntime
+            ? conversationService.getSessionWorkDir(sessionId) || await sessionService.getSessionWorkDir(sessionId)
+            : await sessionService.getSessionWorkDir(sessionId)
         if (resolved) workDir = resolved
         console.log(
           `[WS] handleUserMessage: sessionId=${sessionId}, resolved workDir=${JSON.stringify(
@@ -213,7 +225,10 @@ async function handleUserMessage(
           }`,
         )
       }
-      const runtimeSettings = await getRuntimeSettings()
+      if (shouldRestartForRuntime) {
+        console.log(`[WS] Restarting CLI for ${sessionId} because runtime model/settings changed`)
+        conversationService.stopSession(sessionId)
+      }
       const sdkUrl =
         `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
         `?token=${encodeURIComponent(crypto.randomUUID())}`
@@ -456,10 +471,12 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
  */
 type SessionStreamState = {
   hasReceivedStreamEvents: boolean
+  hasReceivedTextDelta: boolean
+  hasReceivedThinkingDelta: boolean
   activeBlockTypes: Map<number, 'text' | 'tool_use'>
   activeToolBlocks: Map<number, { toolName: string; toolUseId: string; inputJson: string }>
   /** Tool blocks whose input JSON failed to parse in content_block_stop.
-   *  The assistant message carries the complete input — defer to that. */
+   *  The assistant message carries the complete input - defer to that. */
   pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
 }
 
@@ -470,6 +487,8 @@ function getStreamState(sessionId: string): SessionStreamState {
   if (!state) {
     state = {
       hasReceivedStreamEvents: false,
+      hasReceivedTextDelta: false,
+      hasReceivedThinkingDelta: false,
       activeBlockTypes: new Map(),
       activeToolBlocks: new Map(),
       pendingToolBlocks: new Map(),
@@ -484,7 +503,14 @@ function cleanupStreamState(sessionId: string) {
   sessionStreamStates.delete(sessionId)
 }
 
-function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
+function resetStreamTurnState(streamState: SessionStreamState): void {
+  streamState.hasReceivedStreamEvents = false
+  streamState.hasReceivedTextDelta = false
+  streamState.hasReceivedThinkingDelta = false
+  streamState.pendingToolBlocks.clear()
+}
+
+export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
   const streamState = getStreamState(sessionId)
   switch (cliMsg.type) {
     case 'assistant': {
@@ -496,13 +522,33 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         }]
       }
 
-      // If we already received stream_events, text/thinking were already sent.
-      // Only extract tool_use blocks (stream_event's content_block_stop lacks complete tool info).
+      // If we already received stream_events, text/thinking were usually already
+      // sent. Some providers only emit partial stream events, so fall back to
+      // the final assistant payload when no renderable text/thinking delta was
+      // actually forwarded to the frontend.
       if (cliMsg.message?.content && Array.isArray(cliMsg.message.content)) {
         const messages: ServerMessage[] = []
 
         for (const block of cliMsg.message.content) {
           if (streamState.hasReceivedStreamEvents) {
+            if (
+              block.type === 'thinking' &&
+              block.thinking &&
+              !streamState.hasReceivedThinkingDelta
+            ) {
+              messages.push({ type: 'thinking', text: block.thinking })
+              continue
+            }
+
+            if (
+              block.type === 'text' &&
+              block.text &&
+              !streamState.hasReceivedTextDelta
+            ) {
+              messages.push({ type: 'content_start', blockType: 'text' })
+              messages.push({ type: 'content_delta', text: block.text })
+              continue
+            }
             // Stream events handled most blocks — but any tool_use whose
             // input JSON failed to parse in content_block_stop was deferred.
             // Emit those now with the complete input from the assistant message.
@@ -540,8 +586,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         }
 
         // Reset flags for next turn
-        streamState.hasReceivedStreamEvents = false
-        streamState.pendingToolBlocks.clear()
+        resetStreamTurnState(streamState)
         return messages
       }
       return []
@@ -615,6 +660,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
           if (!delta) return []
 
           if (delta.type === 'text_delta' && delta.text) {
+            streamState.hasReceivedTextDelta = true
             return [{ type: 'content_delta', text: delta.text }]
           }
           if (delta.type === 'input_json_delta' && delta.partial_json) {
@@ -625,6 +671,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
             return [{ type: 'content_delta', toolInput: delta.partial_json }]
           }
           if (delta.type === 'thinking_delta' && delta.thinking) {
+            streamState.hasReceivedThinkingDelta = true
             return [{ type: 'thinking', text: delta.thinking }]
           }
           return []
@@ -709,6 +756,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         input_tokens: cliMsg.usage?.input_tokens || 0,
         output_tokens: cliMsg.usage?.output_tokens || 0,
       }
+      resetStreamTurnState(streamState)
 
       if (cliMsg.is_error) {
         // If the user requested stop, this "error" is just the interrupt
@@ -857,10 +905,23 @@ async function getRuntimeSettings(): Promise<{
     }
   } else {
     // No provider — pass model normally
-    const baseModel =
+    let baseModel =
       typeof userSettings.model === 'string' && userSettings.model.trim()
         ? userSettings.model
         : undefined
+    if (!baseModel) {
+      const catalog = await getXiaomuModelCatalog()
+      baseModel = catalog.defaultModelId
+      const routing =
+        catalog.routingById[baseModel] || normalizeModelRouting(undefined, baseModel)
+      await patchSettingsEnv(toModelEnv(routing), {
+        fallbackDirName: XIAOMU_CONFIG_FALLBACK_DIR,
+        topLevel: true,
+        ccHaha: true,
+      }).catch((error) => {
+        console.warn('[WS] failed to sync remote default model routing:', error)
+      })
+    }
     model = baseModel ? (modelContext ? `${baseModel}:${modelContext}` : baseModel) : undefined
   }
 

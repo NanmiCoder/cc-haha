@@ -18,7 +18,7 @@ type Props = {
 
 export function ModelSelector({ value, onChange }: Props = {}) {
   const t = useTranslation()
-  const { currentModel: storeModel, availableModels, effortLevel, setModel, setEffort } = useSettingsStore()
+  const { currentModel: storeModel, availableModels, effortLevel, fetchAll, setModel, setEffort } = useSettingsStore()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -59,7 +59,13 @@ export function ModelSelector({ value, onChange }: Props = {}) {
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          const nextOpen = !open
+          setOpen(nextOpen)
+          if (nextOpen && !isControlled) {
+            void fetchAll().catch(() => {})
+          }
+        }}
         className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[var(--color-surface-container-low)] hover:bg-[var(--color-surface-hover)] rounded-full text-xs font-medium text-[var(--color-text-secondary)] transition-colors"
       >
         <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)]">auto_awesome</span>
@@ -68,10 +74,10 @@ export function ModelSelector({ value, onChange }: Props = {}) {
       </button>
 
       {open && (
-        <div className="absolute right-0 bottom-full mb-2 w-[340px] rounded-xl bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)] shadow-[var(--shadow-dropdown)] z-50">
+        <div className="absolute right-0 bottom-full mb-2 w-[340px] max-h-[min(520px,calc(100vh-140px))] overflow-hidden flex flex-col rounded-xl bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)] shadow-[var(--shadow-dropdown)] z-50">
           {/* Models */}
-          <div className="p-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)] mb-2 px-1">
+          <div className="p-3 flex-1 overflow-y-auto">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)] mb-2 px-1 sticky top-0 bg-[var(--color-surface-container-lowest)] z-10 py-1">
               {t('model.configuration')}
             </div>
             <div className="space-y-1">

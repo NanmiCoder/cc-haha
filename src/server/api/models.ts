@@ -1,68 +1,131 @@
 /**
  * Models REST API
  *
- * GET  /api/models          — 获取可用模型列表
- * GET  /api/models/current  — 获取当前选中的模型
- * PUT  /api/models/current  — 切换模型
- * GET  /api/effort          — 获取 Effort 等级
- * PUT  /api/effort          — 设置 Effort 等级
+ * GET  /api/models          - Get available models
+ * GET  /api/models/current  - Get the currently selected model
+ * PUT  /api/models/current  - Switch the current model
+ * GET  /api/effort          - Get current effort level
+ * PUT  /api/effort          - Update effort level
  */
 
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
+import {
+  modelEnvMatches,
+  normalizeModelRouting,
+  routingFromProviderModels,
+  toModelEnv,
+} from '../services/modelRoutingService.js'
+import { patchSettingsEnv } from '../services/settingsSyncService.js'
+import {
+  DEFAULT_XIAOMU_MODEL_ID,
+  getXiaomuModelCatalog,
+  type XiaomuModel,
+} from '../services/xiaomuModelService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
-// ─── Fallback models (used when no provider is configured) ────────────────────
-
-const DEFAULT_MODELS = [
-  {
-    id: 'claude-opus-4-7',
-    name: 'Opus 4.7',
-    description: 'Most capable for ambitious work',
-    context: '1m',
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    name: 'Sonnet 4.6',
-    description: 'Most efficient for everyday tasks',
-    context: '200k',
-  },
-  {
-    id: 'claude-haiku-4-5',
-    name: 'Haiku 4.5',
-    description: 'Fastest for quick answers',
-    context: '200k',
-  },
-] as const
-
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max'] as const
-
-const DEFAULT_MODEL = 'claude-opus-4-7'
 const DEFAULT_EFFORT = 'max'
+const XIAOMU_CONFIG_FALLBACK_DIR = '.xiaomu-ai'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
 
-// ─── Router ───────────────────────────────────────────────────────────────────
+type ModelInfo = XiaomuModel
+
+function buildProviderModelList(activeProvider: {
+  models: { main: string; haiku: string; sonnet: string; opus: string }
+}): ModelInfo[] {
+  const candidates = [
+    { id: activeProvider.models.main, name: activeProvider.models.main, description: 'Main model', context: '' },
+    { id: activeProvider.models.haiku, name: activeProvider.models.haiku, description: 'Haiku model', context: '' },
+    { id: activeProvider.models.sonnet, name: activeProvider.models.sonnet, description: 'Sonnet model', context: '' },
+    { id: activeProvider.models.opus, name: activeProvider.models.opus, description: 'Opus model', context: '' },
+  ]
+
+  const seen = new Set<string>()
+  return candidates.filter((model) => {
+    if (!model.id || seen.has(model.id)) return false
+    seen.add(model.id)
+    return true
+  })
+}
+
+async function syncSelectedModelRouting(
+  modelId: string,
+  options: {
+    activeProvider?: {
+      models: { main: string; haiku: string; sonnet: string; opus: string }
+    } | null
+    catalog?: Awaited<ReturnType<typeof getXiaomuModelCatalog>> | null
+  },
+): Promise<void> {
+  const routing = options.activeProvider
+    ? routingFromProviderModels({
+        ...options.activeProvider.models,
+        main: modelId,
+      })
+    : options.catalog?.routingById[modelId] || normalizeModelRouting(undefined, modelId)
+
+  await patchSettingsEnv(toModelEnv(routing), {
+    fallbackDirName: XIAOMU_CONFIG_FALLBACK_DIR,
+    topLevel: !options.activeProvider,
+    ccHaha: true,
+  })
+}
+
+async function reconcileXiaomuCurrentModel(
+  explicitModel: string,
+  env: Record<string, string>,
+): Promise<{
+  availableModels: ModelInfo[]
+  currentModelId: string
+  currentModelName: string
+  contextTier?: string
+}> {
+  const catalog = await getXiaomuModelCatalog()
+  const availableModels = catalog.models
+  const availableIds = new Set(availableModels.map((model) => model.id))
+
+  let currentModelId = explicitModel || catalog.defaultModelId || DEFAULT_XIAOMU_MODEL_ID
+  const explicitModelIsInvalid = !!explicitModel && !availableIds.has(explicitModel)
+
+  if (!availableIds.has(currentModelId)) {
+    currentModelId = catalog.defaultModelId || availableModels[0]?.id || DEFAULT_XIAOMU_MODEL_ID
+  }
+
+  if (explicitModelIsInvalid) {
+    await settingsService.updateUserSettings({ model: undefined, modelContext: undefined })
+  }
+
+  const desiredRouting =
+    catalog.routingById[currentModelId] || normalizeModelRouting(undefined, currentModelId)
+  if (!modelEnvMatches(env, desiredRouting)) {
+    await syncSelectedModelRouting(currentModelId, { catalog })
+  }
+
+  return {
+    availableModels,
+    currentModelId,
+    currentModelName: currentModelId,
+  }
+}
 
 export async function handleModelsApi(
   req: Request,
-  url: URL,
+  _url: URL,
   segments: string[],
 ): Promise<Response> {
   try {
-    const resource = segments[1] // 'models' | 'effort'
-    const sub = segments[2] // 'current' | undefined
+    const resource = segments[1]
+    const sub = segments[2]
 
-    // ── /api/effort ───────────────────────────────────────────────────
     if (resource === 'effort') {
       return await handleEffort(req)
     }
 
-    // ── /api/models/* ─────────────────────────────────────────────────
     switch (sub) {
       case undefined:
-        // GET /api/models — 优先从激活的 Provider 读取模型列表
         if (req.method !== 'GET') throw methodNotAllowed(req.method)
         return await handleModelsList()
 
@@ -77,25 +140,26 @@ export async function handleModelsApi(
   }
 }
 
-// ─── Handlers ─────────────────────────────────────────────────────────────────
-
 async function handleModelsList(): Promise<Response> {
   const { providers, activeId } = await providerService.listProviders()
-  const activeProvider = activeId ? providers.find((p) => p.id === activeId) : null
+  const activeProvider = activeId ? providers.find((provider) => provider.id === activeId) : null
+
   if (activeProvider) {
-    // Convert ModelMapping to model list for API compatibility
-    const modelList = [
-      { id: activeProvider.models.main, name: activeProvider.models.main, description: 'Main model', context: '' },
-      ...(activeProvider.models.haiku !== activeProvider.models.main ? [{ id: activeProvider.models.haiku, name: activeProvider.models.haiku, description: 'Haiku model', context: '' }] : []),
-      ...(activeProvider.models.sonnet !== activeProvider.models.main ? [{ id: activeProvider.models.sonnet, name: activeProvider.models.sonnet, description: 'Sonnet model', context: '' }] : []),
-      ...(activeProvider.models.opus !== activeProvider.models.main ? [{ id: activeProvider.models.opus, name: activeProvider.models.opus, description: 'Opus model', context: '' }] : []),
-    ]
     return Response.json({
-      models: modelList,
+      models: buildProviderModelList(activeProvider),
       provider: { id: activeProvider.id, name: activeProvider.name },
     })
   }
-  return Response.json({ models: DEFAULT_MODELS, provider: null })
+
+  const catalog = await getXiaomuModelCatalog()
+  return Response.json({
+    models: catalog.models,
+    provider: { id: 'xiaomu', name: catalog.providerName },
+    meta: {
+      remoteManaged: catalog.remoteManaged,
+      defaultModelId: catalog.defaultModelId,
+    },
+  })
 }
 
 async function handleCurrentModel(req: Request): Promise<Response> {
@@ -103,48 +167,46 @@ async function handleCurrentModel(req: Request): Promise<Response> {
     const settings = await settingsService.getUserSettings()
     const explicitModel = (settings.model as string) || ''
     const contextTier = (settings.modelContext as string) || undefined
-    const env = (settings.env as Record<string, string>) || {}
+    const env = ((settings.env as Record<string, string>) || {})
 
-    // Build the full model list: prefer active provider's models, fall back to defaults
     const { providers, activeId } = await providerService.listProviders()
-    const activeProvider = activeId ? providers.find((p) => p.id === activeId) : null
+    const activeProvider = activeId ? providers.find((provider) => provider.id === activeId) : null
 
+    let availableModels: ModelInfo[]
     let currentModelId: string
     let currentModelName: string
 
     if (activeProvider) {
-      // Provider is active — use the model from env (set by syncToSettings when provider was activated)
-      // unless user explicitly set a different model ID in settings
+      availableModels = buildProviderModelList(activeProvider)
+      const availableIds = new Set(availableModels.map((model) => model.id))
       const providerEnvModel = env.ANTHROPIC_MODEL
-      if (providerEnvModel && (!explicitModel || explicitModel === DEFAULT_MODEL)) {
-        // No explicit model override — use the provider's configured model
-        currentModelId = providerEnvModel
-        currentModelName = providerEnvModel
-      } else {
-        // User explicitly set a model (possibly from the provider's model list)
-        currentModelId = explicitModel || providerEnvModel || activeProvider.models.main
-        currentModelName = currentModelId
+      currentModelId = explicitModel || providerEnvModel || activeProvider.models.main
+
+      if (!availableIds.has(currentModelId)) {
+        currentModelId = availableIds.has(providerEnvModel || '')
+          ? (providerEnvModel as string)
+          : activeProvider.models.main
+      }
+
+      currentModelName = currentModelId
+
+      const desiredRouting = routingFromProviderModels({
+        ...activeProvider.models,
+        main: currentModelId,
+      })
+      if (!modelEnvMatches(env, desiredRouting)) {
+        await syncSelectedModelRouting(currentModelId, { activeProvider })
       }
     } else {
-      // No provider — use settings model with context tier
-      currentModelId = explicitModel || DEFAULT_MODEL
-      currentModelName = currentModelId
+      const reconciled = await reconcileXiaomuCurrentModel(explicitModel, env)
+      availableModels = reconciled.availableModels
+      currentModelId = reconciled.currentModelId
+      currentModelName = reconciled.currentModelName
     }
 
     const lookupId = contextTier ? `${currentModelId}:${contextTier}` : currentModelId
-
-    // Build available models for name lookup
-    const availableModels = activeProvider
-      ? [
-          { id: activeProvider.models.main, name: activeProvider.models.main, description: 'Main model', context: '' },
-          ...(activeProvider.models.haiku && activeProvider.models.haiku !== activeProvider.models.main ? [{ id: activeProvider.models.haiku, name: activeProvider.models.haiku, description: 'Haiku model', context: '' }] : []),
-          ...(activeProvider.models.sonnet && activeProvider.models.sonnet !== activeProvider.models.main ? [{ id: activeProvider.models.sonnet, name: activeProvider.models.sonnet, description: 'Sonnet model', context: '' }] : []),
-          ...(activeProvider.models.opus && activeProvider.models.opus !== activeProvider.models.main ? [{ id: activeProvider.models.opus, name: activeProvider.models.opus, description: 'Opus model', context: '' }] : []),
-        ]
-      : DEFAULT_MODELS
-
-    const modelEntry = availableModels.find((m) => m.id === lookupId)
-      || availableModels.find((m) => m.id === currentModelId)
+    const modelEntry = availableModels.find((model) => model.id === lookupId)
+      || availableModels.find((model) => model.id === currentModelId)
       || {
         id: currentModelId,
         name: currentModelName,
@@ -152,31 +214,44 @@ async function handleCurrentModel(req: Request): Promise<Response> {
         context: contextTier || 'unknown',
       }
 
-    return Response.json({ model: { ...modelEntry, context: contextTier || modelEntry.context } })
+    return Response.json({
+      model: {
+        ...modelEntry,
+        context: contextTier || modelEntry.context,
+      },
+    })
   }
 
   if (req.method === 'PUT') {
     const body = await parseJsonBody(req)
     const modelId = body.modelId
-    if (typeof modelId !== 'string' || !modelId) {
+    if (typeof modelId !== 'string' || !modelId.trim()) {
       throw ApiError.badRequest('Missing or invalid "modelId" in request body')
     }
 
-    // Parse composite IDs like 'claude-opus-4-7-20250610:1m'
-    // Persist the base model ID for CLI compatibility and context tier separately
-    const colonIdx = modelId.indexOf(':')
-    const baseId = colonIdx !== -1 ? modelId.slice(0, colonIdx) : modelId
-    const contextTier = colonIdx !== -1 ? modelId.slice(colonIdx + 1) : undefined
+    const normalizedModelId = modelId.trim()
+    const colonIndex = normalizedModelId.indexOf(':')
+    const baseId = colonIndex !== -1 ? normalizedModelId.slice(0, colonIndex) : normalizedModelId
+    const contextTier = colonIndex !== -1 ? normalizedModelId.slice(colonIndex + 1) : undefined
 
-    const updates: Record<string, unknown> = { model: baseId }
-    if (contextTier) {
-      updates.modelContext = contextTier
-    } else {
-      // Clear context tier when switching to a non-composite model
-      updates.modelContext = undefined
+    const { providers, activeId } = await providerService.listProviders()
+    const activeProvider = activeId ? providers.find((provider) => provider.id === activeId) : null
+    const catalog = activeProvider ? null : await getXiaomuModelCatalog()
+    const availableModels = activeProvider
+      ? buildProviderModelList(activeProvider)
+      : catalog!.models
+
+    if (!availableModels.some((model) => model.id === baseId)) {
+      throw ApiError.badRequest(`Model "${baseId}" is not available right now`)
     }
-    await settingsService.updateUserSettings(updates)
-    return Response.json({ ok: true, model: modelId })
+
+    await settingsService.updateUserSettings({
+      model: baseId,
+      modelContext: contextTier || undefined,
+    })
+    await syncSelectedModelRouting(baseId, { activeProvider, catalog })
+
+    return Response.json({ ok: true, model: normalizedModelId })
   }
 
   throw methodNotAllowed(req.method)
@@ -206,8 +281,6 @@ async function handleEffort(req: Request): Promise<Response> {
 
   throw methodNotAllowed(req.method)
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
   try {

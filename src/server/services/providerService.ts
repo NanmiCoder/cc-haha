@@ -15,6 +15,10 @@ import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenai
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesToAnthropic.js'
 import type { AnthropicRequest, AnthropicResponse } from '../proxy/transform/types.js'
+import {
+  routingFromProviderModels,
+  toModelEnv,
+} from './modelRoutingService.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -33,6 +37,7 @@ const MANAGED_ENV_KEYS = [
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
   'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
 ] as const
 
 const DEFAULT_INDEX: ProvidersIndex = { activeId: null, providers: [] }
@@ -226,10 +231,7 @@ export class ProviderService {
       ...existingEnv,
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_AUTH_TOKEN: needsProxy ? 'proxy-managed' : provider.apiKey,
-      ANTHROPIC_MODEL: provider.models.main,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: provider.models.haiku,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: provider.models.sonnet,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: provider.models.opus,
+      ...toModelEnv(routingFromProviderModels(provider.models)),
     }
 
     await this.writeSettings(settings)

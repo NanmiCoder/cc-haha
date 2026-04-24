@@ -37,6 +37,7 @@ type SessionProcess = {
       permissionSuggestions?: unknown[]
     }
   >
+  runtimeOptionsKey: string
 }
 
 type SessionStartOptions = {
@@ -150,6 +151,7 @@ export class ConversationService {
       stderrLines: [],
       sdkMessages: [],
       pendingPermissionRequests: new Map(),
+      runtimeOptionsKey: this.getRuntimeOptionsKey(options),
     }
     this.sessions.set(sessionId, session)
 
@@ -295,6 +297,14 @@ export class ConversationService {
   getSessionPermissionMode(sessionId: string): string {
     const session = this.sessions.get(sessionId)
     return session?.permissionMode || 'default'
+  }
+
+  needsRestartForRuntimeOptions(
+    sessionId: string,
+    options?: SessionStartOptions,
+  ): boolean {
+    const session = this.sessions.get(sessionId)
+    return !!session && session.runtimeOptionsKey !== this.getRuntimeOptionsKey(options)
   }
 
   authorizeSdkConnection(
@@ -471,6 +481,14 @@ export class ConversationService {
     return args
   }
 
+  private getRuntimeOptionsKey(options: SessionStartOptions | undefined): string {
+    return JSON.stringify({
+      permissionMode: options?.permissionMode || 'default',
+      model: options?.model || '',
+      effort: options?.effort || '',
+    })
+  }
+
   private async buildChildEnv(
     workDir: string,
     sdkUrl?: string,
@@ -490,6 +508,7 @@ export class ConversationService {
       'ANTHROPIC_DEFAULT_HAIKU_MODEL',
       'ANTHROPIC_DEFAULT_SONNET_MODEL',
       'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'ANTHROPIC_SMALL_FAST_MODEL',
     ] as const
 
     const cleanEnv = { ...process.env }
@@ -510,8 +529,63 @@ export class ConversationService {
       }
     }
 
+    // xiaomu: 强制读 settings.json 的 env，直接注入到子进程
+    // 因为 shouldStripInheritedProviderEnv 会把 process.env 里的 ANTHROPIC_* 剥掉，
+    // 而 CLI 内部的"小模型"( session title / 子任务 ) 如果没拿到 ANTHROPIC_SMALL_FAST_MODEL
+    // 会 fallback 到硬编码的 claude-haiku-4-5-20251001 → 打到 aiapi.space 的破通道
+    // → 用户选 gpt-5.4 却报 cli_key=claude 的 502
+    const xiaomuForcedEnv: Record<string, string> = {}
+    try {
+      const configDir =
+        process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.xiaomu-ai')
+      for (const p of [
+        path.join(configDir, 'settings.json'),
+        path.join(configDir, 'cc-haha', 'settings.json'),
+      ]) {
+        try {
+          const raw = fs.readFileSync(p, 'utf-8')
+          const parsed = JSON.parse(raw) as { env?: Record<string, string> }
+          if (parsed.env) {
+            for (const [k, v] of Object.entries(parsed.env)) {
+              if (typeof v === 'string' && v) xiaomuForcedEnv[k] = v
+            }
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+    // 兜底：任何情况下子任务都走 sonnet（保证有通道）
+    if (!xiaomuForcedEnv.ANTHROPIC_SMALL_FAST_MODEL) {
+      xiaomuForcedEnv.ANTHROPIC_SMALL_FAST_MODEL =
+        xiaomuForcedEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL
+        || xiaomuForcedEnv.ANTHROPIC_MODEL
+        || 'gpt-5.4'
+    }
+    if (!xiaomuForcedEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
+      xiaomuForcedEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL =
+        xiaomuForcedEnv.ANTHROPIC_SMALL_FAST_MODEL
+        || xiaomuForcedEnv.ANTHROPIC_MODEL
+        || 'gpt-5.4'
+    }
+    if (!xiaomuForcedEnv.ANTHROPIC_DEFAULT_SONNET_MODEL) {
+      xiaomuForcedEnv.ANTHROPIC_DEFAULT_SONNET_MODEL =
+        xiaomuForcedEnv.ANTHROPIC_MODEL || 'gpt-5.4'
+    }
+    if (!xiaomuForcedEnv.ANTHROPIC_DEFAULT_OPUS_MODEL) {
+      xiaomuForcedEnv.ANTHROPIC_DEFAULT_OPUS_MODEL =
+        xiaomuForcedEnv.ANTHROPIC_MODEL || 'gpt-5.4'
+    }
+
     return {
       ...cleanEnv,
+      // Desktop-launched sessions should keep the Claude Desktop identity even
+      // though they use --sdk-url under the hood. Without this, the CLI tags the
+      // session as sdk-cli and some auth/provider code paths stop treating the
+      // host as the source of truth for routing.
+      CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+      // Tell the child CLI that provider routing is host-managed. This prevents
+      // later settings merges from redirecting requests away from the provider
+      // env that Desktop injected for the session.
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
       CLAUDE_CODE_ENABLE_TASKS: '1',
       CALLER_DIR: workDir,
       PWD: workDir,
@@ -521,18 +595,12 @@ export class ConversationService {
       ...(desktopServerUrl
         ? { CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl }
         : {}),
-      // Tell the CLI entrypoint to skip project .env loading. Provider env
-      // should come from Desktop-managed config or inherited launch env, not
-      // be reintroduced from the repo's .env file.
       CC_HAHA_SKIP_DOTENV: '1',
-      // "官方" 模式 (cc-haha/settings.json 没 provider env) 下,把 CLI 标记为
-      // managed-OAuth,让它忽略外部 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
-      // 残留、只走用户 /login 的 OAuth token。自定义 provider 模式绝不能设,
-      // 否则 CLI 会忽略 provider 的 AUTH_TOKEN、错误地走 OAuth 打到第三方
-      // endpoint。详见 src/utils/auth.ts isManagedOAuthContext()。
       ...(this.shouldMarkManagedOAuth()
         ? await this.buildOfficialOAuthEnv()
         : {}),
+      // xiaomu: 最后注入，确保覆盖上面任何 cleanEnv / managed-OAuth 的残留
+      ...xiaomuForcedEnv,
     }
   }
 
@@ -587,6 +655,7 @@ export class ConversationService {
         'ANTHROPIC_DEFAULT_HAIKU_MODEL',
         'ANTHROPIC_DEFAULT_SONNET_MODEL',
         'ANTHROPIC_DEFAULT_OPUS_MODEL',
+        'ANTHROPIC_SMALL_FAST_MODEL',
       ].some((key) => typeof env[key] === 'string' && env[key]!.trim().length > 0)
     } catch {
       return false
@@ -664,7 +733,9 @@ export class ConversationService {
     }
 
     if (/\.(?:[cm]?[jt]s|tsx?)$/i.test(cliCommand)) {
-      return ['bun', cliCommand, ...baseArgs]
+      // xiaomu: 允许通过 CLAUDE_NODE_PATH 指定 node 而不是 bun（我们 ship 的是 node bundle）
+      const runner = process.env.CLAUDE_NODE_PATH || 'bun'
+      return [runner, cliCommand, ...baseArgs]
     }
 
     const cliBaseName = path.basename(cliCommand)

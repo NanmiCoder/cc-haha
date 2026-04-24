@@ -12,6 +12,7 @@ describe('ConversationService', () => {
   let originalModel: string | undefined
   let originalEntrypoint: string | undefined
   let originalOAuthToken: string | undefined
+  let originalProviderManagedByHost: string | undefined
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-conversation-service-'))
@@ -21,12 +22,14 @@ describe('ConversationService', () => {
     originalModel = process.env.ANTHROPIC_MODEL
     originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
     originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    originalProviderManagedByHost = process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
 
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
     process.env.ANTHROPIC_BASE_URL = 'https://example.invalid/anthropic'
     process.env.ANTHROPIC_MODEL = 'test-model'
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'inherited-parent-oauth-token'
+    delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     // Clear inherited CLAUDE_CODE_ENTRYPOINT so tests can assert whether
     // buildChildEnv injects it or not without interference from the shell env.
     delete process.env.CLAUDE_CODE_ENTRYPOINT
@@ -51,6 +54,13 @@ describe('ConversationService', () => {
     if (originalOAuthToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
 
+    if (originalProviderManagedByHost === undefined) {
+      delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+    } else {
+      process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST =
+        originalProviderManagedByHost
+    }
+
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -58,6 +68,8 @@ describe('ConversationService', () => {
     const service = new ConversationService() as any
     const env = (await service.buildChildEnv('D:\\workspace\\code\\myself_code\\cc-haha')) as Record<string, string>
 
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop')
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('test-token')
     expect(env.ANTHROPIC_BASE_URL).toBe('https://example.invalid/anthropic')
     expect(env.ANTHROPIC_MODEL).toBe('test-model')
@@ -75,6 +87,8 @@ describe('ConversationService', () => {
     const service = new ConversationService() as any
     const env = (await service.buildChildEnv('D:\\workspace\\code\\myself_code\\cc-haha')) as Record<string, string>
 
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop')
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(env.ANTHROPIC_MODEL).toBeUndefined()
@@ -127,7 +141,8 @@ describe('ConversationService', () => {
     const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
 
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
-    expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop')
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
   })
 
   test('buildChildEnv does not leak inherited CLAUDE_CODE_OAUTH_TOKEN when official token is unavailable', async () => {
@@ -143,6 +158,7 @@ describe('ConversationService', () => {
     const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
 
     expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop')
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
   })
 
@@ -157,6 +173,27 @@ describe('ConversationService', () => {
       'com.claude-code-haha.desktop',
     )
     expect(env.CC_HAHA_DESKTOP_SERVER_URL).toBe('http://127.0.0.1:3456')
+  })
+
+  test('buildChildEnv falls back alias models to the selected main model when mappings are missing', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        env: {
+          ANTHROPIC_MODEL: 'gemini-3.1-pro-preview',
+        },
+      }),
+      'utf-8',
+    )
+
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+
+    expect(env.ANTHROPIC_MODEL).toBe('gemini-3.1-pro-preview')
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('gemini-3.1-pro-preview')
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('gemini-3.1-pro-preview')
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gemini-3.1-pro-preview')
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gemini-3.1-pro-preview')
   })
 
   test('uses bun entrypoint fallback on Windows dev mode', () => {
