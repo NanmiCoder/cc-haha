@@ -24,6 +24,8 @@ export function ActiveSession() {
   const hasIncompleteTasks = useCLITaskStore((s) => s.tasks.some((task) => task.status !== 'completed'))
   const chatState = sessionState?.chatState ?? 'idle'
   const tokenUsage = sessionState?.tokenUsage ?? { input_tokens: 0, output_tokens: 0 }
+  const showFullConversation = sessionState?.showFullConversation ?? false
+  const toggleFullConversation = useChatStore((s) => s.toggleFullConversation)
 
   const session = sessions.find((s) => s.id === activeTabId)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -60,6 +62,20 @@ export function ActiveSession() {
     hasIncompleteTasks,
     fetchSessionTasks,
   ])
+
+  // Keyboard shortcut: Alt+E toggles full conversation mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 'e') {
+        e.preventDefault()
+        if (activeTabId) {
+          toggleFullConversation(activeTabId)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeTabId, toggleFullConversation])
 
   const t = useTranslation()
   const messages = sessionState?.messages ?? []
@@ -195,6 +211,21 @@ export function ActiveSession() {
                   </div>
                 )}
               </div>
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => activeTabId && toggleFullConversation(activeTabId)}
+                  title={showFullConversation ? 'Collapse all (Alt+E)' : 'Expand full conversation (Alt+E)'}
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {showFullConversation ? 'collapse_all' : 'expand_all'}
+                  </span>
+                  <span className="hidden sm:inline">
+                    {showFullConversation ? 'Compact' : 'Full'}
+                  </span>
+                </button>
+              )}
             </div>
           )}
 

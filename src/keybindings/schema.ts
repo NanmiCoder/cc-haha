@@ -70,6 +70,7 @@ export const KEYBINDING_ACTIONS = [
   'app:toggleBrief',
   'app:toggleTeammatePreview',
   'app:toggleTerminal',
+  'app:toggleVerbose',
   'app:redraw',
   'app:globalSearch',
   'app:quickOpen',

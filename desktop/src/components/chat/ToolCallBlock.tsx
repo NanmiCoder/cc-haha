@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CodeViewer } from './CodeViewer'
 import { DiffViewer } from './DiffViewer'
 import { TerminalChrome } from './TerminalChrome'
@@ -14,6 +14,7 @@ type Props = {
   result?: { content: unknown; isError: boolean } | null
   agentTaskNotification?: AgentTaskNotification
   compact?: boolean
+  forceExpanded?: boolean
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -30,9 +31,13 @@ const TOOL_ICONS: Record<string, string> = {
   Skill: 'auto_awesome',
 }
 
-export function ToolCallBlock({ toolName, input, result, compact = false }: Props) {
+export function ToolCallBlock({ toolName, input, result, compact = false, forceExpanded }: Props) {
   const [expanded, setExpanded] = useState(false)
   const t = useTranslation()
+
+  useEffect(() => {
+    setExpanded(Boolean(forceExpanded))
+  }, [forceExpanded])
   const obj = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
   const icon = TOOL_ICONS[toolName] || 'build'
   const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''

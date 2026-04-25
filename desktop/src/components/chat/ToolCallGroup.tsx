@@ -17,6 +17,7 @@ type Props = {
   agentTaskNotifications: Record<string, AgentTaskNotification>
   /** When true, the last tool is still executing — show expanded */
   isStreaming?: boolean
+  forceExpanded?: boolean
 }
 
 const TOOL_VERBS: Record<string, (count: number, t: (key: TranslationKey, params?: Record<string, string | number>) => string) => string> = {
@@ -59,6 +60,7 @@ export function ToolCallGroup({
   childToolCallsByParent,
   agentTaskNotifications,
   isStreaming,
+  forceExpanded,
 }: Props) {
   const allAgents = toolCalls.every((toolCall) => toolCall.toolName === 'Agent')
 
@@ -70,6 +72,7 @@ export function ToolCallGroup({
         childToolCallsByParent={childToolCallsByParent}
         agentTaskNotifications={agentTaskNotifications}
         isStreaming={isStreaming}
+        forceExpanded={forceExpanded}
       />
     )
   }
@@ -82,6 +85,7 @@ export function ToolCallGroup({
         toolCall={tc}
         resultMap={resultMap}
         childToolCallsByParent={childToolCallsByParent}
+        forceExpanded={forceExpanded}
       />
     )
   }
@@ -93,6 +97,7 @@ export function ToolCallGroup({
       childToolCallsByParent={childToolCallsByParent}
       agentTaskNotifications={agentTaskNotifications}
       isStreaming={isStreaming}
+      forceExpanded={forceExpanded}
     />
   )
 }
@@ -103,6 +108,7 @@ function AgentToolGroup({
   childToolCallsByParent,
   agentTaskNotifications,
   isStreaming,
+  forceExpanded,
 }: Props) {
   const [expanded, setExpanded] = useState(true)
   const t = useTranslation()
@@ -124,8 +130,10 @@ function AgentToolGroup({
   useEffect(() => {
     if (isStreaming) {
       setExpanded(true)
+    } else if (forceExpanded !== undefined) {
+      setExpanded(Boolean(forceExpanded))
     }
-  }, [isStreaming])
+  }, [forceExpanded, isStreaming])
 
   return (
     <div className="mb-2">
@@ -175,6 +183,7 @@ function AgentToolGroup({
                   childToolCallsByParent={childToolCallsByParent}
                   agentTaskNotification={agentTaskNotifications[toolCall.toolUseId]}
                   isStreaming={isStreaming && !resultMap.has(toolCall.toolUseId)}
+                  forceExpanded={forceExpanded}
                 />
               </div>
             ))}
@@ -186,7 +195,7 @@ function AgentToolGroup({
 }
 
 /** Separated so the useState hook is never called conditionally. */
-function ToolCallGroupMulti({ toolCalls, resultMap, childToolCallsByParent, isStreaming }: Props) {
+function ToolCallGroupMulti({ toolCalls, resultMap, childToolCallsByParent, isStreaming, forceExpanded }: Props) {
   const [expanded, setExpanded] = useState(false)
   const t = useTranslation()
   const summary = generateSummary(toolCalls, t)
@@ -197,8 +206,10 @@ function ToolCallGroupMulti({ toolCalls, resultMap, childToolCallsByParent, isSt
   useEffect(() => {
     if (isStreaming || hasNestedToolCalls) {
       setExpanded(true)
+    } else if (forceExpanded !== undefined) {
+      setExpanded(Boolean(forceExpanded))
     }
-  }, [hasNestedToolCalls, isStreaming])
+  }, [hasNestedToolCalls, isStreaming, forceExpanded])
 
   return (
     <div className="mb-2">
@@ -252,12 +263,14 @@ function AgentCallCard({
   childToolCallsByParent,
   agentTaskNotification,
   isStreaming = false,
+  forceExpanded,
 }: {
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
   agentTaskNotification?: AgentTaskNotification
   isStreaming?: boolean
+  forceExpanded?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -373,6 +386,7 @@ function AgentCallCard({
                   resultMap={resultMap}
                   childToolCallsByParent={childToolCallsByParent}
                   compact
+                  forceExpanded={forceExpanded}
                 />
               ))}
             </div>
@@ -413,11 +427,13 @@ function ToolCallTree({
   resultMap,
   childToolCallsByParent,
   compact = false,
+  forceExpanded,
 }: {
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
   compact?: boolean
+  forceExpanded?: boolean
 }) {
   const result = resultMap.get(toolCall.toolUseId)
   const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? []
@@ -429,6 +445,7 @@ function ToolCallTree({
         input={toolCall.input}
         result={result ? { content: result.content, isError: result.isError } : null}
         compact={compact}
+        forceExpanded={forceExpanded}
       />
       {childToolCalls.length > 0 && (
         <div className={compact ? 'ml-4 border-l border-[var(--color-border)]/60 pl-3' : 'mb-2 ml-16 border-l border-[var(--color-border)]/60 pl-3'}>
@@ -440,6 +457,7 @@ function ToolCallTree({
                 resultMap={resultMap}
                 childToolCallsByParent={childToolCallsByParent}
                 compact
+                forceExpanded={forceExpanded}
               />
             ))}
           </div>

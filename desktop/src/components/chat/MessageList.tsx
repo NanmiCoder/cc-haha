@@ -146,6 +146,7 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
   const activeThinkingId = sessionState?.activeThinkingId ?? null
   const agentTaskNotifications = sessionState?.agentTaskNotifications ?? {}
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const showFullConversation = sessionState?.showFullConversation ?? false
   const bottomRef = useRef<HTMLDivElement>(null)
   const shouldAutoScrollRef = useRef(true)
   const lastSessionIdRef = useRef<string | null | undefined>(resolvedSessionId)
@@ -312,6 +313,7 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
                   chatState === 'tool_executing' &&
                   item.toolCalls.some((tc) => !toolResultMap.has(tc.toolUseId))
                 }
+                forceExpanded={showFullConversation}
               />
             )
           }
@@ -327,6 +329,7 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
               message={msg}
               activeThinkingId={activeThinkingId}
               agentTaskNotifications={agentTaskNotifications}
+              forceExpanded={showFullConversation}
               toolResult={
                 msg.type === 'tool_use'
                   ? (() => {
@@ -489,6 +492,7 @@ export const MessageBlock = memo(function MessageBlock({
   toolResult,
   rewindableUserIndex,
   onRequestRewind,
+  forceExpanded = false,
 }: {
   message: UIMessage
   activeThinkingId: string | null
@@ -499,6 +503,7 @@ export const MessageBlock = memo(function MessageBlock({
     message: Extract<UIMessage, { type: 'user_text' }>,
     userMessageIndex: number,
   ) => void
+  forceExpanded?: boolean
 }) {
   const t = useTranslation()
 
@@ -519,7 +524,7 @@ export const MessageBlock = memo(function MessageBlock({
     case 'assistant_text':
       return <AssistantMessage content={message.content} />
     case 'thinking':
-      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} />
+      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} forceExpanded={forceExpanded} />
     case 'tool_use':
       if (message.toolName === 'AskUserQuestion') {
         return (
@@ -535,6 +540,7 @@ export const MessageBlock = memo(function MessageBlock({
           toolName={message.toolName}
           input={message.input}
           result={toolResult}
+          forceExpanded={forceExpanded}
           agentTaskNotification={
             message.toolName === 'Agent'
               ? agentTaskNotifications[message.toolUseId]

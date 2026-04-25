@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from '../../i18n'
 
-export function ThinkingBlock({ content, isActive = false }: { content: string; isActive?: boolean }) {
+export function ThinkingBlock({ content, isActive = false, forceExpanded }: { content: string; isActive?: boolean; forceExpanded?: boolean }) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    setExpanded(Boolean(forceExpanded))
+  }, [forceExpanded])
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

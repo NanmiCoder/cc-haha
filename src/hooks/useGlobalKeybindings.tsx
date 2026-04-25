@@ -219,6 +219,18 @@ export function GlobalKeybindingHandlers({
     context: 'Global'
   });
 
+  // Toggle verbose mode (alt+e). Expands all thinking blocks, tool
+  // details, and conversation content inline without switching to transcript.
+  const handleToggleVerbose = useCallback(() => {
+    setAppState(prev => ({
+      ...prev,
+      verbose: !prev.verbose,
+    }))
+  }, [setAppState])
+  useKeybinding('app:toggleVerbose', handleToggleVerbose, {
+    context: 'Global'
+  });
+
   // Clear screen and force full redraw (ctrl+l). Recovery path when the
   // terminal was cleared externally (macOS Cmd+K) and Ink's diff engine
   // thinks unchanged cells don't need repainting.

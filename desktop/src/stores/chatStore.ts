@@ -56,6 +56,7 @@ export type PerSessionState = {
     attachments?: UIAttachment[]
     nonce: number
   } | null
+  showFullConversation: boolean
 }
 
 const DEFAULT_SESSION_STATE: PerSessionState = {
@@ -76,6 +77,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   agentTaskNotifications: {},
   elapsedTimer: null,
   composerPrefill: null,
+  showFullConversation: false,
 }
 
 function createDefaultSessionState(): PerSessionState {
@@ -118,6 +120,7 @@ type ChatStore = {
     prefill: { text: string; attachments?: UIAttachment[] },
   ) => void
   clearMessages: (sessionId: string) => void
+  toggleFullConversation: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
 
@@ -515,6 +518,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   clearMessages: (sessionId) => {
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], streamingText: '', chatState: 'idle' })) }))
+  },
+
+  toggleFullConversation: (sessionId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        showFullConversation: !session.showFullConversation,
+      })),
+    }))
   },
 
   handleServerMessage: (sessionId, msg) => {
