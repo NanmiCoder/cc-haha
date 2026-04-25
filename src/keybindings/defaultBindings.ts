@@ -46,6 +46,7 @@ export const DEFAULT_BINDINGS: KeybindingBlock[] = [
         ? { 'ctrl+shift+b': 'app:toggleBrief' as const }
         : {}),
       'ctrl+shift+o': 'app:toggleTeammatePreview',
+      'alt+e': 'app:toggleVerbose',
       'ctrl+r': 'history:search',
       // File navigation. cmd+ bindings only fire on kitty-protocol terminals;
       // ctrl+shift is the portable fallback.

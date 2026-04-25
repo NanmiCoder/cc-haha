@@ -283,6 +283,8 @@ function ModeIndicator({
   const voiceKeyShortcut = feature('VOICE_MODE') ?
   // biome-ignore lint/correctness/useHookAtTopLevel: feature() is a compile-time constant
   useShortcutDisplay('voice:pushToTalk', 'Chat', 'Space') : '';
+  const appVerbose = useAppState(s => s.verbose);
+  const verboseShortcut = useShortcutDisplay('app:toggleVerbose', 'Global', 'alt+e');
   // Captured at mount so the hint doesn't flicker mid-session if another
   // CC instance increments the counter. Incremented once via useEffect the
   // first time voice is enabled in this session — approximates "hint was
@@ -372,7 +374,7 @@ function ModeIndicator({
   const hasRunningAgentTasks = Object.values(tasks).some(t_3 => t_3.type === 'local_agent' && t_3.status === 'running');
 
   // Get hint parts separately for potential second-line rendering
-  const hintParts = showHint ? getSpinnerHintParts(isLoading, escShortcut, todosShortcut, killAgentsShortcut, hasTaskItems, expandedView, hasAnyInProcessTeammates, hasRunningAgentTasks, isKillAgentsConfirmShowing) : [];
+  const hintParts = showHint ? getSpinnerHintParts(isLoading, escShortcut, todosShortcut, killAgentsShortcut, hasTaskItems, expandedView, hasAnyInProcessTeammates, hasRunningAgentTasks, isKillAgentsConfirmShowing, verboseShortcut, appVerbose) : [];
   if (isViewingCompletedTeammate) {
     parts.push(<Text dimColor key="esc-return">
         <KeyboardShortcutHint shortcut={escShortcut} action="return to team lead" />
@@ -481,7 +483,7 @@ function ModeIndicator({
         </Text>}
     </Box>;
 }
-function getSpinnerHintParts(isLoading: boolean, escShortcut: string, todosShortcut: string, killAgentsShortcut: string, hasTaskItems: boolean, expandedView: 'none' | 'tasks' | 'teammates', hasTeammates: boolean, hasRunningAgentTasks: boolean, isKillAgentsConfirmShowing: boolean): React.ReactElement[] {
+function getSpinnerHintParts(isLoading: boolean, escShortcut: string, todosShortcut: string, killAgentsShortcut: string, hasTaskItems: boolean, expandedView: 'none' | 'tasks' | 'teammates', hasTeammates: boolean, hasRunningAgentTasks: boolean, isKillAgentsConfirmShowing: boolean, verboseShortcut: string, appVerbose: boolean): React.ReactElement[] {
   let toggleAction: string;
   if (hasTeammates) {
     // Cycling: none → tasks → teammates → none
@@ -505,6 +507,8 @@ function getSpinnerHintParts(isLoading: boolean, escShortcut: string, todosShort
   const showToggleHint = hasTaskItems || hasTeammates;
   return [...(isLoading ? [<Text dimColor key="esc">
             <KeyboardShortcutHint shortcut={escShortcut} action="interrupt" />
+          </Text>, <Text dimColor key="verbose">
+            <KeyboardShortcutHint shortcut={verboseShortcut} action={appVerbose ? "compact" : "expand"} />
           </Text>] : []), ...(!isLoading && hasRunningAgentTasks && !isKillAgentsConfirmShowing ? [<Text dimColor key="kill-agents">
             <KeyboardShortcutHint shortcut={killAgentsShortcut} action="stop agents" />
           </Text>] : []), ...(showToggleHint ? [<Text dimColor key="toggle-tasks">
