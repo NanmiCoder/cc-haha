@@ -367,6 +367,20 @@ export async function deleteRemoteAgentMetadata(taskId: string): Promise<void> {
 }
 
 /**
+ * Delete a session log file by its LogOption.
+ * Removes the main .jsonl file so the session no longer appears in /resume.
+ */
+export async function deleteSessionLog(log: LogOption): Promise<void> {
+  if (!log.fullPath) return
+  try {
+    await unlink(log.fullPath)
+  } catch (e) {
+    if (isFsInaccessible(e)) return
+    throw e
+  }
+}
+
+/**
  * Scan the remote-agents/ directory for all persisted metadata files.
  * Used by restoreRemoteAgentTasks to reconnect to still-running CCR sessions.
  */
