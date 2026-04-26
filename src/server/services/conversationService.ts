@@ -552,10 +552,30 @@ export class ConversationService {
       }
     }
 
-    const explicitProviderEnv =
+    let explicitProviderEnv =
       typeof options?.providerId === 'string'
         ? await this.providerService.getProviderRuntimeEnv(options.providerId)
         : null
+
+    // When no explicit providerId is passed but inherited env was stripped
+    // (because providers.json exists), read the active provider's env from
+    // cc-haha/settings.json so the subprocess always has ANTHROPIC_BASE_URL.
+    if (!explicitProviderEnv && this.shouldStripInheritedProviderEnv(options?.providerId)) {
+      try {
+        const settingsPath = path.join(
+          process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
+          'cc-haha', 'settings.json',
+        )
+        const raw = fs.readFileSync(settingsPath, 'utf-8')
+        const parsed = JSON.parse(raw) as { env?: Record<string, string> }
+        if (parsed.env && Object.keys(parsed.env).length > 0) {
+          explicitProviderEnv = parsed.env
+        }
+      } catch {
+        // File missing or unreadable — subprocess will fall back to its own
+        // applySafeConfigEnvironmentVariables() at startup
+      }
+    }
 
     return {
       ...cleanEnv,

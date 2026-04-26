@@ -98,14 +98,25 @@ function filterSettingsEnv(
  * contains ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, model defaults, etc.
  * Returns an empty object if the file doesn't exist or is invalid.
  */
+// Cache the last successfully read cc-haha env so that a transient read
+// failure (file locked, race condition during atomic write) does not wipe
+// ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY from process.env on hot-reload.
+let lastKnownCcHahaEnv: Record<string, string> = {}
+
 function getCcHahaSettingsEnv(): Record<string, string> {
   try {
     const ccHahaSettings = join(getClaudeConfigHomeDir(), 'cc-haha', 'settings.json')
     const raw = readFileSync(ccHahaSettings, 'utf-8')
     const parsed = JSON.parse(raw) as { env?: Record<string, string> }
-    return parsed.env ?? {}
+    const env = parsed.env ?? {}
+    if (Object.keys(env).length > 0) {
+      lastKnownCcHahaEnv = env
+    }
+    return lastKnownCcHahaEnv
   } catch {
-    return {}
+    // File missing / locked / corrupt — return last known good values
+    // instead of empty object, to avoid wiping provider config from process.env
+    return lastKnownCcHahaEnv
   }
 }
 
