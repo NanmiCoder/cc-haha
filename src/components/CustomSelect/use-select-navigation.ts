@@ -608,12 +608,51 @@ export function useSelectNavigation<T>({
     return focusedOption?.type === 'input'
   }, [validatedFocusedValue, options])
 
+  // Throttle onFocus calls during rapid navigation (e.g., held arrow key)
+  // to prevent parent re-renders from flooding Ink's render pipeline.
+  // Leading edge: first event fires immediately. Trailing edge: after the
+  // burst stops, a scheduled callback fires with the final value so the
+  // parent always catches up.
+  const lastFocusTimeRef = useRef(0)
+  const trailingFocusRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const FOCUS_THROTTLE_MS = 40
+
+  // Cleanup trailing timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (trailingFocusRef.current !== null) {
+        clearTimeout(trailingFocusRef.current)
+      }
+    }
+  }, [])
+
   // Call onFocus with the validated value (what's actually displayed),
   // not the internal state value which may be stale if options changed.
   // Use ref to avoid re-running when callback reference changes.
   useEffect(() => {
     if (validatedFocusedValue !== undefined) {
-      onFocusRef.current?.(validatedFocusedValue)
+      const now = Date.now()
+      if (now - lastFocusTimeRef.current >= FOCUS_THROTTLE_MS) {
+        // Leading edge: fire immediately
+        if (trailingFocusRef.current !== null) {
+          clearTimeout(trailingFocusRef.current)
+          trailingFocusRef.current = null
+        }
+        lastFocusTimeRef.current = now
+        onFocusRef.current?.(validatedFocusedValue)
+      } else {
+        // Trailing edge: schedule callback with the latest value so the
+        // parent eventually catches up after rapid navigation stops
+        if (trailingFocusRef.current !== null) {
+          clearTimeout(trailingFocusRef.current)
+        }
+        const remaining = FOCUS_THROTTLE_MS - (now - lastFocusTimeRef.current)
+        trailingFocusRef.current = setTimeout(() => {
+          trailingFocusRef.current = null
+          lastFocusTimeRef.current = Date.now()
+          onFocusRef.current?.(validatedFocusedValue)
+        }, remaining)
+      }
     }
   }, [validatedFocusedValue])
 
