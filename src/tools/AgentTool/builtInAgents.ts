@@ -1,7 +1,7 @@
 import { feature } from 'bun:bundle'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
-import { isEnvTruthy } from '../../utils/envUtils.js'
+import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import { CLAUDE_CODE_GUIDE_AGENT } from './built-in/claudeCodeGuideAgent.js'
 import { EXPLORE_AGENT } from './built-in/exploreAgent.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
@@ -11,6 +11,12 @@ import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 
 export function areExplorePlanAgentsEnabled(): boolean {
+  // Allow enabling Explore/Plan agents via env var for local forks where
+  // the BUILTIN_EXPLORE_PLAN_AGENTS Bun compile-time feature is not set.
+  const envOverride = process.env.CLAUDE_CODE_ENABLE_EXPLORE_PLAN_AGENTS
+  if (isEnvTruthy(envOverride)) return true
+  if (isEnvDefinedFalsy(envOverride)) return false
+
   if (feature('BUILTIN_EXPLORE_PLAN_AGENTS')) {
     // 3P default: true — Bedrock/Vertex keep agents enabled (matches pre-experiment
     // external behavior). A/B test treatment sets false to measure impact of removal.
