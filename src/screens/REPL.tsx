@@ -72,7 +72,7 @@ import { buildEffectiveSystemPrompt } from '../utils/systemPrompt.js';
 import { getSystemContext, getUserContext } from '../context.js';
 import { getMemoryFiles } from '../utils/claudemd.js';
 import { startBackgroundHousekeeping } from '../utils/backgroundHousekeeping.js';
-import { getTotalCost, saveCurrentSessionCosts, resetCostState, getStoredSessionCosts } from '../cost-tracker.js';
+import { getTotalCost, saveCurrentSessionCosts, resetCostState, getStoredSessionCosts, formatTurnStats } from '../cost-tracker.js';
 import { useCostSummary } from '../costHook.js';
 import { useFpsMetrics } from '../context/fpsMetrics.js';
 import { useAfterFirstRender } from '../hooks/useAfterFirstRender.js';
@@ -2842,6 +2842,19 @@ export function REPL({
       })]);
     }
     resetLoadingState();
+
+    // 每轮对话结束后输出费用统计（用 isMeta 消息通过 Ink 渲染，不发送给 API）
+    if (hasConsoleBillingAccess()) {
+      setMessages(prev => [...prev, {
+        type: 'system' as const,
+        subtype: 'informational' as const,
+        content: formatTurnStats(),
+        level: 'info' as const,
+        isMeta: true as const,
+        timestamp: new Date().toISOString(),
+        uuid: Math.random().toString(36).slice(2),
+      }])
+    }
 
     // Log query profiling report if enabled
     logQueryProfileReport();

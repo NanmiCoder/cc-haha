@@ -143,7 +143,7 @@ import {
 } from 'src/constants/betas.js'
 import type { QuerySource } from 'src/constants/querySource.js'
 import type { Notification } from 'src/context/notifications.js'
-import { addToTotalSessionCost } from 'src/cost-tracker.js'
+import { addToTotalSessionCost, incrementTotalAPICalls } from 'src/cost-tracker.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import type { AgentId } from 'src/types/ids.js'
 import {
@@ -1763,7 +1763,7 @@ async function* queryModel(
   let partialMessage: BetaMessage | undefined = undefined
   const contentBlocks: (BetaContentBlock | ConnectorTextBlock)[] = []
   let usage: NonNullableUsage = EMPTY_USAGE
-  let costUSD = 0
+  let turnCost = 0
   let stopReason: BetaStopReason | null = null
   let didFallBackToNonStreaming = false
   let fallbackMessage: AssistantMessage | undefined
@@ -2248,9 +2248,10 @@ async function* queryModel(
             }
 
             // Update cost
-            const costUSDForPart = calculateUSDCost(resolvedModel, usage)
-            costUSD += addToTotalSessionCost(
-              costUSDForPart,
+            const costForPart = calculateUSDCost(resolvedModel, usage)
+            incrementTotalAPICalls()
+            turnCost += addToTotalSessionCost(
+              costForPart,
               usage,
               options.model,
             )
@@ -2822,7 +2823,8 @@ async function* queryModel(
       usage = updateUsage(EMPTY_USAGE, fallbackUsage)
       stopReason = fallbackMessage.message.stop_reason
       const fallbackCost = calculateUSDCost(resolvedModel, fallbackUsage)
-      costUSD += addToTotalSessionCost(
+      incrementTotalAPICalls()
+      turnCost += addToTotalSessionCost(
         fallbackCost,
         fallbackUsage,
         options.model,
@@ -2871,7 +2873,7 @@ async function* queryModel(
       didFallBackToNonStreaming,
       querySource: options.querySource,
       headers: responseHeaders,
-      costUSD,
+      turnCost,
       queryTracking: options.queryTracking,
       permissionMode: permissionContext.mode,
       // Pass newMessages for beta tracing - extraction happens in logging.ts

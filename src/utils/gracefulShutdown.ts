@@ -200,6 +200,24 @@ function forceExit(exitCode: number): never {
     clearTimeout(failsafeTimer)
     failsafeTimer = undefined
   }
+
+  // 输出会话费用统计（process.on('exit') 在 Bun/Windows 下可能不触发）
+  try {
+    const {
+      formatTotalCost,
+      saveCurrentSessionCosts,
+      isCostOutputDone,
+      markCostOutputDone,
+    } = require('../cost-tracker.js') as typeof import('../cost-tracker.js')
+    const { hasConsoleBillingAccess } = require('./billing.js') as typeof import('./billing.js')
+    if (!isCostOutputDone() && hasConsoleBillingAccess()) {
+      markCostOutputDone()
+      writeSync(1, '\n' + formatTotalCost() + '\n')
+    }
+    saveCurrentSessionCosts()
+  } catch {
+    // 静默失败，不影响退出流程
+  }
   // Drain stdin LAST, right before exit. cleanupTerminalModes() sent
   // DISABLE_MOUSE_TRACKING early, but the terminal round-trip plus any
   // events already in flight means bytes can arrive during the seconds

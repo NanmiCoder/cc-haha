@@ -48,7 +48,10 @@ type State = {
   // never updated by mid-session EnterWorktreeTool.
   // Use for project identity (history, skills, sessions) not file operations.
   projectRoot: string
+  // NOTE: 虽然字段名为 USD，但实际存储的是统一转换为人民币(CNY)后的金额
+  // 转换逻辑在 cost-tracker.ts 的 addToTotalSessionCost() 中
   totalCostUSD: number
+  totalAPICalls: number
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
   totalToolDuration: number
@@ -278,6 +281,7 @@ function getInitialState(): State {
     originalCwd: resolvedCwd,
     projectRoot: resolvedCwd,
     totalCostUSD: 0,
+    totalAPICalls: 0,
     totalAPIDuration: 0,
     totalAPIDurationWithoutRetries: 0,
     totalToolDuration: 0,
@@ -565,6 +569,14 @@ export function addToTotalCostState(
 
 export function getTotalCostUSD(): number {
   return STATE.totalCostUSD
+}
+
+export function getTotalAPICalls(): number {
+  return STATE.totalAPICalls
+}
+
+export function incrementTotalAPICalls(): void {
+  STATE.totalAPICalls++
 }
 
 export function getTotalAPIDuration(): number {
@@ -863,6 +875,7 @@ export function setSdkBetas(betas: string[] | undefined): void {
 
 export function resetCostState(): void {
   STATE.totalCostUSD = 0
+  STATE.totalAPICalls = 0
   STATE.totalAPIDuration = 0
   STATE.totalAPIDurationWithoutRetries = 0
   STATE.totalToolDuration = 0
@@ -880,6 +893,7 @@ export function resetCostState(): void {
  */
 export function setCostStateForRestore({
   totalCostUSD,
+  totalAPICalls,
   totalAPIDuration,
   totalAPIDurationWithoutRetries,
   totalToolDuration,
@@ -889,6 +903,7 @@ export function setCostStateForRestore({
   modelUsage,
 }: {
   totalCostUSD: number
+  totalAPICalls: number
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
   totalToolDuration: number
@@ -898,6 +913,7 @@ export function setCostStateForRestore({
   modelUsage: { [modelName: string]: ModelUsage } | undefined
 }): void {
   STATE.totalCostUSD = totalCostUSD
+  STATE.totalAPICalls = totalAPICalls
   STATE.totalAPIDuration = totalAPIDuration
   STATE.totalAPIDurationWithoutRetries = totalAPIDurationWithoutRetries
   STATE.totalToolDuration = totalToolDuration

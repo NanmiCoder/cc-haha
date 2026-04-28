@@ -13,6 +13,11 @@ export function hasConsoleBillingAccess(): boolean {
     return false
   }
 
+  // 第三方 API 用户（自定义 ANTHROPIC_BASE_URL）始终显示费用
+  if (process.env.ANTHROPIC_BASE_URL) {
+    return true
+  }
+
   const isSubscriber = isClaudeAISubscriber()
 
   // This might be wrong if user is signed into Max but also using an API key, but

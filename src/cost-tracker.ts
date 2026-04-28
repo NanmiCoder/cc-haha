@@ -8,6 +8,7 @@ import {
   getSdkBetas,
   getSessionId,
   getTokenCounter,
+  getTotalAPICalls,
   getTotalAPIDuration,
   getTotalAPIDurationWithoutRetries,
   getTotalCacheCreationInputTokens,
@@ -22,6 +23,7 @@ import {
   getTotalWebSearchRequests,
   getUsageForModel,
   hasUnknownModelCost,
+  incrementTotalAPICalls,
   resetCostState,
   resetStateForTests,
   setCostStateForRestore,
@@ -45,7 +47,46 @@ import { isFastModeEnabled } from './utils/fastMode.js'
 import { formatDuration, formatNumber } from './utils/format.js'
 import type { FpsMetrics } from './utils/fpsTracker.js'
 import { getCanonicalName } from './utils/model/model.js'
-import { calculateUSDCost } from './utils/modelCost.js'
+import { calculateUSDCost, getModelCosts, toCNY } from './utils/modelCost.js'
+export function formatTurnStats(): string {
+  const totalInput = getTotalInputTokens()
+  const totalOutput = getTotalOutputTokens()
+  const totalCacheRead = getTotalCacheReadInputTokens()
+  const totalCacheCreation = getTotalCacheCreationInputTokens()
+  const totalUpTokens = totalInput + totalCacheRead + totalCacheCreation
+  const totalAllTokens = totalUpTokens + totalOutput
+  const totalCostCNY = getTotalCostUSD()
+  const apiCalls = getTotalAPICalls()
+
+  const modelUsageMap = getModelUsage()
+  const modelNames = Object.keys(modelUsageMap).map(m =>
+    process.env.ANTHROPIC_BASE_URL ? m : getCanonicalName(m),
+  )
+  const uniqueModels = [...new Set(modelNames)]
+  const modelDisplay = uniqueModels.length > 0 ? uniqueModels.join('+') : '?'
+
+  const costStr =
+    totalCostCNY < 0.01
+      ? `¥${totalCostCNY.toFixed(4)}`
+      : `¥${round(totalCostCNY, 100).toFixed(2)}`
+
+  return chalk.dim(
+    `📊 ${modelDisplay} · ${apiCalls} times · ↑${formatNumber(totalUpTokens)} ↓${formatNumber(totalOutput)} · ${costStr}` +
+      (hasUnknownModelCost() ? ' (cost may be inaccurate)' : ''),
+  )
+}
+
+// 防止 gracefulShutdown + process.on('exit') 重复输出
+let costOutputDone = false
+
+export function isCostOutputDone(): boolean {
+  return costOutputDone
+}
+
+export function markCostOutputDone(): void {
+  costOutputDone = true
+}
+
 export {
   getTotalCostUSD as getTotalCost,
   getTotalDuration,
@@ -59,6 +100,8 @@ export {
   getTotalCacheReadInputTokens,
   getTotalCacheCreationInputTokens,
   getTotalWebSearchRequests,
+  getTotalAPICalls,
+  incrementTotalAPICalls,
   formatCost,
   hasUnknownModelCost,
   resetStateForTests,
@@ -98,6 +141,7 @@ export type SessionUsageSnapshot = {
 
 type StoredCostState = {
   totalCostUSD: number
+  totalAPICalls: number
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
   totalToolDuration: number
@@ -139,6 +183,7 @@ export function getStoredSessionCosts(
 
   return {
     totalCostUSD: projectConfig.lastCost ?? 0,
+    totalAPICalls: 0,  // API calls are not persisted across sessions
     totalAPIDuration: projectConfig.lastAPIDuration ?? 0,
     totalAPIDurationWithoutRetries:
       projectConfig.lastAPIDurationWithoutRetries ?? 0,
@@ -203,7 +248,11 @@ export function saveCurrentSessionCosts(fpsMetrics?: FpsMetrics): void {
 }
 
 function formatCost(cost: number, maxDecimalPlaces: number = 4): string {
-  return `$${cost > 0.5 ? round(cost, 100).toFixed(2) : cost.toFixed(maxDecimalPlaces)}`
+  // cost 已经是人民币
+  if (cost < 0.01) {
+    return `¥${cost.toFixed(maxDecimalPlaces)}`
+  }
+  return `¥${round(cost, 100).toFixed(2)}`
 }
 
 function formatModelUsage(): string {
@@ -254,16 +303,57 @@ function formatModelUsage(): string {
 }
 
 export function formatTotalCost(): string {
+  const totalInput = getTotalInputTokens()
+  const totalOutput = getTotalOutputTokens()
+  const totalCacheRead = getTotalCacheReadInputTokens()
+  const totalCacheCreation = getTotalCacheCreationInputTokens()
+  const totalUpTokens = totalInput + totalCacheRead + totalCacheCreation
+  const totalAllTokens = totalUpTokens + totalOutput
+
+  const totalCostCNY = getTotalCostUSD()  // 已统一为人民币
   const costDisplay =
-    formatCost(getTotalCostUSD()) +
+    `¥${totalCostCNY > 0.5 ? round(totalCostCNY, 100).toFixed(2) : totalCostCNY.toFixed(4)}` +
     (hasUnknownModelCost()
       ? ' (costs may be inaccurate due to usage of unknown models)'
       : '')
 
+  // 摘要行
+  const apiCalls = getTotalAPICalls()
+  const modelUsageMap = getModelUsage()
+  const isThirdParty = !!process.env.ANTHROPIC_BASE_URL
+  const modelNames = Object.keys(modelUsageMap).map(m =>
+    isThirdParty ? m : getCanonicalName(m),
+  )
+  const uniqueModels = [...new Set(modelNames)]
+  const modelDisplay = uniqueModels.length > 0 ? uniqueModels.join(', ') : '-'
+
+  const COL_WIDTH = 16
+
+  const rpad = (s: string) => s.padStart(COL_WIDTH)
+
+  const summaryLines = [
+    `${rpad('Model:')} ${modelDisplay}`,
+    `${rpad('Times:')} ${formatNumber(apiCalls)}`,
+    `${rpad('Up tokens:')} ${formatNumber(totalUpTokens)}`,
+    `${rpad('  input:')} ${formatNumber(totalInput)}`,
+  ]
+  if (totalCacheRead > 0) {
+    summaryLines.push(`${rpad('  cache hit:')} ${formatNumber(totalCacheRead)}`)
+  }
+  if (totalCacheCreation > 0) {
+    summaryLines.push(`${rpad('  cache write:')} ${formatNumber(totalCacheCreation)}`)
+  }
+  summaryLines.push(
+    `${rpad('Down tokens:')} ${formatNumber(totalOutput)}`,
+    `${rpad('Total tokens:')} ${formatNumber(totalAllTokens)}`,
+    `${rpad('Est cost:')} ${costDisplay}`,
+  )
+
   const modelUsageDisplay = formatModelUsage()
 
   return chalk.dim(
-    `Total cost:            ${costDisplay}\n` +
+    summaryLines.join('\n') +
+      '\n\n' +
       `Total duration (API):  ${formatDuration(getTotalAPIDuration())}
 Total duration (wall): ${formatDuration(getTotalDuration())}
 Total code changes:    ${getTotalLinesAdded()} ${getTotalLinesAdded() === 1 ? 'line' : 'lines'} added, ${getTotalLinesRemoved()} ${getTotalLinesRemoved() === 1 ? 'line' : 'lines'} removed
@@ -338,15 +428,19 @@ export function addToTotalSessionCost(
   usage: Usage,
   model: string,
 ): number {
-  const modelUsage = addToTotalModelUsage(cost, usage, model)
-  addToTotalCostState(cost, modelUsage, model)
+  // 统一转换为人民币存储
+  const modelCosts = getModelCosts(model, usage)
+  const costCNY = toCNY(cost, modelCosts.currency)
+
+  const modelUsage = addToTotalModelUsage(costCNY, usage, model)
+  addToTotalCostState(costCNY, modelUsage, model)
 
   const attrs =
     isFastModeEnabled() && usage.speed === 'fast'
       ? { model, speed: 'fast' }
       : { model }
 
-  getCostCounter()?.add(cost, attrs)
+  getCostCounter()?.add(costCNY, attrs)
   getTokenCounter()?.add(usage.input_tokens, { ...attrs, type: 'input' })
   getTokenCounter()?.add(usage.output_tokens, { ...attrs, type: 'output' })
   getTokenCounter()?.add(usage.cache_read_input_tokens ?? 0, {
@@ -358,9 +452,11 @@ export function addToTotalSessionCost(
     type: 'cacheCreation',
   })
 
-  let totalCost = cost
+  let totalCost = costCNY
   for (const advisorUsage of getAdvisorUsage(usage)) {
     const advisorCost = calculateUSDCost(advisorUsage.model, advisorUsage)
+    const advisorModelCosts = getModelCosts(advisorUsage.model, advisorUsage)
+    const advisorCostCNY = toCNY(advisorCost, advisorModelCosts.currency)
     logEvent('tengu_advisor_tool_token_usage', {
       advisor_model:
         advisorUsage.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -369,7 +465,7 @@ export function addToTotalSessionCost(
       cache_read_input_tokens: advisorUsage.cache_read_input_tokens ?? 0,
       cache_creation_input_tokens:
         advisorUsage.cache_creation_input_tokens ?? 0,
-      cost_usd_micros: Math.round(advisorCost * 1_000_000),
+      cost_usd_micros: Math.round(advisorCostCNY * 1_000_000),
     })
     totalCost += addToTotalSessionCost(
       advisorCost,
