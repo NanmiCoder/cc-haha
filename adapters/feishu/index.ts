@@ -18,10 +18,11 @@ import { loadConfig } from '../common/config.js'
 import {
   formatImHelp,
   formatImStatus,
+  formatSessionList,
   splitMessage,
 } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
-import { AdapterHttpClient, type RecentProject } from '../common/http-client.js'
+import { AdapterHttpClient, type RecentProject, type SessionListItem } from '../common/http-client.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { optimizeMarkdownForFeishu } from './markdown-style.js'
 import { extractInboundPayload } from './extract-payload.js'
@@ -61,6 +62,7 @@ attachmentStore.gc().catch((err) => {
 // One streaming card lifecycle per chatId (CardKit main + patch fallback).
 const streamingCards = new Map<string, StreamingCard>()
 const pendingProjectSelection = new Map<string, boolean>()
+const pendingSessionSelection = new Map<string, SessionListItem[]>()
 const runtimeStates = new Map<string, ChatRuntimeState>()
 
 // Per-chat outbound watchers for Agent-produced markdown image references.
@@ -715,6 +717,110 @@ async function showProjectPicker(chatId: string): Promise<void> {
   }
 }
 
+// ---------- /resume ----------
+
+async function showSessionPicker(chatId: string): Promise<void> {
+  try {
+    const sessions = await httpClient.listSessions(10)
+    if (sessions.length === 0) {
+      await sendText(chatId, '没有找到已有会话。发送 /new 新建会话。')
+      return
+    }
+    const currentSessionId = sessionStore.get(chatId)?.sessionId
+    pendingSessionSelection.set(chatId, sessions)
+    pendingProjectSelection.delete(chatId)
+    const text = formatSessionList(sessions, currentSessionId)
+    await sendText(chatId, text)
+  } catch (err) {
+    await sendText(chatId, `❌ 无法获取会话列表: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function resumeSession(chatId: string, query?: string): Promise<void> {
+  if (!query) {
+    await showSessionPicker(chatId)
+    return
+  }
+
+  try {
+    const sessions = await httpClient.listSessions(20)
+    const q = query.trim().toLowerCase()
+
+    // Try as 1-based index from pendingSessionSelection
+    const num = parseInt(q, 10)
+    const pendingSessions = pendingSessionSelection.get(chatId)
+    if (!isNaN(num) && num >= 1 && pendingSessions && num <= pendingSessions.length && String(num) === q.trim()) {
+      const target = pendingSessions[num - 1]!
+      pendingSessionSelection.delete(chatId)
+      await switchToSession(chatId, target)
+      return
+    }
+
+    // Try UUID prefix match
+    const uuidMatch = sessions.filter(s => s.id.toLowerCase().startsWith(q))
+    if (uuidMatch.length === 1) {
+      await switchToSession(chatId, uuidMatch[0]!)
+      return
+    }
+    if (uuidMatch.length > 1) {
+      const list = uuidMatch.map((s, i) => `${i + 1}. ${truncate(s.title, 40)} (${shortSessionId(s.id)})`).join('\n')
+      pendingSessionSelection.set(chatId, uuidMatch)
+      await sendText(chatId, `匹配到多个会话，回复编号选择：\n\n${list}`)
+      return
+    }
+
+    // Try title keyword match
+    const titleMatch = sessions.filter(s => s.title.toLowerCase().includes(q))
+    if (titleMatch.length === 1) {
+      await switchToSession(chatId, titleMatch[0]!)
+      return
+    }
+    if (titleMatch.length > 1) {
+      const list = titleMatch.map((s, i) => `${i + 1}. ${truncate(s.title, 40)} (${shortSessionId(s.id)})`).join('\n')
+      pendingSessionSelection.set(chatId, titleMatch)
+      await sendText(chatId, `匹配到多个会话，回复编号选择：\n\n${list}`)
+      return
+    }
+
+    await sendText(chatId, `未找到匹配 "${query}" 的会话。发送 /resume 查看完整列表。`)
+  } catch (err) {
+    await sendText(chatId, `❌ ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function switchToSession(chatId: string, session: SessionListItem): Promise<void> {
+  if (!session.workDirExists) {
+    await sendText(chatId, `⚠️ 会话工作目录不存在: ${session.workDir}，无法恢复。`)
+    return
+  }
+
+  // Clean up existing state
+  clearTransientChatState(chatId)
+  bridge.resetSession(chatId)
+
+  // Bind to the target session
+  sessionStore.set(chatId, session.id, session.workDir)
+  bridge.connectSession(chatId, session.id)
+  bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
+
+  const opened = await bridge.waitForOpen(chatId)
+  if (!opened) {
+    await sendText(chatId, '⚠️ 连接会话超时，请重试。')
+    return
+  }
+
+  const title = truncate(session.title || '(无标题)', 40)
+  await sendText(chatId, `✅ 已切换到会话：**${title}** (${shortSessionId(session.id)})`)
+}
+
+function shortSessionId(sessionId: string): string {
+  return sessionId.length > 12 ? `${sessionId.slice(0, 8)}…` : sessionId
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
 async function startNewSession(chatId: string, query?: string): Promise<void> {
   bridge.resetSession(chatId)
   sessionStore.delete(chatId)
@@ -727,6 +833,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   imageWatchers.delete(chatId)
   uploadedImageKeys.delete(chatId)
   pendingProjectSelection.delete(chatId)
+  pendingSessionSelection.delete(chatId)
   runtimeStates.delete(chatId)
 
   if (query) {
@@ -1038,6 +1145,17 @@ async function handleMessage(data: any): Promise<void> {
     }
     if (!hasAttachments && (msgText === '/projects' || msgText === '项目列表')) {
       await showProjectPicker(chatId)
+      return
+    }
+    if (!hasAttachments && (msgText === '/resume' || msgText.startsWith('/resume '))) {
+      const arg = msgText.startsWith('/resume ') ? msgText.slice(8).trim() : ''
+      await resumeSession(chatId, arg || undefined)
+      return
+    }
+
+    // User is replying to a session picker prompt
+    if (!hasAttachments && pendingSessionSelection.has(chatId)) {
+      await resumeSession(chatId, msgText.trim())
       return
     }
 

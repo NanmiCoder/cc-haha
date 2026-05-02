@@ -1,3 +1,14 @@
+export type SessionListItem = {
+  id: string
+  title: string
+  createdAt: string
+  modifiedAt: string
+  messageCount: number
+  projectPath: string
+  workDir: string
+  workDirExists: boolean
+}
+
 export type RecentProject = {
   projectPath: string
   realPath: string
@@ -108,6 +119,18 @@ export class AdapterHttpClient {
     if (matches.length > 1) return { ambiguous: matches }
 
     return {}
+  }
+
+  async listSessions(limit = 10, project?: string): Promise<SessionListItem[]> {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (project) params.set('project', project)
+    const res = await fetch(`${this.httpBaseUrl}/api/sessions?${params}`)
+    if (!res.ok) {
+      throw new Error(`Failed to list sessions: ${res.statusText}`)
+    }
+    const data = (await res.json()) as { sessions: SessionListItem[] }
+    return data.sessions
   }
 
   async getGitInfo(sessionId: string): Promise<GitInfo> {
