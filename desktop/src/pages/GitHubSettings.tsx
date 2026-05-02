@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useTaskStore } from '../stores/taskStore'
 import { useTranslation } from '../i18n'
 import { Input } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
@@ -27,6 +28,7 @@ export function GitHubSettings() {
     deleteGitHubToken,
     updateGitHubRepos,
   } = useSettingsStore()
+  const { tasks, fetchTasks, runTask } = useTaskStore()
 
   const [tokenInput, setTokenInput] = useState('')
   const [tokenVerifying, setTokenVerifying] = useState(false)
@@ -34,6 +36,14 @@ export function GitHubSettings() {
 
   const [repoInput, setRepoInput] = useState('')
   const [repoError, setRepoError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchTasks()
+  }, [fetchTasks])
+
+  const monitorTask = tasks.find((t) => t.name === 'GitHub Issue Monitor')
+  const monitorEnabled = monitorTask?.enabled !== false
+  const monitorLastRun = monitorTask?.lastFiredAt
 
   const handleSaveToken = useCallback(async () => {
     const token = tokenInput.trim()
@@ -249,6 +259,37 @@ export function GitHubSettings() {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Monitor status */}
+        {githubStatus?.connected && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${monitorEnabled ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                  {t('settings.github.monitorStatus') || 'Issue Monitor'}
+                </span>
+              </div>
+              {monitorTask && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => runTask(monitorTask.id)}
+                >
+                  {t('settings.github.runNow') || 'Run Now'}
+                </Button>
+              )}
+            </div>
+            <div className="text-xs text-[var(--color-text-secondary)]">
+              {monitorEnabled
+                ? (monitorLastRun
+                  ? t('settings.github.monitorLastRun', { time: monitorLastRun }) || `Last run: ${monitorLastRun}`
+                  : t('settings.github.monitorWaiting') || 'Waiting for first run...')
+                : t('settings.github.monitorDisabled') || 'Monitor is disabled (no active repositories)'
+              }
+            </div>
           </div>
         )}
       </div>

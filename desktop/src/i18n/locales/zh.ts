@@ -700,4 +700,9 @@ export const zh: Record<TranslationKey, string> = {
   'settings.github.invalidRepoFormat': '格式无效。请使用 "owner/repo"。',
   'settings.github.repoExists': '该仓库已存在。',
   'settings.github.connectFirst': '请先连接 GitHub 账户以添加仓库。',
+  'settings.github.monitorStatus': 'Issue 监控',
+  'settings.github.runNow': '立即执行',
+  'settings.github.monitorLastRun': '上次执行: {time}',
+  'settings.github.monitorWaiting': '等待首次执行...',
+  'settings.github.monitorDisabled': '监控已禁用（无活跃仓库）',
 }

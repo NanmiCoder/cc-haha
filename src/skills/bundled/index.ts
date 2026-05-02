@@ -54,5 +54,10 @@ export function initBundledSkills(): void {
     const { registerRunSkillGeneratorSkill } = require('./runSkillGenerator.js')
     registerRunSkillGeneratorSkill()
   }
+
+  // GitHub issue responder — unconditionally available
+  const { registerGithubResponderSkill } = require('./githubResponder.js')
+  registerGithubResponderSkill()
+
   /* eslint-enable @typescript-eslint/no-require-imports */
 }

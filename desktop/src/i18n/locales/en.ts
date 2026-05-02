@@ -698,6 +698,11 @@ export const en = {
   'settings.github.invalidRepoFormat': 'Invalid format. Use "owner/repo".',
   'settings.github.repoExists': 'Repository already exists.',
   'settings.github.connectFirst': 'Connect your GitHub account to add repositories.',
+  'settings.github.monitorStatus': 'Issue Monitor',
+  'settings.github.runNow': 'Run Now',
+  'settings.github.monitorLastRun': 'Last run: {time}',
+  'settings.github.monitorWaiting': 'Waiting for first run...',
+  'settings.github.monitorDisabled': 'Monitor is disabled (no active repositories)',
 } as const
 
 export type TranslationKey = keyof typeof en

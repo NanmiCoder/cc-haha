@@ -14,6 +14,7 @@ import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
 import { ProviderService } from './services/providerService.js'
 import { handleHahaOAuthCallback } from './api/haha-oauth.js'
+import { githubMonitorScheduler } from './services/githubMonitorScheduler.js'
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -217,6 +218,11 @@ export function startServer(port = PORT, host = HOST) {
 
   // Start the cron scheduler to execute scheduled tasks
   cronScheduler.start()
+
+  // Start the GitHub issue monitor (registers a system cron task)
+  githubMonitorScheduler.start().catch((err) => {
+    console.error('[Server] Failed to start GitHub monitor:', err)
+  })
 
   console.log(`[Server] Claude Code API server running at http://${host}:${port}`)
   return server
