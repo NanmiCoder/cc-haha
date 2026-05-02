@@ -674,6 +674,30 @@ export const en = {
   'tabs.closeConfirmMessage': 'This session is still running. What would you like to do?',
   'tabs.closeConfirmKeep': 'Keep Running',
   'tabs.closeConfirmStop': 'Stop & Close',
+
+  // ─── GitHub Settings ──────────────────────────────────────
+  'settings.tab.github': 'GitHub',
+  'settings.github.title': 'GitHub Integration',
+  'settings.github.description': 'Manage your GitHub account and monitored repositories.',
+  'settings.github.tokenLabel': 'Personal Access Token',
+  'settings.github.tokenPlaceholder': 'ghp_xxxxxxxxxxxxxxxxxxxx',
+  'settings.github.verifyAndSave': 'Verify & Save',
+  'settings.github.disconnect': 'Disconnect',
+  'settings.github.connectedAs': 'Connected as {username}',
+  'settings.github.connectedDesc': 'Your GitHub account is linked.',
+  'settings.github.verifying': 'Verifying...',
+  'settings.github.tokenRequired': 'Token is required',
+  'settings.github.tokenVerifySuccess': 'GitHub account connected successfully.',
+  'settings.github.tokenVerifyFailed': 'Failed to verify token. Please check and try again.',
+  'settings.github.reposTitle': 'Monitored Repositories',
+  'settings.github.reposDescription': 'Add repositories to monitor for new issues and pull requests.',
+  'settings.github.addRepo': 'Add Repository',
+  'settings.github.repoPlaceholder': 'owner/repo',
+  'settings.github.autoReply': 'Auto-reply',
+  'settings.github.noRepos': 'No repositories monitored yet.',
+  'settings.github.invalidRepoFormat': 'Invalid format. Use "owner/repo".',
+  'settings.github.repoExists': 'Repository already exists.',
+  'settings.github.connectFirst': 'Connect your GitHub account to add repositories.',
 } as const
 
 export type TranslationKey = keyof typeof en

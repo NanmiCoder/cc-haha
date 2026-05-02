@@ -12,6 +12,12 @@ export type ModelInfo = {
   context: string
 }
 
+export type MonitoredRepo = {
+  owner: string
+  repo: string
+  autoReply: boolean
+}
+
 export type UserSettings = {
   model?: string
   modelContext?: string
@@ -19,5 +25,6 @@ export type UserSettings = {
   permissionMode?: PermissionMode
   theme?: ThemeMode
   skipWebFetchPreflight?: boolean
+  githubMonitoredRepos?: MonitoredRepo[]
   [key: string]: unknown
 }

@@ -196,6 +196,14 @@ async function checkStatus(): Promise<EnvStatus> {
     }
   }
 
+  // macOS desktop workaround: when running as a child process of the Tauri
+  // desktop app, AXIsProcessTrusted() checks the venv Python interpreter
+  // rather than the app bundle itself, causing false negatives. Treat a hard
+  // false as unknown so the desktop UI doesn't block the user.
+  if (platform === 'darwin' && accessibility === false) {
+    accessibility = null
+  }
+
   return {
     platform,
     supported,

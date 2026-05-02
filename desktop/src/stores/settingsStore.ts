@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { settingsApi } from '../api/settings'
 import { modelsApi } from '../api/models'
-import type { PermissionMode, EffortLevel, ModelInfo, ThemeMode } from '../types/settings'
+import { githubApi } from '../api/github'
+import type { PermissionMode, EffortLevel, ModelInfo, ThemeMode, MonitoredRepo } from '../types/settings'
 import type { Locale } from '../i18n'
 import { useUIStore } from './uiStore'
 
@@ -24,6 +25,8 @@ type SettingsStore = {
   locale: Locale
   theme: ThemeMode
   skipWebFetchPreflight: boolean
+  githubStatus: { connected: boolean; username?: string; avatar?: string } | null
+  githubMonitoredRepos: MonitoredRepo[]
   isLoading: boolean
   error: string | null
 
@@ -34,6 +37,10 @@ type SettingsStore = {
   setLocale: (locale: Locale) => void
   setTheme: (theme: ThemeMode) => Promise<void>
   setSkipWebFetchPreflight: (enabled: boolean) => Promise<void>
+  fetchGitHubStatus: () => Promise<void>
+  saveGitHubToken: (token: string) => Promise<void>
+  deleteGitHubToken: () => Promise<void>
+  updateGitHubRepos: (repos: MonitoredRepo[]) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -45,18 +52,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   locale: getStoredLocale(),
   theme: useUIStore.getState().theme,
   skipWebFetchPreflight: true,
+  githubStatus: null,
+  githubMonitoredRepos: [],
   isLoading: false,
   error: null,
 
   fetchAll: async () => {
     set({ isLoading: true, error: null })
     try {
-      const [{ mode }, modelsRes, { model }, { level }, userSettings] = await Promise.all([
+      const [{ mode }, modelsRes, { model }, { level }, userSettings, ghStatus] = await Promise.all([
         settingsApi.getPermissionMode(),
         modelsApi.list(),
         modelsApi.getCurrent(),
         modelsApi.getEffort(),
         settingsApi.getUser(),
+        githubApi.getStatus().catch(() => ({ connected: false })),
       ])
       const theme = userSettings.theme === 'dark' ? 'dark' : 'light'
       useUIStore.getState().setTheme(theme)
@@ -68,6 +78,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         effortLevel: level,
         theme,
         skipWebFetchPreflight: userSettings.skipWebFetchPreflight !== false,
+        githubStatus: ghStatus,
+        githubMonitoredRepos: Array.isArray(userSettings.githubMonitoredRepos)
+          ? userSettings.githubMonitoredRepos
+          : [],
         isLoading: false,
         error: null,
       })
@@ -129,6 +143,41 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ skipWebFetchPreflight: enabled })
     } catch {
       set({ skipWebFetchPreflight: prev })
+    }
+  },
+
+  fetchGitHubStatus: async () => {
+    try {
+      const status = await githubApi.getStatus()
+      set({ githubStatus: status })
+    } catch {
+      set({ githubStatus: { connected: false } })
+    }
+  },
+
+  saveGitHubToken: async (token) => {
+    const result = await githubApi.saveToken({ token })
+    set({
+      githubStatus: {
+        connected: true,
+        username: result.username,
+        avatar: result.avatar,
+      },
+    })
+  },
+
+  deleteGitHubToken: async () => {
+    await githubApi.deleteToken()
+    set({ githubStatus: { connected: false }, githubMonitoredRepos: [] })
+  },
+
+  updateGitHubRepos: async (repos) => {
+    const prev = get().githubMonitoredRepos
+    set({ githubMonitoredRepos: repos })
+    try {
+      await settingsApi.updateUser({ githubMonitoredRepos: repos })
+    } catch {
+      set({ githubMonitoredRepos: prev })
     }
   },
 }))

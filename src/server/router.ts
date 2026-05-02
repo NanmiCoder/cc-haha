@@ -17,6 +17,7 @@ import { handleAdaptersApi } from './api/adapters.js'
 import { handleSkillsApi } from './api/skills.js'
 import { handleComputerUseApi } from './api/computer-use.js'
 import { handleHahaOAuthApi } from './api/haha-oauth.js'
+import { handleGitHubApi } from './api/github.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -78,6 +79,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'computer-use':
       return handleComputerUseApi(req, url, segments)
+
+    case 'github':
+      return handleGitHubApi(req, url, segments)
 
     case 'filesystem':
       return handleFilesystemRoute(url.pathname, url)

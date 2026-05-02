@@ -552,7 +552,7 @@ def detect_screen_recording_permission() -> bool | None:
     return None
 
 
-def detect_accessibility_permission() -> bool:
+def detect_accessibility_permission() -> bool | None:
     """
     Use the official macOS Accessibility trust API.
 
@@ -560,17 +560,36 @@ def detect_accessibility_permission() -> bool:
     succeed even when the current helper process was not actually trusted for
     input control, which led the desktop UI to report Accessibility as granted
     while mouse/keyboard control still failed at runtime.
+
+    However, when running as a child process of the desktop app bundle,
+    AXIsProcessTrusted() checks the venv Python interpreter rather than the
+    app bundle itself, causing it to return False even when the user has
+    granted Accessibility to the Desktop app. In this case we return None
+    (unknown) to let the actual action attempt be the final source of truth,
+    matching the behavior of screen-recording detection.
     """
+    # Desktop mode detection: when spawned by the Tauri desktop app, this
+    # env var is injected by the server sidecar (conversationService.ts).
+    is_desktop_child = os.environ.get("CC_HAHA_COMPUTER_USE_HOST_BUNDLE_ID") == "com.claude-code-haha.desktop"
+
     framework_path = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
     try:
         application_services = ctypes.CDLL(framework_path)
         application_services.AXIsProcessTrusted.restype = ctypes.c_bool
         application_services.AXIsProcessTrusted.argtypes = []
-        return bool(application_services.AXIsProcessTrusted())
+        trusted = bool(application_services.AXIsProcessTrusted())
+        if not trusted and is_desktop_child:
+            # Running as a desktop child process — the API may be misreporting
+            # because it checks the Python interpreter instead of the app bundle.
+            # Return unknown and let the actual control action fail if truly
+            # unauthorized.
+            return None
+        return trusted
     except Exception:
         # Fail closed: if the trust API can't be queried, treat accessibility
         # as unavailable instead of reporting a misleading success state.
-        return False
+        # But for desktop child processes, return unknown to avoid blocking.
+        return None if is_desktop_child else False
 
 
 def check_permissions() -> dict[str, bool | None]:

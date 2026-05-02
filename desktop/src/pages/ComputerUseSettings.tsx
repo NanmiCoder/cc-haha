@@ -290,7 +290,7 @@ export function ComputerUseSettings() {
             </>
           )}
 
-          {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility && screenRecordingReady)) && (
+          {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility !== false && screenRecordingReady)) && (
             <div className="px-4 py-3 rounded-lg bg-green-500/10 border border-green-500/30 text-sm text-green-600 flex items-center gap-2">
               <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
               {t('settings.computerUse.allReady')}
