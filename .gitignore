@@ -37,8 +37,11 @@ desktop/package-lock.json
 # Desktop brand asset candidates (keep only selected ones in public/)
 desktop/brand-assets/
 
-# Claude local config & auto-generated
-.claude/
+# Claude local config & auto-generated (keep skills)
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/wx-backup-decrypt/
 
 # Superpowers plans & specs (local only)
 docs/superpowers/
