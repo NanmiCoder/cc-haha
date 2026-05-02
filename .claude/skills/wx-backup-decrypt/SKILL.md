@@ -105,11 +105,7 @@ Test each text field:
 - `wx_group.nickName` — MAY be plaintext
 - `wx_backup_history.display` — Often plaintext (key insight!)
 
-**Critical**: Don't assume all fields use the same encryption. In the discovered case:
-- `wx_chat.content` = XOR 0x36 encrypted
-- `wx_friend.nickname` = Plaintext (NOT encrypted)
-- `wx_group.nickName` = Plaintext (NOT encrypted)
-- `wx_backup_history.display` = Plaintext (gateway to known-plaintext attack)
+**Critical**: Don't assume all fields use the same encryption. Some fields may be XOR-encrypted while others remain plaintext — always check before attempting decryption.
 
 ---
 
@@ -152,7 +148,7 @@ if len(plaintext) == len(ciphertext):
         print(f"pos {i}: xor_key = 0x{key_byte:02x}")
 ```
 
-If the XOR key is constant (all bytes are the same, e.g., 0x36), then it's a simple single-byte XOR cipher. Verify with multiple pairs.
+If the XOR key is constant (all bytes are the same), then it's a simple single-byte XOR cipher. Verify with multiple pairs.
 
 ### 3.4 If key is NOT constant
 
@@ -168,7 +164,7 @@ If the key varies per byte, try:
 ### 4.1 Decrypt messages
 
 ```python
-XOR_KEY = 0x36  # Replace with discovered key
+XOR_KEY = 0x00  # Replace with discovered key
 
 def decrypt_content(content_hex):
     if not content_hex or len(content_hex) % 2 != 0:
@@ -226,14 +222,14 @@ cursor.execute("""
 ### 5.1 Identify and filter unwanted sessions
 
 Common groups to filter out:
-- Gaming service groups (陪玩群): contain keywords like "陪玩", "银雨楼", "点单", "爽文电竞"
+- Gaming/service groups: user provides keywords to match
 - Spam/notification accounts: `@openim` service accounts
 
 ```python
 exclude_sessions = set()
 for gid, info in groups.items():
     name = info.get('name', '')
-    if any(k in name for k in ['陪玩', '银雨楼', '点单服务号']):
+    if any(k in name for k in user_provided_keywords):
         exclude_sessions.add(gid)
 ```
 
@@ -296,7 +292,7 @@ The exported data can feed directly into the `create-yourself` skill. Key data p
 
 | Source | Encryption | Key Derivation | Content Field |
 |--------|-----------|---------------|---------------|
-| NAS WeChat Backup (.xb) | Single-byte XOR | Constant key (0x36) | `wx_chat.content` |
+| NAS WeChat Backup (.xb) | Single-byte XOR | Auto-discovered via known-plaintext | `wx_chat.content` |
 | Android EnMicroMsg.db | SQLCipher | IMEI + UIN → MD5[:7] | Various |
 | iTunes Backup | AES | Device key | Various |
 

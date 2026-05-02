@@ -20,6 +20,9 @@ import argparse
 from collections import Counter
 from datetime import datetime
 
+# Global for exclude keywords (set by decrypt_all)
+exclude_keywords_global = []
+
 
 def decrypt_xor(content_hex, key_bytes):
     """Decrypt hex-encoded content using XOR with key bytes."""
@@ -150,10 +153,15 @@ def validate_key(db_path, key_bytes):
     return valid / total, replacement
 
 
-def decrypt_all(db_path, key_bytes, output_dir, user_wxid=None, exclude_sessions=None):
+def decrypt_all(db_path, key_bytes, output_dir, user_wxid=None, exclude_sessions=None, exclude_keywords=None):
     """Decrypt entire database and export to JSON files."""
     if exclude_sessions is None:
         exclude_sessions = set()
+    if exclude_keywords is None:
+        exclude_keywords = []
+
+    global exclude_keywords_global
+    exclude_keywords_global = exclude_keywords
 
     os.makedirs(output_dir, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -207,10 +215,11 @@ def decrypt_all(db_path, key_bytes, output_dir, user_wxid=None, exclude_sessions
 
         groups[gid] = {'name': name_dec or '', 'remark': remark or '', 'members': mc}
 
-    # Identify exclude sessions
+    # Identify exclude sessions based on user-provided keywords
+    # Keywords are passed via --exclude-keywords argument
     for gid, info in groups.items():
         name = info.get('name', '')
-        if any(k in name for k in ['陪玩', '银雨楼', '点单服务号', '爽文电竞']):
+        if any(k in name for k in exclude_keywords_global):
             exclude_sessions.add(gid)
 
     # Decrypt user messages
@@ -296,8 +305,8 @@ def main():
     parser.add_argument('--uin', default=None, help='WeChat UIN')
     parser.add_argument('--output', default='./wx_decrypted', help='Output directory')
     parser.add_argument('--exclude-keywords', nargs='+',
-                        default=['陪玩', '银雨楼', '点单服务号'],
-                        help='Keywords for sessions to exclude')
+                        default=[],
+                        help='Keywords for group session names to exclude (e.g. --exclude-keywords foo bar)')
     args = parser.parse_args()
 
     print(f"Analyzing database: {args.db}")
@@ -354,7 +363,7 @@ def main():
 
     # Decrypt all
     print(f"\nDecrypting database with key 0x{key_bytes[0]:02x}...")
-    stats = decrypt_all(args.db, key_bytes, args.output, exclude_sessions=set())
+    stats = decrypt_all(args.db, key_bytes, args.output, exclude_sessions=set(), exclude_keywords=args.exclude_keywords)
 
     print(f"\n=== Decryption Complete ===")
     for k, v in stats.items():
