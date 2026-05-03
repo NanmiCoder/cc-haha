@@ -131,7 +131,7 @@ def imei_key_derivation(imei, uin=None):
     """Try IMEI-based key derivation (traditional WeChat method)."""
     key_str = imei + str(uin) if uin else imei
     md5_hash = hashlib.md5(key_str.encode()).hexdigest()
-    return bytes.fromhex(md5_hash[:7])
+    return bytes.fromhex(md5_hash[:8])
 
 
 def validate_key(db_path, key_bytes):
