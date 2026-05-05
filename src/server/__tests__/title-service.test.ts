@@ -35,13 +35,13 @@ describe('titleService', () => {
 
     try {
       const providerId = 'deepseek-test'
-      await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+      await fs.mkdir(path.join(tmpDir, 'yuanclaw'), { recursive: true })
       await fs.writeFile(
         path.join(tmpDir, 'settings.json'),
         JSON.stringify({ alwaysThinkingEnabled: false }, null, 2),
       )
       await fs.writeFile(
-        path.join(tmpDir, 'cc-haha', 'providers.json'),
+        path.join(tmpDir, 'yuanclaw', 'providers.json'),
         JSON.stringify({
           activeId: providerId,
           providers: [

@@ -2,19 +2,19 @@
 layout: home
 
 hero:
-  name: Claude Code Haha
+  name: yuanclaw
   text: 本地可运行的 Claude Code
   tagline: 基于泄露源码修复，支持接入任意 Anthropic 兼容 API（MiniMax、OpenRouter 等）
   image:
     src: /images/logo-horizontal.png
-    alt: Claude Code Haha
+    alt: yuanclaw
   actions:
     - theme: brand
       text: 快速开始
       link: /guide/quick-start
     - theme: alt
       text: GitHub
-      link: https://github.com/NanmiCoder/cc-haha
+      link: https://github.com/NanmiCoder/yuanclaw
 
 features:
   - icon: "\U0001F5A5"

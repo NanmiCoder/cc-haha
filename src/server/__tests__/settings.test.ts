@@ -452,7 +452,7 @@ describe('Models API', () => {
     expect(res.status).toBe(400)
   })
 
-  it('GET /api/models/current should prefer cc-haha managed model over global user model when provider is active', async () => {
+  it('GET /api/models/current should prefer yuanclaw managed model over global user model when provider is active', async () => {
     const settingsSvc = new SettingsService()
     await settingsSvc.updateUserSettings({ model: 'kimi-k2.6' })
 
@@ -481,7 +481,7 @@ describe('Models API', () => {
     expect(body.model.id).toBe('glm-5-turbo')
   })
 
-  it('PUT /api/models/current should persist to cc-haha managed settings when provider is active', async () => {
+  it('PUT /api/models/current should persist to yuanclaw managed settings when provider is active', async () => {
     const settingsSvc = new SettingsService()
     const providerSvc = new ProviderService()
     const provider = await providerSvc.addProvider({

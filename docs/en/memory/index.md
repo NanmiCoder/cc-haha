@@ -113,9 +113,9 @@ All illustrations use a dark background (#1a1a2e) + Anthropic brand copper-orang
 
 ## Related Resources
 
-- [Claude Code Haha Home](/en/)
-- [Memory system source code](https://github.com/NanmiCoder/cc-haha/tree/main/src/memdir/)
-- [Auto-extraction service](https://github.com/NanmiCoder/cc-haha/tree/main/src/services/extractMemories/)
-- [AutoDream service](https://github.com/NanmiCoder/cc-haha/tree/main/src/services/autoDream/)
-- [DreamTask](https://github.com/NanmiCoder/cc-haha/tree/main/src/tasks/DreamTask/)
-- [GitHub Issues](https://github.com/NanmiCoder/cc-haha/issues)
+- [yuanclaw Home](/en/)
+- [Memory system source code](https://github.com/NanmiCoder/yuanclaw/tree/main/src/memdir/)
+- [Auto-extraction service](https://github.com/NanmiCoder/yuanclaw/tree/main/src/services/extractMemories/)
+- [AutoDream service](https://github.com/NanmiCoder/yuanclaw/tree/main/src/services/autoDream/)
+- [DreamTask](https://github.com/NanmiCoder/yuanclaw/tree/main/src/tasks/DreamTask/)
+- [GitHub Issues](https://github.com/NanmiCoder/yuanclaw/issues)

@@ -14,7 +14,7 @@
       <stop stop-color="#FFF7EF"/>
       <stop offset="1" stop-color="#FFE8B8"/>
     </linearGradient>
-    <linearGradient id="hahaText" x1="1508" y1="174" x2="2040" y2="308" gradientUnits="userSpaceOnUse">
+    <linearGradient id="yuanclawText" x1="1508" y1="174" x2="2040" y2="308" gradientUnits="userSpaceOnUse">
       <stop stop-color="#FF5B2E"/>
       <stop offset="0.55" stop-color="#FF7A37"/>
       <stop offset="1" stop-color="#FFB340"/>
@@ -56,8 +56,8 @@
   <text x="598" y="292" fill="#271714" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="800" letter-spacing="-7">
     Claude Code
   </text>
-  <text x="1558" y="292" fill="url(#hahaText)" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="800" letter-spacing="-7">
-    Haha
+  <text x="1558" y="292" fill="url(#yuanclawText)" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="800" letter-spacing="-7">
+    Yuanclaw
   </text>
 
   <text x="602" y="394" fill="#7A5C51" font-family="JetBrains Mono, SFMono-Regular, Menlo, monospace" font-size="36" font-weight="700" letter-spacing="7">

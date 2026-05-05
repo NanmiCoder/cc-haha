@@ -2,17 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { shouldSkipWebFetchPreflight } from './utils.js'
 
 describe('shouldSkipWebFetchPreflight', () => {
-  const originalDesktopServerUrl = process.env.CC_HAHA_DESKTOP_SERVER_URL
+  const originalDesktopServerUrl = process.env.YUANCLAW_DESKTOP_SERVER_URL
 
   beforeEach(() => {
-    delete process.env.CC_HAHA_DESKTOP_SERVER_URL
+    delete process.env.YUANCLAW_DESKTOP_SERVER_URL
   })
 
   afterEach(() => {
     if (originalDesktopServerUrl === undefined) {
-      delete process.env.CC_HAHA_DESKTOP_SERVER_URL
+      delete process.env.YUANCLAW_DESKTOP_SERVER_URL
     } else {
-      process.env.CC_HAHA_DESKTOP_SERVER_URL = originalDesktopServerUrl
+      process.env.YUANCLAW_DESKTOP_SERVER_URL = originalDesktopServerUrl
     }
   })
 
@@ -23,7 +23,7 @@ describe('shouldSkipWebFetchPreflight', () => {
   })
 
   test('respects explicit false from settings even on desktop', () => {
-    process.env.CC_HAHA_DESKTOP_SERVER_URL = 'http://127.0.0.1:3456'
+    process.env.YUANCLAW_DESKTOP_SERVER_URL = 'http://127.0.0.1:3456'
 
     expect(
       shouldSkipWebFetchPreflight({ skipWebFetchPreflight: false }),
@@ -31,7 +31,7 @@ describe('shouldSkipWebFetchPreflight', () => {
   })
 
   test('defaults to enabled for desktop sessions', () => {
-    process.env.CC_HAHA_DESKTOP_SERVER_URL = 'http://127.0.0.1:3456'
+    process.env.YUANCLAW_DESKTOP_SERVER_URL = 'http://127.0.0.1:3456'
 
     expect(shouldSkipWebFetchPreflight({})).toBe(true)
   })

@@ -9,9 +9,9 @@ assignees: ''
 ## 提交前确认
 <!-- 请在提交 issue 前确认以下事项 -->
 
-- [ ] 我已经阅读了 [README 常见问题](https://github.com/NanmiCoder/cc-haha#常见问题)
+- [ ] 我已经阅读了 [README 常见问题](https://github.com/NanmiCoder/yuanclaw#常见问题)
 - [ ] 我已经升级到最新版本后复现过这个问题
-- [ ] 我已经搜索过[现有 issues](https://github.com/NanmiCoder/cc-haha/issues)，确认没有重复问题
+- [ ] 我已经搜索过[现有 issues](https://github.com/NanmiCoder/yuanclaw/issues)，确认没有重复问题
 - [ ] 我已经隐藏截图和日志中的 API Key、Token、Cookie 等敏感信息
 
 ## 问题描述

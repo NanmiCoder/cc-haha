@@ -1,14 +1,16 @@
 /**
- * Haha OpenAI OAuth REST API
+ * Yuanclaw OAuth REST API
  *
- * POST   /api/haha-openai-oauth/start    — 生成 PKCE+state,返回 authorize URL
- * GET    /callback/openai                — 用户浏览器 redirect 到此,完成 token 交换
- * GET    /api/haha-openai-oauth          — 查询当前登录状态(不回传 token 本体)
- * DELETE /api/haha-openai-oauth          — 登出,删除 token 文件
+ * POST   /api/yuanclaw-oauth/start    — 生成 PKCE+state,返回 authorize URL
+ * GET    /callback                — 用户浏览器 redirect 到此,完成 token 交换
+ * GET    /api/yuanclaw-oauth/callback — 兼容旧路径
+ * GET    /api/yuanclaw-oauth          — 查询当前登录状态(不回传 token 本体)
+ * GET    /api/yuanclaw-oauth/status   — 同上(legacy path)
+ * DELETE /api/yuanclaw-oauth          — 登出,删除 token 文件
  */
 
 import { z } from 'zod'
-import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { yuanclawOAuthService } from '../services/yuanclawOAuthService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
 const StartRequestSchema = z.object({
@@ -22,13 +24,13 @@ function html(body: string): Response {
   })
 }
 
-export async function handleHahaOpenAIOAuthApi(
+export async function handleYuanclawOAuthApi(
   req: Request,
   url: URL,
   segments: string[],
 ): Promise<Response> {
   try {
-    const action = segments[2] // segments: ['api', 'haha-openai-oauth', <action?>]
+    const action = segments[2] // segments: ['api', 'yuanclaw-oauth', <action?>]
 
     if (action === 'start' && req.method === 'POST') {
       let body: unknown
@@ -41,7 +43,7 @@ export async function handleHahaOpenAIOAuthApi(
       if (!parsed.success) {
         throw ApiError.badRequest('serverPort (positive integer) required')
       }
-      const session = hahaOpenAIOAuthService.startSession({
+      const session = yuanclawOAuthService.startSession({
         serverPort: parsed.data.serverPort,
       })
       return Response.json({
@@ -50,21 +52,25 @@ export async function handleHahaOpenAIOAuthApi(
       })
     }
 
-    if (action === undefined && req.method === 'GET') {
-      const tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
+    if (action === 'callback' && req.method === 'GET') {
+      return handleYuanclawOAuthCallback(url)
+    }
+
+    if ((action === undefined || action === 'status') && req.method === 'GET') {
+      const tokens = await yuanclawOAuthService.ensureFreshTokens()
       if (!tokens) {
         return Response.json({ loggedIn: false })
       }
       return Response.json({
         loggedIn: true,
         expiresAt: tokens.expiresAt,
-        email: tokens.email,
-        accountId: tokens.accountId,
+        scopes: tokens.scopes,
+        subscriptionType: tokens.subscriptionType,
       })
     }
 
     if (action === undefined && req.method === 'DELETE') {
-      await hahaOpenAIOAuthService.deleteTokens()
+      await yuanclawOAuthService.deleteTokens()
       return Response.json({ ok: true })
     }
 
@@ -74,7 +80,7 @@ export async function handleHahaOpenAIOAuthApi(
   }
 }
 
-export async function handleHahaOpenAIOAuthCallback(url: URL): Promise<Response> {
+export async function handleYuanclawOAuthCallback(url: URL): Promise<Response> {
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
   const error = url.searchParams.get('error')
@@ -87,7 +93,7 @@ export async function handleHahaOpenAIOAuthCallback(url: URL): Promise<Response>
   }
 
   try {
-    await hahaOpenAIOAuthService.completeSession(code, state)
+    await yuanclawOAuthService.completeSession(code, state)
     return html(renderCallbackPage(true, null))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -98,16 +104,16 @@ export async function handleHahaOpenAIOAuthCallback(url: URL): Promise<Response>
 function renderCallbackPage(success: boolean, errorMsg: string | null): string {
   if (success) {
     return `<!doctype html>
-<html><head><meta charset="utf-8"><title>OpenAI Login Success</title>
+<html><head><meta charset="utf-8"><title>Login Success</title>
 <style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#fafafa;color:#333}.card{text-align:center;padding:40px;background:white;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06)}h1{color:#16a34a;margin:0 0 12px}p{color:#666}</style>
-</head><body><div class="card"><h1>✓ OpenAI Login Successful</h1><p>You can close this window and return to Claude Code Haha.</p></div>
+</head><body><div class="card"><h1>✓ Login Successful</h1><p>You can close this window and return to yuanclaw.</p></div>
 <script>setTimeout(() => window.close(), 1500)</script>
 </body></html>`
   }
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>OpenAI Login Failed</title>
+<html><head><meta charset="utf-8"><title>Login Failed</title>
 <style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#fafafa;color:#333}.card{text-align:center;padding:40px;background:white;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06)}h1{color:#dc2626;margin:0 0 12px}pre{color:#666;white-space:pre-wrap;word-break:break-word;text-align:left;background:#f5f5f5;padding:12px;border-radius:6px}</style>
-</head><body><div class="card"><h1>✗ OpenAI Login Failed</h1><pre>${escapeHtml(errorMsg ?? 'Unknown error')}</pre></div>
+</head><body><div class="card"><h1>✗ Login Failed</h1><pre>${escapeHtml(errorMsg ?? 'Unknown error')}</pre></div>
 </body></html>`
 }
 

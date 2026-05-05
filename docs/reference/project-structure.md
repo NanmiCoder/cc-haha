@@ -2,7 +2,7 @@
 
 
 ```
-bin/claude-haha          # 入口脚本
+bin/yuanclaw          # 入口脚本
 preload.ts               # Bun preload（设置 MACRO 全局变量）
 .env.example             # 环境变量模板
 src/

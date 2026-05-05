@@ -118,7 +118,7 @@ async function shouldDisableThinkingForTitle(presetId: string): Promise<boolean>
   if (settings.alwaysThinkingEnabled !== false) return false
 
   const presetEnv = PROVIDER_PRESETS.find((preset) => preset.id === presetId)?.defaultEnv
-  return isEnvTruthy(presetEnv?.CC_HAHA_SEND_DISABLED_THINKING)
+  return isEnvTruthy(presetEnv?.YUANCLAW_SEND_DISABLED_THINKING)
 }
 
 /**

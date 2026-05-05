@@ -9,10 +9,10 @@ cd "$ROOT_DIR"
 
 # When spawned by the desktop/web server as a child CLI process,
 # skip .env loading — the server has already set the correct env
-# via cc-haha/settings.json. Loading .env would re-inject stale
+# via yuanclaw/settings.json. Loading .env would re-inject stale
 # provider keys (e.g., a MiniMax key as ANTHROPIC_API_KEY) that
 # override the active provider config.
-if [[ "${CC_HAHA_SKIP_DOTENV:-0}" == "1" ]]; then
+if [[ "${YUANCLAW_SKIP_DOTENV:-0}" == "1" ]]; then
   # Bun auto-loads .env by default; explicitly point to /dev/null to suppress.
   ENV_FILE_FLAG="--env-file=/dev/null"
 elif [[ -f .env ]]; then

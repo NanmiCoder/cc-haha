@@ -16,7 +16,7 @@ If your model provider only supports the OpenAI protocol, you need a proxy like 
 ## Q: `Cannot find package 'bundle'`
 
 ```
-error: Cannot find package 'bundle' from '.../claude-code-haha/src/entrypoints/cli.tsx'
+error: Cannot find package 'bundle' from '.../yuanclaw/src/entrypoints/cli.tsx'
 ```
 
 **Cause**: Your Bun version is too old and doesn't support the required `bun:bundle` built-in module.

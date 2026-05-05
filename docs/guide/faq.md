@@ -16,7 +16,7 @@
 ## Q: `Cannot find package 'bundle'`
 
 ```
-error: Cannot find package 'bundle' from '.../claude-code-haha/src/entrypoints/cli.tsx'
+error: Cannot find package 'bundle' from '.../yuanclaw/src/entrypoints/cli.tsx'
 ```
 
 **原因**：Bun 版本过低，不支持项目所需的 `bun:bundle` 等内置模块。

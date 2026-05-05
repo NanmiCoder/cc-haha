@@ -211,7 +211,7 @@ async function handleCurrentModel(req: Request): Promise<Response> {
     let currentModelName: string
 
     if (activeProvider) {
-      // Provider is active — only use the provider-managed cc-haha settings.
+      // Provider is active — only use the provider-managed yuanclaw settings.
       // This avoids leaking global ~/.claude/settings.json model choices into
       // the active provider flow.
       const providerEnvModel = env.ANTHROPIC_MODEL

@@ -84,7 +84,7 @@
 
 ![在飞书里发配对码](../images/im/feishu/13-send-code-in-feishu.png)
 
-看到配对成功提示后，就可以用飞书在手机上远程驱动 Claude Code Haha 了：
+看到配对成功提示后，就可以用飞书在手机上远程驱动 yuanclaw 了：
 
 ![配对成功](../images/im/feishu/14-pair-success.png)
 

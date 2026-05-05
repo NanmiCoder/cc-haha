@@ -7,7 +7,7 @@ type OutputFormat = 'text' | 'json'
 function printHelp(): void {
   process.stdout.write(
     [
-      'Usage: claude-haha [options] [prompt]',
+      'Usage: yuanclaw [options] [prompt]',
       '',
       'Local recovery mode for this leaked source tree.',
       '',
@@ -33,7 +33,7 @@ function printHelp(): void {
 }
 
 function printVersion(): void {
-  process.stdout.write('999.0.0-local (Claude Code local recovery)\n')
+  process.stdout.write('999.0.0-local (yuanclaw local recovery)\n')
 }
 
 function parseArgs(argv: string[]) {
@@ -240,7 +240,7 @@ async function runInteractive(parsed: {
   })
 
   process.stdout.write(
-    `Claude Haha local interactive mode\nmodel: ${model}\ncommands: /exit, /clear\n\n`,
+    `yuanclaw local interactive mode\nmodel: ${model}\ncommands: /exit, /clear\n\n`,
   )
   rl.prompt()
 

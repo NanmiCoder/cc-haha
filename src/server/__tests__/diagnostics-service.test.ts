@@ -10,7 +10,7 @@ let tmpDir: string
 let originalConfigDir: string | undefined
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-diagnostics-test-'))
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuanclaw-diagnostics-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = tmpDir
 })
@@ -44,13 +44,13 @@ describe('DiagnosticsService', () => {
       },
     })
 
-    const raw = await fs.readFile(path.join(tmpDir, 'cc-haha', 'diagnostics', 'diagnostics.jsonl'), 'utf-8')
+    const raw = await fs.readFile(path.join(tmpDir, 'yuanclaw', 'diagnostics', 'diagnostics.jsonl'), 'utf-8')
     expect(raw).toContain('cli_start_failed')
     expect(raw).toContain('[REDACTED]')
     expect(raw).not.toContain('sk-secret')
     expect(raw).not.toContain(os.homedir())
 
-    const runtime = await fs.readFile(path.join(tmpDir, 'cc-haha', 'diagnostics', 'runtime-errors.log'), 'utf-8')
+    const runtime = await fs.readFile(path.join(tmpDir, 'yuanclaw', 'diagnostics', 'runtime-errors.log'), 'utf-8')
     expect(runtime).toContain('cli_start_failed')
     expect(runtime).toContain('[REDACTED]')
     expect(runtime).not.toContain('sk-secret-token')
@@ -58,9 +58,9 @@ describe('DiagnosticsService', () => {
 
   test('exports a single diagnostics tarball without provider secrets', async () => {
     const service = new DiagnosticsService()
-    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'yuanclaw'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'cc-haha', 'providers.json'),
+      path.join(tmpDir, 'yuanclaw', 'providers.json'),
       JSON.stringify({
         activeId: 'provider-1',
         providers: [{
@@ -109,7 +109,7 @@ describe('diagnostics API', () => {
     const statusRes = await handleDiagnosticsApi(statusReq.req, statusReq.url, statusReq.segments)
     expect(statusRes.status).toBe(200)
     const status = await statusRes.json() as { logDir: string; recentErrorCount: number }
-    expect(status.logDir).toContain(path.join('cc-haha', 'diagnostics'))
+    expect(status.logDir).toContain(path.join('yuanclaw', 'diagnostics'))
     expect(status.recentErrorCount).toBe(1)
 
     const eventsReq = makeRequest('GET', '/api/diagnostics/events?limit=10')

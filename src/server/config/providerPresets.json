@@ -28,7 +28,7 @@
     "websiteUrl": "https://platform.deepseek.com",
     "apiKeyUrl": "https://platform.deepseek.com/api_keys",
     "defaultEnv": {
-      "CC_HAHA_SEND_DISABLED_THINKING": "1"
+      "YUANCLAW_SEND_DISABLED_THINKING": "1"
     }
   },
   {
@@ -45,9 +45,9 @@
     "needsApiKey": true,
     "websiteUrl": "https://open.bigmodel.cn",
     "apiKeyUrl": "https://www.bigmodel.cn/invite?icode=d41B2qi8Z5xNwTGLNPPF3OZLO2QH3C0EBTSr%2BArzMw4%3D",
-    "promoText": "智谱 GLM 为 cc-haha 用户准备了专属邀请福利，使用此链接注册后可领取新用户权益。",
+    "promoText": "智谱 GLM 为 yuanclaw 用户准备了专属邀请福利，使用此链接注册后可领取新用户权益。",
     "defaultEnv": {
-      "CC_HAHA_SEND_DISABLED_THINKING": "1"
+      "YUANCLAW_SEND_DISABLED_THINKING": "1"
     }
   },
   {
@@ -65,7 +65,7 @@
     "websiteUrl": "https://platform.moonshot.cn",
     "apiKeyUrl": "https://platform.kimi.com/console/api-keys",
     "defaultEnv": {
-      "CC_HAHA_SEND_DISABLED_THINKING": "1"
+      "YUANCLAW_SEND_DISABLED_THINKING": "1"
     }
   },
   {
@@ -97,7 +97,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://jiekou.ai",
     "apiKeyUrl": "https://jiekou.ai/referral?invited_code=OBNU3K",
-    "promoText": "接口AI为 cc-haha 的用户提供官方资源与稳定高性能体验，订阅包价格为官方 8 折；绑定 GitHub 后还可领取 3 美元优惠券。",
+    "promoText": "接口AI为 yuanclaw 的用户提供官方资源与稳定高性能体验，订阅包价格为官方 8 折；绑定 GitHub 后还可领取 3 美元优惠券。",
     "featured": true,
     "defaultEnv": {
       "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "none"
@@ -117,7 +117,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://www.shengsuanyun.com",
     "apiKeyUrl": "https://www.shengsuanyun.com/?from=CH_LEJ88KWR",
-    "promoText": "胜算云为 cc-haha 的用户提供了特别福利，使用此链接注册的新用户可获 10 元模力及首充 10% 赠送！",
+    "promoText": "胜算云为 yuanclaw 的用户提供了特别福利，使用此链接注册的新用户可获 10 元模力及首充 10% 赠送！",
     "featured": true,
     "defaultEnv": {
       "API_TIMEOUT_MS": "3000000",

@@ -20,7 +20,7 @@ Telegram 方案适合个人私聊远程使用。当前实现只处理 `private c
 
 按提示走完三步：
 
-- **取一个机器人名称**，例如 `ClaudeCodeHaha机器人`
+- **取一个机器人名称**，例如 `ClaudeCodeYuanclaw机器人`
 - **取一个机器人用户名**，要求全英文字母，且必须以 `_bot` 结尾，例如 `jiang_cc_hah_bot`
 - 创建成功后，复制 BotFather 返回的 **Bot Token**
 
@@ -42,7 +42,7 @@ Telegram 方案适合个人私聊远程使用。当前实现只处理 `private c
 
 ## 3. 机器人配对
 
-随便给刚才创建的机器人发送一条消息，按提示输入配对码。看到下面的配对成功提示，就可以从手机 Telegram 远程驱动 Claude Code Haha 了：
+随便给刚才创建的机器人发送一条消息，按提示输入配对码。看到下面的配对成功提示，就可以从手机 Telegram 远程驱动 yuanclaw 了：
 
 ![配对成功](../images/im/telegram/06-pair-success.png)
 

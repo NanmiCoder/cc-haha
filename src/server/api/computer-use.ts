@@ -335,10 +335,10 @@ async function runSetup(): Promise<SetupResult> {
 }
 
 // ============================================================================
-// Authorized Apps configuration — stored in ~/.claude/cc-haha/computer-use-config.json
+// Authorized Apps configuration — stored in ~/.claude/yuanclaw/computer-use-config.json
 // ============================================================================
 
-const configPath = join(claudeHome, 'cc-haha', 'computer-use-config.json')
+const configPath = join(claudeHome, 'yuanclaw', 'computer-use-config.json')
 
 type AuthorizedApp = {
   bundleId: string

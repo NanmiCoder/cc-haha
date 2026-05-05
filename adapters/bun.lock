@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "claude-code-im-adapters",
+      "name": "yuanclaw-im-adapters",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.60.0",
         "grammy": "^1.42.0",

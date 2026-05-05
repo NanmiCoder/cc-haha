@@ -30,9 +30,9 @@ See [Environment Variables](./env-vars.md) for the full reference.
 ### macOS / Linux
 
 ```bash
-./bin/claude-haha                          # Interactive TUI mode
-./bin/claude-haha -p "your prompt here"    # Headless mode
-./bin/claude-haha --help                   # Show all options
+./bin/yuanclaw                          # Interactive TUI mode
+./bin/yuanclaw -p "your prompt here"    # Headless mode
+./bin/yuanclaw --help                   # Show all options
 ```
 
 ### Windows
@@ -44,7 +44,7 @@ See [Environment Variables](./env-vars.md) for the full reference.
 bun --env-file=.env ./src/entrypoints/cli.tsx
 
 # Or run inside Git Bash
-./bin/claude-haha
+./bin/yuanclaw
 ```
 
 ## 4. Global Usage (Optional)
@@ -52,7 +52,7 @@ bun --env-file=.env ./src/entrypoints/cli.tsx
 Add `bin/` to your PATH to run from any directory. See [Global Usage Guide](./global-usage.md):
 
 ```bash
-export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
+export PATH="$HOME/path/to/yuanclaw/bin:$PATH"
 ```
 
 ## 5. Recovery Mode
@@ -60,5 +60,5 @@ export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
 If the Ink TUI has issues, use the fallback Recovery CLI mode:
 
 ```bash
-CLAUDE_CODE_FORCE_RECOVERY_CLI=1 ./bin/claude-haha
+CLAUDE_CODE_FORCE_RECOVERY_CLI=1 ./bin/yuanclaw
 ```

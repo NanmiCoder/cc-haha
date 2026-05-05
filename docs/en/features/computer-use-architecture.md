@@ -33,7 +33,7 @@ Our approach: **preserve the original MCP tool definitions and security mechanis
 ### What We Changed
 
 ```
-Original Claude Code                     Claude Code Haha (Patched)
+Original Claude Code                     yuanclaw (Patched)
 ────────────────────                     ─────────────────────────
 @ant/computer-use-swift  ──replaced──→   Python Bridge (mac_helper.py)
 @ant/computer-use-input  ──replaced──→   pyautogui + pyobjc

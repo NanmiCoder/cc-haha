@@ -1,7 +1,7 @@
 /**
- * HahaOpenAIOAuthService — cc-haha-managed OpenAI OAuth token
+ * YuanclawOpenAIOAuthService — yuanclaw-managed OpenAI OAuth token
  *
- * 这个 service 把 token 存到 haha 自己的目录,并通过 env 注入给 CLI。
+ * 这个 service 把 token 存到 yuanclaw 自己的目录,并通过 env 注入给 CLI。
  *
  * 复用 src/services/openaiAuth/client.ts 里的 PKCE + token exchange 逻辑,
  * 不复制粘贴 —— 保证跟 CLI 走同一套协议实现。
@@ -51,7 +51,7 @@ type OpenAIRefreshFn = (
 
 const SESSION_TTL_MS = 5 * 60 * 1000
 
-export class HahaOpenAIOAuthService {
+export class YuanclawOpenAIOAuthService {
   private sessions = new Map<string, OpenAIOAuthSession>()
   private refreshFn: OpenAIRefreshFn = refreshOpenAITokens
 
@@ -62,7 +62,7 @@ export class HahaOpenAIOAuthService {
   private getOAuthFilePath(): string {
     const configDir =
       process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-    return path.join(configDir, 'cc-haha', 'openai-oauth.json')
+    return path.join(configDir, 'yuanclaw', 'openai-oauth.json')
   }
 
   async loadTokens(): Promise<StoredOpenAIOAuthTokens | null> {
@@ -190,7 +190,7 @@ export class HahaOpenAIOAuthService {
       return updated
     } catch (err) {
       console.error(
-        '[HahaOpenAIOAuthService] token refresh failed:',
+        '[YuanclawOpenAIOAuthService] token refresh failed:',
         err instanceof Error ? err.message : err,
       )
       return null
@@ -203,4 +203,4 @@ export class HahaOpenAIOAuthService {
   }
 }
 
-export const hahaOpenAIOAuthService = new HahaOpenAIOAuthService()
+export const yuanclawOpenAIOAuthService = new YuanclawOpenAIOAuthService()

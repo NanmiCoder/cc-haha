@@ -80,14 +80,14 @@ describe('provider presets API', () => {
     expect(deepseek?.defaultModels.haiku).toBe('deepseek-v4-flash')
     expect(deepseek?.defaultModels.sonnet).toBe('deepseek-v4-pro')
     expect(deepseek?.defaultModels.opus).toBe('deepseek-v4-pro')
-    expect(deepseek?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBe('1')
+    expect(deepseek?.defaultEnv?.YUANCLAW_SEND_DISABLED_THINKING).toBe('1')
     expect(zhipu?.defaultModels.main).toBe('glm-5.1')
     expect(zhipu?.defaultModels.haiku).toBe('glm-4.5-air')
     expect(zhipu?.defaultModels.sonnet).toBe('glm-5-turbo')
     expect(zhipu?.defaultModels.opus).toBe('glm-5.1')
     expect(kimi?.baseUrl).toBe('https://api.kimi.com/coding')
     expect(kimi?.defaultModels.main).toBe('kimi-k2.6')
-    expect(kimi?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBe('1')
+    expect(kimi?.defaultEnv?.YUANCLAW_SEND_DISABLED_THINKING).toBe('1')
     expect(minimax?.defaultModels.main).toBe('MiniMax-M2.7')
     expect(jiekouai?.baseUrl).toBe('https://api.jiekou.ai/anthropic')
     expect(jiekouai?.defaultModels.main).toBe('claude-sonnet-4-6')
@@ -119,8 +119,8 @@ describe('provider presets API', () => {
     expect(ollama?.defaultEnv).toEqual({ ANTHROPIC_AUTH_TOKEN: 'ollama' })
     expect(deepseek?.apiKeyUrl).toBe('https://platform.deepseek.com/api_keys')
     expect(zhipu?.apiKeyUrl).toBe('https://www.bigmodel.cn/invite?icode=d41B2qi8Z5xNwTGLNPPF3OZLO2QH3C0EBTSr%2BArzMw4%3D')
-    expect(zhipu?.promoText).toContain('cc-haha')
-    expect(zhipu?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBe('1')
+    expect(zhipu?.promoText).toContain('yuanclaw')
+    expect(zhipu?.defaultEnv?.YUANCLAW_SEND_DISABLED_THINKING).toBe('1')
     expect(kimi?.apiKeyUrl).toBe('https://platform.kimi.com/console/api-keys')
     expect(minimax?.apiKeyUrl).toBe('https://platform.minimaxi.com/subscribe/token-plan?code=1TG2Cseab2&source=link')
     expect(jiekouai?.apiKeyUrl).toBe('https://jiekou.ai/referral?invited_code=OBNU3K')
@@ -137,16 +137,16 @@ describe('provider presets API', () => {
     expect(custom?.promoText).toBeUndefined()
   })
 
-  test('GET and PUT /api/providers/settings read and write cc-haha settings.json', async () => {
+  test('GET and PUT /api/providers/settings read and write yuanclaw settings.json', async () => {
     const initial = {
       env: {
         ANTHROPIC_MODEL: 'glm-5.1',
       },
       model: 'glm-5.1',
     }
-    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'yuanclaw'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'cc-haha', 'settings.json'),
+      path.join(tmpDir, 'yuanclaw', 'settings.json'),
       JSON.stringify(initial, null, 2),
       'utf-8',
     )
@@ -166,7 +166,7 @@ describe('provider presets API', () => {
     const putRes = await handleProvidersApi(putReq.req, putReq.url, putReq.segments)
     expect(putRes.status).toBe(200)
 
-    const updatedRaw = await fs.readFile(path.join(tmpDir, 'cc-haha', 'settings.json'), 'utf-8')
+    const updatedRaw = await fs.readFile(path.join(tmpDir, 'yuanclaw', 'settings.json'), 'utf-8')
     expect(JSON.parse(updatedRaw)).toEqual(updateBody)
   })
 })

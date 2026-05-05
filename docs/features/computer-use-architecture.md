@@ -33,7 +33,7 @@ Claude Code 原版的 Computer Use 功能（内部代号 **Chicago**）依赖三
 ### 我们做了什么
 
 ```
-原始 Claude Code                         Claude Code Haha (补丁版)
+原始 Claude Code                         yuanclaw (补丁版)
 ─────────────────                        ─────────────────────────
 @ant/computer-use-swift  ──替换为──→     Python Bridge (mac_helper.py)
 @ant/computer-use-input  ──替换为──→     pyautogui + pyobjc

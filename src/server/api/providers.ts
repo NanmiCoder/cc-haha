@@ -4,9 +4,9 @@
  * GET    /api/providers              — list all saved providers + activeId
  * GET    /api/providers/presets       — list available presets
  * GET    /api/providers/auth-status   — check whether any usable auth exists
- * GET    /api/providers/settings      — read cc-haha managed settings.json
+ * GET    /api/providers/settings      — read yuanclaw managed settings.json
  * POST   /api/providers              — add a provider
- * PUT    /api/providers/settings      — update cc-haha managed settings.json
+ * PUT    /api/providers/settings      — update yuanclaw managed settings.json
  * PUT    /api/providers/:id          — update a provider
  * DELETE /api/providers/:id          — delete a provider
  * POST   /api/providers/:id/activate — activate a saved provider

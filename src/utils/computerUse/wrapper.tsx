@@ -52,7 +52,7 @@ type Binding = {
  */
 let binding: Binding | undefined;
 let currentToolUseContext: ToolUseContext | undefined;
-const desktopServerUrl = process.env.CC_HAHA_DESKTOP_SERVER_URL;
+const desktopServerUrl = process.env.YUANCLAW_DESKTOP_SERVER_URL;
 function tuc(): ToolUseContext {
   // Safe: `binding` is only populated when `currentToolUseContext` is set.
   // Called only from within `ctx` callbacks, which only fire during dispatch.
@@ -264,7 +264,7 @@ async function runDesktopPermissionDialog(
 }
 
 /**
- * Load pre-authorized apps from ~/.claude/cc-haha/computer-use-config.json.
+ * Load pre-authorized apps from ~/.claude/yuanclaw/computer-use-config.json.
  * Called once when the binding is first created. Pre-authorized apps
  * are injected into appState so `getAllowedApps()` returns them
  * immediately — no runtime permission dialog needed.
@@ -280,7 +280,7 @@ async function loadPreAuthorizedApps(): Promise<void> {
   try {
     const configPath = join(
       process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'),
-      'cc-haha',
+      'yuanclaw',
       'computer-use-config.json',
     )
     const raw = await readFile(configPath, 'utf8')

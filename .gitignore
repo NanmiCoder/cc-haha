@@ -73,3 +73,9 @@ runtime/__pycache__
 
 # Codex logs
 .codex-logs/
+.omc
+.zread
+.vibeskills
+
+# refering repo
+github

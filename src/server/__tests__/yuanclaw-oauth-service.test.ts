@@ -1,5 +1,5 @@
 /**
- * Unit tests for HahaOpenAIOAuthService — haha 自管 OpenAI OAuth 的核心 service 层。
+ * Unit tests for YuanclawOAuthService — yuanclaw 自管 OAuth 的核心 service 层。
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
@@ -7,21 +7,19 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import {
-  HahaOpenAIOAuthService,
-  type StoredOpenAIOAuthTokens,
-} from '../services/hahaOpenAIOAuthService.js'
+  YuanclawOAuthService,
+  type StoredOAuthTokens,
+} from '../services/yuanclawOAuthService.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
-let service: HahaOpenAIOAuthService
+let service: YuanclawOAuthService
 
 async function setup() {
-  tmpDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'haha-openai-oauth-test-'),
-  )
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuanclaw-oauth-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = tmpDir
-  service = new HahaOpenAIOAuthService()
+  service = new YuanclawOAuthService()
 }
 
 async function teardown() {
@@ -33,7 +31,7 @@ async function teardown() {
   await fs.rm(tmpDir, { recursive: true, force: true })
 }
 
-describe('HahaOpenAIOAuthService — file storage', () => {
+describe('YuanclawOAuthService — file storage', () => {
   beforeEach(setup)
   afterEach(teardown)
 
@@ -42,16 +40,16 @@ describe('HahaOpenAIOAuthService — file storage', () => {
   })
 
   test('saveTokens writes file with 0600 permissions', async () => {
-    const tokens: StoredOpenAIOAuthTokens = {
-      accessToken: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.mock-access',
-      refreshToken: 'eyJhbGciOiJSUzI1NiJ9.mock-refresh',
+    const tokens: StoredOAuthTokens = {
+      accessToken: 'sk-ant-oat01-xxx',
+      refreshToken: 'sk-ant-ort01-xxx',
       expiresAt: Date.now() + 3600_000,
-      email: 'test@example.com',
-      accountId: 'acct_123',
+      scopes: ['user:inference', 'user:profile'],
+      subscriptionType: 'max',
     }
     await service.saveTokens(tokens)
 
-    const oauthPath = path.join(tmpDir, 'cc-haha', 'openai-oauth.json')
+    const oauthPath = path.join(tmpDir, 'yuanclaw', 'oauth.json')
     const stat = await fs.stat(oauthPath)
     if (process.platform !== 'win32') {
       expect(stat.mode & 0o777).toBe(0o600)
@@ -66,15 +64,15 @@ describe('HahaOpenAIOAuthService — file storage', () => {
       accessToken: 'a',
       refreshToken: null,
       expiresAt: null,
-      email: null,
-      accountId: null,
+      scopes: [],
+      subscriptionType: null,
     })
     await service.deleteTokens()
     expect(await service.loadTokens()).toBeNull()
   })
 })
 
-describe('HahaOpenAIOAuthService — session management', () => {
+describe('YuanclawOAuthService — session management', () => {
   beforeEach(setup)
   afterEach(teardown)
 
@@ -83,15 +81,11 @@ describe('HahaOpenAIOAuthService — session management', () => {
     expect(session.state).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(session.codeVerifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(session.authorizeUrl).toContain('code_challenge_method=S256')
-    expect(session.authorizeUrl).toContain(
-      `state=${encodeURIComponent(session.state)}`,
-    )
-    expect(session.authorizeUrl).toContain(
-      'codex_cli_simplified_flow=true',
-    )
-    expect(session.authorizeUrl).toContain(
-      encodeURIComponent('http://localhost:54321/auth/callback'),
-    )
+    expect(session.authorizeUrl).toContain(`state=${encodeURIComponent(session.state)}`)
+    expect(session.authorizeUrl).toContain('redirect_uri=')
+    expect(session.authorizeUrl).toContain(encodeURIComponent(
+      'http://localhost:54321/callback',
+    ))
   })
 
   test('getSession returns stored session by state', () => {
@@ -109,9 +103,27 @@ describe('HahaOpenAIOAuthService — session management', () => {
     expect(service.consumeSession(session.state)).not.toBeNull()
     expect(service.getSession(session.state)).toBeNull()
   })
+
+  test('completeSession stores subscription type fetched from profile info', async () => {
+    const session = service.startSession({ serverPort: 54321 })
+    ;(service as any).exchangeWithCustomCallback = async () => ({
+      access_token: 'fresh-access-token',
+      refresh_token: 'fresh-refresh-token',
+      expires_in: 3600,
+      scope: 'user:inference',
+    })
+    service.setFetchProfileFn(async () => ({
+      subscriptionType: 'team',
+    }))
+
+    const tokens = await service.completeSession('authorization-code', session.state)
+
+    expect(tokens.subscriptionType).toBe('team')
+    expect((await service.loadTokens())?.subscriptionType).toBe('team')
+  })
 })
 
-describe('HahaOpenAIOAuthService — ensureFreshAccessToken', () => {
+describe('YuanclawOAuthService — ensureFreshAccessToken', () => {
   beforeEach(setup)
   afterEach(teardown)
 
@@ -120,44 +132,35 @@ describe('HahaOpenAIOAuthService — ensureFreshAccessToken', () => {
   })
 
   test('returns token unchanged if not expired', async () => {
-    const tokens: StoredOpenAIOAuthTokens = {
+    const tokens: StoredOAuthTokens = {
       accessToken: 'still-valid',
       refreshToken: 'refresh-xxx',
       expiresAt: Date.now() + 30 * 60_000,
-      email: 'test@example.com',
-      accountId: 'acct_123',
+      scopes: ['user:inference'],
+      subscriptionType: 'max',
     }
     await service.saveTokens(tokens)
 
     expect(await service.ensureFreshAccessToken()).toBe('still-valid')
   })
 
-  test('returns null when tokens expired and no refresh token', async () => {
-    await service.saveTokens({
-      accessToken: 'expired',
-      refreshToken: null,
-      expiresAt: Date.now() - 1_000,
-      email: null,
-      accountId: null,
-    })
-
-    expect(await service.ensureFreshAccessToken()).toBeNull()
-  })
-
   test('refreshes token when expired (within 5-min buffer)', async () => {
-    await service.saveTokens({
+    const oldTokens: StoredOAuthTokens = {
       accessToken: 'expired',
       refreshToken: 'refresh-xxx',
       expiresAt: Date.now() + 60_000,
-      email: 'test@example.com',
-      accountId: 'acct_123',
-    })
+      scopes: ['user:inference'],
+      subscriptionType: 'max',
+    }
+    await service.saveTokens(oldTokens)
 
     service.setRefreshFn(async () => ({
-      access_token: 'new-fresh-token',
-      refresh_token: 'new-refresh-xxx',
-      expires_in: 3600,
-      id_token: 'mock-id-token',
+      accessToken: 'new-fresh-token',
+      refreshToken: 'new-refresh-xxx',
+      expiresAt: Date.now() + 3600_000,
+      scopes: ['user:inference'],
+      subscriptionType: 'max',
+      rateLimitTier: null,
     }))
 
     const fresh = await service.ensureFreshAccessToken()
@@ -172,8 +175,8 @@ describe('HahaOpenAIOAuthService — ensureFreshAccessToken', () => {
       accessToken: 'expired',
       refreshToken: 'bad-refresh',
       expiresAt: Date.now() + 60_000,
-      email: null,
-      accountId: null,
+      scopes: ['user:inference'],
+      subscriptionType: null,
     })
     service.setRefreshFn(async () => {
       throw new Error('401 Unauthorized')

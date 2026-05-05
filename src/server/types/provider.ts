@@ -1,7 +1,7 @@
 /**
  * Provider types — preset-based provider configuration.
  *
- * Providers are stored in ~/.claude/cc-haha/providers.json as a lightweight index.
+ * Providers are stored in ~/.claude/yuanclaw/providers.json as a lightweight index.
  * The active provider's env vars are written to ~/.claude/settings.json.
  */
 

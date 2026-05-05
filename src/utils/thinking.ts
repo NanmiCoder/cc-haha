@@ -173,5 +173,5 @@ export function shouldEnableThinkingByDefault(): boolean {
 }
 
 export function shouldSendExplicitDisabledThinking(): boolean {
-  return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
+  return isEnvTruthy(process.env.YUANCLAW_SEND_DISABLED_THINKING)
 }
