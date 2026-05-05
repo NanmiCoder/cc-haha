@@ -1023,11 +1023,8 @@ describe('Sessions API', () => {
     const { handleSessionsApi } = await import('../api/sessions.js')
     const { handleConversationsApi } = await import('../api/conversations.js')
 
-    const port = 30000 + Math.floor(Math.random() * 10000)
-    baseUrl = `http://127.0.0.1:${port}`
-
     server = Bun.serve({
-      port,
+      port: 0,
       hostname: '127.0.0.1',
 
       async fetch(req) {
@@ -1045,6 +1042,7 @@ describe('Sessions API', () => {
         return new Response('Not Found', { status: 404 })
       },
     })
+    baseUrl = `http://127.0.0.1:${server.port}`
   })
 
   afterEach(async () => {
