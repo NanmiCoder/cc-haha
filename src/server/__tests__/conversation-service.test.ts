@@ -158,7 +158,7 @@ describe('ConversationService', () => {
       providerId: provider.id,
     })) as Record<string, string>
 
-    expect(env.ANTHROPIC_BASE_URL).toBe(`http://127.0.0.1:3456/proxy/providers/${provider.id}`)
+    expect(env.ANTHROPIC_BASE_URL).toBe(`http://127.0.0.1:${ProviderService.getServerPort()}/proxy/providers/${provider.id}`)
     expect(env.ANTHROPIC_API_KEY).toBe('proxy-managed')
     expect(env.ANTHROPIC_MODEL).toBe('kimi-k2.6')
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
@@ -187,7 +187,7 @@ describe('ConversationService', () => {
       model: 'new-provider-sonnet',
     })) as Record<string, string>
 
-    expect(env.ANTHROPIC_BASE_URL).toBe(`http://127.0.0.1:3456/proxy/providers/${provider.id}`)
+    expect(env.ANTHROPIC_BASE_URL).toBe(`http://127.0.0.1:${ProviderService.getServerPort()}/proxy/providers/${provider.id}`)
     expect(env.ANTHROPIC_MODEL).toBe('new-provider-sonnet')
   })
 
