@@ -59,6 +59,7 @@ export async function handleScheduledTasksApi(
         permanent: body.permanent as boolean | undefined,
         permissionMode: body.permissionMode as string | undefined,
         model: body.model as string | undefined,
+        providerId: body.providerId as string | null | undefined,
         folderPath: body.folderPath as string | undefined,
         useWorktree: body.useWorktree as boolean | undefined,
         notification: body.notification as CronTask['notification'],

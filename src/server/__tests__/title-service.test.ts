@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { generateTitle, saveAiTitle } from '../services/titleService.js'
+import { generateTitle, parseGeneratedTitleText, saveAiTitle } from '../services/titleService.js'
 import { sessionService } from '../services/sessionService.js'
 
 describe('titleService', () => {
@@ -68,6 +68,20 @@ describe('titleService', () => {
     } finally {
       server.stop(true)
     }
+  })
+
+  test('parses JSON title responses wrapped in markdown fences', () => {
+    expect(parseGeneratedTitleText('```json\n{"title":"Write bash script"}\n```'))
+      .toBe('Write bash script')
+  })
+
+  test('parses escaped JSON title responses', () => {
+    expect(parseGeneratedTitleText('```json\n{\\"title\\":\\"Write bash script\\"}\n```'))
+      .toBe('Write bash script')
+  })
+
+  test('rejects incomplete JSON title fragments instead of using them as titles', () => {
+    expect(parseGeneratedTitleText('```json\n{\\"title\\":')).toBeNull()
   })
 
   test('does not persist automatic titles over a user custom title', async () => {

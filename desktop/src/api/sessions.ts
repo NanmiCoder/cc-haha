@@ -7,7 +7,56 @@ type MessagesResponse = {
   messages: MessageEntry[]
   taskNotifications?: AgentTaskNotification[]
 }
-type CreateSessionResponse = { sessionId: string }
+type CreateSessionResponse = { sessionId: string; workDir?: string }
+export type SessionGitWorktreeInfo = {
+  enabled: boolean
+  path: string | null
+  plannedPath: string | null
+  sourceWorkDir: string | null
+  slug: string | null
+  branch: string | null
+}
+export type SessionGitInfo = {
+  branch: string | null
+  repoName: string | null
+  workDir: string
+  changedFiles: number
+  worktree: SessionGitWorktreeInfo | null
+}
+export type CreateSessionRepositoryOptions = {
+  branch?: string | null
+  worktree?: boolean
+}
+export type CreateSessionRequest = {
+  workDir?: string
+  repository?: CreateSessionRepositoryOptions
+}
+export type RepositoryBranchInfo = {
+  name: string
+  current: boolean
+  local: boolean
+  remote: boolean
+  remoteRef?: string
+  checkedOut: boolean
+  worktreePath?: string
+}
+export type RepositoryWorktreeInfo = {
+  path: string
+  branch: string | null
+  current: boolean
+}
+export type RepositoryContextResult = {
+  state: 'ok' | 'not_git_repo' | 'missing_workdir' | 'error'
+  workDir: string
+  repoRoot: string | null
+  repoName: string | null
+  currentBranch: string | null
+  defaultBranch: string | null
+  dirty: boolean
+  branches: RepositoryBranchInfo[]
+  worktrees: RepositoryWorktreeInfo[]
+  error?: string
+}
 export type SessionRewindResponse = {
   target: {
     targetUserMessageId: string
@@ -249,8 +298,11 @@ export const sessionsApi = {
     return api.get<MessagesResponse>(`/api/sessions/${sessionId}/messages`)
   },
 
-  create(workDir?: string) {
-    return api.post<CreateSessionResponse>('/api/sessions', workDir ? { workDir } : {})
+  create(input?: string | CreateSessionRequest) {
+    const body = typeof input === 'string'
+      ? (input ? { workDir: input } : {})
+      : (input ?? {})
+    return api.post<CreateSessionResponse>('/api/sessions', body)
   },
 
   delete(sessionId: string) {
@@ -266,8 +318,13 @@ export const sessionsApi = {
     return api.get<{ projects: RecentProject[] }>(`/api/sessions/recent-projects${query}`)
   },
 
+  getRepositoryContext(workDir: string) {
+    const query = new URLSearchParams({ workDir })
+    return api.get<RepositoryContextResult>(`/api/sessions/repository-context?${query.toString()}`)
+  },
+
   getGitInfo(sessionId: string) {
-    return api.get<{ branch: string | null; repoName: string | null; workDir: string; changedFiles: number }>(`/api/sessions/${sessionId}/git-info`)
+    return api.get<SessionGitInfo>(`/api/sessions/${sessionId}/git-info`)
   },
 
   getSlashCommands(sessionId: string) {

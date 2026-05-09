@@ -296,6 +296,8 @@ describe('Scheduled Tasks API', () => {
         cron: '0 9 * * *',
         prompt: 'Daily review',
         recurring: true,
+        model: 'provider-fast',
+        providerId: 'provider-a',
       }),
     })
     const url = new URL(req.url)
@@ -303,10 +305,14 @@ describe('Scheduled Tasks API', () => {
       'api',
       'scheduled-tasks',
     ])
-    const body = (await resp.json()) as { task: { id: string; prompt: string } }
+    const body = (await resp.json()) as {
+      task: { id: string; prompt: string; model?: string; providerId?: string }
+    }
     expect(resp.status).toBe(201)
     expect(body.task.id).toBeDefined()
     expect(body.task.prompt).toBe('Daily review')
+    expect(body.task.model).toBe('provider-fast')
+    expect(body.task.providerId).toBe('provider-a')
   })
 
   it('should CRUD a full lifecycle', async () => {

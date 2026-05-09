@@ -487,6 +487,24 @@ export function setSessionFileForTesting(path: string): void {
   getProject().sessionFile = path
 }
 
+/** @internal Test hook for flush races where tracked work enqueues late. */
+export async function enqueueSessionEntryAfterPendingForTesting(
+  path: string,
+  entry: Entry,
+  delayMs = 0,
+): Promise<void> {
+  const projectForTesting = getProject() as unknown as {
+    trackWrite<T>(fn: () => Promise<T>): Promise<T>
+    enqueueWrite(filePath: string, entry: Entry): Promise<void>
+  }
+  await projectForTesting.trackWrite(async () => {
+    if (delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+    void projectForTesting.enqueueWrite(path, entry)
+  })
+}
+
 type InternalEventWriter = (
   eventType: string,
   payload: Record<string, unknown>,
@@ -839,25 +857,36 @@ class Project {
   }
 
   async flush(): Promise<void> {
-    // Cancel pending timer
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-    // Wait for any in-flight drain to finish
-    if (this.activeDrain) {
-      await this.activeDrain
-    }
-    // Drain anything remaining in the queues
-    await this.drainWriteQueue()
+    while (true) {
+      // Cancel pending timer so process shutdown does not wait for the next
+      // interval tick before draining already queued transcript writes.
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer)
+        this.flushTimer = null
+      }
 
-    // Wait for non-queue tracked operations (e.g. removeMessageByUuid)
-    if (this.pendingWriteCount === 0) {
-      return
+      // Wait for any in-flight drain to finish before taking ownership of the
+      // remaining queue.
+      if (this.activeDrain) {
+        await this.activeDrain
+      }
+
+      await this.drainWriteQueue()
+
+      if (this.pendingWriteCount === 0) {
+        // A tracked writer may have enqueued after the drain above and then
+        // completed. Loop once more so flush() only returns after that late
+        // enqueue has also been written.
+        if (!this.flushTimer && !this.activeDrain && this.writeQueues.size === 0) {
+          return
+        }
+        continue
+      }
+
+      await new Promise<void>(resolve => {
+        this.flushResolvers.push(resolve)
+      })
     }
-    return new Promise<void>(resolve => {
-      this.flushResolvers.push(resolve)
-    })
   }
 
   /**

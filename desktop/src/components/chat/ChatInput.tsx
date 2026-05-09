@@ -12,13 +12,13 @@ import {
   useWorkspaceChatContextStore,
   type WorkspaceChatReference,
 } from '../../stores/workspaceChatContextStore'
-import { sessionsApi } from '../../api/sessions'
+import { sessionsApi, type SessionGitInfo } from '../../api/sessions'
 import { PermissionModeSelector } from '../controls/PermissionModeSelector'
 import { ModelSelector } from '../controls/ModelSelector'
 import type { AttachmentRef } from '../../types/chat'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ProjectContextChip } from '../shared/ProjectContextChip'
-import { DirectoryPicker } from '../shared/DirectoryPicker'
+import { RepositoryLaunchControls } from '../shared/RepositoryLaunchControls'
 import { FileSearchMenu, type FileSearchMenuHandle } from './FileSearchMenu'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -30,7 +30,7 @@ import {
   resolveSlashUiAction,
 } from './composerUtils'
 
-type GitInfo = { branch: string | null; repoName: string | null; workDir: string; changedFiles: number }
+type GitInfo = SessionGitInfo
 
 type Attachment = {
   id: string
@@ -78,6 +78,11 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const [atCursorPos, setAtCursorPos] = useState(-1)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const [launchWorkDir, setLaunchWorkDir] = useState('')
+  const [launchBranch, setLaunchBranch] = useState<string | null>(null)
+  const [launchUseWorktree, setLaunchUseWorktree] = useState(false)
+  const [launchReady, setLaunchReady] = useState(true)
+  const [launchTransitioning, setLaunchTransitioning] = useState(false)
   const composingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -91,7 +96,6 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const chatState = sessionState?.chatState ?? 'idle'
   const slashCommands = sessionState?.slashCommands ?? []
   const composerPrefill = sessionState?.composerPrefill ?? null
-  const messageCount = sessionState?.messages?.length ?? 0
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
@@ -101,9 +105,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     : undefined
   const runtimeModelLabel = runtimeSelection?.modelId ?? currentModel?.name ?? currentModel?.id
   const activeSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
+  const loadedMessageCount = sessionState?.messages?.length ?? 0
+  const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
-  const hasMessages = useChatStore((s) => activeTabId ? (s.sessions[activeTabId]?.messages?.length ?? 0) > 0 : false)
   const workspaceReferences = useWorkspaceChatContextStore(
     (s) => activeTabId ? s.referencesBySession[activeTabId] ?? EMPTY_WORKSPACE_REFERENCES : EMPTY_WORKSPACE_REFERENCES,
   )
@@ -115,9 +120,17 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const isActive = chatState !== 'idle'
   const isWorkspaceMissing = activeSession?.workDirExists === false
   const hasWorkspaceReferences = !isMemberSession && workspaceReferences.length > 0
-  const canSubmit = !isWorkspaceMissing && (input.trim().length > 0 || (!isMemberSession && (attachments.length > 0 || hasWorkspaceReferences)))
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
+  const showLaunchControls = !isMemberSession && messageCount === 0
+  const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
+  const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
+    ? resolveSlashUiAction(input.trim().slice(1))
+    : null
+  const canSubmit = !isWorkspaceMissing &&
+    !launchTransitioning &&
+    (!showLaunchControls || launchReady || !!pendingSlashUiAction) &&
+    (input.trim().length > 0 || (!isMemberSession && (attachments.length > 0 || hasWorkspaceReferences)))
   const composerAttachments = useMemo(
     () => [
       ...attachments,
@@ -125,6 +138,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     ],
     [attachments, workspaceReferences],
   )
+  const slashCommandCount = slashCommands.length
 
   useEffect(() => {
     textareaRef.current?.focus()
@@ -161,7 +175,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     })
   }, [composerPrefill])
 
-  useEffect(() => {
+  const refreshGitInfo = useCallback(() => {
     if (!activeTabId) {
       setGitInfo(null)
       return
@@ -174,12 +188,34 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   }, [activeTabId, isMemberSession])
 
   useEffect(() => {
+    refreshGitInfo()
+  }, [refreshGitInfo])
+
+  useEffect(() => {
+    if (!activeTabId || isMemberSession || messageCount === 0) return
+    const timeout = setTimeout(refreshGitInfo, chatState === 'idle' ? 0 : 500)
+    return () => clearTimeout(timeout)
+  }, [activeTabId, chatState, isMemberSession, messageCount, refreshGitInfo, slashCommandCount])
+
+  useEffect(() => {
     if (!isMemberSession) return
     setAttachments([])
     setPlusMenuOpen(false)
     setSlashMenuOpen(false)
     setFileSearchOpen(false)
   }, [isMemberSession, activeTabId])
+
+  useEffect(() => {
+    if (!showLaunchControls) return
+    const nextWorkDir = activeSession?.workDir || gitInfo?.workDir || ''
+    setLaunchWorkDir((current) => {
+      if (current === nextWorkDir) return current
+      setLaunchBranch(null)
+      setLaunchUseWorktree(false)
+      setLaunchReady(!nextWorkDir)
+      return nextWorkDir
+    })
+  }, [activeSession?.workDir, activeTabId, gitInfo?.workDir, showLaunchControls])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -351,13 +387,53 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     })
   }, [input])
 
-  const handleSubmit = () => {
+  const replaceEmptySession = useCallback(async (
+    workDir: string,
+    repository?: { branch?: string | null; worktree?: boolean },
+  ) => {
+    if (!activeTabId) return null
+    const oldId = activeTabId
+    const { createSession, deleteSession } = useSessionStore.getState()
+    const { replaceTabSession } = useTabStore.getState()
+    const { disconnectSession, connectToSession } = useChatStore.getState()
+    const newId = await createSession(
+      workDir || undefined,
+      repository ? { repository } : undefined,
+    )
+    useSessionRuntimeStore.getState().moveSelection(oldId, newId)
+    disconnectSession(oldId)
+    replaceTabSession(oldId, newId)
+    connectToSession(newId)
+    deleteSession(oldId).catch(() => {})
+    return newId
+  }, [activeTabId])
+
+  const handleLaunchWorkDirChange = useCallback(async (newWorkDir: string) => {
+    setLaunchWorkDir(newWorkDir)
+    setLaunchBranch(null)
+    setLaunchUseWorktree(false)
+    setLaunchReady(!newWorkDir)
+    if (!activeTabId) return
+
+    setLaunchTransitioning(true)
+    try {
+      await replaceEmptySession(newWorkDir)
+    } catch (error) {
+      useUIStore.getState().addToast({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+      })
+    } finally {
+      setLaunchTransitioning(false)
+    }
+  }, [activeTabId, replaceEmptySession, t])
+
+  const handleSubmit = async () => {
     const text = input.trim()
     if ((!text && ((!attachments.length && !hasWorkspaceReferences) || isMemberSession)) || isWorkspaceMissing) return
 
-    const slashUiAction = !isMemberSession && text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
-    if (slashUiAction?.type === 'panel') {
-      setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
+    if (pendingSlashUiAction?.type === 'panel') {
+      setLocalSlashPanel(pendingSlashUiAction.command as LocalSlashCommandName)
       setInput('')
       setSlashMenuOpen(false)
       setFileSearchOpen(false)
@@ -365,8 +441,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       return
     }
 
-    if (slashUiAction?.type === 'settings') {
-      useUIStore.getState().setPendingSettingsTab(slashUiAction.tab)
+    if (pendingSlashUiAction?.type === 'settings') {
+      useUIStore.getState().setPendingSettingsTab(pendingSlashUiAction.tab)
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
       setInput('')
       setSlashMenuOpen(false)
@@ -374,6 +450,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       setPlusMenuOpen(false)
       return
     }
+
+    if (showLaunchControls && (!launchReady || launchTransitioning)) return
 
     const workspaceReferencePrompt = !isMemberSession
       ? formatWorkspaceReferencePrompt(workspaceReferences)
@@ -417,13 +495,42 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       })),
     ]
 
-    sendMessage(activeTabId!, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
+    let targetSessionId = activeTabId!
+    if (showLaunchControls && activeLaunchWorkDir && launchBranch) {
+      const shouldReplaceForRepositoryLaunch =
+        launchUseWorktree ||
+        (gitInfo?.branch ? launchBranch !== gitInfo.branch : true)
+      if (shouldReplaceForRepositoryLaunch) {
+        setLaunchTransitioning(true)
+        try {
+          const newSessionId = await replaceEmptySession(activeLaunchWorkDir, {
+            branch: launchBranch,
+            worktree: launchUseWorktree,
+          })
+          if (!newSessionId) return
+          targetSessionId = newSessionId
+        } catch (error) {
+          useUIStore.getState().addToast({
+            type: 'error',
+            message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+          })
+          return
+        } finally {
+          setLaunchTransitioning(false)
+        }
+      }
+    }
+
+    sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
       displayContent,
       displayAttachments: visibleAttachmentPayload,
     })
     setInput('')
     setAttachments([])
-    if (!isMemberSession) clearWorkspaceReferences(activeTabId!)
+    if (!isMemberSession) {
+      clearWorkspaceReferences(activeTabId!)
+      if (targetSessionId !== activeTabId) clearWorkspaceReferences(targetSessionId)
+    }
     setPlusMenuOpen(false)
     setSlashMenuOpen(false)
     setFileSearchOpen(false)
@@ -620,7 +727,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       <div
         className={
           isHeroComposer
-            ? 'mx-auto flex w-full max-w-3xl flex-col gap-2'
+            ? 'mx-auto flex w-full max-w-3xl flex-col'
             : compact
               ? 'mx-auto max-w-full'
               : 'mx-auto max-w-[860px]'
@@ -628,7 +735,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       >
         <div
           className={isHeroComposer
-            ? 'glass-panel relative flex flex-col gap-3 rounded-xl p-4 transition-colors'
+            ? 'glass-panel relative flex flex-col gap-3 rounded-t-xl rounded-b-none p-4 transition-colors'
             : compact
               ? 'glass-panel relative rounded-xl p-3 transition-colors'
               : 'glass-panel relative rounded-xl p-4 transition-colors'}
@@ -638,7 +745,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
           {!isMemberSession && fileSearchOpen && (
             <FileSearchMenu
               ref={fileSearchRef}
-              cwd={resolvedWorkDir || ''}
+              cwd={activeLaunchWorkDir || resolvedWorkDir || ''}
               filter={atFilter}
               onNavigate={(relativePath) => {
                 if (atCursorPos < 0) return
@@ -688,7 +795,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               <LocalSlashCommandPanel
                 command={localSlashPanel}
                 sessionId={activeTabId ?? undefined}
-                cwd={resolvedWorkDir}
+                cwd={activeLaunchWorkDir || resolvedWorkDir}
                 commands={allSlashCommands}
                 onClose={() => setLocalSlashPanel(null)}
               />
@@ -869,29 +976,27 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
         {!isMemberSession && (
           <div className={compact ? 'mt-2 flex min-w-0 justify-center px-1' : 'mt-3 px-1'}>
-            {hasMessages ? (
+            {messageCount > 0 ? (
               <ProjectContextChip
                 workDir={resolvedWorkDir}
                 repoName={gitInfo?.repoName || null}
                 branch={gitInfo?.branch || null}
+                sourceWorkDir={gitInfo?.worktree?.sourceWorkDir || null}
+                isWorktree={!!gitInfo?.worktree?.enabled}
+                worktreeSlug={gitInfo?.worktree?.slug || null}
+                worktreePath={gitInfo?.worktree?.path || gitInfo?.worktree?.plannedPath || null}
                 compact={compact}
               />
             ) : (
-              <DirectoryPicker
-                value={resolvedWorkDir || ''}
-                onChange={async (newWorkDir) => {
-                  if (!activeTabId) return
-                  const oldId = activeTabId
-                  const { deleteSession, createSession } = useSessionStore.getState()
-                  const { replaceTabSession } = useTabStore.getState()
-                  const { disconnectSession, connectToSession } = useChatStore.getState()
-                  const newId = await createSession(newWorkDir)
-                  useSessionRuntimeStore.getState().moveSelection(oldId, newId)
-                  disconnectSession(oldId)
-                  replaceTabSession(oldId, newId)
-                  connectToSession(newId)
-                  deleteSession(oldId).catch(() => {})
-                }}
+              <RepositoryLaunchControls
+                workDir={activeLaunchWorkDir}
+                onWorkDirChange={handleLaunchWorkDirChange}
+                branch={launchBranch}
+                onBranchChange={setLaunchBranch}
+                useWorktree={launchUseWorktree}
+                onUseWorktreeChange={setLaunchUseWorktree}
+                onLaunchReadyChange={setLaunchReady}
+                disabled={isActive || launchTransitioning}
               />
             )}
           </div>

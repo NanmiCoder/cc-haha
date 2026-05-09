@@ -7,6 +7,8 @@ import { useTranslation } from '../../i18n'
 type Props = {
   value: string
   onChange: (path: string) => void
+  variant?: 'chip' | 'workbar'
+  isGitProject?: boolean
 }
 
 type DirEntry = { name: string; path: string; isDirectory: boolean }
@@ -15,12 +17,20 @@ type DirEntry = { name: string; path: string; isDirectory: boolean }
 let cachedProjects: RecentProject[] | null = null
 let cacheTimestamp = 0
 const CACHE_TTL = 30_000 // 30s
+const DESKTOP_WORKTREE_MARKER = '/.claude/worktrees/'
 
 function isTauriRuntime() {
   return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
 }
 
-export function DirectoryPicker({ value, onChange }: Props) {
+function projectNameFromPath(filePath: string) {
+  const displayRoot = filePath.includes(DESKTOP_WORKTREE_MARKER)
+    ? filePath.slice(0, filePath.indexOf(DESKTOP_WORKTREE_MARKER))
+    : filePath
+  return displayRoot.split('/').filter(Boolean).pop() || filePath
+}
+
+export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProject = false }: Props) {
   const t = useTranslation()
   const [isOpen, setIsOpen] = useState(false)
   const [mode, setMode] = useState<'recent' | 'browse'>('recent')
@@ -136,45 +146,47 @@ export function DirectoryPicker({ value, onChange }: Props) {
 
   // Find selected project info
   const selectedProject = projects.find((p) => p.realPath === value)
+  const isWorkbar = variant === 'workbar'
+  const selectedLabel = selectedProject?.repoName || selectedProject?.projectName || projectNameFromPath(value)
+  const showGitIcon = selectedProject?.isGit || isGitProject
+  const triggerClassName = isWorkbar
+    ? 'inline-flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-[7px] border border-transparent px-2.5 text-[13px] font-medium leading-none text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35'
+    : 'flex items-center gap-2 px-3 py-1.5 bg-[var(--color-surface-container-low)] hover:bg-[var(--color-surface-hover)] rounded-full text-xs transition-colors border border-[var(--color-border)]'
+  const emptyTriggerClassName = isWorkbar
+    ? 'flex h-9 min-w-0 items-center gap-1.5 rounded-[7px] border border-transparent px-2.5 text-[13px] font-medium leading-none text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35'
+    : 'flex items-center gap-2 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors'
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className={isWorkbar ? 'relative min-w-0 max-w-[320px] shrink' : 'relative'}>
       {/* Trigger — shows selected project chip or placeholder */}
       {value ? (
         <button
           ref={triggerRef}
           onClick={() => { setIsOpen(!isOpen); setMode('recent') }}
-          className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-surface-container-low)] hover:bg-[var(--color-surface-hover)] rounded-full text-xs transition-colors border border-[var(--color-border)]"
+          className={triggerClassName}
+          title={value}
         >
-          {selectedProject?.isGit ? (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-[var(--color-text-secondary)]">
+          {showGitIcon ? (
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 text-[var(--color-text-secondary)]">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
             </svg>
           ) : (
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-secondary)]">folder</span>
+            <span className={`material-symbols-outlined shrink-0 ${isWorkbar ? 'text-[17px]' : 'text-[14px]'} text-[var(--color-text-secondary)]`}>folder</span>
           )}
-          <span className="font-medium text-[var(--color-text-primary)]">
-            {selectedProject?.repoName || selectedProject?.projectName || value.split('/').pop()}
+          <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">
+            {selectedLabel}
           </span>
-          {selectedProject?.branch && (
-            <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-tertiary)]">
-                <circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" />
-                <path d="M13 6h3a2 2 0 0 1 2 2v7" /><line x1="6" y1="9" x2="6" y2="21" />
-              </svg>
-              <span className="text-[var(--color-text-tertiary)]">{selectedProject.branch}</span>
-            </>
-          )}
-          <span className="material-symbols-outlined text-[12px] text-[var(--color-text-tertiary)]">expand_more</span>
+          <span className={`${isWorkbar ? 'text-[15px]' : 'text-[12px]'} material-symbols-outlined shrink-0 text-[var(--color-text-tertiary)]`}>expand_more</span>
         </button>
       ) : (
         <button
           ref={triggerRef}
           onClick={() => { setIsOpen(!isOpen); setMode('recent') }}
-          className="flex items-center gap-2 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors"
+          className={emptyTriggerClassName}
+          title={t('dirPicker.selectProject')}
         >
-          <span className="material-symbols-outlined text-[14px]">folder_open</span>
-          {t('dirPicker.selectProject')}
+          <span className={`material-symbols-outlined shrink-0 ${isWorkbar ? 'text-[17px]' : 'text-[14px]'}`}>folder_open</span>
+          <span className="min-w-0 truncate">{t('dirPicker.selectProject')}</span>
         </button>
       )}
 
@@ -284,16 +296,22 @@ export function DirectoryPicker({ value, onChange }: Props) {
                     {browseEntries.length === 0 ? (
                       <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('dirPicker.noSubdirs')}</div>
                     ) : browseEntries.map((entry) => (
-                      <button
+                      <div
                         key={entry.path}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]"
+                        className="flex w-full items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-hover)]"
                       >
-                        <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]" onClick={() => loadBrowseDir(entry.path)}>folder</span>
-                        <span className="text-xs text-[var(--color-text-primary)] flex-1" onClick={() => loadBrowseDir(entry.path)}>{entry.name}</span>
-                        <button onClick={() => handleSelect(entry.path)} className="px-2 py-0.5 text-[10px] font-semibold text-[var(--color-brand)] hover:bg-[var(--color-primary-fixed)] rounded transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => loadBrowseDir(entry.path)}
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        >
+                          <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">folder</span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{entry.name}</span>
+                        </button>
+                        <button type="button" onClick={() => handleSelect(entry.path)} className="rounded px-2 py-0.5 text-[10px] font-semibold text-[var(--color-brand)] transition-colors hover:bg-[var(--color-primary-fixed)]">
                           {t('common.select')}
                         </button>
-                      </button>
+                      </div>
                     ))}
                   </>
                 )}

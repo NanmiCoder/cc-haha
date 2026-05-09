@@ -25,21 +25,43 @@ export class SessionStore {
   }
 
   get(chatId: string): SessionEntry | null {
+    this.refresh()
     return this.data[chatId] ?? null
   }
 
   set(chatId: string, sessionId: string, workDir: string): void {
+    this.refresh()
     this.data[chatId] = { sessionId, workDir, updatedAt: Date.now() }
     this.save()
   }
 
   delete(chatId: string): void {
+    this.refresh()
     delete this.data[chatId]
     this.save()
   }
 
+  deleteBySessionId(sessionId: string): string[] {
+    this.refresh()
+    const removed: string[] = []
+    for (const [chatId, entry] of Object.entries(this.data)) {
+      if (entry.sessionId !== sessionId) continue
+      delete this.data[chatId]
+      removed.push(chatId)
+    }
+    if (removed.length > 0) {
+      this.save()
+    }
+    return removed
+  }
+
   listAll(): Array<{ chatId: string } & SessionEntry> {
+    this.refresh()
     return Object.entries(this.data).map(([chatId, entry]) => ({ chatId, ...entry }))
+  }
+
+  private refresh(): void {
+    this.data = this.load()
   }
 
   private load(): StoreData {

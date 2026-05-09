@@ -20,6 +20,7 @@ export type CronTask = {
   nextRunAt?: number
   permissionMode?: string
   model?: string
+  providerId?: string | null
   folderPath?: string
   useWorktree?: boolean
   notification?: TaskNotificationConfig
@@ -35,6 +36,7 @@ export type CreateTaskInput = {
   permanent?: boolean
   permissionMode?: string
   model?: string
+  providerId?: string | null
   folderPath?: string
   useWorktree?: boolean
   notification?: TaskNotificationConfig

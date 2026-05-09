@@ -1,7 +1,13 @@
 import { create } from 'zustand'
-import { sessionsApi } from '../api/sessions'
+import { sessionsApi, type CreateSessionRepositoryOptions } from '../api/sessions'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { useTabStore } from './tabStore'
 import type { SessionListItem } from '../types/session'
+import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
+
+type CreateSessionOptions = {
+  repository?: CreateSessionRepositoryOptions
+}
 
 type SessionStore = {
   sessions: SessionListItem[]
@@ -12,7 +18,7 @@ type SessionStore = {
   availableProjects: string[]
 
   fetchSessions: (project?: string) => Promise<void>
-  createSession: (workDir?: string) => Promise<string>
+  createSession: (workDir?: string, options?: CreateSessionOptions) => Promise<string>
   deleteSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   updateSessionTitle: (id: string, title: string) => void
@@ -32,24 +38,35 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const { sessions: raw } = await sessionsApi.list({ project, limit: 100 })
-      // Deduplicate by session ID — keep the most recently modified entry
-      const byId = new Map<string, SessionListItem>()
-      for (const s of raw) {
-        const existing = byId.get(s.id)
-        if (!existing || new Date(s.modifiedAt) > new Date(existing.modifiedAt)) {
-          byId.set(s.id, s)
+      let syncedSessions: SessionListItem[] = []
+      set((state) => {
+        const currentById = new Map(state.sessions.map((session) => [session.id, session]))
+        // Deduplicate by session ID - keep the most recently modified entry.
+        const byId = new Map<string, SessionListItem>()
+        for (const s of raw) {
+          const current = currentById.get(s.id)
+          const candidate = preserveLocalTitle(current, s)
+          const existing = byId.get(s.id)
+          if (!existing || new Date(candidate.modifiedAt) > new Date(existing.modifiedAt)) {
+            byId.set(s.id, candidate)
+          }
         }
-      }
-      const sessions = [...byId.values()]
-      const availableProjects = [...new Set(sessions.map((s) => s.projectPath).filter(Boolean))].sort()
-      set({ sessions, availableProjects, isLoading: false })
+        const sessions = [...byId.values()]
+        syncedSessions = sessions
+        const availableProjects = [...new Set(sessions.map((s) => s.projectPath).filter(Boolean))].sort()
+        return { sessions, availableProjects, isLoading: false }
+      })
+      syncOpenSessionTabTitles(syncedSessions)
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false })
     }
   },
 
-  createSession: async (workDir?: string) => {
-    const { sessionId: id } = await sessionsApi.create(workDir || undefined)
+  createSession: async (workDir?: string, options?: CreateSessionOptions) => {
+    const { sessionId: id, workDir: resolvedWorkDir } = await sessionsApi.create({
+      ...(workDir ? { workDir } : {}),
+      ...(options?.repository ? { repository: options.repository } : {}),
+    })
     const now = new Date().toISOString()
     const optimisticSession: SessionListItem = {
       id,
@@ -58,7 +75,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       modifiedAt: now,
       messageCount: 0,
       projectPath: '',
-      workDir: workDir ?? null,
+      workDir: resolvedWorkDir ?? workDir ?? null,
       workDirExists: true,
     }
 
@@ -102,3 +119,26 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   setActiveSession: (id) => set({ activeSessionId: id }),
   setSelectedProjects: (projects) => set({ selectedProjects: projects }),
 }))
+
+function preserveLocalTitle(
+  current: SessionListItem | undefined,
+  incoming: SessionListItem,
+): SessionListItem {
+  if (!current) return incoming
+  if (isPlaceholderSessionTitle(incoming.title) && !isPlaceholderSessionTitle(current.title)) {
+    return { ...incoming, title: current.title }
+  }
+  return incoming
+}
+
+function syncOpenSessionTabTitles(sessions: SessionListItem[]): void {
+  const titleById = new Map(sessions.map((session) => [session.id, session.title]))
+  const { tabs, updateTabTitle } = useTabStore.getState()
+  for (const tab of tabs) {
+    if (tab.type !== 'session') continue
+    const title = titleById.get(tab.sessionId)
+    if (title && title !== tab.title) {
+      updateTabTitle(tab.sessionId, title)
+    }
+  }
+}

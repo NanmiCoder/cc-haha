@@ -74,18 +74,28 @@ async function setSettingsState(
   })
 }
 
+async function flushReactWork() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 async function renderPanel(sessionId: string) {
   let view!: ReturnType<typeof render>
-  await act(() => {
+  await act(async () => {
     view = render(<WorkspacePanel sessionId={sessionId} />)
+    await Promise.resolve()
   })
   return view
 }
 
 async function clickElement(element: Element) {
-  await act(() => {
+  await act(async () => {
     fireEvent.click(element)
+    await Promise.resolve()
   })
+  await flushReactWork()
 }
 
 function classNameContains(element: Element | null, needle: string) {
@@ -1213,8 +1223,10 @@ describe('WorkspacePanel', () => {
       },
     }))
 
-    await act(() => {
+    await act(async () => {
       view.rerender(<WorkspacePanel sessionId="session-error" />)
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
     await waitFor(() => {

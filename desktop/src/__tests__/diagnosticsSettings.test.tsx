@@ -14,9 +14,15 @@ const diagnosticsApiMock = vi.hoisted(() => ({
   clear: vi.fn(),
 }))
 
+const doctorRepairMock = vi.hoisted(() => ({
+  runDoctorRepair: vi.fn(),
+}))
+
 vi.mock('../api/diagnostics', () => ({
   diagnosticsApi: diagnosticsApiMock,
 }))
+
+vi.mock('../lib/doctorRepair', () => doctorRepairMock)
 
 vi.mock('../stores/providerStore', () => ({
   useProviderStore: () => ({
@@ -120,6 +126,17 @@ describe('Settings > Diagnostics tab', () => {
     })
     diagnosticsApiMock.openLogDir.mockResolvedValue({ ok: true })
     diagnosticsApiMock.clear.mockResolvedValue({ ok: true })
+    doctorRepairMock.runDoctorRepair.mockResolvedValue({
+      local: {
+        removedKeys: ['cc-haha-open-tabs', 'cc-haha-session-runtime'],
+        missingKeys: ['cc-haha-theme', 'cc-haha-locale', 'cc-haha.persistence.schemaVersion'],
+        failedKeys: [],
+      },
+      server: {
+        ok: true,
+      },
+      serverError: null,
+    })
 
     useSettingsStore.setState({ locale: 'en' })
     useUIStore.setState({ pendingSettingsTab: null, toasts: [] })
@@ -189,5 +206,24 @@ describe('Settings > Diagnostics tab', () => {
         value: originalClipboard,
       })
     }
+  })
+
+  it('runs Doctor from Diagnostics without clearing unrelated desktop state', async () => {
+    window.localStorage.setItem('cc-haha-open-tabs', '{"activeTabId":"__settings__"}')
+    window.localStorage.setItem('cc-haha-theme', 'dark')
+    window.localStorage.setItem('cc-haha-chat-history', 'keep')
+
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('Diagnostics'))
+    fireEvent.click(await screen.findByRole('button', { name: /Run Doctor/i }))
+
+    await waitFor(() => {
+      expect(doctorRepairMock.runDoctorRepair).toHaveBeenCalled()
+    })
+
+    const toasts = useUIStore.getState().toasts
+    expect(toasts[toasts.length - 1]?.message).toContain('Doctor')
+    expect(window.localStorage.getItem('cc-haha-chat-history')).toBe('keep')
   })
 })

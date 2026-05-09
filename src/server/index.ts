@@ -18,6 +18,7 @@ import { handleHahaOpenAIOAuthCallback } from './api/haha-openai-oauth.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
+import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -75,6 +76,7 @@ export function startServer(port = PORT, host = HOST) {
     idleTimeout: 60,
 
     async fetch(req, server) {
+      await ensurePersistentStorageUpgraded()
       const url = new URL(req.url)
 
       const origin = req.headers.get('Origin')

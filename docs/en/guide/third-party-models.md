@@ -111,7 +111,7 @@ Choose one of two configuration methods:
 
 #### Method A: Via `.env` File
 
-```env
+```bash
 ANTHROPIC_AUTH_TOKEN=sk-anything
 ANTHROPIC_BASE_URL=http://localhost:4000
 ANTHROPIC_MODEL=gpt-4o
@@ -159,7 +159,7 @@ Some third-party services directly support the Anthropic Messages API, no proxy 
 
 ### OpenRouter
 
-```env
+```bash
 ANTHROPIC_AUTH_TOKEN=sk-or-v1-xxx
 ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
 ANTHROPIC_MODEL=openai/gpt-4o
@@ -179,7 +179,7 @@ MiniMax provides an Anthropic-compatible API endpoint and can be connected direc
 | `MiniMax-M2.7` | Default recommended, excellent overall performance |
 | `MiniMax-M2.7-highspeed` | Faster responses, suitable for latency-sensitive use cases |
 
-```env
+```bash
 ANTHROPIC_AUTH_TOKEN=your_minimax_api_key_here
 # International users: api.minimax.io; China users may use api.minimaxi.com
 ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic

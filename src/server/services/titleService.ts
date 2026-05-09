@@ -99,18 +99,76 @@ export async function generateTitle(
     const text = body.content?.find((b) => b.type === 'text')?.text
     if (!text) return null
 
-    // Parse JSON response
-    const match = text.match(/\{[^}]*"title"\s*:\s*"([^"]+)"[^}]*\}/)
-    if (match?.[1]) return match[1].trim()
-
-    // Fallback: if model returned plain text instead of JSON
-    const plain = text.trim()
-    if (plain.length > 0 && plain.length <= 60) return plain
-
-    return null
+    return parseGeneratedTitleText(text)
   } catch {
     return null
   }
+}
+
+export function parseGeneratedTitleText(text: string): string | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+
+  const parsed = parseTitleFromStructuredText(trimmed)
+  if (parsed) return normalizeTitle(parsed)
+
+  if (looksLikeStructuredTitleFragment(trimmed)) return null
+
+  return normalizeTitle(trimmed)
+}
+
+function parseTitleFromStructuredText(text: string): string | null {
+  const candidates = new Set<string>([text])
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim()
+  if (fenced) candidates.add(fenced)
+
+  const firstBrace = text.indexOf('{')
+  const lastBrace = text.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.add(text.slice(firstBrace, lastBrace + 1))
+  }
+
+  for (const candidate of [...candidates]) {
+    const unescaped = candidate.replace(/\\"/g, '"').replace(/\\n/g, '\n')
+    if (unescaped !== candidate) candidates.add(unescaped)
+  }
+
+  for (const candidate of candidates) {
+    const title = parseTitleJson(candidate)
+    if (title) return title
+  }
+
+  return null
+}
+
+function parseTitleJson(candidate: string): string | null {
+  try {
+    const parsed = JSON.parse(candidate)
+    if (typeof parsed === 'string') {
+      return parseTitleFromStructuredText(parsed)
+    }
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { title?: unknown }).title === 'string') {
+      return (parsed as { title: string }).title
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function normalizeTitle(title: string): string | null {
+  const clean = title.replace(/\s+/g, ' ').trim()
+  if (!clean || clean.length > 60 || looksLikeStructuredTitleFragment(clean)) return null
+  return clean
+}
+
+function looksLikeStructuredTitleFragment(text: string): boolean {
+  return (
+    text.includes('```') ||
+    text.includes('{') ||
+    text.includes('}') ||
+    /\\?"title\\?"\s*:/.test(text)
+  )
 }
 
 async function shouldDisableThinkingForTitle(presetId: string): Promise<boolean> {

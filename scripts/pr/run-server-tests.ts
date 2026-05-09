@@ -2,11 +2,11 @@
 
 import { readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { quarantinedPathSet } from '../quality-gate/quarantine'
+import { loadQuarantineManifest, quarantinedPathSet } from '../quality-gate/quarantine'
 
 const root = process.cwd()
 const roots = ['src/server', 'src/tools', 'src/utils']
-const excludedFiles = quarantinedPathSet()
+const excludedFiles = quarantinedPathSet(loadQuarantineManifest(undefined, { enforceReviewDate: true }))
 
 function normalize(path: string) {
   return relative(root, path).split(sep).join('/')

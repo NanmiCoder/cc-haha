@@ -192,6 +192,12 @@ export default withMermaid(defineConfig({
     },
   },
 
+  vite: {
+    build: {
+      chunkSizeWarningLimit: 1800,
+    },
+  },
+
   head: [
     ['script', { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=G-D42DM82263' }],
     ['script', {}, `window.dataLayer = window.dataLayer || [];\nfunction gtag(){dataLayer.push(arguments);}\ngtag('js', new Date());\ngtag('config', 'G-D42DM82263');`],

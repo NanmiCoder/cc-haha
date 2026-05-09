@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-06T13:40:08.803Z",
+  "suites": {
+    "server-api": {
+      "lines": {
+        "covered": 10755,
+        "total": 15580,
+        "pct": 69.03
+      },
+      "functions": {
+        "covered": 1114,
+        "total": 1384,
+        "pct": 80.49
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "statements": {
+        "covered": 10755,
+        "total": 15580,
+        "pct": 69.03
+      }
+    },
+    "agent-tools": {
+      "lines": {
+        "covered": 5691,
+        "total": 32341,
+        "pct": 17.6
+      },
+      "functions": {
+        "covered": 200,
+        "total": 1127,
+        "pct": 17.75
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "statements": {
+        "covered": 5691,
+        "total": 32341,
+        "pct": 17.6
+      }
+    },
+    "agent-utils": {
+      "lines": {
+        "covered": 16164,
+        "total": 108320,
+        "pct": 14.92
+      },
+      "functions": {
+        "covered": 482,
+        "total": 3989,
+        "pct": 12.08
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "statements": {
+        "covered": 16164,
+        "total": 108320,
+        "pct": 14.92
+      }
+    },
+    "adapters": {
+      "lines": {
+        "covered": 2151,
+        "total": 2814,
+        "pct": 76.44
+      },
+      "functions": {
+        "covered": 270,
+        "total": 322,
+        "pct": 83.85
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "statements": {
+        "covered": 2151,
+        "total": 2814,
+        "pct": 76.44
+      }
+    },
+    "desktop": {
+      "lines": {
+        "covered": 18528,
+        "total": 27357,
+        "pct": 67.73
+      },
+      "functions": {
+        "covered": 639,
+        "total": 1206,
+        "pct": 52.99
+      },
+      "branches": {
+        "covered": 3461,
+        "total": 4718,
+        "pct": 73.36
+      },
+      "statements": {
+        "covered": 18528,
+        "total": 27357,
+        "pct": 67.73
+      }
+    }
+  }
+}

@@ -25,4 +25,15 @@ describe('PR triage workflow comment', () => {
     expect(lastEntry).toBe(`'${DOSU_PROMPT}',`)
     expect(workflow).not.toContain(`\`${DOSU_PROMPT}\``)
   })
+
+  test('surfaces missing-test, coverage-check, and coverage-baseline policy branches', () => {
+    const workflow = readFileSync('.github/workflows/pr-triage.yml', 'utf8')
+
+    expect(workflow).toContain("'allow-missing-tests': 'c2e0c6'")
+    expect(workflow).toContain("'allow-coverage-baseline-change': 'c2e0c6'")
+    expect(workflow).toContain("requiredChecks.push('coverage-checks')")
+    expect(workflow).toContain('Coverage baseline policy')
+    expect(workflow).toContain('coveragePolicyFiles')
+    expect(workflow).toContain('BLOCKING unless \\`allow-missing-tests\\` is applied')
+  })
 })

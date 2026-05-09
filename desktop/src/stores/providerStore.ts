@@ -2,6 +2,8 @@
 
 import { create } from 'zustand'
 import { providersApi } from '../api/providers'
+import { useChatStore } from './chatStore'
+import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { OFFICIAL_DEFAULT_MODEL_ID } from '../constants/modelCatalog'
 import type {
@@ -12,6 +14,7 @@ import type {
   ProviderTestResult,
 } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
+import type { RuntimeSelection } from '../types/runtime'
 
 type ProviderStore = {
   providers: SavedProvider[]
@@ -31,6 +34,60 @@ type ProviderStore = {
   activateOfficial: () => Promise<void>
   testProvider: (id: string, overrides?: { baseUrl?: string; modelId?: string; apiFormat?: string; authStrategy?: string }) => Promise<ProviderTestResult>
   testConfig: (input: TestProviderConfigInput) => Promise<ProviderTestResult>
+}
+
+function providerModelIds(provider: SavedProvider): Set<string> {
+  return new Set(
+    Object.values(provider.models)
+      .map((modelId) => modelId.trim())
+      .filter(Boolean),
+  )
+}
+
+function resolveRuntimeRefreshSelection(
+  provider: SavedProvider,
+  activeId: string | null,
+  currentSelection: RuntimeSelection | undefined,
+): RuntimeSelection | null {
+  if (currentSelection?.providerId === provider.id) {
+    const modelIds = providerModelIds(provider)
+    return {
+      providerId: provider.id,
+      modelId: modelIds.has(currentSelection.modelId)
+        ? currentSelection.modelId
+        : provider.models.main,
+    }
+  }
+
+  if (!currentSelection && activeId === provider.id) {
+    return {
+      providerId: provider.id,
+      modelId: provider.models.main,
+    }
+  }
+
+  return null
+}
+
+function refreshConnectedSessionsForProvider(provider: SavedProvider, activeId: string | null) {
+  const chatStore = useChatStore.getState()
+  const runtimeStore = useSessionRuntimeStore.getState()
+
+  for (const [sessionId, session] of Object.entries(chatStore.sessions)) {
+    if (session.connectionState !== 'connected' || session.chatState !== 'idle') {
+      continue
+    }
+
+    const selection = resolveRuntimeRefreshSelection(
+      provider,
+      activeId,
+      runtimeStore.selections[sessionId],
+    )
+    if (!selection) continue
+
+    runtimeStore.setSelection(sessionId, selection)
+    chatStore.setSessionRuntime(sessionId, selection)
+  }
 }
 
 export const useProviderStore = create<ProviderStore>((set, get) => ({
@@ -74,6 +131,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   updateProvider: async (id, input) => {
     const { provider } = await providersApi.update(id, input)
     await get().fetchProviders()
+    refreshConnectedSessionsForProvider(provider, get().activeId)
     return provider
   },
 

@@ -8,6 +8,7 @@ describe('resolveSidecarInvocation', () => {
       resolveSidecarInvocation(
         ['server', '--host', '127.0.0.1'],
         '/tmp/claude-sidecar',
+        null,
       ),
     ).toEqual({
       mode: 'server',
@@ -21,6 +22,7 @@ describe('resolveSidecarInvocation', () => {
       resolveSidecarInvocation(
         ['plugin', 'install', 'demo'],
         '/Users/demo/.local/bin/claude-haha',
+        null,
       ),
     ).toEqual({
       mode: 'cli',

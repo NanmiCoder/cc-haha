@@ -252,6 +252,41 @@ describe('openaiChatToAnthropic', () => {
     }
   })
 
+  test('tool_calls response preserves object arguments from local proxies', () => {
+    const res: OpenAIChatResponse = {
+      id: 'chatcmpl-write',
+      object: 'chat.completion',
+      created: 1234567890,
+      model: 'gpt-4',
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'call_write',
+            type: 'function',
+            function: {
+              name: 'Write',
+              arguments: { file_path: '/tmp/issue-288.txt', content: 'ok' },
+            },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    }
+
+    const result = openaiChatToAnthropic(res, 'gpt-4')
+    expect(result.content[0].type).toBe('tool_use')
+    if (result.content[0].type === 'tool_use') {
+      expect(result.content[0].name).toBe('Write')
+      expect(result.content[0].input).toEqual({
+        file_path: '/tmp/issue-288.txt',
+        content: 'ok',
+      })
+    }
+  })
+
   test('finish_reason mapping', () => {
     const make = (reason: string) => ({
       id: 'x', object: 'chat.completion', created: 0, model: 'gpt-4',
@@ -440,6 +475,32 @@ describe('openaiResponsesToAnthropic', () => {
     if (result.content[0].type === 'tool_use') {
       expect(result.content[0].id).toBe('call_1')
       expect(result.content[0].input).toEqual({ q: 'test' })
+    }
+  })
+
+  test('function_call preserves object arguments from local proxies', () => {
+    const res: OpenAIResponsesResponse = {
+      id: 'resp_write',
+      object: 'response',
+      created_at: 0,
+      model: 'gpt-4o',
+      status: 'completed',
+      output: [{
+        type: 'function_call',
+        id: 'fc_write',
+        call_id: 'call_write',
+        name: 'Write',
+        arguments: { file_path: '/tmp/issue-288.txt', content: 'ok' },
+      }],
+    }
+
+    const result = openaiResponsesToAnthropic(res, 'gpt-4o')
+    expect(result.content[0].type).toBe('tool_use')
+    if (result.content[0].type === 'tool_use') {
+      expect(result.content[0].input).toEqual({
+        file_path: '/tmp/issue-288.txt',
+        content: 'ok',
+      })
     }
   })
 

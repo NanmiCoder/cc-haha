@@ -21,6 +21,7 @@
  */
 
 import type { OpenAIChatStreamChunk } from '../transform/types.js'
+import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -230,12 +231,17 @@ function closeAllToolBlocks(state: StreamState): void {
     }
   }
   state.toolBlocks.clear()
+  if (state.currentBlockType === 'tool_use') {
+    state.blockStopSent = true
+  }
 }
 
 function closeAllOpenBlocks(state: StreamState): void {
-  // Close current text/thinking block
-  closeCurrentBlock(state)
-  // Close all tool blocks
+  // Close current text/thinking block. Tool blocks are tracked separately
+  // because providers can stream multiple tool calls in parallel.
+  if (state.currentBlockType !== 'tool_use') {
+    closeCurrentBlock(state)
+  }
   closeAllToolBlocks(state)
 }
 
@@ -344,11 +350,9 @@ function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
   if (transition) {
     // Handle block transition: close previous block if type changed
     if (transition.isNew && state.blockStartSent && !state.blockStopSent) {
-      if (transition.type !== 'tool_use') {
-        // For text/thinking, close the current block
-        closeCurrentBlock(state)
+      if (state.currentBlockType === 'tool_use' && transition.type !== 'tool_use') {
+        closeAllToolBlocks(state)
       } else if (state.currentBlockType !== 'tool_use') {
-        // Switching TO tool_use from text/thinking: close current
         closeCurrentBlock(state)
       }
     }
@@ -421,13 +425,15 @@ function handleToolCalls(delta: DeltaEx, state: StreamState): void {
     const block = state.toolBlocks.get(tcIndex)!
     if (tc.id) block.id = tc.id
     if (tc.function?.name) block.name += tc.function.name
-    if (tc.function?.arguments) block.argsBuffer += tc.function.arguments
+    const argumentsDelta = stringifyOpenAIToolArguments(tc.function?.arguments)
+    if (argumentsDelta) block.argsBuffer += argumentsDelta
 
     // Start tool block once we have id + name
     if (!block.started && block.id && block.name) {
       block.started = true
       block.anthropicIndex = state.nextContentIndex++
       state.currentBlockType = 'tool_use'
+      state.currentBlockIndex = block.anthropicIndex
       state.blockStartSent = true
       state.blockStopSent = false
 
@@ -443,9 +449,9 @@ function handleToolCalls(delta: DeltaEx, state: StreamState): void {
           type: 'input_json_delta', partial_json: block.argsBuffer,
         })
       }
-    } else if (block.started && tc.function?.arguments) {
+    } else if (block.started && argumentsDelta) {
       emitDelta(state, block.anthropicIndex, {
-        type: 'input_json_delta', partial_json: tc.function.arguments,
+        type: 'input_json_delta', partial_json: argumentsDelta,
       })
     }
   }

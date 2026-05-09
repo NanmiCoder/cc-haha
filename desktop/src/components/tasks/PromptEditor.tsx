@@ -14,6 +14,8 @@ type Props = {
 
   modelId: string
   onModelChange: (modelId: string) => void
+  providerId?: string | null
+  onProviderIdChange: (providerId: string | null) => void
 
   folderPath: string
   onFolderPathChange: (path: string) => void
@@ -30,6 +32,8 @@ export function PromptEditor({
   onPermissionModeChange,
   modelId,
   onModelChange,
+  providerId,
+  onProviderIdChange,
   folderPath,
   onFolderPathChange,
   useWorktree: _useWorktree,
@@ -53,7 +57,13 @@ export function PromptEditor({
         {/* Row 1: Permission + Model selectors */}
         <div className="flex items-center justify-between">
           <PermissionModeSelector value={permissionMode} onChange={onPermissionModeChange} workDir={folderPath || undefined} />
-          <ModelSelector value={modelId} onChange={onModelChange} />
+          <ModelSelector
+            runtimeSelection={modelId ? { providerId: providerId ?? null, modelId } : undefined}
+            onRuntimeSelectionChange={(selection) => {
+              onProviderIdChange(selection.providerId)
+              onModelChange(selection.modelId)
+            }}
+          />
         </div>
 
         {/* Row 2: Folder picker */}

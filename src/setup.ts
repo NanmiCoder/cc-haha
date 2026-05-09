@@ -62,6 +62,7 @@ export async function setup(
   tmuxEnabled: boolean,
   customSessionId?: string | null,
   worktreePRNumber?: number,
+  worktreeBaseRef?: string,
   messagingSocketPath?: string,
 ): Promise<void> {
   logForDiagnosticsNoPII('info', 'setup_started')
@@ -243,7 +244,12 @@ export async function setup(
         getSessionId(),
         slug,
         tmuxSessionName,
-        worktreePRNumber ? { prNumber: worktreePRNumber } : undefined,
+        worktreePRNumber || worktreeBaseRef
+          ? {
+              ...(worktreePRNumber ? { prNumber: worktreePRNumber } : {}),
+              ...(worktreeBaseRef ? { baseRef: worktreeBaseRef } : {}),
+            }
+          : undefined,
       )
     } catch (error) {
       process.stderr.write(

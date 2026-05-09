@@ -23,6 +23,7 @@ import {
 } from '../tmuxSocket.js'
 import { windowsPathToPosixPath } from '../windowsPaths.js'
 import { resolveClaudeCliLauncher } from '../desktopBundledCli.js'
+import { getWslInteropEnvironmentOverrides } from './wslInterop.js'
 import type { ShellProvider } from './shellProvider.js'
 
 /**
@@ -279,6 +280,14 @@ export async function createBashShellProvider(
         // Safe to set unconditionally — non-zsh shells ignore TMPPREFIX.
         env.TMPPREFIX = posixJoin(posixTmpDir, 'zsh')
       }
+      Object.assign(
+        env,
+        getWslInteropEnvironmentOverrides({
+          platform: getPlatform(),
+          command,
+          shellPrefix: process.env.CLAUDE_CODE_SHELL_PREFIX,
+        }),
+      )
       // Apply session env vars set via /env (child processes only, not the REPL)
       for (const [key, value] of getSessionEnvVars()) {
         env[key] = value

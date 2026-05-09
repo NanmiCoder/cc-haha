@@ -13,6 +13,17 @@ const PROMPT = [
   'When the tests pass, briefly say done.',
 ].join(' ')
 
+export function resolveDesktopSmokeRuntimeSelection(target: BaselineTarget | undefined) {
+  if (!target) return null
+  if (!target.providerId && target.modelId === 'current' && target.label === 'current-runtime') {
+    return null
+  }
+  return {
+    providerId: target.providerId ?? null,
+    modelId: target.modelId,
+  }
+}
+
 async function getPort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer()
@@ -236,7 +247,14 @@ export async function executeDesktopSmoke(
   void pipeToFile(server.stdout, serverLogPath)
   void pipeToFile(server.stderr, serverLogPath)
 
-  const vite = Bun.spawn(['bun', 'run', 'dev', '--', '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], {
+  const viteExecutable = join(
+    rootDir,
+    'desktop',
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'vite.cmd' : 'vite',
+  )
+  const vite = Bun.spawn([viteExecutable, '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], {
     cwd: join(rootDir, 'desktop'),
     env: {
       ...process.env,
@@ -262,10 +280,10 @@ export async function executeDesktopSmoke(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir: projectDir }),
     })
-    const runtimeSelection = {
-      providerId: target?.providerId ?? null,
-      modelId: target?.modelId ?? 'current',
-    }
+    const runtimeSelection = resolveDesktopSmokeRuntimeSelection(target)
+    writeFileSync(join(artifactDir, 'runtime-selection.json'), JSON.stringify(runtimeSelection
+      ? { source: 'explicit-target', ...runtimeSelection }
+      : { source: 'default-runtime' }, null, 2) + '\n')
 
     await runLoggedCommand(['agent-browser', 'open', appUrl], {
       cwd: rootDir,
@@ -273,18 +291,21 @@ export async function executeDesktopSmoke(
       logPath: browserLogPath,
       timeoutMs: 30_000,
     })
+    const browserSetup = [
+      `localStorage.setItem('cc-haha-open-tabs', ${JSON.stringify(JSON.stringify({
+        openTabs: [{ sessionId: session.sessionId, title: 'Desktop Smoke', type: 'session' }],
+        activeTabId: session.sessionId,
+      }))})`,
+      runtimeSelection
+        ? `localStorage.setItem('cc-haha-session-runtime', ${JSON.stringify(JSON.stringify({
+          [session.sessionId]: runtimeSelection,
+        }))})`
+        : `localStorage.removeItem('cc-haha-session-runtime')`,
+    ]
     await runLoggedCommand([
       'agent-browser',
       'eval',
-      [
-        `localStorage.setItem('cc-haha-open-tabs', ${JSON.stringify(JSON.stringify({
-          openTabs: [{ sessionId: session.sessionId, title: 'Desktop Smoke', type: 'session' }],
-          activeTabId: session.sessionId,
-        }))})`,
-        `localStorage.setItem('cc-haha-session-runtime', ${JSON.stringify(JSON.stringify({
-          [session.sessionId]: runtimeSelection,
-        }))})`,
-      ].join(';'),
+      browserSetup.join(';'),
     ], {
       cwd: rootDir,
       env: browserEnv,

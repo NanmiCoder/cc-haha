@@ -17,17 +17,23 @@ export type ChangePolicyResult = {
   areaLabels: string[]
   blocked: boolean
   blockingReason: string | null
+  blockingReasons: string[]
   cliCoreFiles: string[]
+  coveragePolicyFiles: string[]
+  missingTestSignals: string[]
   checks: {
     desktop: boolean
     server: boolean
     adapters: boolean
     desktopNative: boolean
     docs: boolean
+    coverage: boolean
   }
 }
 
 const ALLOW_CLI_CORE_LABEL = 'allow-cli-core-change'
+const ALLOW_MISSING_TESTS_LABEL = 'allow-missing-tests'
+const ALLOW_COVERAGE_BASELINE_LABEL = 'allow-coverage-baseline-change'
 
 const areaLabels: Record<ChangeArea, string> = {
   desktop: 'area:desktop',
@@ -82,6 +88,11 @@ const releaseExactPaths = new Set([
   'desktop/src-tauri/Cargo.lock',
 ])
 
+const coveragePolicyExactPaths = new Set([
+  'scripts/quality-gate/coverage-baseline.json',
+  'scripts/quality-gate/coverage-thresholds.json',
+])
+
 function normalizePath(path: string) {
   return path.trim().replace(/\\/g, '/').replace(/^\.\//, '')
 }
@@ -128,6 +139,48 @@ function areasForPath(path: string): ChangeArea[] {
   return [...areas]
 }
 
+function hasMatchingTest(files: string[], predicate: (file: string) => boolean) {
+  return files.some((file) => (
+    predicate(file) &&
+    (/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes('/__tests__/'))
+  ))
+}
+
+function changedProductionFiles(files: string[], predicate: (file: string) => boolean) {
+  return files.filter((file) => (
+    predicate(file) &&
+    !/\.test\.[cm]?[jt]sx?$/.test(file) &&
+    !file.includes('/__tests__/') &&
+    !file.includes('/fixtures/')
+  ))
+}
+
+function missingTestSignals(files: string[]) {
+  const signals: string[] = []
+  const desktopProd = changedProductionFiles(files, (file) => file.startsWith('desktop/src/'))
+  const serverProd = changedProductionFiles(files, (file) => file.startsWith('src/server/'))
+  const adapterProd = changedProductionFiles(files, (file) => file.startsWith('adapters/'))
+  const agentRuntimeProd = changedProductionFiles(files, (file) => (
+    file.startsWith('src/tools/') ||
+    file.startsWith('src/utils/')
+  ))
+
+  if (desktopProd.length > 0 && !hasMatchingTest(files, (file) => file.startsWith('desktop/src/'))) {
+    signals.push('Desktop product files changed without a desktop test file in the PR.')
+  }
+  if (serverProd.length > 0 && !hasMatchingTest(files, (file) => file.startsWith('src/server/'))) {
+    signals.push('Server product files changed without a server test file in the PR.')
+  }
+  if (adapterProd.length > 0 && !hasMatchingTest(files, (file) => file.startsWith('adapters/'))) {
+    signals.push('Adapter product files changed without an adapter test file in the PR.')
+  }
+  if (agentRuntimeProd.length > 0 && !hasMatchingTest(files, (file) => file.startsWith('src/tools/') || file.startsWith('src/utils/'))) {
+    signals.push('Agent/runtime product files changed without a tools/utils test file in the PR.')
+  }
+
+  return signals
+}
+
 export function evaluateChangePolicy(
   inputFiles: string[],
   inputLabels: string[] = [],
@@ -145,7 +198,22 @@ export function evaluateChangePolicy(
   const cliCoreFiles = files.filter(isCliCorePath)
   const hasCliCoreChange = cliCoreFiles.length > 0
   const hasCliCoreOverride = labels.includes(ALLOW_CLI_CORE_LABEL)
-  const blocked = hasCliCoreChange && !hasCliCoreOverride
+  const coveragePolicyFiles = files.filter((file) => coveragePolicyExactPaths.has(file))
+  const hasCoveragePolicyOverride = labels.includes(ALLOW_COVERAGE_BASELINE_LABEL)
+  const missingTests = missingTestSignals(files)
+  const hasMissingTestsOverride = labels.includes(ALLOW_MISSING_TESTS_LABEL)
+  const blockingReasons: string[] = []
+
+  if (hasCliCoreChange && !hasCliCoreOverride) {
+    blockingReasons.push(`CLI core changes require the ${ALLOW_CLI_CORE_LABEL} label and maintainer approval.`)
+  }
+  if (missingTests.length > 0 && !hasMissingTestsOverride) {
+    blockingReasons.push(`Production code changes require matching tests or the ${ALLOW_MISSING_TESTS_LABEL} maintainer override.`)
+  }
+  if (coveragePolicyFiles.length > 0 && !hasCoveragePolicyOverride) {
+    blockingReasons.push(`Coverage baseline or threshold changes require the ${ALLOW_COVERAGE_BASELINE_LABEL} label and maintainer approval.`)
+  }
+  const blocked = blockingReasons.length > 0
 
   const touchesDesktopNative = files.some((file) => (
     file.startsWith('desktop/') ||
@@ -159,6 +227,17 @@ export function evaluateChangePolicy(
     file.startsWith('release-notes/') ||
     docsExactPaths.has(file)
   ))
+  const touchesCoverage = files.some((file) => (
+    file.startsWith('desktop/src/') ||
+    file.startsWith('src/server/') ||
+    file.startsWith('src/tools/') ||
+    file.startsWith('src/utils/') ||
+    file.startsWith('adapters/') ||
+    file.startsWith('scripts/quality-gate/') ||
+    file === 'package.json' ||
+    file === 'desktop/package.json' ||
+    file === 'desktop/bun.lock'
+  ))
 
   const orderedAreas = [...areas].sort()
 
@@ -168,16 +247,18 @@ export function evaluateChangePolicy(
     areas: orderedAreas,
     areaLabels: orderedAreas.map((area) => areaLabels[area]),
     blocked,
-    blockingReason: blocked
-      ? `CLI core changes require the ${ALLOW_CLI_CORE_LABEL} label and maintainer approval.`
-      : null,
+    blockingReason: blockingReasons[0] ?? null,
+    blockingReasons,
     cliCoreFiles,
+    coveragePolicyFiles,
+    missingTestSignals: missingTests,
     checks: {
       desktop: areas.has('desktop') || areas.has('server'),
       server: areas.has('server') || files.some((file) => file.startsWith('src/tools/') || file.startsWith('src/utils/')),
       adapters: areas.has('adapters'),
       desktopNative: touchesDesktopNative,
       docs: touchesDocs,
+      coverage: touchesCoverage,
     },
   }
 }
@@ -219,7 +300,7 @@ function formatSummary(result: ChangePolicyResult) {
     'PR change policy',
     `  Areas: ${result.areas.length ? result.areas.join(', ') : 'none'}`,
     `  Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}`,
-    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, docs=${result.checks.docs}`,
+    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
   ]
 
   if (result.cliCoreFiles.length > 0) {
@@ -229,8 +310,25 @@ function formatSummary(result: ChangePolicyResult) {
     }
   }
 
-  if (result.blockingReason) {
-    lines.push(`  Blocked: ${result.blockingReason}`)
+  if (result.coveragePolicyFiles.length > 0) {
+    lines.push('  Coverage policy files:')
+    for (const file of result.coveragePolicyFiles) {
+      lines.push(`    - ${file}`)
+    }
+  }
+
+  if (result.missingTestSignals.length > 0) {
+    lines.push('  Missing test signals:')
+    for (const signal of result.missingTestSignals) {
+      lines.push(`    - ${signal}`)
+    }
+  }
+
+  if (result.blockingReasons.length > 0) {
+    lines.push('  Blocked:')
+    for (const reason of result.blockingReasons) {
+      lines.push(`    - ${reason}`)
+    }
   }
 
   return lines.join('\n')
@@ -251,6 +349,7 @@ function writeGithubOutputs(result: ChangePolicyResult) {
     adapter_checks: String(result.checks.adapters),
     desktop_native_checks: String(result.checks.desktopNative),
     docs_checks: String(result.checks.docs),
+    coverage_checks: String(result.checks.coverage),
   }
 
   appendFileSync(

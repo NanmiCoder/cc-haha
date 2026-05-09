@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { Settings } from '../pages/Settings'
@@ -317,7 +317,7 @@ describe('Settings > Agents tab', () => {
     expect(screen.getByText('plain-agent')).toBeInTheDocument()
   })
 
-  it('returns to plugins tab when agent detail was opened from plugins', () => {
+  it('returns to plugins tab when agent detail was opened from plugins', async () => {
     useAgentStore.setState({
       allAgents: MOCK_AGENTS,
       activeAgents: MOCK_AGENTS.filter((agent) => agent.isActive),
@@ -335,7 +335,10 @@ describe('Settings > Agents tab', () => {
     render(<Settings />)
     switchToAgentsTab()
 
-    fireEvent.click(screen.getByText('Back to list'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('Back to list'))
+      await Promise.resolve()
+    })
 
     expect(screen.getByText('Installed Plugins')).toBeInTheDocument()
   })

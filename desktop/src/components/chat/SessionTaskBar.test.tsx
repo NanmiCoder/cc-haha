@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { SessionTaskBar } from './SessionTaskBar'
 import { useCLITaskStore } from '../../stores/cliTaskStore'
@@ -34,6 +34,7 @@ describe('SessionTaskBar', () => {
   })
 
   afterEach(() => {
+    cleanup()
     useCLITaskStore.getState().clearTasks()
   })
 
@@ -74,7 +75,7 @@ describe('SessionTaskBar', () => {
     expect(useCLITaskStore.getState().tasks).toEqual([])
   })
 
-  it('shows the bar again for a new task cycle after a previous completed set was dismissed', () => {
+  it('shows the bar again for a new task cycle after a previous completed set was dismissed', async () => {
     act(() => {
       useCLITaskStore.getState().setTasksFromTodos([
         { content: 'first', status: 'completed' },
@@ -85,7 +86,10 @@ describe('SessionTaskBar', () => {
       render(<SessionTaskBar />)
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide completed tasks' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Hide completed tasks' }))
+      await Promise.resolve()
+    })
     expect(screen.queryByText('Tasks')).toBeNull()
 
     act(() => {

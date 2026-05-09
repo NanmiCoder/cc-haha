@@ -37,7 +37,7 @@ function readMode(value: string | boolean | undefined): QualityGateMode {
   if (value === 'pr' || value === 'baseline' || value === 'release') {
     return value
   }
-  throw new Error('Usage: bun run quality:gate --mode <pr|baseline|release> [--dry-run] [--allow-live] [--provider-model provider:model[:label]]')
+  throw new Error('Usage: bun run quality:gate --mode <pr|baseline|release> [--dry-run] [--allow-live] [--provider-model provider:model[:label]] [--only lane-id|prefix*] [--skip lane-id|prefix*]')
 }
 
 function readBaselineTargets(args: Map<string, Array<string | boolean>>): BaselineTarget[] {
@@ -45,6 +45,14 @@ function readBaselineTargets(args: Map<string, Array<string | boolean>>): Baseli
     .filter((value): value is string => typeof value === 'string')
 
   return parseBaselineTargetValues(values)
+}
+
+function readStringValues(args: Map<string, Array<string | boolean>>, name: string) {
+  return (args.get(name) ?? [])
+    .filter((value): value is string => typeof value === 'string')
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter(Boolean)
 }
 
 const args = parseArgs(process.argv.slice(2))
@@ -69,6 +77,8 @@ const { report, outputDir } = await runQualityGate({
   baselineTargets,
   rootDir: process.cwd(),
   artifactsDir,
+  onlyLaneSelectors: readStringValues(args, '--only'),
+  skipLaneSelectors: readStringValues(args, '--skip'),
 })
 
 console.log(`Quality gate report: ${outputDir}/report.md`)

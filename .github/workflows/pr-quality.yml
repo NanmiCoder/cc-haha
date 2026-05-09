@@ -25,9 +25,12 @@ jobs:
       adapter_checks: ${{ steps.policy.outputs.adapter_checks }}
       desktop_native_checks: ${{ steps.policy.outputs.desktop_native_checks }}
       docs_checks: ${{ steps.policy.outputs.docs_checks }}
+      coverage_checks: ${{ steps.policy.outputs.coverage_checks }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -58,6 +61,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -179,3 +184,105 @@ jobs:
 
       - name: Run docs checks
         run: npm ci && npm run docs:build
+
+  coverage-checks:
+    name: coverage-checks
+    needs: change-policy
+    if: needs.change-policy.outputs.coverage_checks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install root dependencies
+        run: bun install
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install
+
+      - name: Install adapter dependencies
+        working-directory: adapters
+        run: bun install
+
+      - name: Run coverage checks
+        env:
+          COVERAGE_BASE_REF: origin/${{ github.base_ref }}
+        run: bun run check:coverage
+
+      - name: Summarize coverage report
+        if: always()
+        run: |
+          latest_report="$(find artifacts/coverage -name coverage-report.md -print | sort | tail -n 1)"
+          if [ -n "$latest_report" ]; then
+            cat "$latest_report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: artifacts/coverage/
+          retention-days: 14
+
+  pr-quality-gate:
+    name: pr-quality-gate
+    needs:
+      - change-policy
+      - desktop-checks
+      - server-checks
+      - adapter-checks
+      - desktop-native-checks
+      - docs-checks
+      - coverage-checks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all selected quality jobs to pass
+        run: |
+          failures=0
+
+          require_success() {
+            local name="$1"
+            local result="$2"
+            if [ "$result" != "success" ]; then
+              echo "::error::$name ended with result: $result"
+              failures=$((failures + 1))
+            else
+              echo "$name: success"
+            fi
+          }
+
+          allow_skip_or_success() {
+            local name="$1"
+            local result="$2"
+            case "$result" in
+              success|skipped)
+                echo "$name: $result"
+                ;;
+              *)
+                echo "::error::$name ended with result: $result"
+                failures=$((failures + 1))
+                ;;
+            esac
+          }
+
+          require_success "change-policy" "${{ needs.change-policy.result }}"
+          allow_skip_or_success "desktop-checks" "${{ needs.desktop-checks.result }}"
+          allow_skip_or_success "server-checks" "${{ needs.server-checks.result }}"
+          allow_skip_or_success "adapter-checks" "${{ needs.adapter-checks.result }}"
+          allow_skip_or_success "desktop-native-checks" "${{ needs.desktop-native-checks.result }}"
+          allow_skip_or_success "docs-checks" "${{ needs.docs-checks.result }}"
+          allow_skip_or_success "coverage-checks" "${{ needs.coverage-checks.result }}"
+
+          if [ "$failures" -gt 0 ]; then
+            exit 1
+          fi

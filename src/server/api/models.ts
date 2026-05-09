@@ -145,6 +145,12 @@ function getStandaloneModelList(): ApiModelInfo[] {
   return models
 }
 
+function normalizeEffortLevel(value: unknown): (typeof EFFORT_LEVELS)[number] {
+  return typeof value === 'string' && EFFORT_LEVELS.includes(value as (typeof EFFORT_LEVELS)[number])
+    ? value as (typeof EFFORT_LEVELS)[number]
+    : DEFAULT_EFFORT
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export async function handleModelsApi(
@@ -282,7 +288,7 @@ async function handleCurrentModel(req: Request): Promise<Response> {
 async function handleEffort(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const settings = await settingsService.getUserSettings()
-    const level = (settings.effort as string) || DEFAULT_EFFORT
+    const level = normalizeEffortLevel(settings.effort)
     return Response.json({ level, available: EFFORT_LEVELS })
   }
 

@@ -1,39 +1,7 @@
 #!/usr/bin/env bun
 
 import { evaluateChangePolicy } from './change-policy'
-
-async function output(cmd: string[]) {
-  const proc = Bun.spawn(cmd, {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const stdout = await new Response(proc.stdout).text()
-  const stderr = await new Response(proc.stderr).text()
-  const code = await proc.exited
-
-  if (code !== 0) {
-    throw new Error(stderr || stdout || `Command failed: ${cmd.join(' ')}`)
-  }
-
-  return stdout.trim()
-}
-
-async function outputOrEmpty(cmd: string[]) {
-  try {
-    return await output(cmd)
-  } catch {
-    return ''
-  }
-}
-
-async function localChangedFiles() {
-  const staged = await outputOrEmpty(['git', 'diff', '--name-only', '--cached'])
-  const unstaged = await outputOrEmpty(['git', 'diff', '--name-only'])
-  const untracked = await outputOrEmpty(['git', 'ls-files', '--others', '--exclude-standard'])
-
-  return [...staged.split(/\r?\n/), ...unstaged.split(/\r?\n/), ...untracked.split(/\r?\n/)]
-    .filter(Boolean)
-}
+import { changedFilesForLocalPrCheck } from './changed-files'
 
 function parseListArg(name: string) {
   const index = process.argv.indexOf(name)
@@ -51,23 +19,7 @@ function parseListArg(name: string) {
 
 async function changedFiles() {
   const files = parseListArg('--files')
-  if (files.length > 0) {
-    return files
-  }
-
-  const base = process.env.PR_BASE_REF ?? 'origin/main'
-  const localFiles = await localChangedFiles()
-  try {
-    const diff = await output(['git', 'diff', '--name-only', `${base}...HEAD`])
-    return [...new Set([...diff.split(/\r?\n/), ...localFiles].filter(Boolean))]
-  } catch {
-    try {
-      const diff = await output(['git', 'diff', '--name-only', 'main...HEAD'])
-      return [...new Set([...diff.split(/\r?\n/), ...localFiles].filter(Boolean))]
-    } catch {
-      return [...new Set(localFiles)]
-    }
-  }
+  return changedFilesForLocalPrCheck(files)
 }
 
 function commandList(result: ReturnType<typeof evaluateChangePolicy>) {
@@ -87,6 +39,9 @@ function commandList(result: ReturnType<typeof evaluateChangePolicy>) {
   }
   if (result.checks.docs) {
     commands.push('bun run check:docs')
+  }
+  if (result.checks.coverage) {
+    commands.push('bun run check:coverage')
   }
 
   return commands
@@ -169,11 +124,18 @@ const labels = [
 if (process.env.ALLOW_CLI_CORE_CHANGE === '1') {
   labels.push('allow-cli-core-change')
 }
+if (process.env.ALLOW_MISSING_TESTS === '1') {
+  labels.push('allow-missing-tests')
+}
+if (process.env.ALLOW_COVERAGE_BASELINE_CHANGE === '1') {
+  labels.push('allow-coverage-baseline-change')
+}
 
 const files = await changedFiles()
 const result = evaluateChangePolicy(files, labels)
 const commands = commandList(result)
-const warnings = coverageWarnings(result.files)
+const warnings = [...coverageWarnings(result.files)]
+const blockingTestSignals = result.missingTestSignals
 const notes = riskNotes(result.files)
 
 console.log('# PR impact report')
@@ -184,7 +146,10 @@ console.log(`Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}
 console.log(`Blocked: ${result.blocked ? 'yes' : 'no'}`)
 
 if (result.blockingReason) {
-  console.log(`Blocking reason: ${result.blockingReason}`)
+  console.log('Blocking reasons:')
+  for (const reason of result.blockingReasons) {
+    console.log(`- ${reason}`)
+  }
 }
 
 console.log('')
@@ -195,7 +160,12 @@ for (const command of commands) {
 
 console.log('')
 console.log('## Test coverage signals')
-if (warnings.length === 0) {
+if (blockingTestSignals.length > 0) {
+  for (const signal of blockingTestSignals) {
+    console.log(`- BLOCKING: ${signal}`)
+  }
+}
+if (warnings.length === 0 && blockingTestSignals.length === 0) {
   console.log('- No obvious missing-test signal from changed paths.')
 } else {
   for (const warning of warnings) {

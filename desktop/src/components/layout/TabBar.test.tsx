@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -9,6 +9,7 @@ const getCurrentWindowMock = vi.hoisted(() => vi.fn(() => ({
 const windowControlsMock = vi.hoisted(() => ({
   show: true,
 }))
+const scrollIntoViewMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: getCurrentWindowMock,
@@ -64,13 +65,21 @@ describe('TabBar', () => {
       value: {},
     })
 
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoViewMock,
+    })
+
     startDraggingMock.mockClear()
     getCurrentWindowMock.mockClear()
+    scrollIntoViewMock.mockClear()
     windowControlsMock.show = true
     vi.resetModules()
   })
 
   afterEach(async () => {
+    cleanup()
+
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
     const { useWorkspacePanelStore } = await import('../../stores/workspacePanelStore')
@@ -84,6 +93,42 @@ describe('TabBar', () => {
     useTerminalPanelStore.setState(useTerminalPanelStore.getInitialState(), true)
 
     delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__
+  })
+
+  it('scrolls the active tab into view when the active tab changes', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'First Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-2', title: 'Second Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-3', title: 'Third Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-4', title: 'Fourth Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-5', title: 'New Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+    scrollIntoViewMock.mockClear()
+
+    await act(async () => {
+      useTabStore.getState().setActiveTab('tab-5')
+    })
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({
+      block: 'nearest',
+      inline: 'nearest',
+      behavior: 'smooth',
+    })
   })
 
   it('keeps the overflow button flush against window controls on Windows', async () => {

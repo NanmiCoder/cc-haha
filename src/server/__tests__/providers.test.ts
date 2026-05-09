@@ -94,6 +94,38 @@ describe('ProviderService', () => {
       expect(result).toEqual({ providers: [], activeId: null })
     })
 
+    test('should recover from a malformed providers index after an upgrade', async () => {
+      await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+      await fs.writeFile(path.join(tmpDir, 'cc-haha', 'providers.json'), '{not json', 'utf-8')
+
+      const svc = new ProviderService()
+      const result = await svc.listProviders()
+      const files = await fs.readdir(path.join(tmpDir, 'cc-haha'))
+
+      expect(result).toEqual({ providers: [], activeId: null })
+      expect(files.some((name) => name.startsWith('providers.json.invalid-'))).toBe(true)
+    })
+
+    test('should normalize a legacy activeProviderId field', async () => {
+      await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+      const provider = {
+        id: 'legacy-provider',
+        ...sampleInput({ name: 'Legacy Provider' }),
+      }
+      await fs.writeFile(
+        path.join(tmpDir, 'cc-haha', 'providers.json'),
+        JSON.stringify({ activeProviderId: provider.id, providers: [provider] }),
+        'utf-8',
+      )
+
+      const svc = new ProviderService()
+      const result = await svc.listProviders()
+
+      expect(result.activeId).toBe(provider.id)
+      expect(result.providers).toHaveLength(1)
+      expect(result.providers[0].name).toBe('Legacy Provider')
+    })
+
     test('should return all added providers', async () => {
       const svc = new ProviderService()
       await svc.addProvider(sampleInput({ name: 'Provider A' }))
@@ -135,6 +167,33 @@ describe('ProviderService', () => {
       await svc.addProvider(sampleInput())
 
       await expect(fs.readFile(path.join(tmpDir, 'cc-haha', 'settings.json'), 'utf-8')).rejects.toThrow()
+    })
+
+    test('custom providers declare thinking and effort capability passthrough for user-defined models', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        models: {
+          main: 'deepseek-ai/DeepSeek-V4-Pro',
+          haiku: 'deepseek-ai/DeepSeek-V4-Pro',
+          sonnet: 'deepseek-ai/DeepSeek-V4-Pro',
+          opus: 'deepseek-ai/DeepSeek-V4-Pro',
+        },
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('deepseek-ai/DeepSeek-V4-Pro')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
     })
 
     test('adding additional providers should keep activeId unchanged', async () => {
@@ -246,7 +305,7 @@ describe('ProviderService', () => {
       const env = settings.env as Record<string, string>
       expect(env.ANTHROPIC_BASE_URL).toBe('https://new-api.example.com')
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-new-key')
-      expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(env.ANTHROPIC_API_KEY).toBe('')
       expect(env.ANTHROPIC_MODEL).toBe('model-main')
     })
 
@@ -386,7 +445,7 @@ describe('ProviderService', () => {
       const env = settings.env as Record<string, string>
       expect(env.ANTHROPIC_BASE_URL).toBe('https://second-api.example.com')
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-second-key')
-      expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(env.ANTHROPIC_API_KEY).toBe('')
       expect(env.ANTHROPIC_MODEL).toBe('model-main')
       expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('model-haiku')
       expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('model-sonnet')
@@ -563,6 +622,23 @@ describe('ProviderService', () => {
       const env = settings.env as Record<string, string>
       expect(env.CUSTOM_VAR).toBe('keep-me')
       expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com')
+    })
+
+    test('should recover malformed managed settings before activation sync', async () => {
+      await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+      await fs.writeFile(path.join(tmpDir, 'cc-haha', 'settings.json'), '{not json', 'utf-8')
+
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput())
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      const files = await fs.readdir(path.join(tmpDir, 'cc-haha'))
+
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com')
+      expect(files.some((name) => name.startsWith('settings.json.invalid-'))).toBe(true)
     })
 
     test('should throw 404 for non-existent provider id', async () => {
@@ -887,7 +963,7 @@ describe('Providers API', () => {
     const env = settings.env as Record<string, string>
     expect(env.ANTHROPIC_BASE_URL).toBe('https://second.example.com')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-second')
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBe('')
     expect(env.ANTHROPIC_MODEL).toBe('model-main')
   })
 

@@ -19,7 +19,7 @@ describe('evaluateChangePolicy', () => {
   test('allows CLI core changes with a maintainer override label', () => {
     const result = evaluateChangePolicy(
       ['src/tools/WebSearchTool/backend.ts'],
-      ['allow-cli-core-change'],
+      ['allow-cli-core-change', 'allow-missing-tests'],
     )
 
     expect(result.blocked).toBe(false)
@@ -36,6 +36,7 @@ describe('evaluateChangePolicy', () => {
     expect(result.blocked).toBe(false)
     expect(result.areas).toEqual(['docs'])
     expect(result.checks.docs).toBe(true)
+    expect(result.checks.coverage).toBe(false)
     expect(result.checks.desktop).toBe(false)
     expect(result.checks.desktopNative).toBe(false)
   })
@@ -50,6 +51,9 @@ describe('evaluateChangePolicy', () => {
     expect(result.checks.desktop).toBe(true)
     expect(result.checks.server).toBe(true)
     expect(result.checks.desktopNative).toBe(true)
+    expect(result.checks.coverage).toBe(true)
+    expect(result.missingTestSignals).toContain('Desktop product files changed without a desktop test file in the PR.')
+    expect(result.missingTestSignals).toContain('Server product files changed without a server test file in the PR.')
   })
 
   test('routes adapter changes to adapter and native checks', () => {
@@ -58,5 +62,55 @@ describe('evaluateChangePolicy', () => {
     expect(result.areas).toEqual(['adapters'])
     expect(result.checks.adapters).toBe(true)
     expect(result.checks.desktopNative).toBe(true)
+    expect(result.checks.coverage).toBe(true)
+    expect(result.blocked).toBe(true)
+    expect(result.missingTestSignals).toEqual(['Adapter product files changed without an adapter test file in the PR.'])
+  })
+
+  test('allows production changes when matching tests are included', () => {
+    const result = evaluateChangePolicy([
+      'desktop/src/pages/Settings.tsx',
+      'desktop/src/pages/Settings.test.tsx',
+    ])
+
+    expect(result.blocked).toBe(false)
+    expect(result.missingTestSignals).toEqual([])
+  })
+
+  test('blocks coverage baseline and threshold changes without maintainer override', () => {
+    const result = evaluateChangePolicy([
+      'scripts/quality-gate/coverage-baseline.json',
+      'scripts/quality-gate/coverage-thresholds.json',
+    ])
+
+    expect(result.blocked).toBe(true)
+    expect(result.coveragePolicyFiles).toEqual([
+      'scripts/quality-gate/coverage-baseline.json',
+      'scripts/quality-gate/coverage-thresholds.json',
+    ])
+    expect(result.blockingReasons).toContain('Coverage baseline or threshold changes require the allow-coverage-baseline-change label and maintainer approval.')
+  })
+
+  test('allows coverage baseline changes with maintainer override', () => {
+    const result = evaluateChangePolicy(
+      ['scripts/quality-gate/coverage-baseline.json'],
+      ['allow-coverage-baseline-change'],
+    )
+
+    expect(result.blocked).toBe(false)
+  })
+
+  test('normalizes relative and windows-style paths before classification', () => {
+    const result = evaluateChangePolicy([
+      './desktop\\src\\pages\\Settings.tsx',
+      './desktop\\src\\pages\\Settings.test.tsx',
+      './scripts\\quality-gate\\coverage.ts',
+    ])
+
+    expect(result.files).toContain('desktop/src/pages/Settings.tsx')
+    expect(result.files).toContain('scripts/quality-gate/coverage.ts')
+    expect(result.areas).toContain('desktop')
+    expect(result.checks.coverage).toBe(true)
+    expect(result.blocked).toBe(false)
   })
 })

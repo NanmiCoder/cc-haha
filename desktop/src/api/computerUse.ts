@@ -46,6 +46,7 @@ export type AuthorizedApp = {
 }
 
 export type ComputerUseConfig = {
+  enabled: boolean
   authorizedApps: AuthorizedApp[]
   grantFlags: {
     clipboardRead: boolean

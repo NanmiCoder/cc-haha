@@ -51,6 +51,7 @@ export const SavedProviderSchema = z.object({
 })
 
 export const ProvidersIndexSchema = z.object({
+  schemaVersion: z.number().int().positive().optional(),
   activeId: z.string().nullable(),
   providers: z.array(SavedProviderSchema),
 })

@@ -14,5 +14,15 @@ export default defineConfig({
     globals: true,
     css: true,
     setupFiles: [],
+    coverage: {
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.test.{ts,tsx}',
+        'src/**/*.d.ts',
+        'src/types/**',
+        'src/mocks/**',
+        'src/vite-env.d.ts',
+      ],
+    },
   },
 })

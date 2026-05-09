@@ -106,4 +106,78 @@ describe('cliTaskStore', () => {
 
     expect(useCLITaskStore.getState().resetting).toBe(false)
   })
+
+  it('refreshes tasks for the currently tracked session by default', async () => {
+    vi.mocked(cliTasksApi.getTasksForList).mockResolvedValue({
+      tasks: [makeTask('session-1', 'in_progress')],
+    })
+
+    useCLITaskStore.setState({
+      sessionId: 'session-1',
+      tasks: [],
+      expanded: false,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+
+    await useCLITaskStore.getState().refreshTasks()
+
+    expect(cliTasksApi.getTasksForList).toHaveBeenCalledWith('session-1')
+    expect(useCLITaskStore.getState().tasks).toMatchObject([
+      { taskListId: 'session-1', status: 'in_progress' },
+    ])
+  })
+
+  it('marks completed tasks dismissed for the currently tracked session by default', () => {
+    useCLITaskStore.setState({
+      sessionId: 'session-1',
+      tasks: [makeTask('session-1', 'completed')],
+      expanded: true,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+
+    useCLITaskStore.getState().markCompletedAndDismissed()
+
+    expect(useCLITaskStore.getState()).toMatchObject({
+      completedAndDismissed: true,
+      dismissedCompletionKey: 'session-1::1::Keep current session isolated::completed::::',
+      expanded: false,
+    })
+  })
+
+  it('ignores TodoWrite updates for a session that is not currently tracked', () => {
+    useCLITaskStore.setState({
+      sessionId: 'session-1',
+      tasks: [makeTask('session-1', 'in_progress')],
+      expanded: true,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+
+    useCLITaskStore.getState().setTasksFromTodos([
+      { content: 'Session 2 task', status: 'completed' },
+    ], 'session-2')
+
+    expect(useCLITaskStore.getState().tasks).toMatchObject([
+      { taskListId: 'session-1', subject: 'Keep current session isolated' },
+    ])
+  })
+
+  it('does not reset completed tasks for a different session', async () => {
+    useCLITaskStore.setState({
+      sessionId: 'session-1',
+      tasks: [makeTask('session-1', 'completed')],
+      expanded: true,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+
+    await useCLITaskStore.getState().resetCompletedTasks('session-2')
+
+    expect(vi.mocked(cliTasksApi.resetTaskList)).not.toHaveBeenCalled()
+    expect(useCLITaskStore.getState().tasks).toMatchObject([
+      { taskListId: 'session-1', status: 'completed' },
+    ])
+  })
 })

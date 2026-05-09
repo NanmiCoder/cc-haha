@@ -11,6 +11,7 @@ export const PANEL_SLASH_COMMANDS = [
 
 export const SETTINGS_SLASH_COMMANDS = [
   { name: 'plugin', description: 'Open desktop plugin controls in Settings', tab: 'plugins' as const },
+  { name: 'doctor', description: 'Open Doctor in Diagnostics', tab: 'diagnostics' as const },
 ] as const
 
 export const SLASH_COMMAND_ALIASES = [
@@ -28,7 +29,6 @@ export const FALLBACK_SLASH_COMMANDS = [
   { name: 'init', description: 'Initialize project CLAUDE.md' },
   { name: 'bug', description: 'Report a bug' },
   { name: 'config', description: 'Open configuration' },
-  { name: 'doctor', description: 'Diagnose installation issues' },
   { name: 'login', description: 'Switch Anthropic accounts' },
   { name: 'logout', description: 'Sign out of current account' },
   { name: 'memory', description: 'Edit CLAUDE.md memory files' },

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,6 +31,7 @@ import { useTabStore } from '../../stores/tabStore'
 
 describe('ContentRouter terminal tabs', () => {
   afterEach(() => {
+    cleanup()
     useTabStore.setState({ tabs: [], activeTabId: null })
   })
 

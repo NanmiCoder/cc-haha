@@ -53,6 +53,7 @@ const sessionTitleState = new Map<string, {
   hasCustomTitle: boolean
   firstUserMessage: string
   allUserMessages: string[]
+  startedGenerationCounts: Set<number>
 }>()
 
 const runtimeOverrides = new Map<string, {
@@ -67,6 +68,22 @@ const prewarmPendingSessions = new Set<string>()
 const prewarmedSessions = new Set<string>()
 const prewarmIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const DEFAULT_PREWARM_IDLE_TIMEOUT_MS = 5 * 60_000
+
+async function sendRepositoryStartupStatus(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  reason: 'user_message' | 'prewarm_session',
+): Promise<void> {
+  if (reason !== 'user_message') return
+
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+  const repository = launchInfo?.repository
+  if (!repository) return
+
+  if (repository.worktree) {
+    sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Creating worktree' })
+  }
+}
 
 export function getSlashCommands(sessionId: string): Array<{ name: string; description: string }> {
   return sessionSlashCommands.get(sessionId) || []
@@ -163,7 +180,7 @@ export const handleWebSocket = {
           break
 
         case 'prewarm_session':
-          handlePrewarmSession(ws)
+          void handlePrewarmSession(ws)
           break
 
         case 'stop_generation':
@@ -192,6 +209,10 @@ export const handleWebSocket = {
     }
 
     console.log(`[WS] Client disconnected from session: ${sessionId} (${code}: ${reason})`)
+    if (activeSessions.get(sessionId) !== ws) {
+      console.log(`[WS] Ignoring stale client disconnect for session: ${sessionId}`)
+      return
+    }
     computerUseApprovalService.cancelSession(sessionId)
     activeSessions.delete(sessionId)
     conversationService.clearOutputCallbacks(sessionId)
@@ -247,29 +268,30 @@ async function handleUserMessage(
   // Send thinking status
   sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
 
-  const pendingRuntimeTransition = runtimeTransitionPromises.get(sessionId)
-  if (pendingRuntimeTransition) {
-    try {
-      await pendingRuntimeTransition
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      void diagnosticsService.recordEvent({
-        type: 'runtime_transition_failed',
-        severity: 'error',
-        sessionId,
-        summary: errMsg,
-        details: err,
-      })
-      console.error(`[WS] Runtime transition failed before handling user message for ${sessionId}: ${errMsg}`)
-      sendMessage(ws, {
-        type: 'error',
-        message: `Failed to switch provider/model: ${errMsg}`,
-        code: 'CLI_RESTART_FAILED',
-      })
-      sendMessage(ws, { type: 'status', state: 'idle' })
-      return
-    }
+  const initialRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
+  if (!initialRuntimeTransition.ok) return
+  if (initialRuntimeTransition.waited) {
+    sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
   }
+
+  // Track and emit the first placeholder title before CLI startup/streaming.
+  let titleState = sessionTitleState.get(sessionId)
+  if (!titleState) {
+    titleState = {
+      userMessageCount: 0,
+      hasCustomTitle: !!(await sessionService.getCustomTitle(sessionId)),
+      firstUserMessage: '',
+      allUserMessages: [],
+      startedGenerationCounts: new Set<number>(),
+    }
+    sessionTitleState.set(sessionId, titleState)
+  }
+  titleState.userMessageCount++
+  titleState.allUserMessages.push(message.content)
+  if (titleState.userMessageCount === 1) {
+    titleState.firstUserMessage = message.content
+  }
+  triggerTitleGeneration(ws, sessionId)
 
   // 启动 CLI 子进程（如果还没有）
   try {
@@ -290,21 +312,13 @@ async function handleUserMessage(
     return
   }
 
-  // Track user message for title generation
-  let titleState = sessionTitleState.get(sessionId)
-  if (!titleState) {
-    titleState = {
-      userMessageCount: 0,
-      hasCustomTitle: !!(await sessionService.getCustomTitle(sessionId)),
-      firstUserMessage: '',
-      allUserMessages: [],
+  const startupRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
+  if (startupRuntimeTransition.ok) {
+    if (startupRuntimeTransition.waited) {
+      sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
     }
-    sessionTitleState.set(sessionId, titleState)
-  }
-  titleState.userMessageCount++
-  titleState.allUserMessages.push(message.content)
-  if (titleState.userMessageCount === 1) {
-    titleState.firstUserMessage = message.content
+  } else {
+    return
   }
 
   // Register the callback before sending the turn so startup errors are not lost.
@@ -370,9 +384,15 @@ async function handleDesktopClearCommand(
   })
 }
 
-function handlePrewarmSession(ws: ServerWebSocket<WebSocketData>) {
+async function handlePrewarmSession(ws: ServerWebSocket<WebSocketData>) {
   const { sessionId } = ws.data
   if (conversationService.hasSession(sessionId) || sessionStartupPromises.has(sessionId)) {
+    return
+  }
+
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+  if (launchInfo?.repository) {
+    console.log(`[WS] Skipping prewarm for pending repository launch session ${sessionId}`)
     return
   }
 
@@ -440,7 +460,9 @@ function handleSetPermissionMode(
     (message.mode === 'bypassPermissions' || conversationService.getSessionPermissionMode(sessionId) === 'bypassPermissions')
 
   if (needsRestart) {
-    void restartSessionWithPermissionMode(ws, sessionId, message.mode)
+    void enqueueRuntimeTransition(sessionId, () =>
+      restartSessionWithPermissionMode(ws, sessionId, message.mode),
+    )
     return
   }
 
@@ -510,8 +532,6 @@ async function restartSessionWithPermissionMode(
   mode: string,
 ): Promise<void> {
   try {
-    sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Restarting session with new permissions...' })
-
     // Persist the new mode first so it's read on restart
     await settingsService.setPermissionMode(mode)
 
@@ -554,12 +574,6 @@ async function restartSessionWithRuntimeConfig(
   sessionId: string,
 ): Promise<void> {
   try {
-    sendMessage(ws, {
-      type: 'status',
-      state: 'thinking',
-      verb: 'Switching provider and model...',
-    })
-
     const workDir = conversationService.getSessionWorkDir(sessionId)
     conversationService.stopSession(sessionId)
 
@@ -627,6 +641,8 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
 
   // Generate on count 1 (first response) and count 3 (with more context)
   if (count !== 1 && count !== 3) return
+  if (state.startedGenerationCounts.has(count)) return
+  state.startedGenerationCounts.add(count)
 
   const text = count === 1
     ? state.firstUserMessage
@@ -758,6 +774,15 @@ function markPrewarmed(sessionId: string) {
 
 function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
   if (cliMsg?.type !== 'system' || cliMsg.subtype !== 'init') return
+  if (typeof cliMsg.cwd === 'string' && cliMsg.cwd.trim()) {
+    conversationService.updateSessionWorkDir(sessionId, cliMsg.cwd)
+    void (async () => {
+      await sessionService.appendSessionMetadata(sessionId, {
+        workDir: cliMsg.cwd,
+      })
+      await sessionService.deletePlaceholderSessionFiles(sessionId, cliMsg.cwd)
+    })()
+  }
   if (cliMsg.slash_commands && Array.isArray(cliMsg.slash_commands)) {
     sessionSlashCommands.set(sessionId, cliMsg.slash_commands.map((cmd: any) => ({
       name: typeof cmd === 'string' ? cmd : (cmd.name || cmd.command || ''),
@@ -843,6 +868,7 @@ async function ensureCliSessionStarted(
     const sdkUrl =
       `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
       `?token=${encodeURIComponent(crypto.randomUUID())}`
+    await sendRepositoryStartupStatus(ws, sessionId, reason)
     console.log(`[WS] Starting CLI for ${sessionId} due to ${reason}`)
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
   })()
@@ -1480,6 +1506,45 @@ function enqueueRuntimeTransition(
   return next
 }
 
+async function waitForRuntimeTransitionBeforeUserTurn(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+): Promise<{ ok: boolean; waited: boolean }> {
+  let waited = false
+  let pendingRuntimeTransition = runtimeTransitionPromises.get(sessionId)
+  while (pendingRuntimeTransition) {
+    waited = true
+    try {
+      await pendingRuntimeTransition
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      void diagnosticsService.recordEvent({
+        type: 'runtime_transition_failed',
+        severity: 'error',
+        sessionId,
+        summary: errMsg,
+        details: err,
+      })
+      console.error(`[WS] Runtime transition failed before handling user message for ${sessionId}: ${errMsg}`)
+      sendMessage(ws, {
+        type: 'error',
+        message: `Failed to switch provider/model: ${errMsg}`,
+        code: 'CLI_RESTART_FAILED',
+      })
+      sendMessage(ws, { type: 'status', state: 'idle' })
+      return { ok: false, waited }
+    }
+
+    const nextTransition = runtimeTransitionPromises.get(sessionId)
+    pendingRuntimeTransition =
+      nextTransition && nextTransition !== pendingRuntimeTransition
+        ? nextTransition
+        : undefined
+  }
+
+  return { ok: true, waited }
+}
+
 /**
  * Send a message to a specific session's WebSocket (for use by services)
  */
@@ -1490,6 +1555,32 @@ export function sendToSession(sessionId: string, message: ServerMessage): boolea
   return true
 }
 
+export function closeSessionConnection(sessionId: string, reason = 'session closed'): boolean {
+  const cleanupTimer = sessionCleanupTimers.get(sessionId)
+  if (cleanupTimer) {
+    clearTimeout(cleanupTimer)
+    sessionCleanupTimers.delete(sessionId)
+  }
+  computerUseApprovalService.cancelSession(sessionId)
+  conversationService.clearOutputCallbacks(sessionId)
+  cleanupSessionRuntimeState(sessionId)
+
+  const ws = activeSessions.get(sessionId)
+  if (!ws) return false
+
+  activeSessions.delete(sessionId)
+  ws.close(1000, reason)
+  return true
+}
+
 export function getActiveSessionIds(): string[] {
   return Array.from(activeSessions.keys())
+}
+
+export function __resetWebSocketHandlerStateForTests(): void {
+  for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
+  for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
+  activeSessions.clear()
+  sessionCleanupTimers.clear()
+  prewarmIdleTimers.clear()
 }

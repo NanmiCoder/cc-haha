@@ -11,10 +11,23 @@ import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 
 export function areExplorePlanAgentsEnabled(): boolean {
+  if (process.env.USER_TYPE !== 'ant') {
+    return true
+  }
+
   if (feature('BUILTIN_EXPLORE_PLAN_AGENTS')) {
-    // 3P default: true — Bedrock/Vertex keep agents enabled (matches pre-experiment
-    // external behavior). A/B test treatment sets false to measure impact of removal.
     return getFeatureValue_CACHED_MAY_BE_STALE('tengu_amber_stoat', true)
+  }
+  return false
+}
+
+function isVerificationAgentEnabled(): boolean {
+  if (process.env.USER_TYPE !== 'ant') {
+    return true
+  }
+
+  if (feature('VERIFICATION_AGENT')) {
+    return getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
   }
   return false
 }
@@ -61,10 +74,7 @@ export function getBuiltInAgents(): AgentDefinition[] {
     agents.push(CLAUDE_CODE_GUIDE_AGENT)
   }
 
-  if (
-    feature('VERIFICATION_AGENT') &&
-    getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
-  ) {
+  if (isVerificationAgentEnabled()) {
     agents.push(VERIFICATION_AGENT)
   }
 

@@ -2,16 +2,43 @@ type Props = {
   workDir?: string | null
   repoName?: string | null
   branch?: string | null
+  sourceWorkDir?: string | null
+  isWorktree?: boolean
+  worktreeSlug?: string | null
+  worktreePath?: string | null
   compact?: boolean
 }
 
-export function ProjectContextChip({ workDir, repoName, branch, compact = false }: Props) {
-  const label = branch ? (repoName || workDir?.split('/').pop() || '') : (workDir?.split('/').pop() || repoName || '')
+function basename(path: string | null | undefined): string {
+  return path?.split('/').filter(Boolean).pop() || ''
+}
+
+export function ProjectContextChip({
+  workDir,
+  repoName,
+  branch,
+  sourceWorkDir,
+  isWorktree = false,
+  worktreeSlug,
+  worktreePath,
+  compact = false,
+}: Props) {
+  const labelRoot = isWorktree ? (sourceWorkDir || workDir) : workDir
+  const label = branch ? (repoName || basename(labelRoot)) : (basename(labelRoot) || repoName || '')
+  const worktreeName = worktreeSlug || basename(worktreePath) || 'isolated'
+  const title = [
+    label,
+    branch ? `branch: ${branch}` : null,
+    isWorktree ? `worktree: ${worktreeName}` : null,
+    worktreePath ? `worktree cwd: ${worktreePath}` : null,
+    workDir ? `cwd: ${workDir}` : null,
+  ].filter(Boolean).join('\n')
 
   if (!label) return null
 
   return (
     <div
+      title={title}
       className={`inline-flex max-w-full items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)] ${
         compact ? 'gap-1.5 px-3 py-1.5 text-xs' : 'gap-2 px-4 py-2 text-sm'
       }`}
@@ -28,6 +55,15 @@ export function ProjectContextChip({ workDir, repoName, branch, compact = false 
         <>
           <span className="text-[var(--color-text-tertiary)]">|</span>
           <span className="truncate">{branch}</span>
+        </>
+      ) : null}
+      {isWorktree ? (
+        <>
+          <span className="text-[var(--color-text-tertiary)]">|</span>
+          <span className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-[var(--color-text-tertiary)]">
+            worktree
+          </span>
+          <span className="max-w-[12rem] truncate">{worktreeName}</span>
         </>
       ) : null}
     </div>

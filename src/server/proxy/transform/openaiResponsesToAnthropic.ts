@@ -10,6 +10,7 @@ import type {
   AnthropicResponse,
   AnthropicContentBlock,
 } from './types.js'
+import { parseOpenAIToolArguments } from './toolArguments.js'
 
 /**
  * Convert OpenAI Responses API response to Anthropic Messages response.
@@ -56,17 +57,11 @@ function convertOutputItem(item: OpenAIResponsesOutputItem, content: AnthropicCo
       break
     }
     case 'function_call': {
-      let input: Record<string, unknown> = {}
-      try {
-        input = JSON.parse(item.arguments)
-      } catch {
-        input = { raw: item.arguments }
-      }
       content.push({
         type: 'tool_use',
         id: item.call_id,
         name: item.name,
-        input,
+        input: parseOpenAIToolArguments(item.arguments),
       })
       break
     }

@@ -2,6 +2,7 @@ import { Copy, RefreshCw } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from '../../i18n'
 import { Button } from '../shared/Button'
+import { DoctorPanel } from '../doctor/DoctorPanel'
 
 const LOG_MARKER = '\n\nRecent server logs:\n'
 
@@ -92,6 +93,8 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
               {t('common.retry')}
             </Button>
           </div>
+
+          <DoctorPanel compact />
         </div>
       </section>
     </div>

@@ -94,6 +94,21 @@ export function TabBar() {
   }, [updateScrollState, tabs.length])
 
   useEffect(() => {
+    if (!activeTabId) return
+    const activeTabEl = tabRefs.current.get(activeTabId)
+    if (!activeTabEl) return
+
+    activeTabEl.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+      behavior: 'smooth',
+    })
+
+    const frame = window.requestAnimationFrame(updateScrollState)
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeTabId, tabs.length, updateScrollState])
+
+  useEffect(() => {
     if (!contextMenu) return
     const close = () => setContextMenu(null)
     document.addEventListener('click', close)

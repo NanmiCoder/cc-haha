@@ -189,6 +189,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       totalBytes: null,
     }))
 
+    let prepareInstallAttempted = false
     try {
       writeDismissedUpdateVersion(null)
       const { invoke } = await import('@tauri-apps/api/core')
@@ -227,6 +228,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
         }
       })
 
+      prepareInstallAttempted = true
       await invoke('prepare_for_update_install')
       await update.install()
 
@@ -238,6 +240,14 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
       await relaunch()
     } catch (error) {
+      if (prepareInstallAttempted) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('cancel_update_install')
+        } catch {
+          // Best effort: keep the update prompt recoverable even if native reset fails.
+        }
+      }
       set((state) => ({
         ...state,
         status: 'available',

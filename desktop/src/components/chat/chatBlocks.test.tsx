@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { PermissionDialog } from './PermissionDialog'
@@ -98,7 +98,7 @@ describe('chat blocks', () => {
     expect(container.textContent).toContain('allowed applications')
   })
 
-  it('shows a diff preview for edit permission requests', () => {
+  it('shows a diff preview for edit permission requests', async () => {
     useChatStore.setState({
       sessions: {
         'active-tab': {
@@ -130,17 +130,21 @@ describe('chat blocks', () => {
       },
     })
 
-    const { container } = render(
-      <PermissionDialog
-        requestId="perm-1"
-        toolName="Edit"
-        input={{
-          file_path: '/tmp/example.ts',
-          old_string: 'const count = 1',
-          new_string: 'const count = 2',
-        }}
-      />,
-    )
+    let container!: HTMLElement
+    await act(async () => {
+      container = render(
+        <PermissionDialog
+          requestId="perm-1"
+          toolName="Edit"
+          input={{
+            file_path: '/tmp/example.ts',
+            old_string: 'const count = 1',
+            new_string: 'const count = 2',
+          }}
+        />,
+      ).container
+      await Promise.resolve()
+    })
 
     expect(container.textContent).toContain('/tmp/example.ts')
     expect(container.textContent).toContain('Allow')

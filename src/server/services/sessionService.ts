@@ -19,6 +19,11 @@ import {
   getModelMaxOutputTokens,
 } from '../../utils/context.js'
 import { getCanonicalName } from '../../utils/model/model.js'
+import {
+  resolveSessionWorkspaceLaunch,
+  type CreateSessionRepositoryOptions,
+  type PreparedSessionWorkspace,
+} from './repositoryLaunchService.js'
 
 // ============================================================================
 // Types
@@ -43,6 +48,8 @@ export type SessionLaunchInfo = {
   filePath: string
   projectDir: string
   workDir: string
+  repository?: PreparedSessionWorkspace['repository']
+  worktreeSession?: PersistedWorktreeSession | null
   transcriptMessageCount: number
   customTitle: string | null
 }
@@ -172,8 +179,21 @@ type RawEntry = {
     timestamp?: string
   }
   customTitle?: string
+  worktreeSession?: PersistedWorktreeSession | null
   title?: string
   [key: string]: unknown
+}
+
+type PersistedWorktreeSession = {
+  originalCwd: string
+  worktreePath: string
+  worktreeName: string
+  worktreeBranch?: string
+  originalBranch?: string
+  originalHeadCommit?: string
+  sessionId: string
+  tmuxSessionName?: string
+  hookBased?: boolean
 }
 
 type ContentBlock = Record<string, unknown>
@@ -249,7 +269,8 @@ export class SessionService {
     entries: RawEntry[],
     fallbackProjectDir?: string,
   ): string | null {
-    for (const entry of entries) {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
       if (entry.type === 'session-meta' && typeof (entry as Record<string, unknown>).workDir === 'string') {
         return (entry as Record<string, unknown>).workDir as string
       }
@@ -263,6 +284,43 @@ export class SessionService {
     }
 
     return fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null
+  }
+
+  private resolveRepositoryFromEntries(entries: RawEntry[]): PreparedSessionWorkspace['repository'] | undefined {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const repository = (entries[i] as Record<string, unknown>)?.repository
+      if (repository && typeof repository === 'object') {
+        return repository as PreparedSessionWorkspace['repository']
+      }
+    }
+    return undefined
+  }
+
+  private resolveWorktreeSessionFromEntries(entries: RawEntry[]): PersistedWorktreeSession | null | undefined {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
+      if (entry?.type !== 'worktree-state') continue
+
+      const worktreeSession = entry.worktreeSession
+      if (worktreeSession === null) return null
+      if (
+        worktreeSession &&
+        typeof worktreeSession === 'object' &&
+        typeof worktreeSession.worktreePath === 'string' &&
+        typeof worktreeSession.worktreeName === 'string'
+      ) {
+        return worktreeSession
+      }
+    }
+    return undefined
+  }
+
+  private countTranscriptMessages(entries: RawEntry[]): number {
+    return entries.filter((entry) =>
+      !entry.isMeta &&
+      !!entry.message?.role &&
+      (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+    ).length
   }
 
   // --------------------------------------------------------------------------
@@ -778,12 +836,11 @@ export class SessionService {
    * Find the .jsonl file for a given session ID.
    * Searches across all project directories since sessions may belong to any project.
    */
-  async findSessionFile(
+  private async findSessionFiles(
     sessionId: string
-  ): Promise<{ filePath: string; projectDir: string } | null> {
-    // Validate sessionId format to prevent path traversal
+  ): Promise<Array<{ filePath: string; projectDir: string }>> {
     if (!this.isValidSessionId(sessionId)) {
-      return null
+      return []
     }
 
     const projectsDir = this.getProjectsDir()
@@ -792,20 +849,27 @@ export class SessionService {
     try {
       projectDirs = await fs.readdir(projectsDir)
     } catch {
-      return null
+      return []
     }
 
+    const matches: Array<{ filePath: string; projectDir: string }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
         await fs.access(filePath)
-        return { filePath, projectDir: dir }
+        matches.push({ filePath, projectDir: dir })
       } catch {
         continue
       }
     }
 
-    return null
+    return matches
+  }
+
+  async findSessionFile(
+    sessionId: string
+  ): Promise<{ filePath: string; projectDir: string } | null> {
+    return (await this.findSessionFiles(sessionId))[0] ?? null
   }
 
   private isValidSessionId(id: string): boolean {
@@ -1197,33 +1261,32 @@ export class SessionService {
   /**
    * Create a new session file for the given working directory.
    */
-  async createSession(workDir?: string): Promise<{ sessionId: string }> {
+  async createSession(
+    workDir?: string,
+    repositoryOptions?: CreateSessionRepositoryOptions,
+  ): Promise<{ sessionId: string; workDir: string }> {
     // Default to user home directory when no workDir specified
     const resolvedWorkDir = workDir || os.homedir()
+    const sessionId = crypto.randomUUID()
 
     // Resolve to absolute path. NOTE: path.resolve() uses process.cwd() to
     // expand relative paths — in bundled sidecar mode the server's cwd is
     // typically '/'. Callers (IM adapters) already send absolute realPath,
     // but we log here so cwd regressions are caught early.
-    const resolvedPath = path.resolve(resolvedWorkDir)
-    let absWorkDir: string
-    try {
-      absWorkDir = await fs.realpath(resolvedPath)
-    } catch {
-      throw ApiError.badRequest(`Working directory does not exist: ${resolvedPath}`)
-    }
+    const preparedWorkspace = await resolveSessionWorkspaceLaunch(
+      resolvedWorkDir,
+      repositoryOptions,
+      sessionId,
+    )
+    const absWorkDir = preparedWorkspace.workDir
     console.log(
       `[SessionService] createSession: requested workDir=${JSON.stringify(
         workDir,
-      )}, resolved=${absWorkDir} (process.cwd()=${process.cwd()})`,
+      )}, resolved=${absWorkDir}, repository=${JSON.stringify(
+        preparedWorkspace.repository ?? null,
+      )} (process.cwd()=${process.cwd()})`,
     )
-    let stat
-    stat = await fs.stat(absWorkDir)
-    if (!stat.isDirectory()) {
-      throw ApiError.badRequest(`Working directory is not a directory: ${absWorkDir}`)
-    }
 
-    const sessionId = crypto.randomUUID()
     const sanitized = this.sanitizePath(absWorkDir)
     const dirPath = path.join(this.getProjectsDir(), sanitized)
 
@@ -1250,12 +1313,13 @@ export class SessionService {
       type: 'session-meta',
       isMeta: true,
       workDir: absWorkDir,
+      repository: preparedWorkspace.repository,
       timestamp: now,
     }
 
     await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
 
-    return { sessionId }
+    return { sessionId, workDir: absWorkDir }
   }
 
   /**
@@ -1354,26 +1418,23 @@ export class SessionService {
 
     const entries = await this.readJsonlFile(found.filePath)
     const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || process.cwd()
+    const repository = this.resolveRepositoryFromEntries(entries)
+    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
     let customTitle: string | null = null
-    let transcriptMessageCount = 0
 
     for (const entry of entries) {
       if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
         customTitle = entry.customTitle
       }
-      if (
-        !entry.isMeta &&
-        entry.message?.role &&
-        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
-      ) {
-        transcriptMessageCount++
-      }
     }
+    const transcriptMessageCount = this.countTranscriptMessages(entries)
 
     return {
       filePath: found.filePath,
       projectDir: found.projectDir,
       workDir,
+      repository,
+      worktreeSession,
       transcriptMessageCount,
       customTitle,
     }
@@ -1403,6 +1464,7 @@ export class SessionService {
 
     const entries = await this.readJsonlFile(found.filePath)
     const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || fallbackWorkDir || process.cwd()
+    const repository = this.resolveRepositoryFromEntries(entries)
     const now = new Date().toISOString()
 
     const initialEntry = {
@@ -1420,6 +1482,7 @@ export class SessionService {
       type: 'session-meta',
       isMeta: true,
       workDir,
+      repository,
       timestamp: now,
     }
 
@@ -1432,25 +1495,77 @@ export class SessionService {
 
   async appendSessionMetadata(
     sessionId: string,
-    metadata: { workDir: string; customTitle?: string | null }
+    metadata: {
+      workDir: string
+      customTitle?: string | null
+      repository?: PreparedSessionWorkspace['repository']
+    }
   ): Promise<void> {
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return
+    const matches = await this.findSessionFiles(sessionId)
+    if (matches.length === 0) return
 
-    await this.appendJsonlEntry(found.filePath, {
+    let repository = metadata.repository
+    if (!repository) {
+      for (const match of matches) {
+        const candidate = this.resolveRepositoryFromEntries(await this.readJsonlFile(match.filePath))
+        if (candidate) {
+          repository = candidate
+          break
+        }
+      }
+    }
+
+    const targetProjectDir = this.sanitizePath(metadata.workDir)
+    const targetFilePath = path.join(this.getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
+    await fs.mkdir(path.dirname(targetFilePath), { recursive: true })
+
+    await this.appendJsonlEntry(targetFilePath, {
       type: 'session-meta',
       isMeta: true,
       workDir: metadata.workDir,
+      repository,
       timestamp: new Date().toISOString(),
     })
 
     if (metadata.customTitle) {
-      await this.appendJsonlEntry(found.filePath, {
+      await this.appendJsonlEntry(targetFilePath, {
         type: 'custom-title',
         customTitle: metadata.customTitle,
         timestamp: new Date().toISOString(),
       })
     }
+  }
+
+  async deletePlaceholderSessionFiles(
+    sessionId: string,
+    keepWorkDir: string,
+  ): Promise<number> {
+    if (!this.isValidSessionId(sessionId)) return 0
+
+    const projectsDir = this.getProjectsDir()
+    let projectDirs: import('node:fs').Dirent[]
+    try {
+      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw err
+    }
+
+    const keepProjectDir = this.sanitizePath(keepWorkDir)
+    let removed = 0
+    for (const projectDir of projectDirs) {
+      if (!projectDir.isDirectory()) continue
+      if (projectDir.name === keepProjectDir) continue
+      const filePath = path.join(projectsDir, projectDir.name, `${sessionId}.jsonl`)
+      const entries = await this.readJsonlFile(filePath)
+      if (entries.length === 0) continue
+
+      if (this.countTranscriptMessages(entries) > 0) continue
+
+      await fs.rm(filePath, { force: true })
+      removed += 1
+    }
+    return removed
   }
 
   async trimSessionMessagesFrom(

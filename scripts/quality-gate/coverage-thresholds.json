@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "minimums": {
+    "server-api": {
+      "lines": 68.53,
+      "functions": 79.99,
+      "branches": 0,
+      "statements": 68.53
+    },
+    "agent-tools": {
+      "lines": 17.1,
+      "functions": 17.25,
+      "branches": 0,
+      "statements": 17.1
+    },
+    "agent-utils": {
+      "lines": 14.42,
+      "functions": 12.08,
+      "branches": 0,
+      "statements": 14.42
+    },
+    "adapters": {
+      "lines": 75.94,
+      "functions": 83.35,
+      "branches": 0,
+      "statements": 75.94
+    },
+    "desktop": {
+      "lines": 67.23,
+      "functions": 52.49,
+      "branches": 72.86,
+      "statements": 67.23
+    }
+  },
+  "targets": {
+    "server-api": {
+      "lines": 75,
+      "functions": 80,
+      "statements": 75
+    },
+    "agent-tools": {
+      "lines": 60,
+      "functions": 60,
+      "statements": 60
+    },
+    "agent-utils": {
+      "lines": 60,
+      "functions": 60,
+      "statements": 60
+    },
+    "adapters": {
+      "lines": 80,
+      "functions": 85,
+      "statements": 80
+    },
+    "desktop": {
+      "lines": 75,
+      "functions": 70,
+      "branches": 75,
+      "statements": 75
+    }
+  },
+  "changedLines": {
+    "minimumPercent": 90
+  },
+  "ratchet": {
+    "baselinePath": "scripts/quality-gate/coverage-baseline.json",
+    "allowedDropPercent": 0.5
+  }
+}

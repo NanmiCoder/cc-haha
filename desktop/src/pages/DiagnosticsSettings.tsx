@@ -5,6 +5,7 @@ import { copyTextToClipboard } from '../components/chat/clipboard'
 import { useTranslation } from '../i18n'
 import { formatBytes } from '../lib/formatBytes'
 import { useUIStore } from '../stores/uiStore'
+import { DoctorPanel } from '../components/doctor/DoctorPanel'
 
 export function DiagnosticsSettings() {
   const t = useTranslation()
@@ -125,6 +126,10 @@ export function DiagnosticsSettings() {
         <Metric label={t('settings.diagnostics.events')} value={status ? String(status.eventCount) : '-'} />
         <Metric label={t('settings.diagnostics.recentErrors')} value={status ? String(status.recentErrorCount) : '-'} />
         <Metric label={t('settings.diagnostics.retention')} value={status ? t('settings.diagnostics.retentionValue', { days: String(status.retentionDays), size: formatBytes(status.maxBytes) }) : '-'} />
+      </div>
+
+      <div className="mb-5">
+        <DoctorPanel />
       </div>
 
       <div className="border border-[var(--color-border)] rounded-lg mb-5">

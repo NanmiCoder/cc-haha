@@ -31,6 +31,10 @@ use tauri_plugin_shell::{
 mod macos_notifications {
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_int};
+    use std::sync::{Mutex, OnceLock};
+
+    use serde::Serialize;
+    use tauri::{AppHandle, Emitter};
 
     const ERROR_BUFFER_LEN: usize = 1024;
 
@@ -46,10 +50,20 @@ mod macos_notifications {
         fn cchh_send_user_notification(
             title: *const c_char,
             body: *const c_char,
+            target: *const c_char,
             error_buffer: *mut c_char,
             error_buffer_len: usize,
         ) -> bool;
+        fn cchh_set_notification_response_callback(callback: Option<extern "C" fn(*const c_char)>);
     }
+
+    #[derive(Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct NotificationClickPayload {
+        target: Option<String>,
+    }
+
+    static NOTIFICATION_APP_HANDLE: OnceLock<Mutex<Option<AppHandle>>> = OnceLock::new();
 
     fn new_error_buffer() -> [c_char; ERROR_BUFFER_LEN] {
         [0; ERROR_BUFFER_LEN]
@@ -106,19 +120,63 @@ mod macos_notifications {
         permission_state()
     }
 
-    pub fn send_notification(title: String, body: Option<String>) -> Result<bool, String> {
+    extern "C" fn handle_notification_response(target: *const c_char) {
+        let target = if target.is_null() {
+            None
+        } else {
+            let value = unsafe { CStr::from_ptr(target) }
+                .to_string_lossy()
+                .trim()
+                .to_string();
+            (!value.is_empty()).then_some(value)
+        };
+
+        let Some(app) = NOTIFICATION_APP_HANDLE
+            .get()
+            .and_then(|handle| handle.lock().ok().and_then(|guard| guard.clone()))
+        else {
+            return;
+        };
+
+        super::show_main_window(&app);
+        let _ = app.emit(
+            "desktop-notification-clicked",
+            NotificationClickPayload { target },
+        );
+    }
+
+    pub fn install_click_handler(app: AppHandle) {
+        let handle = NOTIFICATION_APP_HANDLE.get_or_init(|| Mutex::new(None));
+        if let Ok(mut guard) = handle.lock() {
+            *guard = Some(app);
+        }
+        unsafe { cchh_set_notification_response_callback(Some(handle_notification_response)) };
+    }
+
+    pub fn send_notification(
+        title: String,
+        body: Option<String>,
+        target: Option<String>,
+    ) -> Result<bool, String> {
         let title = CString::new(title)
             .map_err(|_| "notification title contains an unsupported NUL byte".to_string())?;
         let body = body
             .map(CString::new)
             .transpose()
             .map_err(|_| "notification body contains an unsupported NUL byte".to_string())?;
+        let target = target
+            .map(CString::new)
+            .transpose()
+            .map_err(|_| "notification target contains an unsupported NUL byte".to_string())?;
 
         let mut error_buffer = new_error_buffer();
         let sent = unsafe {
             cchh_send_user_notification(
                 title.as_ptr(),
                 body.as_ref()
+                    .map_or(std::ptr::null(), |value| value.as_ptr()),
+                target
+                    .as_ref()
                     .map_or(std::ptr::null(), |value| value.as_ptr()),
                 error_buffer.as_mut_ptr(),
                 ERROR_BUFFER_LEN,
@@ -138,6 +196,8 @@ mod macos_notifications {
 
 #[cfg(not(target_os = "macos"))]
 mod macos_notifications {
+    use tauri::AppHandle;
+
     pub fn permission_state() -> Result<String, String> {
         Ok("unsupported".to_string())
     }
@@ -146,7 +206,13 @@ mod macos_notifications {
         Ok("unsupported".to_string())
     }
 
-    pub fn send_notification(_title: String, _body: Option<String>) -> Result<bool, String> {
+    pub fn install_click_handler(_app: AppHandle) {}
+
+    pub fn send_notification(
+        _title: String,
+        _body: Option<String>,
+        _target: Option<String>,
+    ) -> Result<bool, String> {
         Ok(false)
     }
 }
@@ -279,12 +345,26 @@ fn prepare_for_update_install(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn mark_app_quitting(app: &AppHandle) {
+#[tauri::command]
+fn cancel_update_install(app: AppHandle) -> Result<(), String> {
+    clear_app_quitting(&app);
+    Ok(())
+}
+
+fn set_app_quitting(app: &AppHandle, next: bool) {
     if let Some(state) = app.try_state::<AppExitState>() {
         if let Ok(mut is_quitting) = state.is_quitting.lock() {
-            *is_quitting = true;
+            *is_quitting = next;
         }
     }
+}
+
+fn mark_app_quitting(app: &AppHandle) {
+    set_app_quitting(app, true);
+}
+
+fn clear_app_quitting(app: &AppHandle) {
+    set_app_quitting(app, false);
 }
 
 fn should_hide_to_tray(app: &AppHandle, label: &str) -> bool {
@@ -731,18 +811,53 @@ fn terminal_kill(state: State<'_, TerminalState>, session_id: u32) -> Result<(),
 }
 
 #[tauri::command]
-fn macos_notification_permission_state() -> Result<String, String> {
-    macos_notifications::permission_state()
+async fn macos_notification_permission_state() -> Result<String, String> {
+    run_notification_bridge(macos_notifications::permission_state).await
 }
 
 #[tauri::command]
-fn macos_request_notification_permission() -> Result<String, String> {
-    macos_notifications::request_permission()
+async fn macos_request_notification_permission() -> Result<String, String> {
+    run_notification_bridge(macos_notifications::request_permission).await
 }
 
 #[tauri::command]
-fn macos_send_notification(title: String, body: Option<String>) -> Result<bool, String> {
-    macos_notifications::send_notification(title, body)
+async fn macos_send_notification(
+    title: String,
+    body: Option<String>,
+    target: Option<String>,
+) -> Result<bool, String> {
+    run_notification_bridge(move || macos_notifications::send_notification(title, body, target))
+        .await
+}
+
+#[tauri::command]
+fn open_windows_notification_settings() -> Result<bool, String> {
+    open_windows_notification_settings_impl()
+}
+
+#[cfg(target_os = "windows")]
+fn open_windows_notification_settings_impl() -> Result<bool, String> {
+    StdCommand::new("explorer.exe")
+        .arg("ms-settings:notifications")
+        .spawn()
+        .map_err(|err| format!("open Windows notification settings: {err}"))?;
+
+    Ok(true)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_windows_notification_settings_impl() -> Result<bool, String> {
+    Ok(false)
+}
+
+async fn run_notification_bridge<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|err| format!("notification bridge worker failed: {err}"))?
 }
 
 fn decode_terminal_output(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
@@ -1260,7 +1375,7 @@ mod tests {
     use super::{
         decode_terminal_output, default_utf8_locale, ensure_utf8_locale,
         has_meaningful_intersection, is_persistable_window_state, parse_env_block,
-        StoredWindowState,
+        run_notification_bridge, StoredWindowState,
     };
     use std::collections::HashMap;
 
@@ -1398,11 +1513,26 @@ mod tests {
         assert_eq!(env.get("LC_CTYPE").map(String::as_str), Some("en_US.UTF8"));
         assert_eq!(env.get("LC_ALL").map(String::as_str), Some("C.UTF-8"));
     }
+
+    #[test]
+    fn notification_bridge_runs_off_the_calling_thread() {
+        let caller_thread = std::thread::current().id();
+        let ran_on_worker = tauri::async_runtime::block_on(run_notification_bridge(move || {
+            Ok(std::thread::current().id() != caller_thread)
+        }))
+        .expect("notification bridge operation should complete");
+
+        assert!(ran_on_worker);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        // Keep this first so duplicate launches are stopped before sidecars start.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .manage(ServerState::default())
         .manage(AdapterState::default())
         .manage(TerminalState::default())
@@ -1416,13 +1546,15 @@ pub fn run() {
             get_server_url,
             restart_adapters_sidecar,
             prepare_for_update_install,
+            cancel_update_install,
             terminal_spawn,
             terminal_write,
             terminal_resize,
             terminal_kill,
             macos_notification_permission_state,
             macos_request_notification_permission,
-            macos_send_notification
+            macos_send_notification,
+            open_windows_notification_settings
         ]);
 
     // macOS: native menu bar (traffic-light overlay style)
@@ -1487,6 +1619,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             setup_system_tray(app)?;
+            macos_notifications::install_click_handler(app.handle().clone());
             restore_main_window_state(&app.handle());
 
             let state = app.state::<ServerState>();

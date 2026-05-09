@@ -49,8 +49,12 @@ export const useTabStore = create<TabStore>((set, get) => ({
     if (existing) {
       set({
         tabs: tabs.map((tab) =>
-          tab.sessionId === sessionId && !(tab as Partial<Tab>).type
-            ? { ...tab, type }
+          tab.sessionId === sessionId
+            ? {
+                ...tab,
+                title,
+                ...(!(tab as Partial<Tab>).type ? { type } : {}),
+              }
             : tab,
         ),
         activeTabId: sessionId,

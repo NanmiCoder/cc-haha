@@ -1,5 +1,6 @@
 import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useTranslation, type TranslationKey } from '../../i18n'
 
 function formatElapsed(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -8,7 +9,17 @@ function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`
 }
 
+function translateServerVerb(
+  t: (key: TranslationKey) => string,
+  verb: string,
+): string {
+  const key = `serverVerb.${verb}` as TranslationKey
+  const translated = t(key)
+  return translated === key ? verb : translated
+}
+
 export function StreamingIndicator() {
+  const t = useTranslation()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const chatState = sessionState?.chatState ?? 'idle'
@@ -17,9 +28,13 @@ export function StreamingIndicator() {
   const tokenUsage = sessionState?.tokenUsage ?? { input_tokens: 0, output_tokens: 0 }
   let verb: string
   if (statusVerb) {
-    verb = statusVerb
+    verb = translateServerVerb(t, statusVerb)
   } else {
-    verb = chatState === 'thinking' ? 'Thinking' : chatState === 'tool_executing' ? 'Running' : 'Working'
+    verb = chatState === 'thinking'
+      ? t('serverVerb.Thinking')
+      : chatState === 'tool_executing'
+        ? t('serverVerb.Running')
+        : t('serverVerb.Working')
   }
 
   return (

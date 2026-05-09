@@ -1,6 +1,7 @@
 import type { CoordinateMode, CuSubGates } from '../../vendor/computer-use-mcp/types.js'
 
 import { getDynamicConfig_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
+import { isEnvDefinedFalsy } from '../envUtils.js'
 
 type ChicagoConfig = CuSubGates & {
   enabled: boolean
@@ -32,6 +33,10 @@ function readConfig(): ChicagoConfig {
 }
 
 export function getChicagoEnabled(): boolean {
+  if (isEnvDefinedFalsy(process.env.CLAUDE_COMPUTER_USE_ENABLED)) {
+    return false
+  }
+
   return true
 }
 

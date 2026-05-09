@@ -8,6 +8,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
+import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { AGENT_LIFECYCLE_TYPES } from '../types/team'
 import type { MessageEntry } from '../types/session'
 import type { PermissionMode } from '../types/settings'
@@ -123,24 +124,60 @@ type ChatStore = {
 }
 
 const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TodoWrite'])
-const pendingTaskToolUseIds = new Set<string>()
+const pendingTaskToolUseIdsBySession = new Map<string, Set<string>>()
+
+function addPendingTaskToolUseId(sessionId: string, toolUseId: string): void {
+  const ids = pendingTaskToolUseIdsBySession.get(sessionId) ?? new Set<string>()
+  ids.add(toolUseId)
+  pendingTaskToolUseIdsBySession.set(sessionId, ids)
+}
+
+function consumePendingTaskToolUseId(sessionId: string, toolUseId: string): boolean {
+  const ids = pendingTaskToolUseIdsBySession.get(sessionId)
+  if (!ids?.has(toolUseId)) return false
+  ids.delete(toolUseId)
+  if (ids.size === 0) pendingTaskToolUseIdsBySession.delete(sessionId)
+  return true
+}
+
+function clearPendingTaskToolUseIds(sessionId: string): void {
+  pendingTaskToolUseIdsBySession.delete(sessionId)
+}
 const AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS = 160
 
 let msgCounter = 0
 const nextId = () => `msg-${++msgCounter}-${Date.now()}`
 
-// Streaming throttle for content_delta
-let pendingDelta = ''
-let flushTimer: ReturnType<typeof setTimeout> | null = null
+// Streaming throttle for content_delta. Buffers must be per-session because
+// multiple desktop tabs can stream at the same time.
+const pendingDeltaBySession = new Map<string, string>()
+const flushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
 
-function consumePendingDelta(): string {
+function consumePendingDelta(sessionId: string): string {
+  const flushTimer = flushTimerBySession.get(sessionId)
   if (flushTimer) {
     clearTimeout(flushTimer)
-    flushTimer = null
+    flushTimerBySession.delete(sessionId)
   }
-  const text = pendingDelta
-  pendingDelta = ''
+  const text = pendingDeltaBySession.get(sessionId) ?? ''
+  pendingDeltaBySession.delete(sessionId)
   return text
+}
+
+function appendPendingDelta(sessionId: string, text: string): void {
+  pendingDeltaBySession.set(
+    sessionId,
+    `${pendingDeltaBySession.get(sessionId) ?? ''}${text}`,
+  )
+}
+
+function clearPendingDelta(sessionId: string): void {
+  const flushTimer = flushTimerBySession.get(sessionId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimerBySession.delete(sessionId)
+  }
+  pendingDeltaBySession.delete(sessionId)
 }
 
 function appendAssistantTextMessage(
@@ -282,11 +319,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   disconnectSession: (sessionId) => {
     const session = get().sessions[sessionId]
     if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
-    if (pendingDelta) {
-      const text = consumePendingDelta()
+    if (pendingDeltaBySession.has(sessionId)) {
+      const text = consumePendingDelta(sessionId)
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
     }
+    clearPendingTaskToolUseIds(sessionId)
     wsManager.disconnect(sessionId)
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions
@@ -316,22 +353,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         : undefined
 
     const taskStore = useCLITaskStore.getState()
-    const allTasksDone = taskStore.tasks.length > 0 && taskStore.tasks.every((t) => t.status === 'completed')
+    const sessionTasks = taskStore.sessionId === sessionId ? taskStore.tasks : []
+    const allTasksDone = sessionTasks.length > 0 && sessionTasks.every((t) => t.status === 'completed')
     const completedTaskSummary = allTasksDone
-      ? taskStore.tasks.map((t) => ({ id: t.id, subject: t.subject, status: t.status, activeForm: t.activeForm }))
+      ? sessionTasks.map((t) => ({ id: t.id, subject: t.subject, status: t.status, activeForm: t.activeForm }))
       : []
 
     if (!isMemberSession && allTasksDone) {
-      void taskStore.resetCompletedTasks()
+      void taskStore.resetCompletedTasks(sessionId)
+    }
+
+    if (!isMemberSession) {
+      updateOptimisticSessionTitle(sessionId, userFacingContent)
     }
 
     set((s) => {
       const session = s.sessions[sessionId] ?? createDefaultSessionState()
-      if (flushTimer) {
-        clearTimeout(flushTimer)
-        flushTimer = null
-      }
-      const bufferedDelta = consumePendingDelta()
+      const bufferedDelta = consumePendingDelta(sessionId)
       const pendingAssistantText = `${session.streamingText}${bufferedDelta}`
 
       const newMessages = pendingAssistantText.trim()
@@ -444,9 +482,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   stopGeneration: (sessionId) => {
     wsManager.send(sessionId, { type: 'stop_generation' })
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
-    if (pendingDelta) {
-      const text = consumePendingDelta()
+    if (pendingDeltaBySession.has(sessionId)) {
+      const text = consumePendingDelta(sessionId)
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
     }
     set((s) => {
@@ -486,12 +523,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       if (lastTodos && lastTodos.length > 0) {
         const taskStore = useCLITaskStore.getState()
-        if (taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos)
+        if (taskStore.sessionId === sessionId && taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos, sessionId)
       } else {
-        useCLITaskStore.getState().setTasksFromTodos([])
+        useCLITaskStore.getState().setTasksFromTodos([], sessionId)
       }
       if (hasMessagesAfterTaskCompletion) {
-        useCLITaskStore.getState().markCompletedAndDismissed()
+        useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
       }
     } catch {
       // Session may not have messages yet
@@ -530,12 +567,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
 
       if (lastTodos && lastTodos.length > 0) {
-        useCLITaskStore.getState().setTasksFromTodos(lastTodos)
+        useCLITaskStore.getState().setTasksFromTodos(lastTodos, sessionId)
       } else {
-        useCLITaskStore.getState().setTasksFromTodos([])
+        useCLITaskStore.getState().setTasksFromTodos([], sessionId)
       }
       if (hasMessagesAfterTaskCompletion) {
-        useCLITaskStore.getState().markCompletedAndDismissed()
+        useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
       }
     } catch {
       // Session may not have messages yet
@@ -555,6 +592,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearMessages: (sessionId) => {
+    clearPendingTaskToolUseIds(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], streamingText: '', chatState: 'idle' })) }))
   },
 
@@ -569,7 +607,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       case 'status':
         update((session) => {
-          const pendingText = `${session.streamingText}${consumePendingDelta()}`
+          const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           const hasPendingStreamText =
             session.chatState === 'streaming' && pendingText.trim().length > 0
           // Background task progress can arrive while the assistant is still
@@ -603,7 +641,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       case 'content_start': {
         const session = get().sessions[sessionId]
         if (!session) break
-        const pendingText = `${session.streamingText}${consumePendingDelta()}`
+        const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
         if (msg.blockType !== 'text' && pendingText.trim()) {
           update((s) => ({
             messages: appendAssistantTextMessage(s.messages, pendingText, Date.now()),
@@ -630,14 +668,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       case 'content_delta':
         if (msg.text !== undefined) {
-          pendingDelta += msg.text
-          if (!flushTimer) {
-            flushTimer = setTimeout(() => {
-              const text = pendingDelta
-              pendingDelta = ''
-              flushTimer = null
+          if (!get().sessions[sessionId]) break
+          appendPendingDelta(sessionId, msg.text)
+          if (!flushTimerBySession.has(sessionId)) {
+            const timer = setTimeout(() => {
+              const text = pendingDeltaBySession.get(sessionId) ?? ''
+              pendingDeltaBySession.delete(sessionId)
+              flushTimerBySession.delete(sessionId)
               update((s) => ({ streamingText: s.streamingText + text }))
             }, 50)
+            flushTimerBySession.set(sessionId, timer)
           }
         }
         if (msg.toolInput !== undefined) update((s) => ({ streamingToolInput: s.streamingToolInput + msg.toolInput }))
@@ -645,7 +685,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       case 'thinking':
         update((s) => {
-          const pendingText = `${s.streamingText}${consumePendingDelta()}`
+          const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
           const base = pendingText.trim()
             ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
             : s.messages
@@ -677,10 +717,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           activeToolUseId: null, activeToolName: null, activeThinkingId: null, streamingToolInput: '',
         }))
         if (toolName === 'TodoWrite' && Array.isArray((msg.input as any)?.todos)) {
-          useCLITaskStore.getState().setTasksFromTodos((msg.input as any).todos)
+          useCLITaskStore.getState().setTasksFromTodos((msg.input as any).todos, sessionId)
         } else if (TASK_TOOL_NAMES.has(toolName)) {
           const useId = msg.toolUseId || session?.activeToolUseId
-          if (useId) pendingTaskToolUseIds.add(useId)
+          if (useId) addPendingTaskToolUseId(sessionId, useId)
         }
         break
       }
@@ -693,9 +733,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           }],
           chatState: 'thinking', activeThinkingId: null,
         }))
-        if (pendingTaskToolUseIds.has(msg.toolUseId)) {
-          pendingTaskToolUseIds.delete(msg.toolUseId)
-          useCLITaskStore.getState().refreshTasks()
+        if (consumePendingTaskToolUseId(sessionId, msg.toolUseId)) {
+          useCLITaskStore.getState().refreshTasks(sessionId)
         }
         break
 
@@ -708,6 +747,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           body: msg.toolName
             ? `${msg.toolName} 请求执行，正在等待允许。`
             : '有一个工具请求正在等待允许。',
+          target: { type: 'session', sessionId },
         })
         update((s) => ({
           pendingPermission: {
@@ -743,6 +783,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           requestAttention: true,
           title: 'Claude Code Haha 需要你的确认',
           body: msg.request.reason || 'Computer Use 正在等待允许。',
+          target: { type: 'session', sessionId },
         })
         update(() => ({
           pendingComputerUsePermission: {
@@ -759,7 +800,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const session = get().sessions[sessionId]
         if (!session) break
         const wasAgentRunning = session.chatState !== 'idle'
-        const text = `${session.streamingText}${consumePendingDelta()}`
+        const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
         let completionMessages = session.messages
         if (text.trim()) {
           completionMessages = appendAssistantTextMessage(session.messages, text, Date.now())
@@ -788,6 +829,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             cooldownScope: 'agent-completion',
             title: notification.title,
             body: notification.body,
+            target: { type: 'session', sessionId },
           })
         }
         break
@@ -795,7 +837,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       case 'error':
         update((s) => {
-          const pendingText = `${s.streamingText}${consumePendingDelta()}`
+          const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
           let newMessages = s.messages
           if (pendingText.trim()) {
             newMessages = appendAssistantTextMessage(newMessages, pendingText, Date.now())
@@ -858,7 +900,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             tokenUsage: { input_tokens: 0, output_tokens: 0 },
             slashCommands: [],
           }))
-          useCLITaskStore.getState().clearTasks()
+          clearPendingDelta(sessionId)
+          clearPendingTaskToolUseIds(sessionId)
+          useCLITaskStore.getState().clearTasks(sessionId)
           useSessionStore.getState().updateSessionTitle(sessionId, 'New Session')
           useTabStore.getState().updateTabTitle(sessionId, 'New Session')
           useTabStore.getState().updateTabStatus(sessionId, 'idle')
@@ -920,6 +964,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }))
+
+function updateOptimisticSessionTitle(sessionId: string, content: string): void {
+  const title = deriveSessionTitle(content)
+  if (!title) return
+
+  const session = useSessionStore.getState().sessions.find((item) => item.id === sessionId)
+  if (!session || session.messageCount > 0 || !isPlaceholderSessionTitle(session.title)) return
+
+  useSessionStore.getState().updateSessionTitle(sessionId, title)
+  useTabStore.getState().updateTabTitle(sessionId, title)
+}
 
 // ─── History mapping helpers (unchanged from original) ─────────
 

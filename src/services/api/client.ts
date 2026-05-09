@@ -91,6 +91,24 @@ function createStderrLogger(): ClientOptions['logger'] {
   }
 }
 
+export function resolveAnthropicClientApiKey({
+  explicitApiKey,
+  envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN,
+  envApiKey = process.env.ANTHROPIC_API_KEY,
+  getFallbackApiKey = getAnthropicApiKey,
+}: {
+  explicitApiKey?: string
+  envAuthToken?: string
+  envApiKey?: string
+  getFallbackApiKey?: () => string | null
+}): string | null {
+  if (envAuthToken && !explicitApiKey && !envApiKey) {
+    return null
+  }
+
+  return explicitApiKey || getFallbackApiKey()
+}
+
 export async function getAnthropicClient({
   apiKey,
   maxRetries,
@@ -319,7 +337,7 @@ export async function getAnthropicClient({
       ? null
       : usingOpenAICodex
         ? OPENAI_OAUTH_DUMMY_KEY
-        : apiKey || getAnthropicApiKey(),
+        : resolveAnthropicClientApiKey({ explicitApiKey: apiKey }),
     authToken: isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,

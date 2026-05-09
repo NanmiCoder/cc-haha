@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle';
 import React, { useCallback, useEffect, useRef } from 'react';
-import { setMainLoopModelOverride } from '../bootstrap/state.js';
+import { setMainLoopModelOverride, setReplBridgeActive } from '../bootstrap/state.js';
 import { type BridgePermissionCallbacks, type BridgePermissionResponse, isBridgePermissionResponse } from '../bridge/bridgePermissionCallbacks.js';
 import { buildBridgeConnectUrl } from '../bridge/bridgeStatusUtil.js';
 import { extractInboundMessageFields } from '../bridge/inboundMessages.js';
@@ -517,6 +517,7 @@ export function useReplBridge(messages: Message[], setMessages: (action: React.S
           }
           handleRef.current = handle_0;
           setReplBridgeHandle(handle_0);
+          setReplBridgeActive(!outboundOnly);
           consecutiveFailuresRef.current = 0;
           // Skip initial messages in the forwarding effect — they were
           // already loaded as session events during creation.
@@ -657,6 +658,7 @@ export function useReplBridge(messages: Message[], setMessages: (action: React.S
           handleRef.current = null;
           setReplBridgeHandle(null);
         }
+        setReplBridgeActive(false);
         setAppState(prev_19 => {
           if (!prev_19.replBridgeConnected && !prev_19.replBridgeSessionActive && !prev_19.replBridgeError) {
             return prev_19;

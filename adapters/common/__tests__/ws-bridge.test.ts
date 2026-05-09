@@ -163,6 +163,24 @@ describe('WsBridge: handler serialization', () => {
     bridge.destroy()
   })
 
+  it('forgets a chat when the server closes the session normally', async () => {
+    const bridge = new WsBridge(serverUrl, 'test')
+    bridge.onServerMessage('chat-deleted', () => {})
+    bridge.connectSession('chat-deleted', 'sess-deleted')
+    await bridge.waitForOpen('chat-deleted')
+
+    const serverWs = connections[0]!
+    serverWs.close(1000, 'session deleted')
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(bridge.hasSession('chat-deleted')).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    expect(connections).toHaveLength(1)
+
+    bridge.destroy()
+  })
+
   it('resetSession clears the handler chain', async () => {
     const bridge = new WsBridge(serverUrl, 'test')
     bridge.onServerMessage('chat-reset', () => {})

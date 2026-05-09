@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 vi.mock('./ProjectFilter', () => ({
@@ -81,6 +81,7 @@ describe('Sidebar', () => {
   })
 
   afterEach(() => {
+    cleanup()
     useTabStore.setState({ tabs: [], activeTabId: null })
   })
 

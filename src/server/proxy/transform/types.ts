@@ -23,7 +23,7 @@ export type OpenAIToolCall = {
   type: 'function'
   function: {
     name: string
-    arguments: string
+    arguments: unknown
   }
 }
 
@@ -90,7 +90,7 @@ export type OpenAIChatStreamChunk = {
         type?: string
         function?: {
           name?: string
-          arguments?: string
+          arguments?: unknown
         }
       }>
     }
@@ -103,7 +103,7 @@ export type OpenAIChatStreamChunk = {
 
 export type OpenAIResponsesInputItem =
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string | OpenAIChatContentPart[] }
-  | { type: 'function_call'; call_id: string; name: string; arguments: string }
+  | { type: 'function_call'; call_id: string; name: string; arguments: unknown }
   | { type: 'function_call_output'; call_id: string; output: string }
 
 export type OpenAIResponsesRequest = {
@@ -127,7 +127,7 @@ export type OpenAIResponsesRequest = {
 
 export type OpenAIResponsesOutputItem =
   | { type: 'message'; role: string; content: Array<{ type: string; text?: string; refusal?: string }> }
-  | { type: 'function_call'; id: string; call_id: string; name: string; arguments: string }
+  | { type: 'function_call'; id: string; call_id: string; name: string; arguments: unknown }
   | { type: 'reasoning'; id: string; summary?: Array<{ type: string; text: string }> }
 
 export type OpenAIResponsesResponse = {

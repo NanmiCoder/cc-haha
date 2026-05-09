@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { Settings } from '../pages/Settings'
@@ -222,7 +222,7 @@ describe('Settings > Skills tab', () => {
     expect(screen.queryByText(/^---$/)).not.toBeInTheDocument()
   })
 
-  it('returns to plugins tab when skill detail was opened from plugins', () => {
+  it('returns to plugins tab when skill detail was opened from plugins', async () => {
     useSkillStore.setState({
       selectedSkill: {
         meta: {
@@ -252,7 +252,10 @@ describe('Settings > Skills tab', () => {
     render(<Settings />)
     switchToSkillsTab()
 
-    fireEvent.click(screen.getByText('Back to list'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('Back to list'))
+      await Promise.resolve()
+    })
 
     expect(screen.getByText('Installed Plugins')).toBeInTheDocument()
   })

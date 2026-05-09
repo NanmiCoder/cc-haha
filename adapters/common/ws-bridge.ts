@@ -201,7 +201,14 @@ export class WsBridge {
 
     ws.on('close', (code, reason) => {
       console.log(`[WsBridge] Disconnected: ${sessionId} (${code}: ${reason})`)
-      if (code === 1000) return
+      if (this.sessions.get(chatId) !== session) return
+      if (code === 1000) {
+        if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
+        this.sessions.delete(chatId)
+        this.handlers.delete(chatId)
+        this.handlerChains.delete(chatId)
+        return
+      }
       this.scheduleReconnect(chatId, sessionId)
     })
 

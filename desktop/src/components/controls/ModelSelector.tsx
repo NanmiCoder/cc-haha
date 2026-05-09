@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { OFFICIAL_DEFAULT_MODEL_ID, OFFICIAL_MODELS } from '../../constants/modelCatalog'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -19,10 +20,25 @@ type ProviderChoice = {
 type Props = {
   value?: string
   onChange?: (modelId: string) => void
+  runtimeSelection?: RuntimeSelection
+  onRuntimeSelectionChange?: (selection: RuntimeSelection) => void
   runtimeKey?: string
   disabled?: boolean
   compact?: boolean
 }
+
+type DropdownPosition = {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+}
+
+const DROPDOWN_WIDTH = 360
+const DROPDOWN_GAP = 8
+const VIEWPORT_MARGIN = 16
+const DROPDOWN_MAX_HEIGHT = 420
+const DROPDOWN_MIN_HEIGHT = 180
 
 function officialChoices(availableModels: ModelInfo[], isDefault: boolean, officialName: string): ProviderChoice {
   return {
@@ -104,6 +120,8 @@ function resolveDefaultRuntimeSelection(
 export function ModelSelector({
   value,
   onChange,
+  runtimeSelection: controlledRuntimeSelection,
+  onRuntimeSelectionChange,
   runtimeKey,
   disabled = false,
   compact = false,
@@ -127,7 +145,9 @@ export function ModelSelector({
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
   const [open, setOpen] = useState(false)
+  const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
 
   const EFFORT_OPTIONS: { value: EffortLevel; label: string }[] = [
@@ -138,7 +158,9 @@ export function ModelSelector({
   ]
 
   const isControlled = value !== undefined
-  const isRuntimeScoped = !isControlled && runtimeKey !== undefined
+  const isRuntimeScoped =
+    !isControlled &&
+    (runtimeKey !== undefined || onRuntimeSelectionChange !== undefined)
 
   useEffect(() => {
     if (!isRuntimeScoped || providersLoading || requestedProvidersRef.current) return
@@ -149,7 +171,14 @@ export function ModelSelector({
   useEffect(() => {
     if (!open) return
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (
+        ref.current &&
+        !ref.current.contains(target) &&
+        !dropdownRef.current?.contains(target)
+      ) {
+        setOpen(false)
+      }
     }
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -161,6 +190,55 @@ export function ModelSelector({
       document.removeEventListener('keydown', handleEsc)
     }
   }, [open])
+
+  const updateDropdownPosition = useCallback(() => {
+    const anchor = ref.current
+    if (!anchor) return
+
+    const rect = anchor.getBoundingClientRect()
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const width = Math.min(DROPDOWN_WIDTH, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2))
+    const left = Math.min(
+      Math.max(VIEWPORT_MARGIN, rect.right - width),
+      Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
+    )
+    const spaceBelow = viewportHeight - rect.bottom - DROPDOWN_GAP - VIEWPORT_MARGIN
+    const spaceAbove = rect.top - DROPDOWN_GAP - VIEWPORT_MARGIN
+    const placeBelow = spaceBelow >= DROPDOWN_MIN_HEIGHT || spaceBelow >= spaceAbove
+    const availableHeight = Math.max(
+      DROPDOWN_MIN_HEIGHT,
+      placeBelow ? spaceBelow : spaceAbove,
+    )
+    const maxHeight = Math.min(DROPDOWN_MAX_HEIGHT, availableHeight)
+
+    setDropdownPosition({
+      top: placeBelow
+        ? rect.bottom + DROPDOWN_GAP
+        : Math.max(VIEWPORT_MARGIN, rect.top - DROPDOWN_GAP - maxHeight),
+      left,
+      width,
+      maxHeight,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setDropdownPosition(null)
+      return
+    }
+    updateDropdownPosition()
+  }, [open, updateDropdownPosition])
+
+  useEffect(() => {
+    if (!open) return
+    window.addEventListener('resize', updateDropdownPosition)
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateDropdownPosition)
+      window.removeEventListener('scroll', updateDropdownPosition, true)
+    }
+  }, [open, updateDropdownPosition])
 
   const roleLabels = useMemo(
     () => ({
@@ -188,7 +266,7 @@ export function ModelSelector({
     : storeModel
 
   const activeRuntimeSelection = isRuntimeScoped
-    ? runtimeSelection ?? resolveDefaultRuntimeSelection(
+    ? controlledRuntimeSelection ?? runtimeSelection ?? resolveDefaultRuntimeSelection(
       activeId,
       activeProviderName,
       providers,
@@ -218,13 +296,174 @@ export function ModelSelector({
     : null
 
   const handleRuntimeSelect = (selection: RuntimeSelection) => {
-    if (!runtimeKey) return
-    useSessionRuntimeStore.getState().setSelection(runtimeKey, selection)
-    if (runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY) {
-      useChatStore.getState().setSessionRuntime(runtimeKey, selection)
+    onRuntimeSelectionChange?.(selection)
+    if (runtimeKey) {
+      useSessionRuntimeStore.getState().setSelection(runtimeKey, selection)
+      if (runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY) {
+        useChatStore.getState().setSessionRuntime(runtimeKey, selection)
+      }
     }
     setOpen(false)
   }
+
+  const dropdown = open && dropdownPosition
+    ? createPortal(
+      <div
+        ref={dropdownRef}
+        data-testid="model-selector-dropdown"
+        className="fixed z-[80] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
+        style={{
+          top: dropdownPosition.top,
+          left: dropdownPosition.left,
+          width: dropdownPosition.width,
+        }}
+      >
+        <div className="overflow-y-auto p-3" style={{ maxHeight: dropdownPosition.maxHeight }}>
+          <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
+            {t('model.configuration')}
+          </div>
+
+          {isRuntimeScoped ? (
+            <div className="space-y-3">
+              {providerChoices.map((choice) => (
+                <div key={choice.providerId ?? 'official'} className="space-y-1.5">
+                  <div className="flex items-center justify-between px-2 pt-1">
+                    <span className="truncate text-[11px] font-semibold tracking-[0.01em] text-[var(--color-text-secondary)]">
+                      {choice.providerName}
+                    </span>
+                    {choice.isDefault && (
+                      <span className="flex-shrink-0 text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                        {t('settings.providers.default')}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    {choice.models.map((model) => {
+                      const isSelected =
+                        activeRuntimeSelection?.providerId === choice.providerId &&
+                        activeRuntimeSelection.modelId === model.id
+                      return (
+                        <button
+                          key={`${choice.providerId ?? 'official'}:${model.id}`}
+                          onClick={() => handleRuntimeSelect({ providerId: choice.providerId, modelId: model.id })}
+                          className={`
+                            w-full rounded-lg border px-3 py-2.5 text-left transition-colors
+                            ${isSelected
+                              ? 'border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
+                              : 'border-transparent hover:bg-[var(--color-surface-hover)]'
+                            }
+                          `}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border-2 ${
+                              isSelected ? 'border-[var(--color-brand)]' : 'border-[var(--color-outline)]'
+                            }`}>
+                              {isSelected && (
+                                <div className="h-2 w-2 rounded-full bg-[var(--color-brand)]" />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                                {model.name}
+                              </div>
+                              {model.description && (
+                                <div className="mt-0.5 truncate pr-[6px] text-[10px] text-[var(--color-text-tertiary)]">
+                                  {model.description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {availableModels.map((model) => {
+                const isSelected = model.id === selectedModel?.id
+                return (
+                  <button
+                    key={model.id}
+                    onClick={() => {
+                      if (isControlled) {
+                        onChange?.(model.id)
+                      } else {
+                        void setModel(model.id)
+                      }
+                      setOpen(false)
+                    }}
+                    className={`
+                      w-full rounded-lg px-3 py-2.5 text-left transition-colors
+                      ${isSelected
+                        ? 'border border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
+                        : 'hover:bg-[var(--color-surface-hover)]'
+                      }
+                    `}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border-2 ${
+                        isSelected ? 'border-[var(--color-brand)]' : 'border-[var(--color-outline)]'
+                      }`}>
+                        {isSelected && (
+                          <div className="h-2 w-2 rounded-full bg-[var(--color-brand)]" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-[var(--color-text-primary)]">{model.name}</div>
+                        {model.description && (
+                          <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">
+                            {model.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {!isControlled && !isRuntimeScoped && (
+          <div className="border-t border-[var(--color-border)] p-3">
+            <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
+              {t('model.effort')}
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {EFFORT_OPTIONS.map((opt) => {
+                const isSelected = opt.value === effortLevel
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() => {
+                      void setEffort(opt.value)
+                      setOpen(false)
+                    }}
+                    className={`
+                      rounded-lg py-2 text-center text-xs font-semibold transition-colors
+                      ${isSelected
+                        ? 'bg-[var(--color-brand)] text-white'
+                        : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+                      }
+                    `}
+                  >
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>,
+      document.body,
+    )
+    : null
 
   return (
     <div ref={ref} className="relative">
@@ -247,153 +486,7 @@ export function ModelSelector({
         </div>
         <span className="material-symbols-outlined flex-shrink-0 text-[12px]">expand_more</span>
       </button>
-
-      {open && (
-        <div className="absolute right-0 bottom-full z-50 mb-2 w-[360px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]">
-          <div className="max-h-[420px] overflow-y-auto p-3">
-            <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
-              {t('model.configuration')}
-            </div>
-
-            {isRuntimeScoped ? (
-              <div className="space-y-3">
-                {providerChoices.map((choice) => (
-                  <div key={choice.providerId ?? 'official'} className="space-y-1.5">
-                    <div className="flex items-center justify-between px-2 pt-1">
-                      <span className="truncate text-[11px] font-semibold tracking-[0.01em] text-[var(--color-text-secondary)]">
-                        {choice.providerName}
-                      </span>
-                      {choice.isDefault && (
-                        <span className="flex-shrink-0 text-[10px] font-medium text-[var(--color-text-tertiary)]">
-                          {t('settings.providers.default')}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      {choice.models.map((model) => {
-                        const isSelected =
-                          activeRuntimeSelection?.providerId === choice.providerId &&
-                          activeRuntimeSelection.modelId === model.id
-                        return (
-                          <button
-                            key={`${choice.providerId ?? 'official'}:${model.id}`}
-                            onClick={() => handleRuntimeSelect({ providerId: choice.providerId, modelId: model.id })}
-                            className={`
-                              w-full rounded-lg border px-3 py-2.5 text-left transition-colors
-                              ${isSelected
-                                ? 'border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
-                                : 'border-transparent hover:bg-[var(--color-surface-hover)]'
-                              }
-                            `}
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border-2 ${
-                                isSelected ? 'border-[var(--color-brand)]' : 'border-[var(--color-outline)]'
-                              }`}>
-                                {isSelected && (
-                                  <div className="h-2 w-2 rounded-full bg-[var(--color-brand)]" />
-                                )}
-                              </div>
-
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                                  {model.name}
-                                </div>
-                                {model.description && (
-                                  <div className="mt-0.5 truncate pr-[6px] text-[10px] text-[var(--color-text-tertiary)]">
-                                    {model.description}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {availableModels.map((model) => {
-                  const isSelected = model.id === selectedModel?.id
-                  return (
-                    <button
-                      key={model.id}
-                      onClick={() => {
-                        if (isControlled) {
-                          onChange?.(model.id)
-                        } else {
-                          void setModel(model.id)
-                        }
-                        setOpen(false)
-                      }}
-                      className={`
-                        w-full rounded-lg px-3 py-2.5 text-left transition-colors
-                        ${isSelected
-                          ? 'border border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
-                          : 'hover:bg-[var(--color-surface-hover)]'
-                        }
-                      `}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border-2 ${
-                          isSelected ? 'border-[var(--color-brand)]' : 'border-[var(--color-outline)]'
-                        }`}>
-                          {isSelected && (
-                            <div className="h-2 w-2 rounded-full bg-[var(--color-brand)]" />
-                          )}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-semibold text-[var(--color-text-primary)]">{model.name}</div>
-                          {model.description && (
-                            <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">
-                              {model.description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {!isControlled && !isRuntimeScoped && (
-            <div className="border-t border-[var(--color-border)] p-3">
-              <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
-                {t('model.effort')}
-              </div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {EFFORT_OPTIONS.map((opt) => {
-                  const isSelected = opt.value === effortLevel
-                  return (
-                    <button
-                      key={opt.value}
-                      onClick={() => {
-                        void setEffort(opt.value)
-                        setOpen(false)
-                      }}
-                      className={`
-                        rounded-lg py-2 text-center text-xs font-semibold transition-colors
-                        ${isSelected
-                          ? 'bg-[var(--color-brand)] text-white'
-                          : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                        }
-                      `}
-                    >
-                      {opt.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {dropdown}
     </div>
   )
 }

@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ApiError } from '../api/client'
 import { skillsApi } from '../api/skills'
 import { useTranslation } from '../i18n'
 import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
-import { useProviderStore } from '../stores/providerStore'
 import { useSessionRuntimeStore, DRAFT_RUNTIME_SELECTION_KEY } from '../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
-import { OFFICIAL_DEFAULT_MODEL_ID } from '../constants/modelCatalog'
-import { DirectoryPicker } from '../components/shared/DirectoryPicker'
+import { RepositoryLaunchControls } from '../components/shared/RepositoryLaunchControls'
 import { PermissionModeSelector } from '../components/controls/PermissionModeSelector'
 import { ModelSelector } from '../components/controls/ModelSelector'
 import { AttachmentGallery } from '../components/chat/AttachmentGallery'
@@ -24,7 +23,7 @@ import {
   replaceSlashCommand,
   resolveSlashUiAction,
 } from '../components/chat/composerUtils'
-import type { AttachmentRef, UIAttachment } from '../types/chat'
+import type { AttachmentRef } from '../types/chat'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
 
 type Attachment = {
@@ -37,12 +36,52 @@ type Attachment = {
   data?: string
 }
 
+type Translate = ReturnType<typeof useTranslation>
+
+function getApiErrorCode(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null
+  const body = error.body
+  if (!body || typeof body !== 'object' || !('error' in body)) return null
+  return typeof body.error === 'string' ? body.error : null
+}
+
+function resolveCreateSessionErrorMessage(error: unknown, t: Translate): string {
+  const code = getApiErrorCode(error)
+  switch (code) {
+    case 'WORKDIR_MISSING':
+    case 'WORKDIR_NOT_DIRECTORY':
+      return t('empty.createError.workdirMissing')
+    case 'REPOSITORY_NOT_GIT':
+      return t('empty.createError.notGit')
+    case 'REPOSITORY_BRANCH_NOT_FOUND':
+      return t('empty.createError.branchNotFound')
+    case 'REPOSITORY_DIRTY_WORKTREE':
+      return t('empty.createError.dirtyWorktree')
+    case 'REPOSITORY_BRANCH_CHECKED_OUT':
+      return t('empty.createError.branchCheckedOut')
+    case 'REPOSITORY_WORKTREE_CREATE_FAILED':
+      return t('empty.createError.worktreeCreateFailed', {
+        detail: error instanceof Error ? error.message : t('empty.failedToCreate'),
+      })
+    case 'REPOSITORY_SWITCH_FAILED':
+      return t('empty.createError.switchFailed', {
+        detail: error instanceof Error ? error.message : t('empty.failedToCreate'),
+      })
+    case 'REPOSITORY_CONTEXT_ERROR':
+      return t('empty.createError.contextFailed')
+    default:
+      return error instanceof Error ? error.message : t('empty.failedToCreate')
+  }
+}
+
 export function EmptySession() {
   const t = useTranslation()
   const [input, setInput] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [workDir, setWorkDir] = useState('')
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
+  const [useWorktree, setUseWorktree] = useState(false)
+  const [repositoryLaunchReady, setRepositoryLaunchReady] = useState(true)
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
@@ -166,71 +205,11 @@ export function EmptySession() {
     [slashCommands],
   )
 
-  const resolveDraftRuntimeSelection = async () => {
-    const settings = useSettingsStore.getState()
-    let providerState = useProviderStore.getState()
-    if (
-      settings.activeProviderName &&
-      providerState.providers.length === 0 &&
-      !providerState.isLoading
-    ) {
-      await providerState.fetchProviders()
-      providerState = useProviderStore.getState()
-    }
-    const inferredProviderId = providerState.activeId ?? (
-      settings.activeProviderName
-        ? providerState.providers.find((provider) => provider.name === settings.activeProviderName)?.id ?? null
-        : null
-    )
-    return (
-      useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]
-      ?? {
-        providerId: inferredProviderId,
-        modelId: settings.currentModel?.id ?? OFFICIAL_DEFAULT_MODEL_ID,
-      }
-    )
-  }
-
-  const openDraftSessionForWorkDir = async (newWorkDir: string) => {
+  const handleWorkDirChange = (newWorkDir: string) => {
     setWorkDir(newWorkDir)
-    if (!newWorkDir || isCreatingSession || isSubmitting) return
-
-    setIsCreatingSession(true)
-    try {
-      const draftSelection = await resolveDraftRuntimeSelection()
-      const sessionId = await createSession(newWorkDir)
-      useSessionRuntimeStore.getState().setSelection(sessionId, draftSelection)
-      useSessionRuntimeStore.getState().clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
-      setActiveView('code')
-      useTabStore.getState().openTab(sessionId, 'New Session')
-      connectToSession(sessionId)
-
-      const draftAttachments: UIAttachment[] = attachments.map((attachment) => ({
-        type: attachment.type,
-        name: attachment.name,
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      }))
-      if (input.trim() || draftAttachments.length > 0) {
-        useChatStore.getState().queueComposerPrefill(sessionId, {
-          text: input,
-          attachments: draftAttachments,
-        })
-      }
-      setInput('')
-      setAttachments([])
-      setFileSearchOpen(false)
-      setSlashMenuOpen(false)
-      setPlusMenuOpen(false)
-      setLocalSlashPanel(null)
-    } catch (error) {
-      addToast({
-        type: 'error',
-        message: error instanceof Error ? error.message : t('empty.failedToCreate'),
-      })
-    } finally {
-      setIsCreatingSession(false)
-    }
+    setSelectedBranch(null)
+    setUseWorktree(false)
+    setRepositoryLaunchReady(!newWorkDir)
   }
 
   const filteredCommands = useMemo(() => {
@@ -248,6 +227,11 @@ export function EmptySession() {
     if (!normalized) return null
     return filteredCommands.find((command) => command.name.toLowerCase() === normalized) ?? null
   }, [filteredCommands, slashFilter])
+  const canSubmit = (
+    input.trim().length > 0 ||
+    attachments.length > 0 ||
+    !!workDir
+  ) && !isSubmitting && repositoryLaunchReady
 
   useEffect(() => {
     setSlashSelectedIndex(0)
@@ -262,7 +246,7 @@ export function EmptySession() {
 
   const handleSubmit = async () => {
     const text = input.trim()
-    if ((!text && attachments.length === 0) || isSubmitting) return
+    if (!canSubmit) return
 
     const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
     if (slashUiAction?.type === 'panel') {
@@ -286,10 +270,17 @@ export function EmptySession() {
 
     setIsSubmitting(true)
     try {
-      const draftSelection = await resolveDraftRuntimeSelection()
-      const sessionId = await createSession(workDir || undefined)
-      useSessionRuntimeStore.getState().setSelection(sessionId, draftSelection)
-      useSessionRuntimeStore.getState().clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+      const explicitDraftSelection = useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]
+      const sessionId = await createSession(
+        workDir || undefined,
+        selectedBranch
+          ? { repository: { branch: selectedBranch, worktree: useWorktree } }
+          : undefined,
+      )
+      if (explicitDraftSelection) {
+        useSessionRuntimeStore.getState().setSelection(sessionId, explicitDraftSelection)
+        useSessionRuntimeStore.getState().clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+      }
       setActiveView('code')
       useTabStore.getState().openTab(sessionId, 'New Session')
       connectToSession(sessionId)
@@ -300,13 +291,15 @@ export function EmptySession() {
         data: attachment.data,
         mimeType: attachment.mimeType,
       }))
-      sendMessage(sessionId, text, attachmentPayload)
+      if (text || attachmentPayload.length > 0) {
+        sendMessage(sessionId, text, attachmentPayload)
+      }
       setInput('')
       setAttachments([])
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+        message: resolveCreateSessionErrorMessage(error, t),
       })
     } finally {
       setIsSubmitting(false)
@@ -528,9 +521,9 @@ export function EmptySession() {
       </div>
 
       <div className="absolute bottom-4 left-0 right-0 flex justify-center px-8">
-        <div className="flex w-full max-w-3xl flex-col gap-2">
+        <div className="flex w-full max-w-3xl flex-col">
           <div
-            className="glass-panel relative flex flex-col gap-3 rounded-xl p-4"
+            className="glass-panel relative flex flex-col gap-3 rounded-t-xl rounded-b-none p-4"
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDrop}
           >
@@ -681,10 +674,10 @@ export function EmptySession() {
                   fallbackModelLabel={draftModelLabel}
                   draft
                 />
-                <ModelSelector runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting || isCreatingSession} />
+                <ModelSelector runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} />
                 <button
                   onClick={handleSubmit}
-                  disabled={(!input.trim() && attachments.length === 0) || isSubmitting || isCreatingSession}
+                  disabled={!canSubmit}
                   className="flex w-[112px] items-center justify-center gap-1 rounded-lg bg-[image:var(--gradient-btn-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] transition-all hover:brightness-105 disabled:opacity-30"
                 >
                   {t('common.run')}
@@ -694,9 +687,16 @@ export function EmptySession() {
             </div>
           </div>
 
-          <div>
-            <DirectoryPicker value={workDir} onChange={(path) => void openDraftSessionForWorkDir(path)} />
-          </div>
+          <RepositoryLaunchControls
+            workDir={workDir}
+            onWorkDirChange={handleWorkDirChange}
+            branch={selectedBranch}
+            onBranchChange={setSelectedBranch}
+            useWorktree={useWorktree}
+            onUseWorktreeChange={setUseWorktree}
+            onLaunchReadyChange={setRepositoryLaunchReady}
+            disabled={isSubmitting}
+          />
         </div>
       </div>
 

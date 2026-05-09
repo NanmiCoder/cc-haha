@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { computerUseApi, type ComputerUseStatus, type SetupResult, type InstalledApp, type AuthorizedApp } from '../api/computerUse'
 import { useTranslation } from '../i18n'
 
@@ -58,8 +58,10 @@ export function ComputerUseSettings() {
   const [appsLoading, setAppsLoading] = useState(false)
   const [appsSaved, setAppsSaved] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [computerUseEnabled, setComputerUseEnabled] = useState(true)
   const [clipboardAccess, setClipboardAccess] = useState(true)
   const [systemKeys, setSystemKeys] = useState(true)
+  const configMutationSeqRef = useRef(0)
 
   const fetchStatus = useCallback(async () => {
     setCheckState('loading')
@@ -72,7 +74,29 @@ export function ComputerUseSettings() {
     }
   }, [])
 
+  const applyConfig = useCallback((
+    configResult: Awaited<ReturnType<typeof computerUseApi.getAuthorizedApps>>,
+    requestSeq = configMutationSeqRef.current,
+  ) => {
+    if (requestSeq !== configMutationSeqRef.current) return
+    setComputerUseEnabled(configResult.enabled)
+    setAuthorizedApps(configResult.authorizedApps)
+    setAuthorizedBundleIds(new Set(configResult.authorizedApps.map(a => a.bundleId)))
+    setClipboardAccess(configResult.grantFlags.clipboardRead)
+    setSystemKeys(configResult.grantFlags.systemKeyCombos)
+  }, [])
+
+  const fetchConfig = useCallback(async () => {
+    const requestSeq = configMutationSeqRef.current
+    try {
+      applyConfig(await computerUseApi.getAuthorizedApps(), requestSeq)
+    } catch {
+      // API not ready
+    }
+  }, [applyConfig])
+
   const fetchApps = useCallback(async () => {
+    const requestSeq = configMutationSeqRef.current
     setAppsLoading(true)
     try {
       const [appsResult, configResult] = await Promise.all([
@@ -80,20 +104,18 @@ export function ComputerUseSettings() {
         computerUseApi.getAuthorizedApps(),
       ])
       setInstalledApps(appsResult.apps)
-      setAuthorizedApps(configResult.authorizedApps)
-      setAuthorizedBundleIds(new Set(configResult.authorizedApps.map(a => a.bundleId)))
-      setClipboardAccess(configResult.grantFlags.clipboardRead)
-      setSystemKeys(configResult.grantFlags.systemKeyCombos)
+      applyConfig(configResult, requestSeq)
     } catch {
       // API not ready
     } finally {
       setAppsLoading(false)
     }
-  }, [])
+  }, [applyConfig])
 
   useEffect(() => {
     fetchStatus()
-  }, [fetchStatus])
+    fetchConfig()
+  }, [fetchStatus, fetchConfig])
 
   // Load apps when environment is ready
   const envReady = status?.venv.created && status?.dependencies.installed
@@ -117,6 +139,7 @@ export function ComputerUseSettings() {
   }
 
   const toggleApp = (app: InstalledApp) => {
+    configMutationSeqRef.current += 1
     const newSet = new Set(authorizedBundleIds)
     let newAuthorized = [...authorizedApps]
     if (newSet.has(app.bundleId)) {
@@ -144,6 +167,7 @@ export function ComputerUseSettings() {
   }
 
   const toggleFlag = (flag: 'clipboard' | 'systemKeys', value: boolean) => {
+    configMutationSeqRef.current += 1
     if (flag === 'clipboard') setClipboardAccess(value)
     else setSystemKeys(value)
 
@@ -154,6 +178,15 @@ export function ComputerUseSettings() {
         clipboardWrite: flag === 'clipboard' ? value : clipboardAccess,
         systemKeyCombos: flag === 'systemKeys' ? value : systemKeys,
       },
+    })
+  }
+
+  const toggleComputerUseEnabled = (value: boolean) => {
+    configMutationSeqRef.current += 1
+    setComputerUseEnabled(value)
+    computerUseApi.setAuthorizedApps({ enabled: value }).then(() => {
+      setAppsSaved(true)
+      setTimeout(() => setAppsSaved(false), 1500)
     })
   }
 
@@ -193,13 +226,30 @@ export function ComputerUseSettings() {
     <div className="max-w-2xl space-y-6">
       {/* Title */}
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
-          {t('settings.computerUse.title')}
-        </h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
+            {t('settings.computerUse.title')}
+          </h2>
+          <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={computerUseEnabled}
+              onChange={e => toggleComputerUseEnabled(e.target.checked)}
+              className="rounded border-[var(--color-border)] accent-[var(--color-brand)]"
+            />
+            {t('settings.computerUse.enabledToggle')}
+          </label>
+        </div>
         <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
           {t('settings.computerUse.description')}
         </p>
       </div>
+
+      {!computerUseEnabled && (
+        <div className="px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-sm text-yellow-700">
+          {t('settings.computerUse.disabledHint')}
+        </div>
+      )}
 
       {checkState === 'loading' ? (
         <div className="py-8 text-center text-sm text-[var(--color-text-tertiary)]">

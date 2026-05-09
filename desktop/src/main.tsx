@@ -1,11 +1,15 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { App } from './App'
-import { ErrorBoundary } from './components/ErrorBoundary'
 import './theme/globals.css'
-import { installClientDiagnosticsCapture } from './lib/diagnosticsCapture'
-import { initializeTheme } from './stores/uiStore'
+import { runDesktopPersistenceMigrations } from './lib/persistenceMigrations'
 
+runDesktopPersistenceMigrations()
+const [{ App }, { ErrorBoundary }, { installClientDiagnosticsCapture }, { initializeTheme }] = await Promise.all([
+  import('./App'),
+  import('./components/ErrorBoundary'),
+  import('./lib/diagnosticsCapture'),
+  import('./stores/uiStore'),
+])
 initializeTheme()
 installClientDiagnosticsCapture()
 

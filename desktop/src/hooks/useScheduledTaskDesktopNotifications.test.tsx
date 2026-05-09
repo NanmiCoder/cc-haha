@@ -94,6 +94,52 @@ describe('useScheduledTaskDesktopNotifications', () => {
       dedupeKey: 'scheduled-task:run-new',
       title: '定时任务 Daily review',
       body: '失败: provider timeout',
+      target: { type: 'scheduled' },
+    })
+  })
+
+  it('targets the run session when a scheduled task run has a session id', async () => {
+    listMock.mockResolvedValue({
+      tasks: [{
+        id: 'task-1',
+        name: 'Daily review',
+        cron: '* * * * *',
+        prompt: 'review',
+        enabled: true,
+        createdAt: 1,
+        notification: { enabled: true, channels: ['desktop'] },
+      }],
+    })
+    getRecentRunsMock
+      .mockResolvedValueOnce({ runs: [] })
+      .mockResolvedValueOnce({
+        runs: [{
+          id: 'run-new',
+          taskId: 'task-1',
+          taskName: 'Daily review',
+          startedAt: '2026-05-03T00:01:00.000Z',
+          completedAt: '2026-05-03T00:01:01.000Z',
+          status: 'completed',
+          prompt: 'review',
+          output: 'done',
+          sessionId: 'session-task-run',
+        }],
+      })
+
+    render(<Harness />)
+    await vi.waitFor(() => expect(getRecentRunsMock).toHaveBeenCalledTimes(1))
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(notifyDesktopMock).toHaveBeenCalledTimes(1))
+    expect(notifyDesktopMock).toHaveBeenCalledWith({
+      dedupeKey: 'scheduled-task:run-new',
+      title: '定时任务 Daily review',
+      body: '完成: done',
+      target: {
+        type: 'session',
+        sessionId: 'session-task-run',
+        title: 'Daily review',
+      },
     })
   })
 

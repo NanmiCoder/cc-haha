@@ -76,6 +76,8 @@ export type CronTask = {
   folder?: string
   /** Model to use (e.g. "claude-opus-4-7", "claude-sonnet-4-6"). */
   model?: string
+  /** Desktop provider ID for the selected model; null means official. */
+  providerId?: string | null
   /** Permission mode: "ask" | "auto-accept" | "plan" | "bypass". */
   permissionMode?: string
   /** Whether to use git worktree for execution. */
@@ -92,6 +94,7 @@ export type CronTaskMeta = {
   description?: string
   folder?: string
   model?: string
+  providerId?: string | null
   permissionMode?: string
   worktree?: boolean
   frequency?: string
@@ -169,6 +172,9 @@ export async function readCronTasks(dir?: string): Promise<CronTask[]> {
         : {}),
       ...(typeof t.folder === 'string' ? { folder: t.folder } : {}),
       ...(typeof t.model === 'string' ? { model: t.model } : {}),
+      ...(typeof t.providerId === 'string' || t.providerId === null
+        ? { providerId: t.providerId }
+        : {}),
       ...(typeof t.permissionMode === 'string'
         ? { permissionMode: t.permissionMode }
         : {}),
@@ -254,6 +260,9 @@ export async function addCronTask(
     ...(meta?.description ? { description: meta.description } : {}),
     ...(meta?.folder ? { folder: meta.folder } : {}),
     ...(meta?.model ? { model: meta.model } : {}),
+    ...(typeof meta?.providerId === 'string' || meta?.providerId === null
+      ? { providerId: meta.providerId }
+      : {}),
     ...(meta?.permissionMode
       ? { permissionMode: meta.permissionMode }
       : {}),

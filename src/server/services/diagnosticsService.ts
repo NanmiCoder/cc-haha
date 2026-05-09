@@ -140,15 +140,19 @@ export class DiagnosticsService {
     this.processCaptureInstalled = true
 
     process.on('uncaughtException', (error) => {
+      this.writeProcessFailureToStderr('Uncaught exception', error)
+      const fallbackExit = setTimeout(() => process.exit(1), 1000)
+      fallbackExit.unref?.()
       void this.recordEvent({
         type: 'server_uncaught_exception',
         severity: 'error',
         summary: error.message || 'Uncaught exception',
         details: { error },
-      })
+      }).finally(() => process.exit(1))
     })
 
     process.on('unhandledRejection', (reason) => {
+      this.writeProcessFailureToStderr('Unhandled rejection', reason)
       void this.recordEvent({
         type: 'server_unhandled_rejection',
         severity: 'error',
@@ -352,6 +356,17 @@ export class DiagnosticsService {
     } catch {
       return this.sanitizeString(String(reason))
     }
+  }
+
+  private writeProcessFailureToStderr(label: string, reason: unknown): void {
+    if (reason instanceof Error && reason.stack) {
+      process.stderr.write(`[Server] ${label}:\n${reason.stack}\n`)
+      return
+    }
+    const summary = reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : this.formatUnknownReason(reason)
+    process.stderr.write(`[Server] ${label}: ${summary}\n`)
   }
 
   private formatRuntimeLogEntry(event: DiagnosticEvent): string {

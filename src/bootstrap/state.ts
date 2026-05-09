@@ -196,7 +196,11 @@ type State = {
   mainThreadAgentType: string | undefined
   // Remote 模式（--remote flag）。
   isRemoteMode: boolean
-  // Direct connect server URL（用于在 header 中展示）。
+  // 仅当 Remote Control 已连接且启用了入站控制时为 true。
+  // 仅出站的 CCR 镜像模式会保留 bridge handle，但无法接收
+  // 对等消息或用户文件请求。
+  replBridgeActive: boolean
+  // 直连服务器 URL（用于在 header 中展示）。
   directConnectServerUrl: string | undefined
   // system prompt 分段缓存状态。
   systemPromptSectionCache: Map<string, string | null>
@@ -386,11 +390,7 @@ function getInitialState(): State {
     mainThreadAgentType: undefined,
     // Remote 模式。
     isRemoteMode: false,
-    ...(process.env.USER_TYPE === 'ant'
-      ? {
-          replBridgeActive: false,
-        }
-      : {}),
+    replBridgeActive: false,
     // 直连服务器 URL。
     directConnectServerUrl: undefined,
     // system prompt 分段缓存状态。
@@ -1081,6 +1081,14 @@ export function setKairosActive(value: boolean): void {
   STATE.kairosActive = value
 }
 
+export function isReplBridgeActive(): boolean {
+  return STATE.replBridgeActive
+}
+
+export function setReplBridgeActive(value: boolean): void {
+  STATE.replBridgeActive = value
+}
+
 export function getStrictToolResultPairing(): boolean {
   return STATE.strictToolResultPairing
 }
@@ -1763,4 +1771,3 @@ export function getPromptId(): string | null {
 export function setPromptId(id: string | null): void {
   STATE.promptId = id
 }
-

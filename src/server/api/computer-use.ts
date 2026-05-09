@@ -15,7 +15,11 @@ import { fileURLToPath } from 'url'
 import type { CuPermissionRequest } from '../../vendor/computer-use-mcp/types.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { detectPythonRuntime } from './computer-use-python.js'
-import { DEFAULT_DESKTOP_GRANT_FLAGS } from '../../utils/computerUse/preauthorizedConfig.js'
+import {
+  DEFAULT_DESKTOP_GRANT_FLAGS,
+  loadStoredComputerUseConfig,
+  saveStoredComputerUseConfig,
+} from '../../utils/computerUse/preauthorizedConfig.js'
 // Embed helper scripts at compile time so they're available in bundled mode
 // @ts-ignore — Bun text import
 import MAC_HELPER_CONTENT from '../../../runtime/mac_helper.py' with { type: 'text' }
@@ -338,15 +342,14 @@ async function runSetup(): Promise<SetupResult> {
 // Authorized Apps configuration — stored in ~/.claude/cc-haha/computer-use-config.json
 // ============================================================================
 
-const configPath = join(claudeHome, 'cc-haha', 'computer-use-config.json')
-
 type AuthorizedApp = {
   bundleId: string
   displayName: string
-  authorizedAt: string
+  authorizedAt?: string
 }
 
 type ComputerUseConfig = {
+  enabled: boolean
   authorizedApps: AuthorizedApp[]
   grantFlags: {
     clipboardRead: boolean
@@ -361,21 +364,17 @@ type RequestAccessBody = {
 }
 
 const DEFAULT_CONFIG: ComputerUseConfig = {
+  enabled: true,
   authorizedApps: [],
   grantFlags: DEFAULT_DESKTOP_GRANT_FLAGS,
 }
 
 async function loadConfig(): Promise<ComputerUseConfig> {
-  try {
-    const raw = await readFile(configPath, 'utf8')
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
-  } catch {
-    return { ...DEFAULT_CONFIG }
-  }
+  return { ...DEFAULT_CONFIG, ...(await loadStoredComputerUseConfig()) }
 }
 
 async function saveConfig(config: ComputerUseConfig): Promise<void> {
-  await writeFile(configPath, JSON.stringify(config, null, 2), 'utf8')
+  await saveStoredComputerUseConfig(config)
 }
 
 async function listInstalledApps(): Promise<{ bundleId: string; displayName: string; path: string }[]> {
@@ -437,6 +436,7 @@ export async function handleComputerUseApi(
     try {
       const body = (await req.json()) as Partial<ComputerUseConfig>
       const config = await loadConfig()
+      if (body.enabled !== undefined) config.enabled = body.enabled
       if (body.authorizedApps) config.authorizedApps = body.authorizedApps
       if (body.grantFlags) config.grantFlags = { ...config.grantFlags, ...body.grantFlags }
       await saveConfig(config)

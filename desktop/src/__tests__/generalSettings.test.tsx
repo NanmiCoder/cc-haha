@@ -218,7 +218,7 @@ describe('Settings > General tab', () => {
     })
     expect(desktopNotificationsMock.notifyDesktop).toHaveBeenCalledWith({
       title: 'Claude Code Haha notifications are enabled',
-      body: 'Permission prompts and completed agent replies will now use macOS notifications.',
+      body: 'Permission prompts and completed agent replies will now use system notifications.',
     })
   })
 
@@ -329,14 +329,20 @@ describe('Settings > Providers tab', () => {
   it('requires confirmation before deleting a provider', async () => {
     render(<Settings />)
 
-    fireEvent.click(screen.getAllByText('Delete')[0]!)
+    await act(async () => {
+      fireEvent.click(screen.getAllByText('Delete')[0]!)
+      await Promise.resolve()
+    })
 
     expect(MOCK_DELETE_PROVIDER).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('Delete provider "MiniMax-M2.7-highspeed(openai)"? This cannot be undone.')).toBeInTheDocument()
 
     const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+      await Promise.resolve()
+    })
 
     expect(MOCK_DELETE_PROVIDER).toHaveBeenCalledWith('provider-1')
   })

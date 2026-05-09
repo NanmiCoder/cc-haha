@@ -132,4 +132,33 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().status).toBe('restarting')
     expect(relaunch).toHaveBeenCalledTimes(1)
   })
+
+  it('clears the native exit guard when install fails after sidecars stop', async () => {
+    const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
+      onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+      onEvent?.({ event: 'Finished' })
+    })
+    const install = vi.fn().mockRejectedValue(new Error('installer failed'))
+
+    check.mockResolvedValue({
+      version: '0.2.0',
+      body: 'Notes',
+      download,
+      install,
+      close: vi.fn().mockResolvedValue(undefined),
+    })
+    invoke.mockResolvedValue(undefined)
+
+    vi.resetModules()
+    const { useUpdateStore } = await import('./updateStore')
+
+    await useUpdateStore.getState().checkForUpdates()
+    await useUpdateStore.getState().installUpdate()
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'prepare_for_update_install')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'cancel_update_install')
+    expect(useUpdateStore.getState().status).toBe('available')
+    expect(useUpdateStore.getState().error).toContain('installer failed')
+    expect(useUpdateStore.getState().shouldPrompt).toBe(true)
+  })
 })

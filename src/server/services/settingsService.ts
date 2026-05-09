@@ -13,6 +13,8 @@ import { randomBytes } from 'node:crypto'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
+import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 
 const VALID_PERMISSION_MODES = [
   'default',
@@ -57,15 +59,13 @@ export class SettingsService {
 
   /** 安全读取 JSON 文件，文件不存在时返回空对象 */
   private async readJsonFile(filePath: string): Promise<Record<string, unknown>> {
-    try {
-      const raw = await fs.readFile(filePath, 'utf-8')
-      return JSON.parse(raw) as Record<string, unknown>
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw ApiError.internal(`Failed to read settings from ${filePath}: ${err}`)
-    }
+    await ensurePersistentStorageUpgraded()
+    return readRecoverableJsonFile({
+      filePath,
+      label: 'settings',
+      defaultValue: {},
+      normalize: normalizeJsonObject,
+    })
   }
 
   /** 获取合并后的设置（user + project） */
@@ -178,7 +178,10 @@ export class SettingsService {
   /** 获取当前权限模式 */
   async getPermissionMode(): Promise<string> {
     const settings = await this.getUserSettings()
-    return (settings.defaultMode as string) || 'default'
+    const mode = settings.defaultMode
+    return typeof mode === 'string' && VALID_PERMISSION_MODES.includes(mode as PermissionMode)
+      ? mode
+      : 'default'
   }
 
   /** 设置权限模式 */

@@ -41,6 +41,41 @@ describe('SessionStore', () => {
     expect(store.get('chat-1')).toBeNull()
   })
 
+  it('deletes every chat entry bound to a sessionId', () => {
+    store.set('chat-1', 'uuid-shared', '/project-a')
+    store.set('chat-2', 'uuid-other', '/project-b')
+    store.set('chat-3', 'uuid-shared', '/project-c')
+
+    const removed = store.deleteBySessionId('uuid-shared')
+
+    expect(removed.sort()).toEqual(['chat-1', 'chat-3'])
+    expect(store.get('chat-1')).toBeNull()
+    expect(store.get('chat-3')).toBeNull()
+    expect(store.get('chat-2')!.sessionId).toBe('uuid-other')
+
+    const reloaded = new SessionStore(path.join(tmpDir, 'sessions.json'))
+    expect(reloaded.get('chat-1')).toBeNull()
+    expect(reloaded.get('chat-3')).toBeNull()
+    expect(reloaded.get('chat-2')!.sessionId).toBe('uuid-other')
+  })
+
+  it('refreshes from disk before reading so running adapters do not reuse deleted mappings', () => {
+    store.set('chat-1', 'uuid-stale', '/project')
+    const serverSideStore = new SessionStore(path.join(tmpDir, 'sessions.json'))
+
+    expect(serverSideStore.deleteBySessionId('uuid-stale')).toEqual(['chat-1'])
+
+    expect(store.get('chat-1')).toBeNull()
+    expect(store.listAll()).toEqual([])
+  })
+
+  it('returns an empty list when deleting an unknown sessionId', () => {
+    store.set('chat-1', 'uuid-aaa', '/project')
+
+    expect(store.deleteBySessionId('uuid-missing')).toEqual([])
+    expect(store.get('chat-1')!.sessionId).toBe('uuid-aaa')
+  })
+
   it('persists to disk and reloads', () => {
     store.set('chat-1', 'uuid-aaa', '/path')
 

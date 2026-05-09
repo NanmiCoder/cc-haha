@@ -5,35 +5,40 @@
       "path": "src/server/__tests__/cron-scheduler.test.ts",
       "reason": "Known unstable scheduler timing assertions; keep out of default server gate until fixed.",
       "owner": "maintainers",
-      "reviewAfter": "2026-06-01"
+      "reviewAfter": "2026-06-01",
+      "exitCriteria": "Replace timing-sensitive assertions with deterministic scheduler controls and prove the test passes in check:server for five consecutive local/CI runs."
     },
     {
       "id": "server:providers-real",
       "path": "src/server/__tests__/providers-real.test.ts",
       "reason": "Live provider coverage belongs in maintainer baseline or release mode, not the default PR gate.",
       "owner": "maintainers",
-      "reviewAfter": "2026-06-01"
+      "reviewAfter": "2026-06-01",
+      "exitCriteria": "Move live behavior into provider-smoke lanes and keep only non-live provider contract tests in check:server."
     },
     {
       "id": "server:tasks",
       "path": "src/server/__tests__/tasks.test.ts",
       "reason": "Known default-gate instability; keep quarantined until task timing is hardened.",
       "owner": "maintainers",
-      "reviewAfter": "2026-06-01"
+      "reviewAfter": "2026-06-01",
+      "exitCriteria": "Harden task timing with fake timers or event-based waits and prove the suite passes in check:server for five consecutive local/CI runs."
     },
     {
       "id": "server:e2e:business-flow",
       "path": "src/server/__tests__/e2e/business-flow.test.ts",
       "reason": "Broad e2e flow is not deterministic enough for default PR checks.",
       "owner": "maintainers",
-      "reviewAfter": "2026-06-01"
+      "reviewAfter": "2026-06-01",
+      "exitCriteria": "Split into deterministic contract tests or move to an explicit smoke lane with bounded fixtures, logs, and timeout policy."
     },
     {
       "id": "server:e2e:full-flow",
       "path": "src/server/__tests__/e2e/full-flow.test.ts",
       "reason": "Broad e2e flow is not deterministic enough for default PR checks.",
       "owner": "maintainers",
-      "reviewAfter": "2026-06-01"
+      "reviewAfter": "2026-06-01",
+      "exitCriteria": "Split into deterministic contract tests or move to an explicit smoke lane with bounded fixtures, logs, and timeout policy."
     }
   ]
 }

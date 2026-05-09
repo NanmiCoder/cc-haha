@@ -24,7 +24,7 @@ cp .env.example .env
 
 编辑 `.env`（以下示例使用 [MiniMax](https://platform.minimaxi.com/subscribe/token-plan?code=1TG2Cseab2&source=link) 作为 API 提供商，也可替换为其他兼容服务）：
 
-```env
+```bash
 # API 认证（二选一）
 ANTHROPIC_API_KEY=sk-xxx          # 标准 API Key（x-api-key 头）
 ANTHROPIC_AUTH_TOKEN=sk-xxx       # Bearer Token（Authorization 头）

@@ -7,6 +7,15 @@ const host = process.env.TAURI_DEV_HOST
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    chunkSizeWarningLimit: 2200,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        if (warning.code === 'INEFFECTIVE_DYNAMIC_IMPORT') return
+        warn(warning)
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

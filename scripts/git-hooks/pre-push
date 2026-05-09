@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+git_config() {
+  git config --local --get "$1" 2>/dev/null || true
+}
+
+is_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+echo "[pre-push] Running PR quality gate: bun run quality:pr"
+
+if is_enabled "$(git_config quality.allowCliCoreChange)"; then
+  export ALLOW_CLI_CORE_CHANGE=1
+fi
+
+if is_enabled "$(git_config quality.allowMissingTests)"; then
+  export ALLOW_MISSING_TESTS=1
+fi
+
+if is_enabled "$(git_config quality.allowCoverageBaselineChange)"; then
+  export ALLOW_COVERAGE_BASELINE_CHANGE=1
+fi
+
+bun run quality:pr
+
+live="${QUALITY_PRE_PUSH_LIVE:-$(git_config quality.prePushLive)}"
+
+if ! is_enabled "$live"; then
+  echo "[pre-push] Live model smoke is disabled. Configure it with: bun run hooks:install -- --live-provider-model <selector>"
+  exit 0
+fi
+
+provider_models="${QUALITY_PRE_PUSH_PROVIDER_MODELS:-${QUALITY_PRE_PUSH_PROVIDER_MODEL:-$(git_config quality.prePushProviderModels)}}"
+
+if [[ -z "${provider_models// }" ]]; then
+  echo "[pre-push] Live model smoke is enabled, but no provider selector is configured."
+  echo "[pre-push] Run: bun run quality:providers"
+  echo "[pre-push] Then: bun run hooks:install -- --live-provider-model <selector>"
+  exit 1
+fi
+
+live_mode="${QUALITY_PRE_PUSH_LIVE_MODE:-$(git_config quality.prePushLiveMode)}"
+live_mode="${live_mode:-smoke}"
+
+case "$live_mode" in
+  smoke)
+    cmd=(bun run quality:smoke)
+    ;;
+  baseline)
+    cmd=(bun run quality:gate --mode baseline --allow-live)
+    ;;
+  *)
+    echo "[pre-push] Unsupported live mode: $live_mode"
+    echo "[pre-push] Use smoke or baseline."
+    exit 1
+    ;;
+esac
+
+for selector in $provider_models; do
+  cmd+=(--provider-model "$selector")
+done
+
+echo "[pre-push] Running live $live_mode gate with configured provider selector(s)."
+"${cmd[@]}"

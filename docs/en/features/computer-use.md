@@ -1,7 +1,7 @@
 # Computer Use Guide
 
 
-> **Modified Version**: This feature is a **heavily modified version** of the Computer Use (internal codename "Chicago") found in the leaked Claude Code source. The official implementation relies on Anthropic's private native modules (`@ant/computer-use-swift`, `@ant/computer-use-input`) that are not publicly available. We **replaced the entire underlying operation layer** with a Python bridge (`pyautogui` + `mss` + `pyobjc`), enabling anyone to run Computer Use on macOS.
+> **Modified Version**: This feature is a **heavily modified version** of the Computer Use (internal codename "Chicago") found in the leaked Claude Code source. The official implementation relies on Anthropic's private native modules (`@ant/computer-use-swift`, `@ant/computer-use-input`) that are not publicly available. We **replaced the entire underlying operation layer** with a Python bridge: macOS uses `pyautogui` + `mss` + `pyobjc`, and Windows uses `pyautogui` + `mss` + `win32gui` + `psutil`.
 
 ---
 
@@ -45,7 +45,7 @@ Computer Use allows AI models to **directly control your computer** — taking s
 |----------|-------------|--------|-------|
 | macOS | Apple Silicon (M1/M2/M3/M4) | ✅ Fully supported | Recommended |
 | macOS | Intel x86_64 | ✅ Fully supported | |
-| Windows | Any | ⚠️ Theoretically possible | Core libs (`pyautogui` + `mss`) are cross-platform, but `pyobjc` parts (app management) need to be replaced with `win32com`. Not yet adapted |
+| Windows | x64 | ✅ Fully supported | Uses `win32gui` + `psutil` + `pyperclip` + `screeninfo` instead of macOS APIs |
 | Linux | Any | ⚠️ Theoretically possible | Same as above — `pyobjc` needs to be replaced with `wmctrl` + `xdotool`. Not yet adapted |
 
 ### Requirements
@@ -53,6 +53,7 @@ Computer Use allows AI models to **directly control your computer** — taking s
 - [Bun](https://bun.sh) >= 1.1.0
 - Python >= 3.8 (venv and dependencies are auto-installed on first use)
 - macOS permissions: Accessibility + Screen Recording
+- Windows: no extra OS permission setup
 
 ---
 
@@ -83,10 +84,12 @@ Computer Use operates through a **screenshot → analyze → act** feedback loop
                 │ callPythonHelper()
                 ▼
 ┌────────────────────────────────────────────────────┐
-│  Python Bridge (runtime/mac_helper.py)              │
+│  Python Bridge                                      │
+│  macOS: runtime/mac_helper.py                       │
+│  Windows: runtime/win_helper.py                     │
 │  pyautogui.click(756, 342)   ← mouse control        │
 │  mss.grab(monitor)           ← screenshot            │
-│  NSWorkspace.open(bundleId)  ← app management        │
+│  NSWorkspace / win32gui      ← app management        │
 └────────────────────────────────────────────────────┘
 ```
 
@@ -143,6 +146,25 @@ Just ask in natural language:
 > Open Safari and search for something
 > Type "hello" in the text editor
 ```
+
+### Disable Computer Use
+
+If you only want the regular Coding Agent and do not want to expose `computer-use` MCP tools, disable it with either command:
+
+```bash
+claude-haha --no-computer-use
+CLAUDE_COMPUTER_USE_ENABLED=0 claude-haha
+```
+
+You can also write the global config file at `~/.claude/cc-haha/computer-use-config.json`:
+
+```json
+{
+  "enabled": false
+}
+```
+
+The desktop Settings > Computer Use switch writes the same config. Once disabled, new sessions will not inject the dynamic `computer-use` MCP server or add its desktop-control tools to `allowedTools`.
 
 ---
 
@@ -214,7 +236,7 @@ Replaced all native module calls with Python subprocess calls via `callPythonHel
 
 | Limitation | Description |
 |------------|-------------|
-| macOS only | Windows/Linux need `pyobjc` replacements |
+| Linux not adapted | Linux needs `wmctrl` + `xdotool` style platform integration |
 | No global Escape abort | Original used CGEventTap; use `Ctrl+C` instead |
 | No auto-hide windows | Original's `prepareDisplay` relied on Swift |
 | Slightly higher latency | ~100ms Python process startup overhead per call |

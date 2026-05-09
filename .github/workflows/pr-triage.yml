@@ -35,6 +35,8 @@ jobs:
               'area:cli-core': 'b60205',
               'needs-maintainer-approval': 'b60205',
               'allow-cli-core-change': 'c2e0c6',
+              'allow-missing-tests': 'c2e0c6',
+              'allow-coverage-baseline-change': 'c2e0c6',
             }
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -107,6 +109,32 @@ jobs:
               file.startsWith('src/tools/') ||
               file.startsWith('src/utils/')
             )
+            const missingTestSignals = []
+            if (desktopProduct.length > 0 && !hasTest('desktop/src/')) {
+              missingTestSignals.push('Desktop product files changed without a desktop test file in the PR.')
+            }
+            if (serverProduct.length > 0 && !hasTest('src/server/')) {
+              missingTestSignals.push('Server product files changed without a server test file in the PR.')
+            }
+            if (adapterProduct.length > 0 && !hasTest('adapters/')) {
+              missingTestSignals.push('Adapter product files changed without an adapter test file in the PR.')
+            }
+            if (agentRuntimeProduct.length > 0 && !filenames.some((file) =>
+              (file.startsWith('src/tools/') || file.startsWith('src/utils/')) &&
+              (/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes('/__tests__/'))
+            )) {
+              missingTestSignals.push('Agent/runtime product files changed without a tools/utils test file in the PR.')
+            }
+            if (missingTestSignals.length > 0 && !currentLabels.has('allow-missing-tests')) {
+              areas.add('needs-maintainer-approval')
+            }
+            const coveragePolicyFiles = filenames.filter((file) =>
+              file === 'scripts/quality-gate/coverage-baseline.json' ||
+              file === 'scripts/quality-gate/coverage-thresholds.json'
+            )
+            if (coveragePolicyFiles.length > 0 && !currentLabels.has('allow-coverage-baseline-change')) {
+              areas.add('needs-maintainer-approval')
+            }
 
             const requiredChecks = ['change-policy']
             if (areas.has('area:desktop') || areas.has('area:server')) requiredChecks.push('desktop-checks')
@@ -121,17 +149,20 @@ jobs:
               )
             ) requiredChecks.push('desktop-native-checks')
             if (areas.has('area:docs')) requiredChecks.push('docs-checks')
+            if (
+              filenames.some((file) =>
+                file.startsWith('desktop/src/') ||
+                file.startsWith('src/server/') ||
+                file.startsWith('src/tools/') ||
+                file.startsWith('src/utils/') ||
+                file.startsWith('adapters/') ||
+                file.startsWith('scripts/quality-gate/') ||
+                ['package.json', 'desktop/package.json', 'desktop/bun.lock'].includes(file)
+              )
+            ) requiredChecks.push('coverage-checks')
 
             const testSignals = []
-            if (desktopProduct.length > 0 && !hasTest('desktop/src/')) {
-              testSignals.push('Desktop product files changed without a desktop test file in the PR.')
-            }
-            if (serverProduct.length > 0 && !hasTest('src/server/')) {
-              testSignals.push('Server product files changed without a server test file in the PR.')
-            }
-            if (adapterProduct.length > 0 && !hasTest('adapters/')) {
-              testSignals.push('Adapter product files changed without an adapter test file in the PR.')
-            }
+            testSignals.push(...missingTestSignals.map((signal) => `BLOCKING unless \`allow-missing-tests\` is applied: ${signal}`))
             if (agentRuntimeProduct.length > 0) {
               testSignals.push('Agent/model runtime path changed: use mock/request-shape tests in PR and maintainer live-model smoke before release.')
             }
@@ -183,7 +214,7 @@ jobs:
             }
 
             for (const label of Object.keys(managedLabels)) {
-              if (label === 'allow-cli-core-change') continue
+              if (label === 'allow-cli-core-change' || label === 'allow-missing-tests' || label === 'allow-coverage-baseline-change') continue
               if (!areas.has(label) && currentLabels.has(label)) {
                 try {
                   await github.rest.issues.removeLabel({
@@ -203,8 +234,17 @@ jobs:
             const approvalText = cliCoreFiles.length > 0 && !currentLabels.has('allow-cli-core-change')
               ? 'Blocked by policy until a maintainer applies `allow-cli-core-change` and approves the PR.'
               : 'No CLI-core policy block detected.'
+            const missingTestText = missingTestSignals.length > 0 && !currentLabels.has('allow-missing-tests')
+              ? 'Blocked by policy until a maintainer applies `allow-missing-tests` or matching tests are added.'
+              : 'No missing-test policy block detected.'
+            const coveragePolicyText = coveragePolicyFiles.length > 0 && !currentLabels.has('allow-coverage-baseline-change')
+              ? 'Blocked by policy until a maintainer applies `allow-coverage-baseline-change` after reviewing the baseline or threshold change.'
+              : 'No coverage-baseline policy block detected.'
             const cliFilesText = cliCoreFiles.length
               ? cliCoreFiles.slice(0, 20).map((file) => `- \`${file}\``).join('\n')
+              : '- none'
+            const coveragePolicyFilesText = coveragePolicyFiles.length
+              ? coveragePolicyFiles.slice(0, 20).map((file) => `- \`${file}\``).join('\n')
               : '- none'
 
             const body = [
@@ -215,8 +255,15 @@ jobs:
               '',
               `**CLI core policy:** ${approvalText}`,
               '',
+              `**Missing-test policy:** ${missingTestText}`,
+              '',
+              `**Coverage baseline policy:** ${coveragePolicyText}`,
+              '',
               '**CLI core files:**',
               cliFilesText,
+              '',
+              '**Coverage policy files:**',
+              coveragePolicyFilesText,
               '',
               '**Expected checks:**',
               requiredChecks.map((check) => `- \`${check}\``).join('\n'),
