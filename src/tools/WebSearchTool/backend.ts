@@ -7,9 +7,15 @@ export type WebSearchMode =
   | 'anthropic'
   | 'tavily'
   | 'brave'
+  | 'duckduckgo'
   | 'disabled'
 
-export type WebSearchProvider = 'anthropic' | 'tavily' | 'brave' | 'disabled'
+export type WebSearchProvider =
+  | 'anthropic'
+  | 'tavily'
+  | 'brave'
+  | 'duckduckgo'
+  | 'disabled'
 
 export type WebSearchSettings = {
   mode?: WebSearchMode
@@ -25,17 +31,25 @@ export type ResolvedWebSearch = {
 type ExternalSearchHit = {
   title: string
   url: string
+  snippet?: string
 }
+
+export type ExternalWebSearchProvider = Exclude<
+  WebSearchProvider,
+  'anthropic' | 'disabled'
+>
 
 const WEB_SEARCH_MODES = new Set<WebSearchMode>([
   'auto',
   'anthropic',
   'tavily',
   'brave',
+  'duckduckgo',
   'disabled',
 ])
 
 const unsupportedNativeModels = new Set<string>()
+const DUCKDUCKGO_HTML_ENDPOINT = 'https://html.duckduckgo.com/html'
 
 export function isLikelyClaudeModel(model: string | undefined): boolean {
   if (!model) {
@@ -80,6 +94,10 @@ export function resolveWebSearchProvider(
     return { provider: settings.braveApiKey ? 'brave' : 'disabled', settings }
   }
 
+  if (mode === 'duckduckgo') {
+    return { provider: 'duckduckgo', settings }
+  }
+
   if (mode === 'anthropic') {
     return {
       provider: canUseAnthropicNativeWebSearch(model) ? 'anthropic' : 'disabled',
@@ -99,7 +117,7 @@ export function resolveWebSearchProvider(
     return { provider: 'brave', settings }
   }
 
-  return { provider: 'disabled', settings }
+  return { provider: 'duckduckgo', settings }
 }
 
 export function isWebSearchEnabledForModel(
@@ -127,40 +145,79 @@ export function markAnthropicNativeUnsupported(model: string | undefined): void 
 }
 
 export async function searchWithExternalProvider(
-  provider: Exclude<WebSearchProvider, 'anthropic' | 'disabled'>,
+  provider: ExternalWebSearchProvider,
   input: Input,
-  apiKey: string,
+  apiKey: string | null,
   signal: AbortSignal,
 ): Promise<Output> {
   const startTime = performance.now()
-  const hits =
-    provider === 'tavily'
-      ? await searchWithTavily(input, apiKey, signal)
-      : await searchWithBrave(input, apiKey, signal)
+  const hits = await searchWithProvider(provider, input, apiKey, signal)
   const durationSeconds = (performance.now() - startTime) / 1000
 
   return makeExternalSearchOutput(provider, input.query, hits, durationSeconds)
 }
 
-export function getFallbackProvider(
+export function getExternalFallbackProviders(
   settings: WebSearchSettings,
-): Exclude<WebSearchProvider, 'anthropic' | 'disabled'> | null {
+): ExternalWebSearchProvider[] {
+  const mode = settings.mode ?? 'auto'
+
+  if (mode === 'tavily') {
+    return settings.tavilyApiKey ? ['tavily'] : []
+  }
+
+  if (mode === 'brave') {
+    return settings.braveApiKey ? ['brave'] : []
+  }
+
+  if (mode === 'duckduckgo') {
+    return ['duckduckgo']
+  }
+
+  const providers: ExternalWebSearchProvider[] = []
   if (settings.tavilyApiKey) {
-    return 'tavily'
+    providers.push('tavily')
   }
   if (settings.braveApiKey) {
-    return 'brave'
+    providers.push('brave')
   }
-  return null
+
+  if (mode === 'auto') {
+    providers.push('duckduckgo')
+  }
+
+  return providers
+}
+
+export function getFallbackProvider(
+  settings: WebSearchSettings,
+): ExternalWebSearchProvider | null {
+  return getExternalFallbackProviders(settings)[0] ?? null
+}
+
+export function getFallbackProvidersAfter(
+  provider: ExternalWebSearchProvider,
+  settings: WebSearchSettings,
+): ExternalWebSearchProvider[] {
+  const providers = getExternalFallbackProviders(settings)
+  const index = providers.indexOf(provider)
+  return index >= 0 ? providers.slice(index + 1) : []
 }
 
 export function getApiKeyForProvider(
-  provider: Exclude<WebSearchProvider, 'anthropic' | 'disabled'>,
+  provider: ExternalWebSearchProvider,
   settings: WebSearchSettings,
 ): string | null {
+  if (provider === 'duckduckgo') {
+    return null
+  }
   return provider === 'tavily'
     ? settings.tavilyApiKey ?? null
     : settings.braveApiKey ?? null
+}
+
+export function providerRequiresApiKey(provider: ExternalWebSearchProvider): boolean {
+  return provider !== 'duckduckgo'
 }
 
 export function makeWebSearchUnavailableOutput(
@@ -191,6 +248,25 @@ function normalizeApiKey(value: unknown): string | undefined {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : undefined
+}
+
+async function searchWithProvider(
+  provider: ExternalWebSearchProvider,
+  input: Input,
+  apiKey: string | null,
+  signal: AbortSignal,
+): Promise<ExternalSearchHit[]> {
+  if (provider === 'duckduckgo') {
+    return searchWithDuckDuckGo(input, signal)
+  }
+
+  if (!apiKey) {
+    throw new Error(`Web search provider ${provider} requires an API key.`)
+  }
+
+  return provider === 'tavily'
+    ? searchWithTavily(input, apiKey, signal)
+    : searchWithBrave(input, apiKey, signal)
 }
 
 async function searchWithTavily(
@@ -258,6 +334,36 @@ async function searchWithBrave(
     .filter((hit): hit is ExternalSearchHit => hit != null)
 }
 
+async function searchWithDuckDuckGo(
+  input: Input,
+  signal: AbortSignal,
+): Promise<ExternalSearchHit[]> {
+  const url = new URL(DUCKDUCKGO_HTML_ENDPOINT)
+  url.searchParams.set('q', applyDomainFiltersToQuery(input))
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent':
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    },
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(
+      `DuckDuckGo search failed: ${response.status} ${await readErrorBody(response)}`,
+    )
+  }
+
+  const html = await response.text()
+  if (isDuckDuckGoBotChallenge(html)) {
+    throw new Error('DuckDuckGo returned a bot-detection challenge.')
+  }
+
+  return parseDuckDuckGoHtml(html).slice(0, 8)
+}
+
 function applyDomainFiltersToQuery(input: Input): string {
   const allowed = input.allowed_domains?.filter(Boolean) ?? []
   const blocked = input.blocked_domains?.filter(Boolean) ?? []
@@ -271,6 +377,88 @@ function applyDomainFiltersToQuery(input: Input): string {
   return `${allowedClause}${blockedClause}${input.query}`.trim()
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '-')
+    .replace(/&mdash;/g, '--')
+    .replace(/&hellip;/g, '...')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+      String.fromCodePoint(Number.parseInt(code, 16)),
+    )
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function readHrefAttribute(tagAttributes: string): string {
+  const match = /\bhref=(?:"([^"]*)"|'([^']*)')/i.exec(tagAttributes)
+  return match?.[1] ?? match?.[2] ?? ''
+}
+
+function decodeDuckDuckGoUrl(rawUrl: string): string {
+  try {
+    const normalized = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl
+    const parsed = new URL(normalized)
+    return parsed.searchParams.get('uddg') ?? rawUrl
+  } catch {
+    return rawUrl
+  }
+}
+
+function isDuckDuckGoBotChallenge(html: string): boolean {
+  if (/class=["'][^"']*\bresult__a\b[^"']*["']/i.test(html)) {
+    return false
+  }
+  return /g-recaptcha|are you a human|id=["']challenge-form["']|name=["']challenge["']/i.test(
+    html,
+  )
+}
+
+function parseDuckDuckGoHtml(html: string): ExternalSearchHit[] {
+  const results: ExternalSearchHit[] = []
+  const resultRegex =
+    /<a\b(?=[^>]*\bclass=["'][^"']*\bresult__a\b[^"']*["'])([^>]*)>([\s\S]*?)<\/a>/gi
+  const nextResultRegex =
+    /<a\b(?=[^>]*\bclass=["'][^"']*\bresult__a\b[^"']*["'])[^>]*>/i
+  const snippetRegex =
+    /<(?:a|div)\b(?=[^>]*\bclass=["'][^"']*\bresult__snippet\b[^"']*["'])[^>]*>([\s\S]*?)<\/(?:a|div)>/i
+
+  for (const match of html.matchAll(resultRegex)) {
+    const rawAttributes = match[1] ?? ''
+    const rawTitle = match[2] ?? ''
+    const rawUrl = readHrefAttribute(rawAttributes)
+    const matchEnd = (match.index ?? 0) + match[0].length
+    const trailingHtml = html.slice(matchEnd)
+    const nextResultIndex = trailingHtml.search(nextResultRegex)
+    const scopedTrailingHtml =
+      nextResultIndex >= 0 ? trailingHtml.slice(0, nextResultIndex) : trailingHtml
+    const rawSnippet = snippetRegex.exec(scopedTrailingHtml)?.[1] ?? ''
+    const title = decodeHtmlEntities(stripHtml(rawTitle))
+    const url = decodeDuckDuckGoUrl(decodeHtmlEntities(rawUrl))
+    const snippet = decodeHtmlEntities(stripHtml(rawSnippet))
+
+    if (title && url) {
+      results.push({
+        title,
+        url,
+        ...(snippet ? { snippet } : {}),
+      })
+    }
+  }
+
+  return results
+}
+
 function normalizeHit(title: unknown, url: unknown): ExternalSearchHit | null {
   if (typeof title !== 'string' || typeof url !== 'string') {
     return null
@@ -280,7 +468,7 @@ function normalizeHit(title: unknown, url: unknown): ExternalSearchHit | null {
 }
 
 function makeExternalSearchOutput(
-  provider: Exclude<WebSearchProvider, 'anthropic' | 'disabled'>,
+  provider: ExternalWebSearchProvider,
   query: string,
   hits: ExternalSearchHit[],
   durationSeconds: number,
@@ -300,4 +488,11 @@ function makeExternalSearchOutput(
 async function readErrorBody(response: Response): Promise<string> {
   const text = await response.text().catch(() => '')
   return text.slice(0, 500)
+}
+
+export const __testing = {
+  decodeDuckDuckGoUrl,
+  decodeHtmlEntities,
+  isDuckDuckGoBotChallenge,
+  parseDuckDuckGoHtml,
 }

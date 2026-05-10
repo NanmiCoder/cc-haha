@@ -19,11 +19,14 @@ import { getMainLoopModel, getSmallFastModel } from '../../utils/model/model.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import {
+  type ExternalWebSearchProvider,
   getApiKeyForProvider,
-  getFallbackProvider,
+  getExternalFallbackProviders,
+  getFallbackProvidersAfter,
   isWebSearchEnabledForModel,
   makeWebSearchUnavailableOutput,
   markAnthropicNativeUnsupported,
+  providerRequiresApiKey,
   resolveWebSearchProvider,
   searchWithExternalProvider,
   shouldFallbackFromNativeError,
@@ -57,6 +60,7 @@ const searchResultSchema = lazySchema(() => {
   const searchHitSchema = z.object({
     title: z.string().describe('The title of the search result'),
     url: z.string().describe('The URL of the search result'),
+    snippet: z.string().optional().describe('Short search result snippet'),
   })
 
   return z.object({
@@ -254,46 +258,28 @@ export const WebSearchTool = buildTool({
         data: makeWebSearchUnavailableOutput(
           query,
           durationSeconds,
-          'Web search is not configured for this model. Use a Claude model for native web search or add a Tavily/Brave API key in Settings.',
+          'Web search is not configured for this model. Use a Claude model for native web search, add a Tavily/Brave API key, or select DuckDuckGo keyless search in Settings.',
         ),
       }
     }
 
-    if (resolved.provider === 'tavily' || resolved.provider === 'brave') {
-      onProgress?.({
-        toolUseID: `${resolved.provider}-web-search`,
-        data: {
-          type: 'query_update',
-          query,
-        },
-      })
-      const apiKey = getApiKeyForProvider(resolved.provider, resolved.settings)
-      if (!apiKey) {
-        const durationSeconds = (performance.now() - startTime) / 1000
-        return {
-          data: makeWebSearchUnavailableOutput(
-            query,
-            durationSeconds,
-            `Web search provider ${resolved.provider} is selected but its API key is missing.`,
-          ),
-        }
-      }
-      const data = await searchWithExternalProvider(
-        resolved.provider,
+    if (
+      resolved.provider === 'tavily' ||
+      resolved.provider === 'brave' ||
+      resolved.provider === 'duckduckgo'
+    ) {
+      return await callExternalWebSearchWithFallback({
         input,
-        apiKey,
-        context.abortController.signal,
-      )
-      onProgress?.({
-        toolUseID: `${resolved.provider}-web-search`,
-        data: {
-          type: 'search_results_received',
-          resultCount:
-            typeof data.results[1] === 'object' ? data.results[1].content.length : 0,
-          query,
-        },
+        context,
+        onProgress,
+        startTime,
+        providers: [
+          resolved.provider,
+          ...getFallbackProvidersAfter(resolved.provider, resolved.settings),
+        ],
+        settings: resolved.settings,
+        returnUnavailableOnFailure: (resolved.settings.mode ?? 'auto') === 'auto',
       })
-      return { data }
     }
 
     try {
@@ -309,8 +295,8 @@ export const WebSearchTool = buildTool({
       }
 
       markAnthropicNativeUnsupported(model)
-      const fallbackProvider = getFallbackProvider(resolved.settings)
-      if (!fallbackProvider) {
+      const fallbackProviders = getExternalFallbackProviders(resolved.settings)
+      if (fallbackProviders.length === 0) {
         const durationSeconds = (performance.now() - startTime) / 1000
         logError(error instanceof Error ? error : new Error(String(error)))
         return {
@@ -322,26 +308,16 @@ export const WebSearchTool = buildTool({
         }
       }
 
-      const apiKey = getApiKeyForProvider(fallbackProvider, resolved.settings)
-      if (!apiKey) {
-        const durationSeconds = (performance.now() - startTime) / 1000
-        return {
-          data: makeWebSearchUnavailableOutput(
-            query,
-            durationSeconds,
-            `Fallback provider ${fallbackProvider} is configured without an API key.`,
-          ),
-        }
-      }
-
       logError(error instanceof Error ? error : new Error(String(error)))
-      const data = await searchWithExternalProvider(
-        fallbackProvider,
+      return await callExternalWebSearchWithFallback({
         input,
-        apiKey,
-        context.abortController.signal,
-      )
-      return { data }
+        context,
+        onProgress,
+        startTime,
+        providers: fallbackProviders,
+        settings: resolved.settings,
+        returnUnavailableOnFailure: (resolved.settings.mode ?? 'auto') === 'auto',
+      })
     }
   },
   mapToolResultToToolResultBlockParam(output, toolUseID) {
@@ -379,6 +355,79 @@ export const WebSearchTool = buildTool({
     }
   },
 } satisfies ToolDef<InputSchema, Output, WebSearchProgress>)
+
+async function callExternalWebSearchWithFallback({
+  input,
+  context,
+  onProgress,
+  startTime,
+  providers,
+  settings,
+  returnUnavailableOnFailure,
+}: {
+  input: Input
+  context: ToolUseContext
+  onProgress: ToolCallProgress<WebSearchProgress> | undefined
+  startTime: number
+  providers: ExternalWebSearchProvider[]
+  settings: Parameters<typeof getApiKeyForProvider>[1]
+  returnUnavailableOnFailure: boolean
+}) {
+  const errors: string[] = []
+  const uniqueProviders = Array.from(new Set(providers))
+
+  for (const provider of uniqueProviders) {
+    const apiKey = getApiKeyForProvider(provider, settings)
+    if (providerRequiresApiKey(provider) && !apiKey) {
+      errors.push(`${provider}: missing API key`)
+      continue
+    }
+
+    onProgress?.({
+      toolUseID: `${provider}-web-search`,
+      data: {
+        type: 'query_update',
+        query: input.query,
+      },
+    })
+
+    try {
+      const data = await searchWithExternalProvider(
+        provider,
+        input,
+        apiKey,
+        context.abortController.signal,
+      )
+      onProgress?.({
+        toolUseID: `${provider}-web-search`,
+        data: {
+          type: 'search_results_received',
+          resultCount:
+            typeof data.results[1] === 'object' ? data.results[1].content.length : 0,
+          query: input.query,
+        },
+      })
+      return { data }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(`${provider}: ${message}`)
+      logError(error instanceof Error ? error : new Error(message))
+
+      if (!returnUnavailableOnFailure && provider === uniqueProviders.at(-1)) {
+        throw error
+      }
+    }
+  }
+
+  const durationSeconds = (performance.now() - startTime) / 1000
+  return {
+    data: makeWebSearchUnavailableOutput(
+      input.query,
+      durationSeconds,
+      `Web search fallback providers failed. ${errors.join('; ')}`,
+    ),
+  }
+}
 
 async function callAnthropicNativeWebSearch(
   input: Input,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MessageList, buildRenderModel } from './MessageList'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
+import { ApiError } from '../../api/client'
 import { sessionsApi } from '../../api/sessions'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -537,6 +538,217 @@ describe('MessageList nested tool calls', () => {
     expect(scrollIntoView).toHaveBeenCalled()
   })
 
+  it('keeps auto-scrolling when an existing latest message grows while already near the bottom', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'thinking',
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: 'Analyze this',
+              timestamp: 1,
+            },
+            {
+              id: 'thinking-1',
+              type: 'thinking',
+              content: 'Considering',
+              timestamp: 2,
+            },
+          ],
+          activeThinkingId: 'thinking-1',
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let scrollTop = 552
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value
+      },
+    })
+
+    scrollIntoView.mockClear()
+    fireEvent.scroll(scroller)
+
+    act(() => {
+      useChatStore.setState((state) => {
+        const session = state.sessions[ACTIVE_TAB]!
+        return {
+          sessions: {
+            ...state.sessions,
+            [ACTIVE_TAB]: {
+              ...session,
+              messages: session.messages.map((message) =>
+                message.id === 'thinking-1' && message.type === 'thinking'
+                  ? { ...message, content: `${message.content} next step` }
+                  : message,
+              ),
+            },
+          },
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Considering next step')).toBeTruthy()
+    })
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
+
+  it('keeps auto-scrolling when rendered content grows without a message state change', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    let resizeCallback: ResizeObserverCallback | null = null
+    const originalResizeObserver = globalThis.ResizeObserver
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback
+      }
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      value: ResizeObserverMock,
+    })
+
+    try {
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSessionState({
+            chatState: 'tool_executing',
+            messages: [
+              {
+                id: 'tool-bash',
+                type: 'tool_use',
+                toolName: 'Bash',
+                toolUseId: 'bash-1',
+                input: { command: 'printf "lots of output"' },
+                timestamp: 1,
+              },
+            ],
+          }),
+        },
+      })
+
+      const { container } = render(<MessageList />)
+      await waitFor(() => {
+        expect(resizeCallback).toBeTruthy()
+      })
+
+      const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+      let scrollTop = 552
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+      Object.defineProperty(scroller, 'scrollTop', {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value) => {
+          scrollTop = value
+        },
+      })
+
+      scrollIntoView.mockClear()
+      fireEvent.scroll(scroller)
+
+      act(() => {
+        resizeCallback?.([], {} as ResizeObserver)
+      })
+
+      expect(scrollIntoView).toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(globalThis, 'ResizeObserver', {
+        configurable: true,
+        value: originalResizeObserver,
+      })
+    }
+  })
+
+  it('renders automatic retry state as one live countdown notice', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSessionState({
+            retry: {
+              paused: false,
+              failureCount: 2,
+              nextAttempt: 2,
+              intervalMs: 120_000,
+              nextRetryAt: Date.now() + 120_000,
+              errorMessage: 'API Error: Input is too long.',
+              errorCode: 'CLI_ERROR',
+              status: 'scheduled',
+            },
+          }),
+        },
+      })
+
+      render(<MessageList />)
+
+      const notice = screen.getByRole('status', { name: 'Automatic retry status' })
+      expect(within(notice).getByText('Retrying in 2:00 (retry #2)')).toBeTruthy()
+      expect(within(notice).getByText('attempt 2')).toBeTruthy()
+      expect(within(notice).getByText('Last error code: CLI_ERROR')).toBeTruthy()
+      expect(within(notice).getByText('API Error: Input is too long.')).toBeTruthy()
+
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+
+      expect(within(notice).getByText('Retrying in 1:59 (retry #2)')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders paused automatic retry state without transcript spam', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [],
+          retry: {
+            paused: true,
+            failureCount: 1,
+            nextAttempt: 1,
+            intervalMs: 120_000,
+            nextRetryAt: null,
+            errorMessage: 'API Error: overloaded',
+            errorCode: 'CLI_ERROR',
+            status: 'paused',
+            statusMessage: 'Automatic retry paused after stop.',
+          },
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    const notice = screen.getByRole('status', { name: 'Automatic retry status' })
+    expect(within(notice).getByText('Automatic retry paused after stop.')).toBeTruthy()
+    expect(within(notice).getByText('Use /retry resume to continue, /retry now to retry immediately, or /retry clear to clear this state.')).toBeTruthy()
+    expect(screen.queryByText('Retrying in')).toBeNull()
+  })
+
   it('keeps user actions anchored to the right bubble and assistant actions to the left bubble', () => {
     useChatStore.setState({
       sessions: {
@@ -652,8 +864,292 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(await screen.findByRole('button', { name: 'Undo current turn changes' })).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo current turn changes' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Undo current turn?' })
+    expect(
+      within(dialog).getByText(
+        'This will rewind the latest assistant response and restore tracked files for this turn.',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
     expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull()
+  })
+
+  it('recalls the latest completed turn into the composer and rewinds tracked files', async () => {
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+      checkpoints: [],
+    })
+    vi.spyOn(sessionsApi, 'rewind').mockResolvedValue({
+      target: {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        userMessageCount: 1,
+      },
+      conversation: {
+        messagesRemoved: 2,
+        removedMessageIds: ['user-1', 'assistant-1'],
+      },
+      code: {
+        available: true,
+        filesChanged: ['src/App.tsx'],
+        insertions: 4,
+        deletions: 1,
+      },
+    })
+    const reloadHistory = vi.fn().mockResolvedValue(undefined)
+    const queueComposerPrefill = vi.fn()
+
+    useChatStore.setState({
+      reloadHistory,
+      queueComposerPrefill,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: 'Update the app shell',
+              modelContent: '@"/repo/src/App.tsx" Update the app shell',
+              attachments: [{
+                type: 'file',
+                name: 'App.tsx',
+                path: 'src/App.tsx',
+                lineStart: 4,
+                lineEnd: 8,
+              }],
+              timestamp: 1,
+            },
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: 'Updated the app shell.',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Recall to edit' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Recall latest message?' })
+    expect(
+      within(dialog).getByText(
+        'This will remove the latest prompt and assistant response, restore tracked file changes for that turn, and place the prompt back in the composer.',
+      ),
+    ).toBeTruthy()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Recall to edit' }))
+
+    await waitFor(() => {
+      expect(sessionsApi.rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        expectedContent: '@"/repo/src/App.tsx" Update the app shell',
+      })
+    })
+    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
+      text: 'Update the app shell',
+      attachments: [{
+        type: 'file',
+        name: 'App.tsx',
+        path: 'src/App.tsx',
+        lineStart: 4,
+        lineEnd: 8,
+      }],
+    })
+  })
+
+  it('recalls attachment-only user turns into the composer', async () => {
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+      checkpoints: [],
+    })
+    vi.spyOn(sessionsApi, 'rewind').mockResolvedValue({
+      target: {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        userMessageCount: 1,
+      },
+      conversation: {
+        messagesRemoved: 2,
+        removedMessageIds: ['user-1', 'assistant-1'],
+      },
+      code: {
+        available: true,
+        filesChanged: ['src/App.tsx'],
+        insertions: 1,
+        deletions: 0,
+      },
+    })
+    const reloadHistory = vi.fn().mockResolvedValue(undefined)
+    const queueComposerPrefill = vi.fn()
+    const attachments = [{
+      type: 'file' as const,
+      name: 'App.tsx',
+      path: 'src/App.tsx',
+      lineStart: 12,
+      lineEnd: 16,
+    }]
+
+    useChatStore.setState({
+      reloadHistory,
+      queueComposerPrefill,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: '',
+              attachments,
+              timestamp: 1,
+            },
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: 'Updated the referenced file.',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Recall to edit' }))
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: 'Recall latest message?' }))
+        .getByRole('button', { name: 'Recall to edit' }),
+    )
+
+    await waitFor(() => {
+      expect(sessionsApi.rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        expectedContent: '',
+      })
+    })
+    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
+      text: '',
+      attachments,
+    })
+  })
+
+  it('recalls unsaved in-flight user turns locally when the server has no rewind target', async () => {
+    vi.spyOn(sessionsApi, 'rewind').mockRejectedValue(
+      new ApiError(404, { message: 'This session has no user messages to rewind.' }),
+    )
+    const reloadHistory = vi.fn().mockResolvedValue(undefined)
+    const queueComposerPrefill = vi.fn()
+    const discardLocalTurn = vi.fn()
+    const stopGeneration = vi.fn()
+    const attachments = [{
+      type: 'file' as const,
+      name: 'App.tsx',
+      path: 'src/App.tsx',
+      lineStart: 3,
+      lineEnd: 5,
+    }]
+
+    useChatStore.setState({
+      reloadHistory,
+      queueComposerPrefill,
+      discardLocalTurn,
+      stopGeneration,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'thinking',
+          messages: [
+            {
+              id: 'user-local',
+              type: 'user_text',
+              content: 'Update the unsaved turn',
+              attachments,
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Recall to edit' }))
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: 'Recall latest message?' }))
+        .getByRole('button', { name: 'Recall to edit' }),
+    )
+
+    await waitFor(() => {
+      expect(sessionsApi.rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
+        targetUserMessageId: 'user-local',
+        userMessageIndex: 0,
+        expectedContent: 'Update the unsaved turn',
+      })
+    })
+    expect(stopGeneration).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(discardLocalTurn).toHaveBeenCalledWith(ACTIVE_TAB, 'user-local')
+    expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
+      text: 'Update the unsaved turn',
+      attachments,
+    })
+    expect(reloadHistory).not.toHaveBeenCalled()
+  })
+
+  it('surfaces recall failures when the server rejects the rewind', async () => {
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+      checkpoints: [],
+    })
+    vi.spyOn(sessionsApi, 'rewind').mockRejectedValue(new Error('checkpoint moved'))
+    const reloadHistory = vi.fn().mockResolvedValue(undefined)
+    const queueComposerPrefill = vi.fn()
+
+    useChatStore.setState({
+      reloadHistory,
+      queueComposerPrefill,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: 'Try risky change',
+              timestamp: 1,
+            },
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: 'Done.',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Recall to edit' }))
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: 'Recall latest message?' }))
+        .getByRole('button', { name: 'Recall to edit' }),
+    )
+
+    await waitFor(() => {
+      expect(sessionsApi.rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        expectedContent: 'Try risky change',
+      })
+    })
+    expect(reloadHistory).not.toHaveBeenCalled()
+    expect(queueComposerPrefill).not.toHaveBeenCalled()
   })
 
   it('keeps historical sessions readable when turn checkpoint payloads are missing', async () => {

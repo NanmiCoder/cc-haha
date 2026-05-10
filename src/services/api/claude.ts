@@ -80,11 +80,13 @@ import {
   normalizeMessagesForAPI,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
+  stripUnsignedThinkingBlocks,
   stripToolReferenceBlocksFromUserMessage,
 } from "../../utils/messages.js";
 import {
   getDefaultOpusModel,
   getDefaultSonnetModel,
+  isLikelyClaudeModel,
   getSmallFastModel,
   isNonCustomOpusModel,
 } from "../../utils/model/model.js";
@@ -1342,6 +1344,17 @@ async function* queryModel(
           return msg;
       }
     });
+  }
+
+  // OpenAI-compatible providers map reasoning_content to Anthropic-shaped
+  // thinking blocks so the UI can render reasoning and proxy continuations can
+  // pass it back. Claude-family requests cannot replay those unsigned blocks;
+  // switching DeepSeek/OpenAI-style history to Claude otherwise 400s. Gate on
+  // the current model instead of base URL so third-party Claude providers and
+  // OpenAI-format Claude routers are covered, while DeepSeek continuations keep
+  // their reasoning_content history.
+  if (isLikelyClaudeModel(options.model)) {
+    messagesForAPI = stripUnsignedThinkingBlocks(messagesForAPI);
   }
 
   // Repair tool_use/tool_result pairing mismatches that can occur when resuming

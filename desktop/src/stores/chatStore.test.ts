@@ -149,6 +149,8 @@ function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState 
     elapsedSeconds: 0,
     statusVerb: '',
     slashCommands: [],
+    goal: null,
+    retry: null,
     agentTaskNotifications: {},
     elapsedTimer: null,
     ...overrides,
@@ -615,6 +617,196 @@ describe('chatStore history mapping', () => {
     expect(markCompletedAndDismissedMock).toHaveBeenCalledWith(TEST_SESSION_ID)
   })
 
+  it('refreshes idle session history when an existing in-memory transcript is stale', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-new',
+          type: 'user',
+          timestamp: '2026-04-06T00:00:00.000Z',
+          content: 'new prompt',
+        },
+        {
+          id: 'assistant-new',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:01.000Z',
+          content: 'new reply',
+        },
+      ],
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          messages: [
+            { id: 'assistant-old', type: 'assistant_text', content: 'old reply', timestamp: 1 },
+          ],
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { id: 'user-new', type: 'user_text', content: 'new prompt' },
+      { id: 'assistant-new', type: 'assistant_text', content: 'new reply' },
+    ])
+  })
+
+  it('does not overwrite an active optimistic turn when transcript history has not caught up', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-old',
+          type: 'user',
+          timestamp: '2026-04-06T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'assistant-old',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:01.000Z',
+          content: 'old reply',
+        },
+      ],
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'thinking',
+          messages: [
+            { id: 'user-old-local', type: 'user_text', content: 'old prompt', timestamp: 1 },
+            { id: 'assistant-old-local', type: 'assistant_text', content: 'old reply', timestamp: 2 },
+            { id: 'user-local', type: 'user_text', content: 'new prompt', timestamp: 3 },
+          ],
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { id: 'user-old-local', type: 'user_text', content: 'old prompt' },
+      { id: 'assistant-old-local', type: 'assistant_text', content: 'old reply' },
+      { id: 'user-local', type: 'user_text', content: 'new prompt' },
+    ])
+  })
+
+  it('recovers a stale active session from transcript history after output was missed', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-old',
+          type: 'user',
+          timestamp: '2026-04-06T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'assistant-old',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:01.000Z',
+          content: 'old reply',
+        },
+        {
+          id: 'user-new',
+          type: 'user',
+          timestamp: '2026-04-06T00:00:02.000Z',
+          content: 'new prompt',
+        },
+        {
+          id: 'assistant-new',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:03.000Z',
+          content: 'partial answer completed',
+        },
+      ],
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'streaming',
+          streamingText: 'partial answer',
+          statusVerb: 'Working',
+          messages: [
+            { id: 'user-old-local', type: 'user_text', content: 'old prompt', timestamp: 1 },
+            { id: 'assistant-old-local', type: 'assistant_text', content: 'old reply', timestamp: 2 },
+            { id: 'user-local', type: 'user_text', content: 'new prompt', timestamp: 3 },
+          ],
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toMatchObject([
+      { id: 'user-old', type: 'user_text', content: 'old prompt' },
+      { id: 'assistant-old', type: 'assistant_text', content: 'old reply' },
+      { id: 'user-new', type: 'user_text', content: 'new prompt' },
+      { id: 'assistant-new', type: 'assistant_text', content: 'partial answer completed' },
+    ])
+    expect(session).toMatchObject({
+      chatState: 'idle',
+      streamingText: '',
+      streamingToolInput: '',
+      activeToolUseId: null,
+      activeToolName: null,
+      activeThinkingId: null,
+      pendingPermission: null,
+      pendingComputerUsePermission: null,
+      statusVerb: '',
+    })
+    expect(updateTabStatusMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'idle')
+  })
+
+  it('discards a local turn and clears transient runtime state', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'tool_executing',
+          streamingText: 'partial',
+          streamingToolInput: '{"cmd"',
+          activeToolUseId: 'tool-2',
+          activeToolName: 'Bash',
+          activeThinkingId: 'thinking-2',
+          pendingPermission: {
+            requestId: 'perm-1',
+            toolName: 'Bash',
+            input: { command: 'npm test' },
+          },
+          statusVerb: 'Working',
+          messages: [
+            { id: 'user-1', type: 'user_text', content: 'first prompt', timestamp: 1 },
+            { id: 'assistant-1', type: 'assistant_text', content: 'first reply', timestamp: 2 },
+            { id: 'user-2', type: 'user_text', content: 'second prompt', timestamp: 3 },
+            { id: 'tool-2-message', type: 'tool_use', toolName: 'Bash', toolUseId: 'tool-2', input: {}, timestamp: 4 },
+          ],
+        }),
+      },
+    })
+
+    useChatStore.getState().discardLocalTurn(TEST_SESSION_ID, 'user-2')
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      messages: [
+        { id: 'user-1', type: 'user_text', content: 'first prompt' },
+        { id: 'assistant-1', type: 'assistant_text', content: 'first reply' },
+      ],
+      chatState: 'idle',
+      streamingText: '',
+      streamingToolInput: '',
+      activeToolUseId: null,
+      activeToolName: null,
+      activeThinkingId: null,
+      pendingPermission: null,
+      pendingComputerUsePermission: null,
+      statusVerb: '',
+    })
+  })
+
   it('reloads history task state for the requested session', async () => {
     const todos = [{ content: 'Reloaded task', status: 'pending' }]
     vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
@@ -1024,6 +1216,185 @@ describe('chatStore history mapping', () => {
     vi.advanceTimersByTime(60)
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.streamingText).toBe('')
     vi.useRealTimers()
+  })
+
+  it('tracks persistent goal system notifications', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }),
+      },
+    })
+
+    const goal = {
+      sessionId: TEST_SESSION_ID,
+      goalId: 'goal-1',
+      objective: 'finish the migration',
+      status: 'active' as const,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_updated',
+      message: 'Session goal set: finish the migration',
+      data: goal,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.goal).toEqual(goal)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { type: 'system', content: 'Session goal set: finish the migration' },
+    ])
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_cleared',
+      message: 'Session goal cleared.',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.goal).toBeNull()
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toHaveLength(2)
+  })
+
+  it('tracks automatic retry system notifications and exposes retry state', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }),
+      },
+    })
+
+    const retry = {
+      paused: false,
+      failureCount: 1,
+      nextAttempt: 1,
+      intervalMs: 120_000,
+      nextRetryAt: 1760000000000,
+      errorMessage: 'API Error: overloaded',
+      errorCode: 'CLI_ERROR',
+    }
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_scheduled',
+      message: 'Model request failed. Retrying in 120 seconds (retry #1).',
+      data: retry,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.retry).toMatchObject({
+      ...retry,
+      status: 'scheduled',
+      statusMessage: 'Model request failed. Retrying in 120 seconds (retry #1).',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      message: 'API Error: overloaded',
+      code: 'CLI_ERROR',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_paused',
+      message: 'Automatic retry paused.',
+      data: { ...retry, paused: true, nextRetryAt: null },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.retry).toMatchObject({
+      paused: true,
+      nextRetryAt: null,
+      status: 'paused',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_cleared',
+      message: 'Automatic retry state cleared.',
+      data: null,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.retry).toBeNull()
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { type: 'system', content: 'Automatic retry state cleared.' },
+    ])
+  })
+
+  it('coalesces automatic retry errors into retry state across attempts', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }),
+      },
+    })
+
+    const retryError = 'API Error: Input is too long.'
+    const retry1 = {
+      paused: false,
+      failureCount: 1,
+      nextAttempt: 1,
+      intervalMs: 120_000,
+      nextRetryAt: 1760000000000,
+      errorMessage: retryError,
+      errorCode: 'CLI_ERROR',
+    }
+    const retry2 = {
+      ...retry1,
+      failureCount: 2,
+      nextAttempt: 2,
+      nextRetryAt: 1760000120000,
+    }
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      message: retryError,
+      code: 'CLI_ERROR',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { type: 'error', message: retryError, code: 'CLI_ERROR' },
+    ])
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_scheduled',
+      message: 'Model request failed. Retrying in 120 seconds (retry #1).',
+      data: retry1,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.retry).toMatchObject({
+      failureCount: 1,
+      status: 'scheduled',
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_attempting',
+      message: 'Retrying model request (retry #1).',
+      data: { ...retry1, nextRetryAt: null },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      message: retryError,
+      code: 'CLI_ERROR',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'retry_scheduled',
+      message: 'Model request failed. Retrying in 120 seconds (retry #2).',
+      data: retry2,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.retry).toMatchObject({
+      failureCount: 2,
+      status: 'scheduled',
+      statusMessage: 'Model request failed. Retrying in 120 seconds (retry #2).',
+    })
   })
 
   it('clears local message state for only the requested session', () => {

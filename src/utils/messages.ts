@@ -5098,6 +5098,72 @@ export function stripSignatureBlocks(messages: Message[]): Message[] {
   return changed ? result : messages
 }
 
+function hasNonEmptyThinkingSignature(block: ThinkingBlockType): boolean {
+  if (block.type !== 'thinking') {
+    return true
+  }
+
+  const signature = (block as { signature?: unknown }).signature
+  return typeof signature === 'string' && signature.length > 0
+}
+
+/**
+ * Strip thinking blocks that cannot be replayed to Anthropic because they do
+ * not carry an Anthropic signature. OpenAI-compatible providers expose
+ * reasoning_content as Anthropic-shaped thinking for the UI and for proxy
+ * continuation, but those blocks are not valid native Anthropic history.
+ */
+export function stripUnsignedThinkingBlocks(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  let changed = false
+  const result: (UserMessage | AssistantMessage)[] = []
+
+  for (const msg of messages) {
+    if (msg.type !== 'assistant') {
+      result.push(msg)
+      continue
+    }
+
+    const content = msg.message.content
+    if (!Array.isArray(content)) {
+      result.push(msg)
+      continue
+    }
+
+    const filtered = content.filter(block => {
+      if (!isThinkingBlock(block)) {
+        return true
+      }
+      return hasNonEmptyThinkingSignature(block)
+    })
+
+    if (filtered.length === content.length) {
+      result.push(msg)
+      continue
+    }
+
+    changed = true
+    logEvent('tengu_stripped_unsigned_thinking_blocks', {
+      messageUUID:
+        msg.uuid as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      blocksRemoved: content.length - filtered.length,
+      remainingBlocks: filtered.length,
+    })
+
+    if (filtered.length === 0) {
+      continue
+    }
+
+    result.push({
+      ...msg,
+      message: { ...msg.message, content: filtered },
+    })
+  }
+
+  return changed ? mergeAdjacentUserMessages(result) : messages
+}
+
 /**
  * Creates a tool use summary message for SDK emission.
  * Tool use summaries provide human-readable progress updates after tool batches complete.

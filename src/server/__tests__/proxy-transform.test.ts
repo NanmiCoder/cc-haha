@@ -161,6 +161,32 @@ describe('anthropicToOpenaiChat', () => {
     expect(msg.tool_calls![0].function.arguments).toBe('{"city":"NYC"}')
   })
 
+  test('assistant thinking is preserved as reasoning_content for tool continuation', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'I need to fetch the page first.' },
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'WebFetch',
+            input: { url: 'https://example.com' },
+          },
+        ],
+      }],
+    }
+
+    const result = anthropicToOpenaiChat(req)
+    const msg = result.messages[0]
+    expect(msg.role).toBe('assistant')
+    expect(msg.reasoning_content).toBe('I need to fetch the page first.')
+    expect(msg.tool_calls).toHaveLength(1)
+    expect(msg.tool_calls![0].id).toBe('toolu_1')
+  })
+
   test('user message with tool_result', () => {
     const req: AnthropicRequest = {
       model: 'gpt-4',

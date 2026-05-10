@@ -38,6 +38,8 @@ describe('composerUtils', () => {
       expect.arrayContaining([
         { name: 'help', description: 'Show available desktop and agent commands' },
         { name: 'clear', description: 'Clear conversation history' },
+        { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent session goal' },
+        { name: 'retry', description: 'View, pause, resume, retry now, or clear automatic model request retries' },
         { name: 'context', description: 'Show current context usage' },
       ]),
     )

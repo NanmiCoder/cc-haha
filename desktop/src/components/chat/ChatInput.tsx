@@ -150,14 +150,19 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     setInput(composerPrefill.text)
     setAttachments(
       (composerPrefill.attachments ?? [])
-        .filter((attachment) => attachment.type === 'image' || attachment.data)
+        .filter((attachment) => attachment.type === 'image' || attachment.data || attachment.path)
         .map((attachment, index) => ({
           id: `rewind-prefill-${composerPrefill.nonce}-${index}`,
           name: attachment.name,
           type: attachment.type,
+          path: attachment.path,
           mimeType: attachment.mimeType,
           previewUrl: attachment.type === 'image' ? attachment.data : undefined,
           data: attachment.data,
+          lineStart: attachment.lineStart,
+          lineEnd: attachment.lineEnd,
+          note: attachment.note,
+          quote: attachment.quote,
         })),
     )
     setPlusMenuOpen(false)

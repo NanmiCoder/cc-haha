@@ -5,10 +5,22 @@ import { MessageActionBar } from './MessageActionBar'
 type Props = {
   content: string
   attachments?: UIAttachment[]
+  onRecall?: () => void
+  recallLabel?: string
+  recallDisplayLabel?: string
+  recallDisabled?: boolean
 }
 
-export function UserMessage({ content, attachments }: Props) {
+export function UserMessage({
+  content,
+  attachments,
+  onRecall,
+  recallLabel = 'Recall to edit',
+  recallDisplayLabel = 'Recall',
+  recallDisabled = false,
+}: Props) {
   const hasText = content.trim().length > 0
+  const hasActions = Boolean(onRecall)
 
   return (
     <div className="group mb-5 flex justify-end">
@@ -29,11 +41,20 @@ export function UserMessage({ content, attachments }: Props) {
           </div>
         )}
 
-        {hasText && (
+        {(hasText || hasActions) && (
           <MessageActionBar
-            copyText={content}
+            copyText={hasText ? content : undefined}
             copyLabel="Copy prompt"
             align="end"
+            actions={onRecall
+              ? [{
+                  label: recallLabel,
+                  displayLabel: recallDisplayLabel,
+                  onClick: onRecall,
+                  disabled: recallDisabled,
+                  tone: 'danger',
+                }]
+              : undefined}
           />
         )}
       </div>

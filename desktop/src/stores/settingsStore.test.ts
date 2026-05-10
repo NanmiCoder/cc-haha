@@ -129,3 +129,44 @@ describe('settingsStore desktop notification persistence', () => {
     expect(useSettingsStore.getState().desktopNotificationsEnabled).toBe(true)
   })
 })
+
+describe('settingsStore web search settings', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('keeps DuckDuckGo as a valid keyless web search mode', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({
+          webSearch: { mode: 'duckduckgo', tavilyApiKey: '', braveApiKey: '' },
+        }),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().webSearch).toEqual({
+      mode: 'duckduckgo',
+      tavilyApiKey: '',
+      braveApiKey: '',
+    })
+  })
+})

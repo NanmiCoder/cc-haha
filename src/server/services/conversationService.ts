@@ -373,6 +373,24 @@ export class ConversationService {
     })
   }
 
+  sendSyntheticMessage(
+    sessionId: string,
+    content: string,
+    options: { priority?: 'now' | 'next' | 'later' } = {},
+  ): boolean {
+    return this.sendSdkMessage(sessionId, {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: content }],
+      },
+      parent_tool_use_id: null,
+      session_id: '',
+      isSynthetic: true,
+      priority: options.priority ?? 'next',
+    })
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,

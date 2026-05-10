@@ -4110,6 +4110,8 @@ function runHeadlessStreaming(
         value: await resolveAndPrepend(message, message.message.content),
         uuid: message.uuid,
         priority: message.priority,
+        isMeta: message.isSynthetic ? true : undefined,
+        skipSlashCommands: message.isSynthetic ? true : undefined,
       })
       // Increment prompt count for attribution tracking and save snapshot
       // The snapshot persists promptCount so it survives compaction

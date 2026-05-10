@@ -1397,6 +1397,7 @@ function GeneralSettings() {
     { value: 'auto', label: t('settings.general.webSearch.mode.auto') },
     { value: 'tavily', label: t('settings.general.webSearch.mode.tavily') },
     { value: 'brave', label: t('settings.general.webSearch.mode.brave') },
+    { value: 'duckduckgo', label: t('settings.general.webSearch.mode.duckduckgo') },
     { value: 'anthropic', label: t('settings.general.webSearch.mode.anthropic') },
     { value: 'disabled', label: t('settings.general.webSearch.mode.disabled') },
   ]
@@ -1606,7 +1607,7 @@ function GeneralSettings() {
         <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.webSearchTitle')}</h2>
         <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webSearchDescription')}</p>
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-4">
-          <div className="grid grid-cols-5 gap-1.5 mb-4">
+          <div className="grid grid-cols-6 gap-1.5 mb-4">
             {WEB_SEARCH_MODES.map(({ value, label }) => (
               <button
                 key={value}

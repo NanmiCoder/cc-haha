@@ -23,6 +23,8 @@ export const FALLBACK_SLASH_COMMANDS = [
   ...SETTINGS_SLASH_COMMANDS.map(({ name, description }) => ({ name, description })),
   { name: 'compact', description: 'Compact conversation context' },
   { name: 'clear', description: 'Clear conversation history' },
+  { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent session goal' },
+  { name: 'retry', description: 'View, pause, resume, retry now, or clear automatic model request retries' },
   { name: 'review', description: 'Review code changes' },
   { name: 'commit', description: 'Create a git commit' },
   { name: 'pr', description: 'Create a pull request' },

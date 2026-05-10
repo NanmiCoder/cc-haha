@@ -428,4 +428,68 @@ describe('ChatInput file mentions', () => {
       attachments: [{ name: 'conditions.py', path: '/repo/backend/src/conditions.py' }],
     })
   })
+
+  it('restores recalled file attachments into the composer', async () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'existing', type: 'assistant_text', content: 'ready', timestamp: 1 }],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+          composerPrefill: {
+            text: 'Update this section',
+            nonce: 1,
+            attachments: [{
+              type: 'file',
+              name: 'App.tsx',
+              path: 'src/App.tsx',
+              lineStart: 12,
+              lineEnd: 18,
+              note: 'tighten copy',
+              quote: '<Header />',
+            }],
+          },
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    await waitFor(() => {
+      expect(input.value).toBe('Update this section')
+    })
+    expect(screen.getByRole('button', { name: 'Remove App.tsx' })).toBeInTheDocument()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: 'Update this section',
+      attachments: [{
+        type: 'file',
+        name: 'App.tsx',
+        path: 'src/App.tsx',
+        data: undefined,
+        mimeType: undefined,
+        lineStart: 12,
+        lineEnd: 18,
+        note: 'tighten copy',
+        quote: '<Header />',
+      }],
+    })
+  })
 })

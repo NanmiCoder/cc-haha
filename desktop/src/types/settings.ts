@@ -4,7 +4,13 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermiss
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
 export type ThemeMode = 'light' | 'dark'
-export type WebSearchMode = 'auto' | 'anthropic' | 'tavily' | 'brave' | 'disabled'
+export type WebSearchMode =
+  | 'auto'
+  | 'anthropic'
+  | 'tavily'
+  | 'brave'
+  | 'duckduckgo'
+  | 'disabled'
 
 export type WebSearchSettings = {
   mode?: WebSearchMode

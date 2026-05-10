@@ -141,6 +141,44 @@ function Resolve-OutputDirectory {
   return $PreferredPath
 }
 
+function Remove-PathIfExists {
+  param([string]$Path)
+
+  if (Test-Path -LiteralPath $Path) {
+    Remove-Item -LiteralPath $Path -Force -Recurse
+  }
+}
+
+function Remove-AppBuildCache {
+  param([string]$ReleaseDir)
+
+  if (-not (Test-Path -LiteralPath $ReleaseDir)) {
+    return
+  }
+
+  Remove-PathIfExists -Path (Join-Path $ReleaseDir 'bundle')
+  Remove-PathIfExists -Path (Join-Path $ReleaseDir 'claude-code-desktop.exe')
+
+  $buildDir = Join-Path $ReleaseDir 'build'
+  if (Test-Path -LiteralPath $buildDir) {
+    Get-ChildItem -LiteralPath $buildDir -Directory -Filter 'claude-code-desktop-*' -ErrorAction SilentlyContinue |
+      ForEach-Object { Remove-PathIfExists -Path $_.FullName }
+  }
+
+  $fingerprintDir = Join-Path $ReleaseDir '.fingerprint'
+  if (Test-Path -LiteralPath $fingerprintDir) {
+    Get-ChildItem -LiteralPath $fingerprintDir -Directory -Filter 'claude-code-desktop-*' -ErrorAction SilentlyContinue |
+      ForEach-Object { Remove-PathIfExists -Path $_.FullName }
+  }
+
+  $depsDir = Join-Path $ReleaseDir 'deps'
+  if (Test-Path -LiteralPath $depsDir) {
+    Get-ChildItem -LiteralPath $depsDir -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like 'claude_code_desktop-*' -or $_.Name -like 'libclaude_code_desktop-*' } |
+      ForEach-Object { Remove-PathIfExists -Path $_.FullName }
+  }
+}
+
 Assert-WindowsHost
 Assert-Command bun
 
@@ -189,6 +227,47 @@ if ($env:SKIP_INSTALL -ne '1') {
   }
 }
 
+Write-Step 'Cleaning stale frontend output, sidecar binaries, and Tauri app cache...'
+Get-ChildItem -LiteralPath (Join-Path $desktopDir 'src-tauri\binaries') -Filter 'claude-sidecar-*' -File -ErrorAction SilentlyContinue |
+  ForEach-Object { Remove-PathIfExists -Path $_.FullName }
+Remove-PathIfExists -Path (Join-Path $desktopDir 'dist')
+Remove-PathIfExists -Path (Join-Path $desktopDir 'tsconfig.tsbuildinfo')
+
+$targetReleaseDir = Join-Path $tauriTargetDir "$targetTriple\release"
+$fallbackReleaseDir = Join-Path $tauriTargetDir 'release'
+if ($env:PRESERVE_TAURI_TARGET -eq '1') {
+  Write-Step 'PRESERVE_TAURI_TARGET=1: keeping Rust dependency cache, clearing app-specific artifacts only...'
+  Remove-AppBuildCache -ReleaseDir $targetReleaseDir
+  Remove-AppBuildCache -ReleaseDir $fallbackReleaseDir
+} else {
+  Write-Step "Removing Tauri target cache for $targetTriple to force fresh embedded frontend assets..."
+  Remove-PathIfExists -Path (Join-Path $tauriTargetDir $targetTriple)
+  Remove-AppBuildCache -ReleaseDir $fallbackReleaseDir
+}
+
+Write-Step 'Rebuilding frontend (tsc + vite)...'
+Push-Location $desktopDir
+try {
+  & bun run build
+  if ($LASTEXITCODE -ne 0) {
+    throw "[build-windows-x64] bun run build failed (exit $LASTEXITCODE)"
+  }
+} finally {
+  Pop-Location
+}
+
+Write-Step "Rebuilding sidecar for $targetTriple..."
+Push-Location $desktopDir
+try {
+  $env:TAURI_ENV_TARGET_TRIPLE = $targetTriple
+  & bun run build:sidecars
+  if ($LASTEXITCODE -ne 0) {
+    throw "[build-windows-x64] bun run build:sidecars failed (exit $LASTEXITCODE)"
+  }
+} finally {
+  Pop-Location
+}
+
 $tauriBuildArgs = @(
   'tauri',
   'build',
@@ -199,18 +278,20 @@ $tauriBuildArgs = @(
   '--ci'
 )
 
-$tempConfigPath = $null
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-  $tempConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) 'cc-haha.tauri.local.windows.json'
-  $tempConfig = @{
-    bundle = @{
-      createUpdaterArtifacts = $false
-    }
-  } | ConvertTo-Json -Depth 10
-  Set-Content -Path $tempConfigPath -Value $tempConfig -Encoding UTF8
-  Write-Step 'TAURI_SIGNING_PRIVATE_KEY not set, disabling updater artifacts for local build'
-  $tauriBuildArgs += @('--config', $tempConfigPath)
+$tempConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) 'cc-haha.tauri.local.windows.json'
+$tempConfig = @{
+  build = @{
+    beforeBuildCommand = 'cmd /c exit /b 0'
+  }
 }
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+  $tempConfig.bundle = @{
+    createUpdaterArtifacts = $false
+  }
+  Write-Step 'TAURI_SIGNING_PRIVATE_KEY not set, disabling updater artifacts for local build'
+}
+Set-Content -Path $tempConfigPath -Value ($tempConfig | ConvertTo-Json -Depth 10) -Encoding UTF8
+$tauriBuildArgs += @('--config', $tempConfigPath)
 
 if ($null -ne $TauriArgs) {
   $remainingArgs = @($TauriArgs)

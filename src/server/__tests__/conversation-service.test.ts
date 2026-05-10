@@ -84,6 +84,27 @@ describe('ConversationService', () => {
     await expect(fs.stat(path.dirname(env.CLAUDE_CODE_DIAGNOSTICS_FILE))).resolves.toBeTruthy()
   })
 
+  test('sendSyntheticMessage marks desktop-injected prompts as synthetic', () => {
+    const service = new ConversationService() as any
+    const sent: string[] = []
+    service.sessions.set('synthetic-session', {
+      sdkSocket: { send: (payload: string) => sent.push(payload) },
+      pendingOutbound: [],
+    })
+
+    expect(service.sendSyntheticMessage('synthetic-session', 'continue the goal')).toBe(true)
+
+    expect(JSON.parse(sent[0]!)).toMatchObject({
+      type: 'user',
+      isSynthetic: true,
+      priority: 'next',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'continue the goal' }],
+      },
+    })
+  })
+
   test('strips inherited provider env when desktop provider config exists', async () => {
     const ccHahaDir = path.join(tmpDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })

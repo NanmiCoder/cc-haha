@@ -4,14 +4,16 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../../services/analytics/index.js'
-import { queryHaiku } from '../../services/api/claude.js'
+import { queryHaiku, queryWithModel } from '../../services/api/claude.js'
 import { AbortError } from '../../utils/errors.js'
 import { getWebFetchUserAgent } from '../../utils/http.js'
 import { logError } from '../../utils/log.js'
+import { getSmallFastModel } from '../../utils/model/model.js'
 import {
   isBinaryContentType,
   persistBinaryContent,
 } from '../../utils/mcpOutputStorage.js'
+import { extractTextContent } from '../../utils/messages.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { isPreapprovedHost } from './preapproved.js'
@@ -139,6 +141,46 @@ const MAX_REDIRECTS = 10
 
 // Truncate to not spend too many tokens
 export const MAX_MARKDOWN_LENGTH = 100_000
+
+type WebFetchProcessingModel = {
+  model: string
+  useSmallFastModel: boolean
+}
+
+function isClaudeModel(model: string | undefined): boolean {
+  return /\bclaude\b/i.test(model ?? '')
+}
+
+export function resolveWebFetchProcessingModel(
+  mainLoopModel: string | undefined,
+): WebFetchProcessingModel {
+  const smallFastModel = getSmallFastModel()
+  const hasConfiguredSmallFastModel =
+    typeof process.env.ANTHROPIC_SMALL_FAST_MODEL === 'string' &&
+    process.env.ANTHROPIC_SMALL_FAST_MODEL.trim().length > 0
+  const hasConfiguredHaikuModel =
+    typeof process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL === 'string' &&
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL.trim().length > 0
+
+  if (
+    mainLoopModel &&
+    !isClaudeModel(mainLoopModel) &&
+    isClaudeModel(smallFastModel) &&
+    !hasConfiguredSmallFastModel &&
+    !hasConfiguredHaikuModel
+  ) {
+    return { model: mainLoopModel, useSmallFastModel: false }
+  }
+
+  return { model: smallFastModel, useSmallFastModel: true }
+}
+
+export function extractWebFetchPromptResult(
+  content: readonly { readonly type: string }[],
+): string {
+  const text = extractTextContent(content, '\n\n').trim()
+  return text || 'No response from model'
+}
 
 export function isPreapprovedUrl(url: string): boolean {
   try {
@@ -498,7 +540,10 @@ export async function applyPromptToMarkdown(
   prompt: string,
   markdownContent: string,
   signal: AbortSignal,
-  isNonInteractiveSession: boolean,
+  options: {
+    isNonInteractiveSession: boolean
+    mainLoopModel?: string
+  },
   isPreapprovedDomain: boolean,
 ): Promise<string> {
   // Truncate content to avoid "Prompt is too long" errors from the secondary model
@@ -513,18 +558,30 @@ export async function applyPromptToMarkdown(
     prompt,
     isPreapprovedDomain,
   )
-  const assistantMessage = await queryHaiku({
-    systemPrompt: asSystemPrompt([]),
-    userPrompt: modelPrompt,
-    signal,
-    options: {
-      querySource: 'web_fetch_apply',
-      agents: [],
-      isNonInteractiveSession,
-      hasAppendSystemPrompt: false,
-      mcpTools: [],
-    },
-  })
+  const processingModel = resolveWebFetchProcessingModel(options.mainLoopModel)
+  const queryOptions = {
+    querySource: 'web_fetch_apply' as const,
+    agents: [],
+    isNonInteractiveSession: options.isNonInteractiveSession,
+    hasAppendSystemPrompt: false,
+    mcpTools: [],
+  }
+  const assistantMessage = processingModel.useSmallFastModel
+    ? await queryHaiku({
+        systemPrompt: asSystemPrompt([]),
+        userPrompt: modelPrompt,
+        signal,
+        options: queryOptions,
+      })
+    : await queryWithModel({
+        systemPrompt: asSystemPrompt([]),
+        userPrompt: modelPrompt,
+        signal,
+        options: {
+          ...queryOptions,
+          model: processingModel.model,
+        },
+      })
 
   // We need to bubble this up, so that the tool call throws, causing us to return
   // an is_error tool_use block to the server, and render a red dot in the UI.
@@ -532,12 +589,5 @@ export async function applyPromptToMarkdown(
     throw new AbortError()
   }
 
-  const { content } = assistantMessage.message
-  if (content.length > 0) {
-    const contentBlock = content[0]
-    if ('text' in contentBlock!) {
-      return contentBlock.text
-    }
-  }
-  return 'No response from model'
+  return extractWebFetchPromptResult(assistantMessage.message.content)
 }

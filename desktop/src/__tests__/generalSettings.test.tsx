@@ -255,6 +255,20 @@ describe('Settings > General tab', () => {
     })
   })
 
+  it('saves DuckDuckGo keyless WebSearch mode', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    fireEvent.click(screen.getByRole('button', { name: 'DuckDuckGo' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(useSettingsStore.getState().setWebSearch).toHaveBeenCalledWith({
+      mode: 'duckduckgo',
+      tavilyApiKey: '',
+      braveApiKey: '',
+    })
+  })
+
   it('links to WebSearch provider API key dashboards', () => {
     render(<Settings />)
 

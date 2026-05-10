@@ -149,11 +149,14 @@ function convertUserMessage(blocks: AnthropicContentBlock[], output: OpenAIChatM
 
 function convertAssistantMessage(blocks: AnthropicContentBlock[], output: OpenAIChatMessage[]): void {
   let textContent = ''
+  let reasoningContent = ''
   const toolCalls: OpenAIToolCall[] = []
 
   for (const block of blocks) {
     if (block.type === 'text') {
       textContent += block.text
+    } else if (block.type === 'thinking') {
+      reasoningContent += block.thinking
     } else if (block.type === 'tool_use') {
       toolCalls.push({
         id: block.id,
@@ -164,12 +167,17 @@ function convertAssistantMessage(blocks: AnthropicContentBlock[], output: OpenAI
         },
       })
     }
-    // Skip thinking blocks — no OpenAI equivalent
   }
 
   const msg: OpenAIChatMessage = {
     role: 'assistant',
     content: textContent || null,
+  }
+
+  if (reasoningContent) {
+    // DeepSeek/OpenRouter-style thinking mode requires this field when a
+    // later tool_result continues the same assistant turn.
+    msg.reasoning_content = reasoningContent
   }
 
   if (toolCalls.length > 0) {

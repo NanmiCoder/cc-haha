@@ -16,12 +16,14 @@ import type { RuntimeSelection } from '../types/runtime'
 import type {
   AgentTaskNotification,
   AttachmentRef,
+  AutoRetryState,
   ChatState,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
   UIAttachment,
   UIMessage,
   ServerMessage,
+  SessionGoal,
   TokenUsage,
 } from '../types/chat'
 
@@ -51,6 +53,8 @@ export type PerSessionState = {
   elapsedSeconds: number
   statusVerb: string
   slashCommands: Array<{ name: string; description: string }>
+  goal?: SessionGoal | null
+  retry?: AutoRetryState | null
   agentTaskNotifications: Record<string, AgentTaskNotification>
   elapsedTimer: ReturnType<typeof setInterval> | null
   composerPrefill?: {
@@ -75,6 +79,8 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   elapsedSeconds: 0,
   statusVerb: '',
   slashCommands: [],
+  goal: null,
+  retry: null,
   agentTaskNotifications: {},
   elapsedTimer: null,
   composerPrefill: null,
@@ -119,6 +125,7 @@ type ChatStore = {
     sessionId: string,
     prefill: { text: string; attachments?: UIAttachment[] },
   ) => void
+  discardLocalTurn: (sessionId: string, targetUserMessageId: string) => void
   clearMessages: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
@@ -147,6 +154,82 @@ const AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS = 160
 
 let msgCounter = 0
 const nextId = () => `msg-${++msgCounter}-${Date.now()}`
+
+function isSessionGoalData(value: unknown): value is SessionGoal {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.sessionId === 'string' &&
+    typeof record.goalId === 'string' &&
+    typeof record.objective === 'string' &&
+    typeof record.status === 'string' &&
+    typeof record.tokensUsed === 'number' &&
+    typeof record.timeUsedSeconds === 'number'
+  )
+}
+
+function isAutoRetryStateData(value: unknown): value is AutoRetryState {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.paused === 'boolean' &&
+    typeof record.failureCount === 'number' &&
+    typeof record.nextAttempt === 'number' &&
+    typeof record.intervalMs === 'number' &&
+    (typeof record.nextRetryAt === 'number' || record.nextRetryAt === null) &&
+    typeof record.errorMessage === 'string' &&
+    typeof record.errorCode === 'string'
+  )
+}
+
+function getRetryStatusFromSubtype(
+  subtype: string,
+  retry: AutoRetryState,
+): AutoRetryState['status'] {
+  if (subtype === 'retry_attempting' || subtype === 'retry_resumed') return 'attempting'
+  if (subtype === 'retry_paused' || retry.paused) return 'paused'
+  if (subtype === 'retry_scheduled') return 'scheduled'
+  return 'status'
+}
+
+function normalizeRetryState(
+  retry: AutoRetryState,
+  subtype: string,
+  message: string | null,
+): AutoRetryState {
+  return {
+    ...retry,
+    status: getRetryStatusFromSubtype(subtype, retry),
+    statusMessage: message ?? retry.statusMessage,
+  }
+}
+
+function removeTrailingRetryErrorMessages(
+  messages: UIMessage[],
+  retry: AutoRetryState | null,
+): UIMessage[] {
+  if (!retry) return messages
+
+  let end = messages.length
+  while (end > 0) {
+    const message = messages[end - 1]
+    if (
+      message?.type === 'error' &&
+      message.message === retry.errorMessage &&
+      message.code === retry.errorCode
+    ) {
+      end -= 1
+      continue
+    }
+    break
+  }
+
+  return end === messages.length ? messages : messages.slice(0, end)
+}
+
+function shouldAppendRetrySystemMessage(subtype: string): boolean {
+  return subtype === 'retry_status' || subtype === 'retry_cleared'
+}
 
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
@@ -208,6 +291,126 @@ function appendAssistantTextMessage(
       ...(model ? { model } : {}),
     },
   ]
+}
+
+function messageHistorySignature(messages: UIMessage[]): string {
+  return messages
+    .map((message) => {
+      switch (message.type) {
+        case 'user_text':
+          return `${message.type}:${message.id}:${message.content}:${message.modelContent ?? ''}`
+        case 'assistant_text':
+          return `${message.type}:${message.id}:${message.content}:${message.model ?? ''}`
+        case 'thinking':
+          return `${message.type}:${message.id}:${message.content}`
+        case 'tool_use':
+          return `${message.type}:${message.id}:${message.toolUseId}:${message.toolName}`
+        case 'tool_result':
+          return `${message.type}:${message.id}:${message.toolUseId}:${message.isError}`
+        case 'error':
+          return `${message.type}:${message.id}:${message.code}:${message.message}`
+        case 'task_summary':
+          return `${message.type}:${message.id}:${message.tasks.length}`
+        case 'permission_request':
+          return `${message.type}:${message.id}:${message.requestId}:${message.toolName}`
+        case 'system':
+          return `${message.type}:${message.id}:${message.content}`
+        default:
+          return `${(message as { type: string }).type}:${(message as { id?: string }).id ?? ''}`
+      }
+    })
+    .join('\n')
+}
+
+type HistorySnapshotApplyMode = 'replace' | 'recover'
+
+function normalizeComparableMessageText(text: string): string {
+  return text.replace(/\r\n/g, '\n').trim()
+}
+
+function getUserTurnComparableContents(messages: UIMessage[]): string[] {
+  return messages.flatMap((message) => {
+    if (message.type !== 'user_text' || message.pending) return []
+    return [normalizeComparableMessageText(message.modelContent ?? message.content)]
+  })
+}
+
+function historyCoversLocalUserTurns(
+  localMessages: UIMessage[],
+  historyMessages: UIMessage[],
+): boolean {
+  const localTurns = getUserTurnComparableContents(localMessages)
+  const historyTurns = getUserTurnComparableContents(historyMessages)
+  if (localTurns.length === 0 || historyTurns.length < localTurns.length) return false
+  return localTurns.every((content, index) => historyTurns[index] === content)
+}
+
+function hasAssistantCompletionForUserTurn(messages: UIMessage[], userTurnIndex: number): boolean {
+  let currentUserTurnIndex = -1
+
+  for (const message of messages) {
+    if (message.type === 'user_text' && !message.pending) {
+      currentUserTurnIndex += 1
+      continue
+    }
+    if (
+      currentUserTurnIndex === userTurnIndex &&
+      (message.type === 'assistant_text' || message.type === 'error')
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function historyContainsStreamingText(
+  historyMessages: UIMessage[],
+  streamingText: string,
+): boolean {
+  const comparableStreamingText = normalizeComparableMessageText(streamingText)
+  if (!comparableStreamingText) return true
+
+  return historyMessages.some((message) => (
+    message.type === 'assistant_text' &&
+    normalizeComparableMessageText(message.content).includes(comparableStreamingText)
+  ))
+}
+
+function shouldRecoverRuntimeFromHistory(
+  session: PerSessionState,
+  uiMessages: UIMessage[],
+): boolean {
+  const localUserTurnCount = getUserTurnComparableContents(session.messages).length
+  if (localUserTurnCount === 0) return false
+  if (!historyCoversLocalUserTurns(session.messages, uiMessages)) return false
+  if (!hasAssistantCompletionForUserTurn(uiMessages, localUserTurnCount - 1)) return false
+  return historyContainsStreamingText(uiMessages, session.streamingText)
+}
+
+function getHistorySnapshotApplyMode(
+  session: PerSessionState,
+  uiMessages: UIMessage[],
+): HistorySnapshotApplyMode | null {
+  if (uiMessages.length === 0) return session.messages.length === 0
+    ? 'replace'
+    : null
+  if (session.messages.length === 0) return 'replace'
+  if (
+    session.chatState !== 'idle' ||
+    session.streamingText.trim().length > 0 ||
+    session.streamingToolInput.trim().length > 0 ||
+    session.activeToolUseId ||
+    session.activeThinkingId ||
+    session.pendingPermission ||
+    session.pendingComputerUsePermission
+  ) {
+    return shouldRecoverRuntimeFromHistory(session, uiMessages) ? 'recover' : null
+  }
+
+  return messageHistorySignature(session.messages) !== messageHistorySignature(uiMessages)
+    ? 'replace'
+    : null
 }
 
 function normalizeNotificationPreview(content: string): string {
@@ -272,7 +475,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     void useCLITaskStore.getState().fetchSessionTasks(sessionId)
 
     const existing = get().sessions[sessionId]
-    if (existing && existing.connectionState !== 'disconnected') return
+    if (existing && existing.connectionState !== 'disconnected') {
+      void get().loadHistory(sessionId)
+      return
+    }
 
     set((s) => ({
       sessions: {
@@ -413,6 +619,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             statusVerb: isMemberSession ? '' : randomSpinnerVerb(),
             elapsedTimer: timer,
             connectionState: isMemberSession ? 'connected' : session.connectionState,
+            retry: null,
           },
         },
       }
@@ -513,14 +720,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         lastTodos,
         hasMessagesAfterTaskCompletion,
       } = await fetchAndMapSessionHistory(sessionId)
+      let recoveredFromHistory = false
       set((state) => {
         const session = state.sessions[sessionId]
-        if (!session || session.messages.length > 0) return state
+        if (!session) return state
+        const applyMode = getHistorySnapshotApplyMode(session, uiMessages)
+        if (!applyMode) return state
+        if (applyMode === 'recover') {
+          recoveredFromHistory = true
+          clearPendingDelta(sessionId)
+          clearPendingTaskToolUseIds(sessionId)
+          if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        }
         return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
           messages: uiMessages,
           agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
+          ...(applyMode === 'recover' ? {
+            chatState: 'idle',
+            streamingText: '',
+            streamingToolInput: '',
+            activeToolUseId: null,
+            activeToolName: null,
+            activeThinkingId: null,
+            pendingPermission: null,
+            pendingComputerUsePermission: null,
+            elapsedTimer: null,
+            statusVerb: '',
+          } : {}),
         })) }
       })
+      if (recoveredFromHistory) {
+        useTabStore.getState().updateTabStatus(sessionId, 'idle')
+      }
       if (lastTodos && lastTodos.length > 0) {
         const taskStore = useCLITaskStore.getState()
         if (taskStore.sessionId === sessionId && taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos, sessionId)
@@ -591,6 +822,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
   },
 
+  discardLocalTurn: (sessionId, targetUserMessageId) => {
+    clearPendingDelta(sessionId)
+    clearPendingTaskToolUseIds(sessionId)
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      const targetIndex = session.messages.findIndex(
+        (message) => message.type === 'user_text' && message.id === targetUserMessageId,
+      )
+      if (targetIndex < 0) return state
+      if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+      return {
+        sessions: updateSessionIn(state.sessions, sessionId, () => ({
+          messages: session.messages.slice(0, targetIndex),
+          chatState: 'idle',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          elapsedTimer: null,
+          statusVerb: '',
+        })),
+      }
+    })
+  },
+
   clearMessages: (sessionId) => {
     clearPendingTaskToolUseIds(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], streamingText: '', chatState: 'idle' })) }))
@@ -603,6 +863,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     switch (msg.type) {
       case 'connected':
+        void get().loadHistory(sessionId)
         break
 
       case 'status':
@@ -842,7 +1103,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (pendingText.trim()) {
             newMessages = appendAssistantTextMessage(newMessages, pendingText, Date.now())
           }
-          newMessages = [...newMessages, { id: nextId(), type: 'error', message: msg.message, code: msg.code, timestamp: Date.now() }]
+          if (!s.retry) {
+            newMessages = [...newMessages, { id: nextId(), type: 'error', message: msg.message, code: msg.code, timestamp: Date.now() }]
+          }
           return {
             messages: newMessages,
             chatState: 'idle',
@@ -899,6 +1162,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             statusVerb: '',
             tokenUsage: { input_tokens: 0, output_tokens: 0 },
             slashCommands: [],
+            goal: null,
+            retry: null,
           }))
           clearPendingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
@@ -906,6 +1171,70 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           useSessionStore.getState().updateSessionTitle(sessionId, 'New Session')
           useTabStore.getState().updateTabTitle(sessionId, 'New Session')
           useTabStore.getState().updateTabStatus(sessionId, 'idle')
+        }
+        if (msg.subtype.startsWith('goal_')) {
+          const goal = isSessionGoalData(msg.data) ? msg.data : null
+          const message =
+            typeof msg.message === 'string' && msg.message.trim()
+              ? msg.message
+              : null
+          update((session) => ({
+            goal:
+              msg.subtype === 'goal_cleared' || msg.subtype === 'goal_status'
+                ? goal
+                : goal ?? session.goal ?? null,
+            ...(message
+              ? {
+                  messages: [
+                    ...session.messages,
+                    {
+                      id: nextId(),
+                      type: 'system',
+                      content: message,
+                      timestamp: Date.now(),
+                    },
+                  ],
+                }
+              : {}),
+          }))
+        }
+        if (msg.subtype.startsWith('retry_')) {
+          const retry = isAutoRetryStateData(msg.data) ? msg.data : null
+          const message =
+            typeof msg.message === 'string' && msg.message.trim()
+              ? msg.message
+              : null
+          const nextRetry =
+            msg.subtype === 'retry_cleared' || msg.subtype === 'retry_succeeded'
+              ? null
+              : retry
+                ? normalizeRetryState(retry, msg.subtype, message)
+                : null
+          update((session) => {
+            const retryForErrorCleanup = nextRetry ?? session.retry ?? null
+            const messages = removeTrailingRetryErrorMessages(
+              session.messages,
+              retryForErrorCleanup,
+            )
+            return {
+              retry: nextRetry ?? (
+                msg.subtype === 'retry_cleared' || msg.subtype === 'retry_succeeded'
+                  ? null
+                  : session.retry ?? null
+              ),
+              messages: message && shouldAppendRetrySystemMessage(msg.subtype)
+                ? [
+                    ...messages,
+                    {
+                      id: nextId(),
+                      type: 'system',
+                      content: message,
+                      timestamp: Date.now(),
+                    },
+                  ]
+                : messages,
+            }
+          })
         }
         if (msg.subtype === 'compact_boundary') {
           update((session) => ({

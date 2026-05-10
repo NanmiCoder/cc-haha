@@ -10,6 +10,7 @@ export type OpenAIChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content?: string | OpenAIChatContentPart[] | null
   name?: string
+  reasoning_content?: string
   tool_calls?: OpenAIToolCall[]
   tool_call_id?: string
 }

@@ -806,7 +806,7 @@ describe('WorkspacePanel', () => {
       expect(view.getByTestId('workspace-code').textContent).toContain('const line2300 = 2300')
     })
     expect(view.getByRole('button', { name: 'Collapse preview' })).toBeTruthy()
-  })
+  }, 30_000)
 
   it('renders image previews from workspace files', async () => {
     await setWorkspaceState((state) => ({

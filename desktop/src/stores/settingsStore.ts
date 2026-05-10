@@ -6,6 +6,14 @@ import type { Locale } from '../i18n'
 import { useUIStore } from './uiStore'
 
 const LOCALE_STORAGE_KEY = 'cc-haha-locale'
+const WEB_SEARCH_MODES = new Set<WebSearchSettings['mode']>([
+  'auto',
+  'anthropic',
+  'tavily',
+  'brave',
+  'duckduckgo',
+  'disabled',
+])
 let desktopNotificationsSaveQueue: Promise<void> = Promise.resolve()
 
 function getStoredLocale(): Locale {
@@ -189,8 +197,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 }))
 
 function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): WebSearchSettings {
+  const mode = settings?.mode && WEB_SEARCH_MODES.has(settings.mode)
+    ? settings.mode
+    : 'auto'
+
   return {
-    mode: settings?.mode ?? 'auto',
+    mode,
     tavilyApiKey: settings?.tavilyApiKey ?? '',
     braveApiKey: settings?.braveApiKey ?? '',
   }

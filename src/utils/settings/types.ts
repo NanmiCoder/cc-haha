@@ -655,10 +655,10 @@ export const SettingsSchema = lazySchema(() =>
       webSearch: z
         .object({
           mode: z
-            .enum(['auto', 'anthropic', 'tavily', 'brave', 'disabled'])
+            .enum(['auto', 'anthropic', 'tavily', 'brave', 'duckduckgo', 'disabled'])
             .optional()
             .describe(
-              'WebSearch backend selection. auto uses native Claude web search for Claude model names, then Tavily, then Brave.',
+              'WebSearch backend selection. auto uses native Claude web search for Claude model names, then Tavily, then Brave, then DuckDuckGo. duckduckgo uses keyless managed search.',
             ),
           tavilyApiKey: z
             .string()

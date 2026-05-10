@@ -51,6 +51,14 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
   )
 }
 
+export function isLikelyClaudeModel(model: string | undefined): boolean {
+  if (!model) {
+    return false
+  }
+
+  return /(^|[/:._-])claude([/:._-]|$)/.test(model.toLowerCase())
+}
+
 /**
  * Helper to get the model from /model (including via /config), the --model flag, environment variable,
  * or the saved settings. The returned value can be a model alias if that's what the user specified.

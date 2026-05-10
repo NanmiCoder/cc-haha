@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, memo, useState, useCallback } from 'react'
+import { useRef, useEffect, useLayoutEffect, useMemo, memo, useState, useCallback } from 'react'
 import { ApiError } from '../../api/client'
 import { sessionsApi, type SessionTurnCheckpoint } from '../../api/sessions'
 import { useChatStore } from '../../stores/chatStore'
@@ -18,7 +18,7 @@ import { AskUserQuestion } from './AskUserQuestion'
 import { StreamingIndicator } from './StreamingIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
-import type { AgentTaskNotification, UIMessage } from '../../types/chat'
+import type { AgentTaskNotification, AutoRetryState, UIMessage } from '../../types/chat'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -47,6 +47,12 @@ type TurnChangeCardModel = {
   checkpoint: SessionTurnCheckpoint
   workDir: string | null
   isLatest: boolean
+}
+
+type RewindConfirmRequest = {
+  target: RewindTurnTarget
+  isLatest: boolean
+  source: 'message' | 'change-card'
 }
 
 function appendChildToolCall(
@@ -173,6 +179,25 @@ export function getLatestCompletedTurnTarget(messages: UIMessage[]): RewindTurnT
   return completedTurns.length > 0 ? completedTurns[completedTurns.length - 1] ?? null : null
 }
 
+export function getLatestUserTurnTarget(messages: UIMessage[]): RewindTurnTarget | null {
+  let userMessageIndex = -1
+  let latestTarget: RewindTurnTarget | null = null
+
+  for (const message of messages) {
+    if (message.type !== 'user_text' || message.pending) continue
+    userMessageIndex += 1
+    latestTarget = {
+      messageId: message.id,
+      userMessageIndex,
+      content: message.content,
+      expectedContent: message.modelContent ?? message.content,
+      attachments: message.attachments,
+    }
+  }
+
+  return latestTarget
+}
+
 function buildTurnCardInsertionMap(
   renderItems: RenderItem[],
   turnChangeCards: TurnChangeCardModel[],
@@ -220,6 +245,17 @@ function getApiErrorMessage(error: unknown) {
       : String(error)
 }
 
+function isLocalOnlyRewindMiss(error: unknown) {
+  if (!(error instanceof ApiError)) return false
+  const message = getApiErrorMessage(error)
+  return (
+    error.status === 404 ||
+    message.includes('This session has no user messages to rewind') ||
+    message.includes('Invalid rewind target') ||
+    message.includes('Message not found in active session chain')
+  )
+}
+
 function isSessionTurnCheckpoint(value: unknown): value is SessionTurnCheckpoint {
   if (!value || typeof value !== 'object') return false
   const checkpoint = value as Partial<SessionTurnCheckpoint>
@@ -246,11 +282,94 @@ type MessageListProps = {
 }
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 48
+const AUTO_SCROLL_FRAME_PASSES = 2
 
 function isNearScrollBottom(element: HTMLElement) {
   return (
     element.scrollHeight - element.scrollTop - element.clientHeight <=
     AUTO_SCROLL_BOTTOM_THRESHOLD_PX
+  )
+}
+
+function scrollToElementBottom(
+  container: HTMLElement,
+  bottomElement: HTMLElement | null,
+) {
+  bottomElement?.scrollIntoView?.({ behavior: 'auto', block: 'end' })
+  container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+}
+
+function getRetryRemainingSeconds(retry: AutoRetryState, now: number) {
+  if (!retry.nextRetryAt) return 0
+  return Math.max(0, Math.ceil((retry.nextRetryAt - now) / 1000))
+}
+
+function formatRetryCountdown(seconds: number) {
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60)
+    const remainder = seconds % 60
+    return `${minutes}:${String(remainder).padStart(2, '0')}`
+  }
+  return `${seconds}s`
+}
+
+function getRetryNoticeTitle(retry: AutoRetryState, now: number) {
+  if (retry.paused || retry.status === 'paused') {
+    return retry.statusMessage || 'Automatic retry paused'
+  }
+
+  if (retry.status === 'attempting' || retry.status === 'resumed' || !retry.nextRetryAt) {
+    return `Retrying model request (retry #${retry.failureCount})`
+  }
+
+  const remainingSeconds = getRetryRemainingSeconds(retry, now)
+  return `Retrying in ${formatRetryCountdown(remainingSeconds)} (retry #${retry.failureCount})`
+}
+
+function AutoRetryNotice({ retry }: { retry: AutoRetryState }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (retry.paused || !retry.nextRetryAt) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [retry.nextRetryAt, retry.paused])
+
+  const title = getRetryNoticeTitle(retry, now)
+  const helperText = retry.paused
+    ? 'Use /retry resume to continue, /retry now to retry immediately, or /retry clear to clear this state.'
+    : 'Use /retry error to view details, /retry pause to pause, or /retry now to retry immediately.'
+
+  return (
+    <div
+      role="status"
+      aria-label="Automatic retry status"
+      className="mb-4 rounded-[var(--radius-lg)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-container)]/20 px-4 py-3 text-sm text-[var(--color-text-primary)] shadow-sm"
+    >
+      <div className="flex items-start gap-3">
+        <span className="material-symbols-rounded mt-0.5 text-[18px] text-[var(--color-warning)]">
+          autorenew
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium">{title}</span>
+            <span className="rounded-full bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]">
+              attempt {retry.failureCount}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
+            Last error code: {retry.errorCode}
+          </div>
+          <div className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+            {retry.errorMessage}
+          </div>
+          <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+            {helperText}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -263,6 +382,7 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
   const stopGeneration = useChatStore((s) => s.stopGeneration)
   const reloadHistory = useChatStore((s) => s.reloadHistory)
   const queueComposerPrefill = useChatStore((s) => s.queueComposerPrefill)
+  const discardLocalTurn = useChatStore((s) => s.discardLocalTurn)
   const isMemberSession = useTeamStore((s) =>
     resolvedSessionId ? Boolean(s.getMemberBySessionId(resolvedSessionId)) : false,
   )
@@ -271,10 +391,13 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
   const chatState = sessionState?.chatState ?? 'idle'
   const streamingText = sessionState?.streamingText ?? ''
   const activeThinkingId = sessionState?.activeThinkingId ?? null
+  const retry = sessionState?.retry ?? null
   const agentTaskNotifications = sessionState?.agentTaskNotifications ?? {}
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const scrollContentRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const shouldAutoScrollRef = useRef(true)
+  const pendingAutoScrollFramesRef = useRef<number[]>([])
   const lastSessionIdRef = useRef<string | null | undefined>(resolvedSessionId)
   const t = useTranslation()
   const [turnChangeCards, setTurnChangeCards] = useState<TurnChangeCardModel[]>([])
@@ -282,7 +405,7 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
   const [turnActionErrors, setTurnActionErrors] = useState<Record<string, string>>({})
   const [isLoadingTurnChangeCards, setIsLoadingTurnChangeCards] = useState(false)
   const [rewindingTurnId, setRewindingTurnId] = useState<string | null>(null)
-  const [turnUndoConfirmTargetId, setTurnUndoConfirmTargetId] = useState<string | null>(null)
+  const [rewindConfirmRequest, setRewindConfirmRequest] = useState<RewindConfirmRequest | null>(null)
 
   const updateAutoScrollState = useCallback(() => {
     const container = scrollContainerRef.current
@@ -290,22 +413,90 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
     shouldAutoScrollRef.current = isNearScrollBottom(container)
   }, [])
 
-  useEffect(() => {
+  const clearPendingAutoScrollFrames = useCallback(() => {
+    if (typeof window === 'undefined' || typeof window.cancelAnimationFrame !== 'function') {
+      pendingAutoScrollFramesRef.current = []
+      return
+    }
+    for (const frameId of pendingAutoScrollFramesRef.current) {
+      window.cancelAnimationFrame(frameId)
+    }
+    pendingAutoScrollFramesRef.current = []
+  }, [])
+
+  const performAutoScroll = useCallback(() => {
+    if (!shouldAutoScrollRef.current) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    scrollToElementBottom(container, bottomRef.current)
+  }, [])
+
+  const scheduleAutoScroll = useCallback(() => {
+    if (!shouldAutoScrollRef.current) return
+
+    clearPendingAutoScrollFrames()
+    performAutoScroll()
+
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      return
+    }
+
+    const scheduleFrame = (remainingPasses: number) => {
+      if (remainingPasses <= 0) return
+      const frameId = window.requestAnimationFrame(() => {
+        pendingAutoScrollFramesRef.current = pendingAutoScrollFramesRef.current.filter(
+          (id) => id !== frameId,
+        )
+        performAutoScroll()
+        scheduleFrame(remainingPasses - 1)
+      })
+      pendingAutoScrollFramesRef.current.push(frameId)
+    }
+
+    scheduleFrame(AUTO_SCROLL_FRAME_PASSES)
+  }, [clearPendingAutoScrollFrames, performAutoScroll])
+
+  useLayoutEffect(() => {
     if (lastSessionIdRef.current !== resolvedSessionId) {
       shouldAutoScrollRef.current = true
       lastSessionIdRef.current = resolvedSessionId
     }
 
-    if (!shouldAutoScrollRef.current) return
+    scheduleAutoScroll()
+  }, [
+    activeThinkingId,
+    agentTaskNotifications,
+    chatState,
+    messages,
+    resolvedSessionId,
+    retry,
+    scheduleAutoScroll,
+    streamingText,
+    turnChangeCards,
+  ])
 
-    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' })
-  }, [messages.length, resolvedSessionId, streamingText])
+  useEffect(() => {
+    const content = scrollContentRef.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(() => {
+      scheduleAutoScroll()
+    })
+    observer.observe(content)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [resolvedSessionId, scheduleAutoScroll])
+
+  useEffect(() => clearPendingAutoScrollFrames, [clearPendingAutoScrollFrames])
 
   const { toolResultMap, childToolCallsByParent, renderItems } = useMemo(
     () => buildRenderModel(messages),
     [messages],
   )
   const completedTurnTargets = useMemo(() => getCompletedTurnTargets(messages), [messages])
+  const latestUserTurnTarget = useMemo(() => getLatestUserTurnTarget(messages), [messages])
   const latestCompletedTurnId =
     completedTurnTargets.length > 0
       ? completedTurnTargets[completedTurnTargets.length - 1]?.messageId ?? null
@@ -314,11 +505,6 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
     () => buildTurnCardInsertionMap(renderItems, turnChangeCards),
     [renderItems, turnChangeCards],
   )
-  const confirmTurnCard = useMemo(
-    () => turnChangeCards.find((card) => card.target.messageId === turnUndoConfirmTargetId) ?? null,
-    [turnChangeCards, turnUndoConfirmTargetId],
-  )
-
   useEffect(() => {
     if (!resolvedSessionId || completedTurnTargets.length === 0 || isMemberSession) {
       setTurnChangeCards([])
@@ -384,9 +570,9 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
   }, [chatState, completedTurnTargets, isMemberSession, latestCompletedTurnId, resolvedSessionId])
 
   const handleUndoCurrentTurn = useCallback(async () => {
-    if (!resolvedSessionId || !confirmTurnCard || rewindingTurnId) return
+    if (!resolvedSessionId || !rewindConfirmRequest || rewindingTurnId) return
 
-    const target = confirmTurnCard.target
+    const target = rewindConfirmRequest.target
     setRewindingTurnId(target.messageId)
     setTurnActionErrors((current) => {
       if (!(target.messageId in current)) return current
@@ -420,30 +606,82 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
             })
           : t('chat.rewindSuccessConversationOnly', {
               count: result.conversation.messagesRemoved,
-            }),
+          }),
       })
 
-      setTurnUndoConfirmTargetId(null)
+      setRewindConfirmRequest(null)
     } catch (error) {
+      const message = getApiErrorMessage(error)
+      if (rewindConfirmRequest.source === 'message' && isLocalOnlyRewindMiss(error)) {
+        discardLocalTurn(resolvedSessionId, target.messageId)
+        queueComposerPrefill(resolvedSessionId, {
+          text: target.content,
+          attachments: target.attachments,
+        })
+        addToast({
+          type: 'success',
+          message: t('chat.recallLocalOnlySuccess'),
+        })
+        setRewindConfirmRequest(null)
+        return
+      }
+
       setTurnActionErrors((current) => ({
         ...current,
-        [target.messageId]: getApiErrorMessage(error),
+        [target.messageId]: message,
       }))
-      setTurnUndoConfirmTargetId(null)
+      addToast({
+        type: 'error',
+        message,
+      })
+      setRewindConfirmRequest(null)
     } finally {
       setRewindingTurnId(null)
     }
   }, [
     addToast,
     chatState,
-    confirmTurnCard,
+    discardLocalTurn,
     queueComposerPrefill,
     reloadHistory,
     resolvedSessionId,
+    rewindConfirmRequest,
     rewindingTurnId,
     stopGeneration,
     t,
   ])
+
+  const getConfirmText = useCallback((request: RewindConfirmRequest | null) => {
+    if (!request) {
+      return {
+        title: '',
+        body: '',
+        confirmLabel: '',
+      }
+    }
+
+    if (request.source === 'change-card') {
+      return {
+        title: request.isLatest
+          ? t('chat.turnChangesLatestConfirmTitle')
+          : t('chat.turnChangesHistoricalConfirmTitle'),
+        body: request.isLatest
+          ? t('chat.turnChangesLatestConfirmBody')
+          : t('chat.turnChangesHistoricalConfirmBody'),
+        confirmLabel: request.isLatest
+          ? t('chat.turnChangesLatestConfirmUndo')
+          : t('chat.turnChangesHistoricalConfirmUndo'),
+      }
+    }
+
+    return {
+      title: t('chat.recallLatestConfirmTitle'),
+      body: t('chat.recallLatestConfirmBody'),
+      confirmLabel: t('chat.recallConfirmUndo'),
+    }
+  }, [t])
+
+  const confirmText = getConfirmText(rewindConfirmRequest)
 
   return (
     <div
@@ -451,7 +689,10 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
       onScroll={updateAutoScrollState}
       className={`flex-1 overflow-y-auto ${compact ? 'px-3 py-3 pb-5' : 'px-4 py-4'}`}
     >
-      <div className={compact ? 'mx-auto max-w-full' : 'mx-auto max-w-[860px]'}>
+      <div
+        ref={scrollContentRef}
+        className={compact ? 'mx-auto max-w-full' : 'mx-auto max-w-[860px]'}
+      >
         {renderItems.map((item, index) => {
           const cardsForItem = turnCardsByRenderIndex.get(index) ?? []
 
@@ -468,21 +709,46 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
                     item.toolCalls.some((tc) => !toolResultMap.has(tc.toolUseId))
                   }
                 />
-              ) : (
-                <MessageBlock
-                  message={item.message}
-                  activeThinkingId={activeThinkingId}
-                  agentTaskNotifications={agentTaskNotifications}
-                  toolResult={
-                    item.message.type === 'tool_use'
-                      ? (() => {
-                          const result = toolResultMap.get(item.message.toolUseId)
-                          return result ? { content: result.content, isError: result.isError } : null
-                        })()
-                      : null
-                  }
-                />
-              )}
+              ) : (() => {
+                const userTurnTarget =
+                  item.message.type === 'user_text' &&
+                  latestUserTurnTarget?.messageId === item.message.id
+                    ? latestUserTurnTarget
+                    : null
+                const canRecallUserTurn =
+                  Boolean(userTurnTarget) &&
+                  !isMemberSession
+
+                return (
+                  <MessageBlock
+                    message={item.message}
+                    activeThinkingId={activeThinkingId}
+                    agentTaskNotifications={agentTaskNotifications}
+                    toolResult={
+                      item.message.type === 'tool_use'
+                        ? (() => {
+                            const result = toolResultMap.get(item.message.toolUseId)
+                            return result ? { content: result.content, isError: result.isError } : null
+                          })()
+                        : null
+                    }
+                    recallAction={canRecallUserTurn && userTurnTarget
+                      ? {
+                          label: t('chat.recallToEditAria'),
+                          displayLabel: t('chat.recallToEdit'),
+                          disabled: rewindingTurnId === userTurnTarget.messageId,
+                          onRecall: () => {
+                            setRewindConfirmRequest({
+                              target: userTurnTarget,
+                              isLatest: true,
+                              source: 'message',
+                            })
+                          },
+                        }
+                      : null}
+                  />
+                )
+              })()}
 
               {resolvedSessionId && cardsForItem.map((card) => (
                 <CurrentTurnChangeCard
@@ -495,7 +761,11 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
                   isUndoing={rewindingTurnId === card.target.messageId}
                   isLatest={card.isLatest}
                   onUndo={() => {
-                    setTurnUndoConfirmTargetId(card.target.messageId)
+                    setRewindConfirmRequest({
+                      target: card.target,
+                      isLatest: card.isLatest,
+                      source: 'change-card',
+                    })
                   }}
                 />
               ))}
@@ -515,6 +785,8 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
           <StreamingIndicator />
         )}
 
+        {retry && <AutoRetryNotice retry={retry} />}
+
         {!isLoadingTurnChangeCards && turnChangeCards.length === 0 && turnChangeLoadError && (
           <div className="mx-auto mb-5 w-full max-w-[860px] rounded-[var(--radius-lg)] border border-[var(--color-error)]/25 bg-[var(--color-error-container)]/18 px-4 py-3 text-xs text-[var(--color-error)]">
             {turnChangeLoadError}
@@ -525,22 +797,16 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
       </div>
 
       <ConfirmDialog
-        open={Boolean(confirmTurnCard)}
+        open={Boolean(rewindConfirmRequest)}
         onClose={() => {
           if (!rewindingTurnId) {
-            setTurnUndoConfirmTargetId(null)
+            setRewindConfirmRequest(null)
           }
         }}
         onConfirm={handleUndoCurrentTurn}
-        title={confirmTurnCard?.isLatest
-          ? t('chat.turnChangesLatestConfirmTitle')
-          : t('chat.turnChangesHistoricalConfirmTitle')}
-        body={confirmTurnCard?.isLatest
-          ? t('chat.turnChangesLatestConfirmBody')
-          : t('chat.turnChangesHistoricalConfirmBody')}
-        confirmLabel={confirmTurnCard?.isLatest
-          ? t('chat.turnChangesLatestConfirmUndo')
-          : t('chat.turnChangesHistoricalConfirmUndo')}
+        title={confirmText.title}
+        body={confirmText.body}
+        confirmLabel={confirmText.confirmLabel}
         cancelLabel={t('common.cancel')}
         confirmVariant="danger"
         loading={Boolean(rewindingTurnId)}
@@ -554,11 +820,18 @@ export const MessageBlock = memo(function MessageBlock({
   activeThinkingId,
   agentTaskNotifications,
   toolResult,
+  recallAction,
 }: {
   message: UIMessage
   activeThinkingId: string | null
   agentTaskNotifications: Record<string, AgentTaskNotification>
   toolResult?: { content: unknown; isError: boolean } | null
+  recallAction?: {
+    label: string
+    displayLabel: string
+    disabled: boolean
+    onRecall: () => void
+  } | null
 }) {
   const t = useTranslation()
 
@@ -568,6 +841,10 @@ export const MessageBlock = memo(function MessageBlock({
         <UserMessage
           content={message.content}
           attachments={message.attachments}
+          onRecall={recallAction?.onRecall}
+          recallLabel={recallAction?.label}
+          recallDisplayLabel={recallAction?.displayLabel}
+          recallDisabled={recallAction?.disabled}
         />
       )
     case 'assistant_text':
