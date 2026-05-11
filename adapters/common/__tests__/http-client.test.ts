@@ -56,6 +56,33 @@ describe('AdapterHttpClient', () => {
     expect(projects[0].projectName).toBe('my-app')
   })
 
+  it('listSessions calls GET /api/sessions with filters', async () => {
+    const mockSessions = [{
+      id: 'session-123',
+      title: 'Fix bug',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      modifiedAt: '2026-01-02T00:00:00.000Z',
+      messageCount: 4,
+      projectPath: '-home-user-my-app',
+      workDir: '/home/user/my-app',
+      workDirExists: true,
+    }]
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: mockSessions, total: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    ) as any
+
+    const result = await client.listSessions({ project: '/home/user/my-app', limit: 10, offset: 20 })
+
+    expect(result.sessions[0]?.id).toBe('session-123')
+    const callUrl = new URL((globalThis.fetch as any).mock.calls[0][0])
+    expect(`${callUrl.origin}${callUrl.pathname}`).toBe('http://127.0.0.1:3456/api/sessions')
+    expect(callUrl.searchParams.get('project')).toBe('/home/user/my-app')
+    expect(callUrl.searchParams.get('limit')).toBe('10')
+    expect(callUrl.searchParams.get('offset')).toBe('20')
+  })
+
   it('matchProject accepts an absolute local project path inside an allowed root without recent history', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
     const projectDir = fs.mkdtempSync(path.join(rootDir, 'project-'))

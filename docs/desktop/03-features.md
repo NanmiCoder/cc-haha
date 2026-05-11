@@ -200,10 +200,13 @@
 |------|------|
 | 直接发文本 | 与 Claude Code 对话 |
 | `/new [项目]` 或 `新会话` | 开始新会话 |
-| `/projects` 或 `项目列表` | 查看最近项目 |
+| `/projects` 或 `项目列表` | 查看最近项目并新建会话 |
+| `/sessions [项目]` 或 `会话列表` | 查看历史会话 |
+| `/sessions -n` / `/sessions -p` | 查看下一页 / 上一页历史会话 |
+| `/resume <编号|sessionId>` 或 `切换会话` | 切换到历史会话 |
 | `/stop` 或 `停止` | 停止生成 |
 
-权限请求在 IM 中以按钮形式展示（Telegram Inline Keyboard / 飞书 Interactive Card）。
+权限请求在 IM 中以按钮形式展示（Telegram Inline Keyboard / 飞书 Interactive Card）。飞书流式卡片会额外展示“当前状态”、工具执行汇总和思考过程，完成后再收敛为纯正文卡片。
 
 ---
 

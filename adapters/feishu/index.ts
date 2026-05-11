@@ -28,7 +28,7 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { AdapterHttpClient, type RecentProject } from '../common/http-client.js'
+import { AdapterHttpClient, type RecentProject, type SessionListItem } from '../common/http-client.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { optimizeMarkdownForFeishu } from './markdown-style.js'
 import { extractInboundPayload } from './extract-payload.js'
@@ -69,6 +69,14 @@ attachmentStore.gc().catch((err) => {
 // One streaming card lifecycle per chatId (CardKit main + patch fallback).
 const streamingCards = new Map<string, StreamingCard>()
 const pendingProjectSelection = new Map<string, boolean>()
+type PendingSessionSelectionState = {
+  sessions: SessionListItem[]
+  offset: number
+  limit: number
+  total: number
+  project?: RecentProject
+}
+const pendingSessionSelection = new Map<string, PendingSessionSelectionState>()
 const runtimeStates = new Map<string, ChatRuntimeState>()
 const pendingPermissions = new Map<string, Set<string>>()
 
@@ -429,7 +437,119 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
         { tag: 'hr', margin: '14px 0 0 0' },
         {
           tag: 'markdown',
-          content: '💡 点击右侧 **选择** 按钮，或发送 `/new <项目名>`',
+          content: '💡 点击右侧 **选择** 按钮会新建会话；要切换历史会话请发送 `/sessions`',
+          text_size: 'notation',
+          margin: '6px 0 0 0',
+        },
+      ],
+    },
+  }
+}
+
+function buildSessionPickerCard(
+  sessions: SessionListItem[],
+  currentSessionId?: string,
+  projectLabel = '',
+  pagination?: { offset: number; limit: number; total: number },
+): Record<string, unknown> {
+  const items = sessions.slice(0, 10)
+  const subtitleText = pagination
+    ? projectLabel
+      ? `${projectLabel} · 第 ${Math.floor(pagination.offset / pagination.limit) + 1} 页 · 共 ${pagination.total} 个可切换会话`
+      : `第 ${Math.floor(pagination.offset / pagination.limit) + 1} 页 · 共 ${pagination.total} 个可切换会话`
+    : projectLabel
+      ? `${projectLabel} · 共 ${sessions.length} 个可切换会话`
+      : `共 ${sessions.length} 个可切换会话`
+
+  const rows = items.map((session, i) => {
+    const title = session.title || 'Untitled Session'
+    const isCurrent = currentSessionId === session.id
+    const projectName = path.basename(session.workDir || session.projectPath) || session.projectPath
+    const updated = new Date(session.modifiedAt).toLocaleString('zh-CN', { hour12: false })
+    return {
+      tag: 'column_set',
+      flex_mode: 'stretch',
+      horizontal_spacing: '8px',
+      margin: i === 0 ? '0px 0 0 0' : '10px 0 0 0',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          vertical_align: 'center',
+          elements: [
+            {
+              tag: 'markdown',
+              content: `${isCurrent ? '🟢 ' : ''}**${title}**${isCurrent ? '（当前会话）' : ''}`,
+            },
+            {
+              tag: 'markdown',
+              content: `${projectName} · 消息 ${session.messageCount} · ${updated}`,
+              text_size: 'notation',
+              margin: '2px 0 0 0',
+            },
+            ...(isCurrent
+              ? [
+                  {
+                    tag: 'markdown',
+                    content: '当前聊天已连接到这个会话，重复点击不会重新切换。',
+                    text_size: 'notation',
+                    margin: '2px 0 0 0',
+                  },
+                ]
+              : []),
+          ],
+        },
+        {
+          tag: 'column',
+          width: 'auto',
+          vertical_align: 'center',
+          elements: [
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: isCurrent ? '当前' : '切换' },
+              type: isCurrent ? 'default' : i === 0 ? 'primary' : 'default',
+              size: 'small',
+              value: {
+                action: 'resume_session',
+                sessionId: session.id,
+                workDir: session.workDir,
+                title,
+              },
+            },
+          ],
+        },
+      ],
+    }
+  })
+
+  const footerLines = ['💡 点击 **切换**，或回复编号 / 发送 `/resume <编号|sessionId>`', '🟢 标记项表示当前会话，不会重复切换']
+  if (pagination) {
+    const page = Math.floor(pagination.offset / pagination.limit) + 1
+    const totalPages = Math.max(1, Math.ceil(pagination.total / pagination.limit))
+    if (page > 1 || page < totalPages) {
+      footerLines.push('翻页：发送 `/sessions -p 上一页` 或 `/sessions -n 下一页`')
+    }
+  }
+
+  return {
+    schema: '2.0',
+    config: {
+      wide_screen_mode: true,
+      update_multi: true,
+    },
+    header: {
+      title: { tag: 'plain_text', content: '💬 历史会话' },
+      subtitle: { tag: 'plain_text', content: subtitleText },
+      template: 'purple',
+    },
+    body: {
+      elements: [
+        ...rows,
+        { tag: 'hr', margin: '14px 0 0 0' },
+        {
+          tag: 'markdown',
+          content: footerLines.join('\n'),
           text_size: 'notation',
           margin: '6px 0 0 0',
         },
@@ -505,11 +625,22 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
 /** True if `filePath` resolves to a location outside of `workDir`.
  *  Relative paths are resolved against workDir first. */
 function isOutsideWorkDir(filePath: string, workDir: string): boolean {
-  const abs = path.isAbsolute(filePath)
-    ? path.normalize(filePath)
-    : path.resolve(workDir, filePath)
-  const normWork = path.normalize(workDir).replace(/\/+$/, '')
-  return abs !== normWork && !abs.startsWith(normWork + path.sep)
+  const pathImpl = usesWindowsPath(filePath) || usesWindowsPath(workDir) ? path.win32 : path.posix
+  const abs = pathImpl.isAbsolute(filePath)
+    ? pathImpl.normalize(filePath)
+    : pathImpl.resolve(workDir, filePath)
+  const normAbs = comparablePath(abs, pathImpl === path.win32)
+  const normWork = comparablePath(pathImpl.normalize(workDir), pathImpl === path.win32)
+  return normAbs !== normWork && !normAbs.startsWith(normWork + '/')
+}
+
+function usesWindowsPath(filePath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.includes('\\')
+}
+
+function comparablePath(filePath: string, caseInsensitive: boolean): string {
+  const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseInsensitive ? normalized.toLowerCase() : normalized
 }
 
 /** Truncate a single-line target preview (e.g. shell command) to maxLen. */
@@ -673,6 +804,33 @@ async function ensureSession(chatId: string): Promise<boolean> {
   return false
 }
 
+async function connectExistingSessionForChat(
+  chatId: string,
+  sessionId: string,
+  workDir: string,
+): Promise<boolean> {
+  bridge.resetSession(chatId)
+  const inflightCard = streamingCards.get(chatId)
+  if (inflightCard) {
+    streamingCards.delete(chatId)
+    void inflightCard.abort(new Error('session reset')).catch(() => {})
+  }
+  imageWatchers.delete(chatId)
+  uploadedImageKeys.delete(chatId)
+  pendingPermissions.delete(chatId)
+  runtimeStates.delete(chatId)
+
+  sessionStore.set(chatId, sessionId, workDir)
+  bridge.connectSession(chatId, sessionId)
+  bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
+  const opened = await bridge.waitForOpen(chatId)
+  if (!opened) {
+    await sendText(chatId, '⚠️ 连接服务器超时，请重试。')
+    return false
+  }
+  return true
+}
+
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
   try {
     // Always tear down any stale WS connection before creating a new session.
@@ -718,10 +876,161 @@ async function showProjectPicker(chatId: string): Promise<void> {
       const lines = projects.slice(0, 10).map((p, i) =>
         `${i + 1}. **${p.projectName}**${p.branch ? ` (${p.branch})` : ''}\n   ${p.realPath}`
       )
-      await sendText(chatId, `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+      await sendText(chatId, `选择项目并新建会话（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 下次可直接 /new <编号、名称或绝对路径> 快速新建会话；发送 /sessions 查看历史会话`)
     }
   } catch (err) {
     await sendText(chatId, `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function showSessionList(chatId: string, query?: string): Promise<void> {
+  try {
+    const limit = 10
+    const normalizedQuery = query?.trim() || ''
+    let project: RecentProject | undefined
+    let offset = 0
+
+    if (normalizedQuery === '-n' || normalizedQuery === '下一页') {
+      const pending = pendingSessionSelection.get(chatId)
+      if (!pending) {
+        await sendText(chatId, '请先发送 /sessions，再使用翻页命令。')
+        return
+      }
+      project = pending.project
+      offset = pending.offset + pending.limit
+      if (offset >= pending.total) {
+        await sendText(chatId, '已经是最后一页了。')
+        return
+      }
+    } else if (normalizedQuery === '-p' || normalizedQuery === '上一页') {
+      const pending = pendingSessionSelection.get(chatId)
+      if (!pending) {
+        await sendText(chatId, '请先发送 /sessions，再使用翻页命令。')
+        return
+      }
+      project = pending.project
+      offset = Math.max(0, pending.offset - pending.limit)
+      if (pending.offset === 0) {
+        await sendText(chatId, '已经是第一页了。')
+        return
+      }
+    } else if (normalizedQuery) {
+      const matched = await httpClient.matchProject(normalizedQuery)
+      if (matched.ambiguous) {
+        const list = matched.ambiguous.map((p, i) => `${i + 1}. **${p.projectName}** — ${p.realPath}`).join('\n')
+        await sendText(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        return
+      }
+      project = matched.project
+      if (!project) {
+        await sendText(chatId, `未找到匹配 "${normalizedQuery}" 的项目。发送 /projects 查看项目列表。`)
+        return
+      }
+    }
+
+    const projectLabel = project ? `（${project.projectName}）` : ''
+    const result = await httpClient.listSessions({
+      project: project?.realPath,
+      limit,
+      offset,
+    })
+    const sessions = result.sessions.filter((session) => session.workDirExists && session.workDir)
+    if (sessions.length === 0) {
+      await sendText(chatId, `没有找到历史会话${projectLabel}。发送 /new${project ? ` ${project.projectName}` : ''} 新建会话。`)
+      return
+    }
+
+    pendingSessionSelection.set(chatId, {
+      sessions,
+      offset,
+      limit,
+      total: result.total,
+      project,
+    })
+    const currentSessionId = sessionStore.get(chatId)?.sessionId
+    const cardId = await sendCard(
+      chatId,
+      buildSessionPickerCard(sessions, currentSessionId, project?.projectName, {
+        offset,
+        limit,
+        total: result.total,
+      }),
+    )
+    if (!cardId) {
+      const lines = sessions.map((session, index) => {
+        const currentMark = currentSessionId === session.id ? '（当前）' : ''
+        const title = `${session.title || 'Untitled Session'}${currentMark}`
+        const projectName = path.basename(session.workDir || session.projectPath) || session.projectPath
+        const updated = new Date(session.modifiedAt).toLocaleString('zh-CN', { hour12: false })
+        return `${offset + index + 1}. **${title}**\n   项目: ${projectName} · 消息: ${session.messageCount} · 更新: ${updated}\n   ${session.id}`
+      })
+      const page = Math.floor(offset / limit) + 1
+      const totalPages = Math.max(1, Math.ceil(result.total / limit))
+      const pagingHint =
+        totalPages > 1
+          ? `\n\n翻页：发送 /sessions -p 查看上一页，发送 /sessions -n 查看下一页。当前第 ${page}/${totalPages} 页。`
+          : ''
+      await sendText(chatId, `历史会话${projectLabel}（回复编号，或发送 /resume <编号|sessionId>）：\n\n${lines.join('\n\n')}${pagingHint}`)
+    }
+  } catch (err) {
+    await sendText(chatId, `❌ 无法获取会话列表: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function resumeSession(chatId: string, query: string): Promise<void> {
+  const trimmed = query.trim()
+  if (!trimmed) {
+    await showSessionList(chatId)
+    return
+  }
+
+  let session: SessionListItem | undefined
+  const pending = pendingSessionSelection.get(chatId)
+  const index = parseInt(trimmed, 10)
+  if (
+    pending &&
+    !isNaN(index) &&
+    index >= pending.offset + 1 &&
+    index <= pending.offset + pending.sessions.length &&
+    String(index) === trimmed
+  ) {
+    session = pending.sessions[index - pending.offset - 1]
+  }
+
+  if (!session && pending && !isNaN(index) && index >= 1 && index <= pending.sessions.length && String(index) === trimmed) {
+    session = pending.sessions[index - 1]
+  }
+
+  if (!session) {
+    const result = await httpClient.listSessions({ limit: 50 })
+    const matched = result.sessions.filter((item) => item.id === trimmed || item.id.startsWith(trimmed))
+    if (matched.length > 1) {
+      const lines = matched
+        .slice(0, 5)
+        .map((item, i) => `${i + 1}. **${item.title || 'Untitled Session'}**\n   ${item.id}`)
+        .join('\n\n')
+      await sendText(chatId, `匹配到多个会话，请使用更长的 sessionId，或先发送 /sessions 后按编号切换：\n\n${lines}`)
+      return
+    }
+    session = matched[0]
+  }
+
+  if (!session || !session.workDir || !session.workDirExists) {
+    await sendText(chatId, `未找到可切换的会话：${trimmed}。发送 /sessions 查看历史会话。`)
+    return
+  }
+
+  const currentSessionId = sessionStore.get(chatId)?.sessionId
+  if (currentSessionId === session.id) {
+    await sendText(chatId, `当前已经是该会话：**${session.title || 'Untitled Session'}**\n会话: ${session.id}`)
+    return
+  }
+
+  pendingProjectSelection.delete(chatId)
+  pendingSessionSelection.delete(chatId)
+  const ok = await connectExistingSessionForChat(chatId, session.id, session.workDir)
+  if (ok) {
+    await sendText(chatId, `✅ 已切换会话：**${session.title || 'Untitled Session'}**\n项目: ${path.basename(session.workDir) || session.workDir}\n会话: ${session.id}`)
   }
 }
 
@@ -737,6 +1046,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   imageWatchers.delete(chatId)
   uploadedImageKeys.delete(chatId)
   pendingProjectSelection.delete(chatId)
+  pendingSessionSelection.delete(chatId)
   pendingPermissions.delete(chatId)
   runtimeStates.delete(chatId)
 
@@ -1030,7 +1340,7 @@ async function handleMessage(data: any): Promise<void> {
       return
     }
     if (!hasAttachments && (msgText === '/help' || msgText === '帮助')) {
-      await sendText(chatId, formatImHelp())
+      await sendText(chatId, formatImHelp({ includeSessionCommands: true }))
       return
     }
     if (!hasAttachments && (msgText === '/status' || msgText === '状态')) {
@@ -1066,10 +1376,24 @@ async function handleMessage(data: any): Promise<void> {
       await showProjectPicker(chatId)
       return
     }
+    if (!hasAttachments && (msgText === '/sessions' || msgText === '会话列表' || msgText.startsWith('/sessions '))) {
+      const arg = msgText.startsWith('/sessions ') ? msgText.slice(10).trim() : ''
+      await showSessionList(chatId, arg || undefined)
+      return
+    }
+    if (!hasAttachments && (msgText === '/resume' || msgText === '切换会话' || msgText.startsWith('/resume '))) {
+      const arg = msgText.startsWith('/resume ') ? msgText.slice(8).trim() : ''
+      await resumeSession(chatId, arg)
+      return
+    }
 
     // User is replying to a project picker prompt
     if (!hasAttachments && pendingProjectSelection.has(chatId)) {
       await startNewSession(chatId, msgText.trim())
+      return
+    }
+    if (!hasAttachments && pendingSessionSelection.has(chatId)) {
+      await resumeSession(chatId, msgText.trim())
       return
     }
 
@@ -1203,6 +1527,9 @@ async function handleCardAction(data: any): Promise<any> {
         rule?: string
         realPath?: string
         projectName?: string
+        sessionId?: string
+        workDir?: string
+        title?: string
       }
     }
     context?: { open_chat_id?: string }
@@ -1246,6 +1573,27 @@ async function handleCardAction(data: any): Promise<any> {
       await sendText(chatId, `✅ 已新建会话：**${projectName}**`)
     }
     return { toast: { type: 'info', content: `📁 ${projectName}` } }
+  }
+
+  if (action === 'resume_session') {
+    const sessionId = event.action?.value?.sessionId
+    const workDir = event.action?.value?.workDir
+    const title = event.action?.value?.title || 'Untitled Session'
+    if (!sessionId || !workDir) return
+
+    const currentSessionId = sessionStore.get(chatId)?.sessionId
+    if (currentSessionId === sessionId) {
+      await sendText(chatId, `当前已经是该会话：**${title}**\n会话: ${sessionId}`)
+      return { toast: { type: 'info', content: '当前已在此会话' } }
+    }
+
+    pendingProjectSelection.delete(chatId)
+    pendingSessionSelection.delete(chatId)
+    const ok = await connectExistingSessionForChat(chatId, sessionId, workDir)
+    if (ok) {
+      await sendText(chatId, `✅ 已切换会话：**${title}**\n项目: ${path.basename(workDir) || workDir}\n会话: ${sessionId}`)
+    }
+    return { toast: { type: 'info', content: `💬 ${title}` } }
   }
 }
 

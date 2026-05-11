@@ -43,11 +43,16 @@ export function buildInitialStreamingCard(): Record<string, unknown> {
       streaming_mode: true,
       update_multi: true,
     },
+    header: {
+      title: { tag: 'plain_text', content: 'Claude Code' },
+      subtitle: { tag: 'plain_text', content: '正在生成回复' },
+      template: 'blue',
+    },
     body: {
       elements: [
         {
           tag: 'markdown',
-          content: '☁️ *正在思考中...*',
+          content: '📍 **当前状态**\n\n☁️ 正在思考中\n\n收到消息，正在准备回复...',
           text_align: 'left',
           element_id: STREAMING_ELEMENT_ID,
         },
@@ -67,12 +72,30 @@ export function buildRenderedCard(renderedMarkdown: string): Record<string, unkn
     config: {
       update_multi: true,
     },
+    header: {
+      title: { tag: 'plain_text', content: 'Claude Code' },
+      subtitle: { tag: 'plain_text', content: '已完成' },
+      template: 'green',
+    },
     body: {
       elements: [
         {
           tag: 'markdown',
           content: renderedMarkdown || ' ',
           text_align: 'left',
+        },
+        {
+          tag: 'markdown',
+          content: '后续操作：`/new` 新会话 · `/status` 查看状态 · `/sessions` 查看历史会话',
+          text_size: 'notation',
+          margin: '12px 0 0 0',
+        },
+        {
+          tag: 'markdown',
+          content: 'Claude Code · 已完成',
+          text_size: 'notation',
+          text_align: 'right',
+          margin: '8px 0 0 0',
         },
       ],
     },
@@ -81,31 +104,39 @@ export function buildRenderedCard(renderedMarkdown: string): Record<string, unkn
 
 /** 错误卡片：红色 header + 错误文本。用于 abort() 兜底。 */
 export function buildErrorCard(message: string): Record<string, unknown> {
+  const content = message || '未知错误'
   return {
     schema: '2.0',
     config: { update_multi: true },
     header: {
       title: { tag: 'plain_text', content: '❌ 出错了' },
+      subtitle: { tag: 'plain_text', content: '回复生成失败' },
       template: 'red',
     },
     body: {
       elements: [
         {
           tag: 'markdown',
-          content: message || '未知错误',
+          content,
+        },
+        {
+          tag: 'markdown',
+          content: '后续操作：`/status` 查看状态 · `/new` 重新开始 · `/sessions` 查看历史会话',
+          text_size: 'notation',
+          margin: '12px 0 0 0',
         },
       ],
     },
   }
 }
 
-/** 从末尾截取最多 maxLen 个字符；超过时前缀 "..." 保留最新 maxLen-3 个字。
- *
- *  思考内容往往是"先分析 → 得出结论"的线性过程，截取末尾比截取开头更有用 —— 用户
- *  最关心的是"模型现在在想什么"，不是"五千个 token 前在想什么"。 */
-function truncateReasoningPreview(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text
-  return '...' + text.slice(text.length - maxLen + 3)
+function summarizeReasoningText(text: string): string {
+  const normalized = text.trim()
+  if (!normalized) return '正在分析上下文并整理下一步操作。'
+  if (normalized.length > REASONING_PREVIEW_CHARS) {
+    return '正在持续分析上下文、工具结果和回复结构。'
+  }
+  return '正在分析上下文并整理下一步操作。'
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +167,7 @@ type ToolStep = {
 
 /** 最多保留的 reasoning 预览字符数，超过则取末尾 + 省略号前缀。 */
 const REASONING_PREVIEW_CHARS = 600
+const TOOL_LINES_LIMIT = 5
 
 /** 连续 streamCardContent 失败多少次后才放弃 CardKit 流式。
  *  设成 3 而不是 1，是为了避免单次抖动（网络、临时校验失败等）把整张卡片
@@ -433,36 +465,45 @@ export class StreamingCard {
    *  任意 section 为空则忽略；全部为空时返回等待提示。 */
   private renderedText(): string {
     const sections: string[] = []
+    const runningTools = this.toolSteps.filter((s) => s.status === 'running').length
+    const doneTools = this.toolSteps.filter((s) => s.status === 'done').length
+
+    let statusLine = '☁️ 正在思考中'
+    if (runningTools > 0) {
+      statusLine = `⚙️ 正在调用工具（${runningTools} 个运行中）`
+    } else if (this.accumulatedText) {
+      statusLine = '📝 正在整理回复'
+    }
+    sections.push(`📍 **当前状态**\n\n${statusLine}`)
 
     if (this.toolSteps.length > 0) {
-      // 单行 inline 形式: ⚙️ Bash · ✅ Read · ⚙️ Glob ...
-      // 用中点分隔，比 markdown list 更不容易触发 Feishu 排版异常
-      const inline = this.toolSteps
-        .map((s) => `${s.status === 'done' ? '✅' : '⚙️'} ${s.name}`)
-        .join(' · ')
-      sections.push(`🛠️ ${inline}`)
+      const hiddenDoneTools = Math.max(0, doneTools - TOOL_LINES_LIMIT)
+      const visibleSteps =
+        this.toolSteps.length > TOOL_LINES_LIMIT
+          ? this.toolSteps.slice(-TOOL_LINES_LIMIT)
+          : this.toolSteps
+      const lines = visibleSteps
+        .map((s) => `${s.status === 'done' ? '✅ 已完成' : '⚙️ 运行中'} ${s.name}`)
+        .join('\n')
+      const extraLine =
+        hiddenDoneTools > 0 ? `\n\n…… 另外还有 ${hiddenDoneTools} 个已完成工具已折叠` : ''
+      sections.push(
+        `🛠️ **工具执行**\n\n共 ${this.toolSteps.length} 个 · 已完成 ${doneTools} 个 · 运行中 ${runningTools} 个\n\n${lines}${extraLine}`,
+      )
     }
 
     if (this.accumulatedReasoningText) {
-      const preview = truncateReasoningPreview(
-        this.accumulatedReasoningText,
-        REASONING_PREVIEW_CHARS,
-      )
-      // openclaw 风格: 一行 header + 空行 + 原文。不引用 / 不缩进，让飞书
-      // markdown 元素按普通段落渲染。
-      sections.push(`💭 **思考中**\n\n${preview}`)
+      const preview = summarizeReasoningText(this.accumulatedReasoningText)
+      sections.push(`💭 **思考过程**\n\n${preview}`)
     }
 
     if (this.accumulatedText) {
       sections.push(this.accumulatedText)
     }
 
-    if (sections.length === 0) return '☁️ *正在思考中...*'
+    if (sections.length === 0) return '📍 **当前状态**\n\n☁️ 正在思考中'
 
-    // 用一行分隔符把 sections 分开，比单纯空行更稳定
     const composed = sections.join('\n\n---\n\n')
-
-    // 表格数限制在 optimize 之前做 —— sanitize 对原始 markdown 最准
     const limited = sanitizeTextForCard(composed)
     return optimizeMarkdownForFeishu(limited, 2)
   }

@@ -53,6 +53,17 @@ type RecentProject = {
   sessionCount: number
 }
 
+type SessionListItem = {
+  id: string
+  title: string
+  createdAt: string
+  modifiedAt: string
+  messageCount: number
+  projectPath: string
+  workDir: string | null
+  workDirExists: boolean
+}
+
 function prettyPath(realPath: string, maxLen = 64): string {
   const home = process.env.HOME
   let p = realPath
@@ -139,7 +150,119 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
         { tag: 'hr', margin: '14px 0 0 0' },
         {
           tag: 'markdown',
-          content: '💡 点击右侧 **选择** 按钮，或发送 `/new <项目名>`',
+          content: '💡 点击右侧 **选择** 按钮会新建会话；要切换历史会话请发送 `/sessions`',
+          text_size: 'notation',
+          margin: '6px 0 0 0',
+        },
+      ],
+    },
+  }
+}
+
+function buildSessionPickerCard(
+  sessions: SessionListItem[],
+  currentSessionId?: string,
+  projectLabel = '',
+  pagination?: { offset: number; limit: number; total: number },
+): Record<string, unknown> {
+  const items = sessions.slice(0, 10)
+  const subtitleText = pagination
+    ? projectLabel
+      ? `${projectLabel} · 第 ${Math.floor(pagination.offset / pagination.limit) + 1} 页 · 共 ${pagination.total} 个可切换会话`
+      : `第 ${Math.floor(pagination.offset / pagination.limit) + 1} 页 · 共 ${pagination.total} 个可切换会话`
+    : projectLabel
+      ? `${projectLabel} · 共 ${sessions.length} 个可切换会话`
+      : `共 ${sessions.length} 个可切换会话`
+
+  const rows = items.map((session, i) => {
+    const title = session.title || 'Untitled Session'
+    const isCurrent = currentSessionId === session.id
+    const projectName = path.basename(session.workDir || session.projectPath) || session.projectPath
+    const updated = new Date(session.modifiedAt).toLocaleString('zh-CN', { hour12: false })
+    return {
+      tag: 'column_set',
+      flex_mode: 'stretch',
+      horizontal_spacing: '8px',
+      margin: i === 0 ? '0px 0 0 0' : '10px 0 0 0',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          vertical_align: 'center',
+          elements: [
+            {
+              tag: 'markdown',
+              content: `${isCurrent ? '🟢 ' : ''}**${title}**${isCurrent ? '（当前会话）' : ''}`,
+            },
+            {
+              tag: 'markdown',
+              content: `${projectName} · 消息 ${session.messageCount} · ${updated}`,
+              text_size: 'notation',
+              margin: '2px 0 0 0',
+            },
+            ...(isCurrent
+              ? [
+                  {
+                    tag: 'markdown',
+                    content: '当前聊天已连接到这个会话，重复点击不会重新切换。',
+                    text_size: 'notation',
+                    margin: '2px 0 0 0',
+                  },
+                ]
+              : []),
+          ],
+        },
+        {
+          tag: 'column',
+          width: 'auto',
+          vertical_align: 'center',
+          elements: [
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: isCurrent ? '当前' : '切换' },
+              type: isCurrent ? 'default' : i === 0 ? 'primary' : 'default',
+              size: 'small',
+              value: {
+                action: 'resume_session',
+                sessionId: session.id,
+                workDir: session.workDir,
+                title,
+              },
+            },
+          ],
+        },
+      ],
+    }
+  })
+
+  const footerLines = ['💡 点击 **切换**，或回复编号 / 发送 `/resume <编号|sessionId>`', '🟢 标记项表示当前会话，不会重复切换']
+  if (pagination) {
+    const page = Math.floor(pagination.offset / pagination.limit) + 1
+    const totalPages = Math.max(1, Math.ceil(pagination.total / pagination.limit))
+    if (page > 1 || page < totalPages) {
+      footerLines.push('翻页：发送 `/sessions -p 上一页` 或 `/sessions -n 下一页`')
+    }
+  }
+
+  return {
+    schema: '2.0',
+    config: {
+      wide_screen_mode: true,
+      update_multi: true,
+    },
+    header: {
+      title: { tag: 'plain_text', content: '💬 历史会话' },
+      subtitle: { tag: 'plain_text', content: subtitleText },
+      template: 'purple',
+    },
+    body: {
+      elements: [
+        ...rows,
+        { tag: 'hr', margin: '14px 0 0 0' },
+        {
+          tag: 'markdown',
+          content: footerLines.join('\n'),
           text_size: 'notation',
           margin: '6px 0 0 0',
         },
@@ -210,11 +333,22 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
 }
 
 function isOutsideWorkDir(filePath: string, workDir: string): boolean {
-  const abs = path.isAbsolute(filePath)
-    ? path.normalize(filePath)
-    : path.resolve(workDir, filePath)
-  const normWork = path.normalize(workDir).replace(/\/+$/, '')
-  return abs !== normWork && !abs.startsWith(normWork + path.sep)
+  const pathImpl = usesWindowsPath(filePath) || usesWindowsPath(workDir) ? path.win32 : path.posix
+  const abs = pathImpl.isAbsolute(filePath)
+    ? pathImpl.normalize(filePath)
+    : pathImpl.resolve(workDir, filePath)
+  const normAbs = comparablePath(abs, pathImpl === path.win32)
+  const normWork = comparablePath(pathImpl.normalize(workDir), pathImpl === path.win32)
+  return normAbs !== normWork && !normAbs.startsWith(normWork + '/')
+}
+
+function usesWindowsPath(filePath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.includes('\\')
+}
+
+function comparablePath(filePath: string, caseInsensitive: boolean): string {
+  const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseInsensitive ? normalized.toLowerCase() : normalized
 }
 
 function truncateTarget(s: string, maxLen = 160): string {
@@ -866,6 +1000,106 @@ describe('Feishu: project picker card', () => {
   })
 })
 
+describe('Feishu: session picker card', () => {
+  const sampleSessions: SessionListItem[] = [
+    {
+      id: 'session-1',
+      title: 'Fix bug',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      modifiedAt: '2026-01-02T03:04:05.000Z',
+      messageCount: 4,
+      projectPath: '-Users-dev-claude-code-haha',
+      workDir: '/Users/dev/claude-code-haha',
+      workDirExists: true,
+    },
+    {
+      id: 'session-2',
+      title: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      modifiedAt: '2026-01-03T03:04:05.000Z',
+      messageCount: 2,
+      projectPath: '-Users-dev-desktop',
+      workDir: '/Users/dev/desktop',
+      workDirExists: true,
+    },
+  ]
+
+  function getRows(card: Record<string, unknown>): any[] {
+    return (((card.body as any).elements ?? []) as any[]).filter((el) => el.tag === 'column_set')
+  }
+
+  function getRowButton(row: any): any {
+    const buttonCol = row.columns.find((c: any) =>
+      c.elements.some((e: any) => e.tag === 'button'),
+    )
+    return buttonCol.elements.find((e: any) => e.tag === 'button')
+  }
+
+  it('renders resumable session rows with resume_session buttons', () => {
+    const card = buildSessionPickerCard(sampleSessions, 'session-2', 'claude-code-haha')
+    const rows = getRows(card)
+
+    expect(card.schema).toBe('2.0')
+    expect((card.header as any).title.content).toContain('历史会话')
+    expect((card.header as any).subtitle.content).toContain('claude-code-haha')
+    expect(rows.length).toBe(2)
+
+    const firstButton = getRowButton(rows[0])
+    expect(firstButton.text.content).toBe('切换')
+    expect(firstButton.type).toBe('primary')
+    expect(firstButton.value.action).toBe('resume_session')
+    expect(firstButton.value.sessionId).toBe('session-1')
+    expect(firstButton.value.workDir).toBe('/Users/dev/claude-code-haha')
+    expect(firstButton.value.title).toBe('Fix bug')
+
+    const currentRowText = JSON.stringify(rows[1])
+    expect(currentRowText).toContain('🟢')
+    expect(currentRowText).toContain('当前会话')
+    expect(currentRowText).toContain('不会重新切换')
+
+    const currentButton = getRowButton(rows[1])
+    expect(currentButton.text.content).toBe('当前')
+    expect(currentButton.value.title).toBe('Untitled Session')
+  })
+
+  it('caps to first 10 sessions', () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({
+      ...sampleSessions[0]!,
+      id: `session-${i}`,
+      title: `session ${i}`,
+    }))
+    const card = buildSessionPickerCard(many)
+    const rows = getRows(card)
+
+    expect(rows.length).toBe(10)
+    expect(getRowButton(rows[9]).value.sessionId).toBe('session-9')
+  })
+
+  it('shows pagination info in subtitle when provided', () => {
+    const card = buildSessionPickerCard(sampleSessions, undefined, 'claude-code-haha', {
+      offset: 10,
+      limit: 10,
+      total: 25,
+    })
+
+    expect((card.header as any).subtitle.content).toContain('第 2 页')
+    expect((card.header as any).subtitle.content).toContain('共 25 个可切换会话')
+  })
+
+  it('shows paging hint in footer when there are multiple pages', () => {
+    const card = buildSessionPickerCard(sampleSessions, undefined, '', {
+      offset: 0,
+      limit: 10,
+      total: 25,
+    })
+    const elements = ((card.body as any).elements ?? []) as any[]
+    const footer = elements[elements.length - 1]
+
+    expect(footer.content).toContain('/sessions -n 下一页')
+    expect(footer.content).toContain('🟢 标记项表示当前会话')
+  })
+})
+
 describe('Feishu: card.action.trigger parsing', () => {
   it('parses permit action from event', () => {
     const event = {
@@ -898,10 +1132,29 @@ describe('Feishu: card.action.trigger parsing', () => {
     expect(event.action.value.projectName).toBe('claude-code-haha')
   })
 
+  it('parses resume_session action from event', () => {
+    const event = {
+      operator: { open_id: 'ou_user_1' },
+      action: {
+        value: {
+          action: 'resume_session',
+          sessionId: 'session-123',
+          workDir: '/Users/dev/claude-code-haha',
+          title: 'Fix bug',
+        },
+      },
+      context: { open_chat_id: 'oc_chat_123' },
+    }
+
+    expect(event.action.value.action).toBe('resume_session')
+    expect(event.action.value.sessionId).toBe('session-123')
+    expect(event.action.value.workDir).toBe('/Users/dev/claude-code-haha')
+  })
+
   it('ignores non-handled actions', () => {
     const event = {
       action: { value: { action: 'other_action' } },
     }
-    expect(['permit', 'pick_project']).not.toContain(event.action.value.action)
+    expect(['permit', 'pick_project', 'resume_session']).not.toContain(event.action.value.action)
   })
 })
