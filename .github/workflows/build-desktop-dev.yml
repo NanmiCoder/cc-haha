@@ -1,5 +1,8 @@
 name: Build Desktop (Dev)
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # 开发阶段构建 — 不创建 Release，只上传 Artifacts 供下载测试
 on:
   workflow_dispatch:
