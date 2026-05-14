@@ -8,6 +8,10 @@ const host = process.env.TAURI_DEV_HOST
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
+    // Vite 8 defaults to 'baseline-widely-available' (safari16.4+), which
+    // requires macOS 13+. Explicitly target safari15 so the desktop app
+    // renders on macOS 12 Monterey (Safari 15) and older Intel machines.
+    target: ['es2021', 'safari15'],
     chunkSizeWarningLimit: 2200,
     rollupOptions: {
       onwarn(warning, warn) {

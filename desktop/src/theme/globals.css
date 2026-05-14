@@ -287,6 +287,18 @@
   --color-selection-bg: rgba(255, 219, 208, 0.9);
   --color-selection-fg: #390C00;
 
+  /* Safari 15 compat: pre-computed color-mix replacements */
+  --color-text-secondary-a72: rgba(84, 67, 62, 0.72);
+  --color-text-secondary-a68: rgba(84, 67, 62, 0.68);
+  --color-text-primary-a88: rgba(27, 28, 26, 0.88);
+  --color-text-primary-a82: rgba(27, 28, 26, 0.82);
+  --color-text-primary-a78: rgba(27, 28, 26, 0.78);
+  --color-surface-hover-a34: rgba(233, 232, 228, 0.34);
+  --color-surface-hover-a54: rgba(233, 232, 228, 0.54);
+  --color-outline-a72: rgba(135, 115, 109, 0.72);
+  --color-outline-a78: rgba(135, 115, 109, 0.78);
+  --color-outline-a92: rgba(135, 115, 109, 0.92);
+
   /* Radii */
   --radius-sm: 4px;
   --radius-md: 8px;
@@ -590,6 +602,18 @@
   --color-window-close-hover: #C63B44;
   --color-selection-bg: rgba(255, 181, 159, 0.32);
   --color-selection-fg: #FBE7E1;
+
+  /* Safari 15 compat: pre-computed color-mix replacements */
+  --color-text-secondary-a72: rgba(183, 170, 165, 0.72);
+  --color-text-secondary-a68: rgba(183, 170, 165, 0.68);
+  --color-text-primary-a88: rgba(229, 226, 225, 0.88);
+  --color-text-primary-a82: rgba(229, 226, 225, 0.82);
+  --color-text-primary-a78: rgba(229, 226, 225, 0.78);
+  --color-surface-hover-a34: rgba(53, 53, 52, 0.34);
+  --color-surface-hover-a54: rgba(53, 53, 52, 0.54);
+  --color-outline-a72: rgba(141, 127, 122, 0.72);
+  --color-outline-a78: rgba(141, 127, 122, 0.78);
+  --color-outline-a92: rgba(141, 127, 122, 0.92);
 }
 
 /* ─── Material Symbols ─────────────────────────────────────────── */
@@ -738,7 +762,7 @@ button, input, textarea, select, a, [role="button"] {
 }
 
 .sidebar-toggle-button {
-  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+  color: var(--color-text-secondary-a72);
   background: transparent;
   transition:
     color 180ms ease,
@@ -749,25 +773,25 @@ button, input, textarea, select, a, [role="button"] {
 }
 
 .sidebar-toggle-button:hover {
-  color: color-mix(in srgb, var(--color-text-primary) 88%, transparent);
-  background: color-mix(in srgb, var(--color-surface-hover) 34%, transparent);
+  color: var(--color-text-primary-a88);
+  background: var(--color-surface-hover-a34);
 }
 
 .sidebar-toggle-button:active {
   transform: translateY(0.5px);
-  background: color-mix(in srgb, var(--color-surface-hover) 54%, transparent);
+  background: var(--color-surface-hover-a54);
 }
 
 .sidebar-toggle-button--open {
-  color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
+  color: var(--color-text-secondary-a68);
 }
 
 .sidebar-toggle-button--open:hover {
-  color: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
+  color: var(--color-text-primary-a82);
 }
 
 .sidebar-toggle-button--collapsed {
-  color: color-mix(in srgb, var(--color-text-primary) 78%, transparent);
+  color: var(--color-text-primary-a78);
 }
 
 .sidebar-toggle-button--collapsed:hover {
@@ -886,7 +910,7 @@ button, input, textarea, select, a, [role="button"] {
 
 .sidebar-scroll-area {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--color-outline) 72%, transparent) transparent;
+  scrollbar-color: var(--color-outline-a72) transparent;
 }
 
 .sidebar-scroll-area::-webkit-scrollbar {
@@ -898,12 +922,12 @@ button, input, textarea, select, a, [role="button"] {
 }
 
 .sidebar-scroll-area::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-outline) 78%, transparent);
+  background: var(--color-outline-a78);
   border-radius: 9999px;
 }
 
 .sidebar-scroll-area::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-outline) 92%, transparent);
+  background: var(--color-outline-a92);
 }
 
 /* Animations */
