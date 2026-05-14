@@ -347,7 +347,7 @@ export class ProviderService {
     provider: SavedProvider,
     options?: { proxyPath?: string },
   ): Record<string, string> {
-    const needsProxy = provider.apiFormat != null && provider.apiFormat !== 'anthropic'
+    const needsProxy = provider.apiFormat != null
     const proxyPath = options?.proxyPath ?? '/proxy'
     const baseUrl = needsProxy
       ? `http://127.0.0.1:${ProviderService.serverPort}${proxyPath}`
@@ -460,7 +460,7 @@ export class ProviderService {
       const provider = index.providers.find(p => p.id === index.activeId)
       if (provider) {
         const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
-        const needsProxy = provider.apiFormat != null && provider.apiFormat !== 'anthropic'
+        const needsProxy = provider.apiFormat != null
         const authEnv = buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy)
         if (Object.values(authEnv).some(value => value.length > 0)) {
           return { hasAuth: true, source: 'cc-haha-provider', activeProvider: provider.name }
