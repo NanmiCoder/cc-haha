@@ -1,118 +1,32 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.4.3",
-  "description": "Desktop coding agent workbench for Claude Code Haha.",
-  "homepage": "https://github.com/NanmiCoder/cc-haha",
-  "author": {
-    "name": "NanmiCoder",
-    "email": "relakkes@gmail.com"
-  },
+  "version": "0.3.1",
   "type": "module",
-  "main": "electron-dist/main.cjs",
-  "build": {
-    "appId": "com.claude-code-haha.desktop",
-    "productName": "Claude Code Haha",
-    "asar": true,
-    "asarUnpack": [
-      "dist/**",
-      "node_modules/node-pty/**",
-      "src-tauri/binaries/**"
-    ],
-    "artifactName": "Claude-Code-Haha-${version}-${os}-${arch}.${ext}",
-    "npmRebuild": false,
-    "directories": {
-      "output": "build-artifacts/electron"
-    },
-    "files": [
-      "dist/**",
-      "electron-dist/**",
-      "node_modules/node-pty/**",
-      "src-tauri/binaries/**",
-      "src-tauri/icons/**",
-      "src-tauri/resources/preview-agent.js",
-      "package.json"
-    ],
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "src-tauri/icons/icon.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "signIgnore": [
-        "/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$",
-        "/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$"
-      ],
-      "notarize": true
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "src-tauri/icons/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "icon": "src-tauri/icons",
-      "category": "Development",
-      "maintainer": "NanmiCoder <relakkes@gmail.com>"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "NanmiCoder",
-        "repo": "cc-haha"
-      }
-    ]
-  },
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
-    "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
-    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
+    "build": "bun run build:preview-agent && tsc -b && vite build",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
-    "clean:electron-output": "bun run ./scripts/clean-electron-output.ts",
     "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
-    "build:linux-x64": "bash ./scripts/build-linux.sh",
-    "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
-    "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",
-    "electron:build": "bun run build:sidecars && bun run build && bun run build:electron",
-    "electron:package": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
-    "electron:package:dir": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",
-    "check:electron": "node ./node_modules/typescript/bin/tsc -p electron/tsconfig.json && bun test electron && bun run build:electron",
     "preview": "vite preview",
+    "tauri": "tauri",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "lint": "node ./node_modules/typescript/bin/tsc --noEmit"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dnd-kit/utilities": "^3.2.2",
     "@tailwindcss/typography": "^0.5.19",
     "@types/dompurify": "^3.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.3.3",
-    "electron-updater": "^6.8.3",
     "html2canvas": "^1.4.1",
     "katex": "^0.16.45",
     "lucide-react": "^0.469.0",
     "marked": "^15.0.7",
     "mermaid": "^11.14.0",
-    "node-pty": "^1.1.0",
     "prism-react-renderer": "^2.4.1",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
@@ -127,17 +41,24 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
-    "@types/node": "^25.9.1",
+    "@types/katex": "^0.16.8",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "3.2.4",
-    "electron": "^42.3.0",
-    "electron-builder": "^26.8.1",
     "jsdom": "^25.0.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.10",
     "vitest": "^3.0.4"
+  },
+  "optionalDependencies": {
+    "@tauri-apps/api": "^2.3.0",
+    "@tauri-apps/cli": "^2.3.1",
+    "@tauri-apps/plugin-dialog": "^2.2.1",
+    "@tauri-apps/plugin-notification": "^2.2.1",
+    "@tauri-apps/plugin-process": "^2.2.1",
+    "@tauri-apps/plugin-shell": "^2.2.1",
+    "@tauri-apps/plugin-updater": "^2.2.1"
   }
 }

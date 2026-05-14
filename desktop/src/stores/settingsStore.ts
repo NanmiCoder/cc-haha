@@ -83,6 +83,7 @@ type SettingsStore = {
   h5AccessDiagnostics: H5AccessDiagnostics | null
   h5AccessError: string | null
   responseLanguage: string
+  plantumlJarPath: string
   uiZoom: number
   isLoading: boolean
   error: string | null
@@ -121,6 +122,7 @@ type SettingsStore = {
   setResponseLanguage: (language: string) => Promise<void>
   fetchAppMode: () => Promise<void>
   setAppMode: (mode: AppMode, portableDir?: string | null) => Promise<void>
+  setPlantumlJarPath: (path: string) => Promise<void>
   setUiZoom: (zoom: number) => void
 }
 
@@ -200,6 +202,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   h5AccessError: null,
   responseLanguage: '',
   uiZoom: readStoredAppZoomLevel(),
+  plantumlJarPath: '',
   isLoading: false,
   error: null,
 
@@ -254,6 +257,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         h5AccessDiagnostics: h5AccessResult.diagnostics,
         h5AccessError: h5AccessResult.error,
         responseLanguage: typeof userSettings.language === 'string' ? userSettings.language : '',
+        plantumlJarPath: typeof userSettings.plantumlJarPath === 'string' ? userSettings.plantumlJarPath : '',
         isLoading: false,
         error: null,
       })
@@ -597,6 +601,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       set({ appMode: prev, appModeRequiresRestart: false })
     }
   },
+
+  setPlantumlJarPath: async (path) => {
+    const prev = get().plantumlJarPath
+    set({ plantumlJarPath: path })
+    try {
+      await settingsApi.updateUser({ plantumlJarPath: path || undefined })
+    } catch {
+      set({ plantumlJarPath: prev })
+    }
+  },
+
+
 }))
 
 function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): WebSearchSettings {

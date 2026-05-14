@@ -983,6 +983,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.general.outputStyleSourceLocal': '项目本地风格',
   'settings.general.outputStyleSourcePolicy': '受管风格',
   'settings.general.outputStyleSourcePlugin': '插件风格',
+  'settings.general.plantumlJarDescription': '设置 plantuml.jar 路径后，Markdown 中的 PlantUML 代码块将渲染为图表。留空则展示为代码块。',
   'settings.general.effortTitle': '推理强度',
   'settings.general.effortDescription': '控制模型使用的计算量。',
   'settings.general.effort.low': '低',

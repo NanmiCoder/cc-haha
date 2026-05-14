@@ -436,7 +436,7 @@ describe('WorkspacePanel', () => {
     getMocks().getWorkspaceTreeMock.mockResolvedValue({
       state: 'ok',
       path: '',
-      entries: [{ name: 'src', path: 'src', isDirectory: true }],
+      entries: [{ name: 'src', path: 'src', isDirectory: true, isSymlink: false }],
     })
 
     await setWorkspaceState((state) => ({
@@ -567,7 +567,7 @@ describe('WorkspacePanel', () => {
     const rootTreeRequest = deferred<{
       state: 'ok'
       path: ''
-      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+      entries: Array<{ name: string; path: string; isDirectory: boolean; isSymlink: boolean }>
     }>()
 
     getMocks().getWorkspaceStatusMock.mockReturnValue(statusRequest.promise)
@@ -602,8 +602,8 @@ describe('WorkspacePanel', () => {
         state: 'ok',
         path: '',
         entries: [
-          { name: 'src', path: 'src', isDirectory: true },
-          { name: 'README.md', path: 'README.md', isDirectory: false },
+          { name: 'src', path: 'src', isDirectory: true, isSymlink: false },
+          { name: 'README.md', path: 'README.md', isDirectory: false, isSymlink: false },
         ],
       })
       await rootTreeRequest.promise
@@ -627,7 +627,7 @@ describe('WorkspacePanel', () => {
     const rootTreeRequest = deferred<{
       state: 'ok'
       path: ''
-      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+      entries: Array<{ name: string; path: string; isDirectory: boolean; isSymlink: boolean }>
     }>()
     const childTreeRequest = deferred<{
       state: 'ok'
@@ -676,8 +676,8 @@ describe('WorkspacePanel', () => {
         state: 'ok',
         path: '',
         entries: [
-          { name: 'src', path: 'src', isDirectory: true },
-          { name: 'README.md', path: 'README.md', isDirectory: false },
+          { name: 'src', path: 'src', isDirectory: true, isSymlink: false },
+          { name: 'README.md', path: 'README.md', isDirectory: false, isSymlink: false },
         ],
       })
       await Promise.all([statusRequest.promise, rootTreeRequest.promise])
@@ -699,7 +699,7 @@ describe('WorkspacePanel', () => {
       childTreeRequest.resolve({
         state: 'ok',
         path: 'src',
-        entries: [{ name: 'index.ts', path: 'src/index.ts', isDirectory: false }],
+        entries: [{ name: 'index.ts', path: 'src/index.ts', isDirectory: false, isSymlink: false }],
       })
       await childTreeRequest.promise
     })
@@ -1146,7 +1146,7 @@ describe('WorkspacePanel', () => {
           '': {
             state: 'ok',
             path: '',
-            entries: [{ name: 'logo.png', path: 'logo.png', isDirectory: false }],
+            entries: [{ name: 'logo.png', path: 'logo.png', isDirectory: false, isSymlink: false }],
           },
         },
       },
@@ -1392,7 +1392,7 @@ describe('WorkspacePanel', () => {
           '': {
             state: 'ok',
             path: '',
-            entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false }],
+            entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false, isSymlink: false }],
           },
         },
       },
@@ -1446,7 +1446,7 @@ describe('WorkspacePanel', () => {
           '': {
             state: 'ok',
             path: '',
-            entries: [{ name: 'src', path: 'src', isDirectory: true }],
+            entries: [{ name: 'src', path: 'src', isDirectory: true, isSymlink: false }],
           },
         },
       },
@@ -1470,6 +1470,7 @@ describe('WorkspacePanel', () => {
         absolutePath: '/repo/src',
         name: 'src/',
         isDirectory: true,
+        isSymlink: true,
       },
     ])
   })
@@ -1524,7 +1525,7 @@ describe('WorkspacePanel', () => {
           '': {
             state: 'ok',
             path: '',
-            entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false }],
+            entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false, isSymlink: false }],
           },
         },
       },
@@ -1585,7 +1586,7 @@ describe('WorkspacePanel', () => {
             '': {
               state: 'ok',
               path: '',
-              entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false }],
+              entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false, isSymlink: false }],
             },
           },
         },
