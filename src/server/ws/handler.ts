@@ -25,6 +25,7 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../../constants/xml.js'
 import { shouldCreateWorktreeForSessionLaunch } from '../services/repositoryLaunchService.js'
+import { getWorkspaceRoot } from '../services/workspaceRootInstance.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -829,7 +830,11 @@ function bindPrewarmMetadataCapture(sessionId: string) {
   })
 }
 
-async function resolveSessionWorkDir(sessionId: string, fallback = os.homedir()): Promise<string> {
+async function resolveSessionWorkDir(sessionId: string, fallback?: string): Promise<string> {
+  if (!fallback) {
+    const root = getWorkspaceRoot()
+    fallback = await root.ensureWorkspaceDir(sessionId).catch(() => os.homedir())
+  }
   let workDir = fallback
   try {
     const resolved = await sessionService.getSessionWorkDir(sessionId)

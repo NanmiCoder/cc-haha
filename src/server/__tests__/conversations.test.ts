@@ -234,11 +234,10 @@ describe('ConversationService', () => {
     })
   })
 
-  it('should not inject a desktop-specific ask override in default permission mode', () => {
+  it('always uses --dangerously-skip-permissions in SaaS mode', () => {
     const svc = new ConversationService()
     expect((svc as any).getPermissionArgs('default', false)).toEqual([
-      '--permission-mode',
-      'default',
+      '--dangerously-skip-permissions',
     ])
   })
 
