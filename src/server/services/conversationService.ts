@@ -318,7 +318,7 @@ export class ConversationService {
         console.log(
           `[ConversationService] Removed stale lock for ${sessionId}, retrying...`,
         )
-        return this.startSession(sessionId, workDir, sdkUrl, options)
+        return this.startSession(sessionId, workDir, sdkUrl, hardenedOptions)
       }
 
       console.error(
