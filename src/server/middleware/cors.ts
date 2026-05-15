@@ -2,8 +2,6 @@
  * CORS middleware for desktop and temporary open H5 access.
  */
 
-import { isLoopbackHost } from '../h5AccessPolicy.js'
-
 export function corsHeaders(origin?: string | null): Record<string, string> {
   const allowedOrigin = origin || 'http://localhost:3000'
   return {
@@ -35,66 +33,17 @@ export type CorsResolutionOptions = {
   isOriginAllowed?: (origin: string) => Promise<boolean>
 }
 
-const LOCAL_ORIGINS = new Set([
-  'http://tauri.localhost',
-  'https://tauri.localhost',
-  'tauri://localhost',
-])
-
-function isLocalOrigin(origin?: string | null): boolean {
-  if (!origin) {
-    return true
-  }
-
-  if (LOCAL_ORIGINS.has(origin)) {
-    return true
-  }
-
-  try {
-    return isLoopbackHost(new URL(origin).hostname)
-  } catch {
-    return false
-  }
-}
-
 export async function resolveCors(
   origin?: string | null,
   _requestOrigin?: string | null,
-  options: CorsResolutionOptions = {},
+  _options: CorsResolutionOptions = {},
 ): Promise<CorsResolution> {
-  if (!origin) {
-    return {
-      allowed: true,
-      rejected: false,
-      headers: corsHeaders(origin),
-    }
-  }
-
-  if (!options.h5Enabled || isLocalOrigin(origin)) {
-    return {
-      allowed: true,
-      rejected: false,
-      headers: {
-        ...baseCorsHeaders(),
-        'Access-Control-Allow-Origin': origin,
-      },
-    }
-  }
-
-  if (options.isOriginAllowed && await options.isOriginAllowed(origin)) {
-    return {
-      allowed: true,
-      rejected: false,
-      headers: {
-        ...baseCorsHeaders(),
-        'Access-Control-Allow-Origin': origin,
-      },
-    }
-  }
-
   return {
-    allowed: false,
-    rejected: true,
-    headers: baseCorsHeaders(),
+    allowed: true,
+    rejected: false,
+    headers: {
+      ...baseCorsHeaders(),
+      'Access-Control-Allow-Origin': origin ?? '*',
+    },
   }
 }
