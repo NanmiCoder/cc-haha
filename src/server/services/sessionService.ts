@@ -25,6 +25,7 @@ import {
   type PreparedSessionWorkspace,
 } from './repositoryLaunchService.js'
 import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
+import { getWorkspaceRoot } from './workspaceRootInstance.js'
 
 // ============================================================================
 // Types
@@ -1295,6 +1296,12 @@ export class SessionService {
       sessionId,
     )
     const absWorkDir = preparedWorkspace.workDir
+    const wsRoot = getWorkspaceRoot()
+    if (!wsRoot.isInsideRoot(absWorkDir)) {
+      throw new Error(
+        `workDir is not inside the workspace root: ${absWorkDir} (root: ${wsRoot.getRoot()})`,
+      )
+    }
     console.log(
       `[SessionService] createSession: requested workDir=${JSON.stringify(
         workDir,

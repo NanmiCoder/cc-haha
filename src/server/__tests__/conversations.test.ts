@@ -38,6 +38,22 @@ async function rmWithRetry(targetPath: string): Promise<void> {
 // ============================================================================
 
 describe('ConversationService', () => {
+  let originalWorkspaceRoot: string | undefined
+
+  beforeAll(async () => {
+    const { configureWorkspaceRoot } = await import('../services/workspaceRootInstance.js')
+    originalWorkspaceRoot = process.env.CC_HAHA_WORKSPACES_ROOT
+    configureWorkspaceRoot(os.tmpdir())
+  })
+
+  afterAll(() => {
+    if (originalWorkspaceRoot === undefined) {
+      delete process.env.CC_HAHA_WORKSPACES_ROOT
+    } else {
+      process.env.CC_HAHA_WORKSPACES_ROOT = originalWorkspaceRoot
+    }
+  })
+
   it('should report no session for unknown ID', () => {
     const svc = new ConversationService()
     const sid = crypto.randomUUID()
@@ -730,6 +746,8 @@ describe('WebSocket Chat Integration', () => {
     const port = 15000 + Math.floor(Math.random() * 1000)
     const { startServer } = await import('../index.js')
     server = startServer(port, '127.0.0.1')
+    const { configureWorkspaceRoot } = await import('../services/workspaceRootInstance.js')
+    configureWorkspaceRoot(tmpDir)
     baseUrl = `http://127.0.0.1:${port}`
     wsUrl = `ws://127.0.0.1:${port}`
   })
@@ -1071,7 +1089,7 @@ describe('WebSocket Chat Integration', () => {
       const createRes = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workDir: process.cwd() }),
+        body: JSON.stringify({ workspaceName: 'ws-api-test' }),
       })
       expect(createRes.status).toBe(201)
       const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1246,7 +1264,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1263,7 +1281,7 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('should keep a long desktop session alive in a /tmp project across engineering turns', async () => {
-    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-issue247-project-'))
+    const projectDir = await fs.mkdtemp(path.join(tmpDir, 'cc-haha-issue247-project-'))
     let sessionId: string | undefined
 
     try {
@@ -1277,13 +1295,8 @@ describe('WebSocket Chat Integration', () => {
         'export function greet(name: string) { return `hello ${name}` }\n',
       )
 
-      const createRes = await fetch(`${baseUrl}/api/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workDir: projectDir }),
-      })
-      expect(createRes.status).toBe(201)
-      ;({ sessionId } = await createRes.json() as { sessionId: string })
+      const result = await sessionService.createSession(projectDir)
+      sessionId = result.sessionId
 
       const prompts = [
         'Inspect this TypeScript project and summarize what you see.',
@@ -1310,7 +1323,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1336,7 +1349,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1360,15 +1373,9 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('should include desktop service diagnostics when CLI startup fails', async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-startup-missing-workdir-'))
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'claude-startup-missing-workdir-'))
     const canonicalWorkDir = await fs.realpath(workDir)
-    const createRes = await fetch(`${baseUrl}/api/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir }),
-    })
-    expect(createRes.status).toBe(201)
-    const { sessionId } = await createRes.json() as { sessionId: string }
+    const { sessionId } = await sessionService.createSession(workDir)
 
     await fs.rm(workDir, { recursive: true, force: true })
 
@@ -1409,7 +1416,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1542,7 +1549,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1613,7 +1620,7 @@ describe('WebSocket Chat Integration', () => {
       const createRes = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workDir: process.cwd() }),
+        body: JSON.stringify({ workspaceName: 'ws-api-test' }),
       })
       expect(createRes.status).toBe(201)
       const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1723,7 +1730,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1832,7 +1839,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -1962,7 +1969,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -2064,7 +2071,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -2179,7 +2186,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -2361,7 +2368,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -2507,7 +2514,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }
@@ -2620,7 +2627,7 @@ describe('WebSocket Chat Integration', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir: process.cwd() }),
+      body: JSON.stringify({ workspaceName: 'ws-api-test' }),
     })
     expect(createRes.status).toBe(201)
     const { sessionId } = await createRes.json() as { sessionId: string }

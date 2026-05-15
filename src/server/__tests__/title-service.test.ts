@@ -13,6 +13,8 @@ describe('titleService', () => {
     originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'title-service-test-'))
     process.env.CLAUDE_CONFIG_DIR = tmpDir
+    const { configureWorkspaceRoot } = await import('../services/workspaceRootInstance.js')
+    configureWorkspaceRoot(os.tmpdir())
   })
 
   afterEach(async () => {

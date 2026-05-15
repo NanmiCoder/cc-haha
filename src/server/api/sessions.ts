@@ -34,6 +34,7 @@ import {
   type RewindTargetSelector,
 } from '../services/sessionRewindService.js'
 import { SessionStore } from '../../../adapters/common/session-store.js'
+import { getWorkspaceRoot } from '../services/workspaceRootInstance.js'
 
 const workspaceService = new WorkspaceService(
   async (sessionId) => (
@@ -266,15 +267,22 @@ async function handleSessionWorkspaceRoute(
 }
 
 async function createSession(req: Request): Promise<Response> {
-  let body: { workDir?: string; repository?: CreateSessionRepositoryOptions }
+  let body: { workspaceName?: string; repository?: CreateSessionRepositoryOptions }
   try {
-    body = (await req.json()) as { workDir?: string; repository?: CreateSessionRepositoryOptions }
+    body = (await req.json()) as {
+      workspaceName?: string
+      repository?: CreateSessionRepositoryOptions
+    }
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
 
-  if (body.workDir && typeof body.workDir !== 'string') {
-    throw ApiError.badRequest('workDir must be a string')
+  if (body.workspaceName !== undefined && typeof body.workspaceName !== 'string') {
+    throw ApiError.badRequest('workspaceName must be a string')
+  }
+
+  if ((body as { workDir?: unknown }).workDir !== undefined) {
+    throw ApiError.badRequest('workDir is not allowed; pass workspaceName instead (paths are confined to the workspace root)')
   }
 
   if (body.repository !== undefined) {
@@ -289,7 +297,20 @@ async function createSession(req: Request): Promise<Response> {
     }
   }
 
-  const result = await sessionService.createSession(body.workDir, body.repository)
+  const root = getWorkspaceRoot()
+  const fallbackName = crypto.randomUUID()
+  let absoluteWorkDir: string
+  try {
+    absoluteWorkDir = await root.ensureWorkspaceDir(
+      body.workspaceName?.trim() ? body.workspaceName.trim() : fallbackName,
+    )
+  } catch (err) {
+    throw ApiError.badRequest(
+      err instanceof Error ? err.message : 'invalid workspace name',
+    )
+  }
+
+  const result = await sessionService.createSession(absoluteWorkDir, body.repository)
   recentProjectsCache = null
   return Response.json(result, { status: 201 })
 }
