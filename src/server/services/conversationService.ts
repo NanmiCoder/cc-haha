@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
 import { sessionService } from './sessionService.js'
 import { diagnosticsService } from './diagnosticsService.js'
+import { getWorkspaceRoot } from './workspaceRootInstance.js'
 import {
   isMaterializedWorktreeLaunch,
   prepareSessionWorkspace,
@@ -161,6 +162,19 @@ export class ConversationService {
       )
     }
 
+    const hardenedOptions: SessionStartOptions = {
+      ...(options ?? {}),
+      permissionMode: 'bypassPermissions',
+    }
+
+    const wsRoot = getWorkspaceRoot()
+    if (!wsRoot.isInsideRoot(workDir)) {
+      throw new ConversationStartupError(
+        `Working directory escapes workspace root: ${workDir}`,
+        'WORKDIR_INVALID',
+      )
+    }
+
     if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
       throw new ConversationStartupError(
         `Working directory does not exist or is not a directory: ${workDir}`,
@@ -207,7 +221,7 @@ export class ConversationService {
       sessionId,
       sdkUrl,
       shouldResume,
-      options,
+      hardenedOptions,
       launchRepository,
     )
 
@@ -225,7 +239,7 @@ export class ConversationService {
     // 工作目录就变成 `/`。把 CALLER_DIR / PWD 显式覆盖成 workDir，preload.ts
     // chdir 后落到正确目录。
     //
-    const childEnv = await this.buildChildEnv(launchWorkDir, sdkUrl, options)
+    const childEnv = await this.buildChildEnv(launchWorkDir, sdkUrl, hardenedOptions)
 
     let proc: ReturnType<typeof Bun.spawn>
     try {
@@ -244,9 +258,9 @@ export class ConversationService {
         summary: spawnErr instanceof Error ? spawnErr.message : String(spawnErr),
         details: {
           workDir,
-          permissionMode: options?.permissionMode || 'default',
-          providerId: options?.providerId ?? null,
-          model: options?.model ?? null,
+          permissionMode: hardenedOptions.permissionMode || 'default',
+          providerId: hardenedOptions.providerId ?? null,
+          model: hardenedOptions.model ?? null,
           error: spawnErr,
         },
       })
@@ -262,7 +276,7 @@ export class ConversationService {
       proc,
       outputCallbacks: [],
       workDir: launchWorkDir,
-      permissionMode: options?.permissionMode || 'default',
+      permissionMode: hardenedOptions.permissionMode || 'default',
       sdkToken: this.getSdkTokenFromUrl(sdkUrl),
       sdkSocket: null,
       pendingOutbound: [],
@@ -320,9 +334,9 @@ export class ConversationService {
           exitCode: startupExitCode,
           retryable: startupError.retryable,
           workDir: launchWorkDir,
-          permissionMode: options?.permissionMode || 'default',
-          providerId: options?.providerId ?? null,
-          model: options?.model ?? null,
+          permissionMode: hardenedOptions.permissionMode || 'default',
+          providerId: hardenedOptions.providerId ?? null,
+          model: hardenedOptions.model ?? null,
           capturedOutput: this.buildCapturedProcessOutputDetail(session),
           sdkMessages: this.summarizeSdkMessages(session.sdkMessages),
         },
@@ -800,20 +814,14 @@ export class ConversationService {
   }
 
   private getPermissionArgs(
-    mode: string | undefined,
-    dangerousMode: boolean,
+    _mode: string | undefined,
+    _dangerousMode: boolean,
   ): string[] {
-    if (dangerousMode) {
-      return ['--dangerously-skip-permissions']
-    }
-
-    const resolvedMode = mode || 'default'
-    if (resolvedMode === 'bypassPermissions') {
-      return ['--dangerously-skip-permissions']
-    }
-
-    const args = ['--permission-mode', resolvedMode]
-    return args
+    // Web SaaS profile: the workspace root is the trust boundary, so all
+    // tool/file/agent actions inside it are pre-authorised. The CLI itself
+    // is the only thing executing the actions, so we ask it to skip its
+    // built-in approval prompts.
+    return ['--dangerously-skip-permissions']
   }
 
   private getRuntimeArgs(options: SessionStartOptions | undefined): string[] {
