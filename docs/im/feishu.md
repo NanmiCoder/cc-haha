@@ -22,7 +22,7 @@
 
 创建成功后，把 **App ID** 和 **App Secret** 保存下来，接着去配置机器人菜单。
 
-## 2. 配置自定义菜单（/projects /new /clear）
+## 2. 配置自定义菜单（/projects /sessions /resume /new /clear）
 
 进入[飞书开发者后台](https://open.feishu.cn/app?lang=zh-CN)，选择刚创建的机器人，进入机器人配置页：
 
@@ -32,11 +32,15 @@
 
 ![进入菜单配置](../images/im/feishu/04-menu-enter.png)
 
-依次添加 3 个命令：
+建议添加这些常用命令：
 
-**/projects** — 切换最近使用的项目
+**/projects** — 查看最近使用的项目，并在选中项目后新建会话
 
 ![菜单 /projects](../images/im/feishu/05-menu-projects.png)
+
+**/sessions** — 查看历史会话列表
+
+**/resume** — 切换到历史会话（配合编号或 sessionId 使用）
 
 **/new** — 开启新对话
 
@@ -46,7 +50,7 @@
 
 ![菜单 /clear](../images/im/feishu/07-menu-clear.png)
 
-三个都配好后点击保存：
+菜单配好后点击保存：
 
 ![保存菜单](../images/im/feishu/08-menu-save.png)
 
@@ -56,8 +60,11 @@
 
 **命令作用说明：**
 
-- `/projects`：列出最近使用的项目，支持切换当前会话绑定的目录
-- `/new`：开启新对话
+- `/projects`：列出最近使用的项目，选中后在该项目中新建会话
+- `/sessions [项目]`：列出历史会话；可不带参数查看全部，也可带项目名筛选
+- `/sessions -n` / `/sessions -p`：查看下一页 / 上一页历史会话
+- `/resume <编号|sessionId>`：切换到 `/sessions` 列表中的历史会话；若 sessionId 前缀匹配到多个会话，会提示继续缩小范围
+- `/new [项目]`：开启新对话；可带项目名、编号或绝对路径
 - `/clear`：清空当前会话上下文
 
 ## 3. 在 Claude Code Haha 桌面端填写
@@ -98,7 +105,9 @@
 - `/status` 或 `状态`
 - `/clear` 或 `清空`
 - `/projects` 或 `项目列表`
-- `/new` 或 `新会话`
+- `/sessions [项目]`、`/sessions -n`、`/sessions -p` 或 `会话列表`
+- `/resume <编号|sessionId>` 或 `切换会话`
+- `/new [项目]` 或 `新会话`
 - `/stop` 或 `停止`
 
 ## 权限审批
@@ -109,7 +118,10 @@
 
 - 普通文本通过 `post` 消息发送
 - 权限审批通过卡片发送
-- 流式内容优先 patch 同一条消息
+- 流式卡片会先显示“当前状态”，再逐步补充工具执行、思考过程和正文
+- 工具执行中会显示运行中/已完成状态与汇总计数
+- 完成后终态卡片只保留正文，过程态状态区不会保留
+- 普通文本回退路径仍优先 patch 同一条消息
 - 完成后按 30000 字左右分片
 
 ## 启动 adapter

@@ -20,6 +20,17 @@ export type GitInfo = {
   changedFiles: number
 }
 
+export type SessionListItem = {
+  id: string
+  title: string
+  createdAt: string
+  modifiedAt: string
+  messageCount: number
+  projectPath: string
+  workDir: string | null
+  workDirExists: boolean
+}
+
 export type SessionTask = {
   id: string
   subject: string
@@ -83,6 +94,27 @@ export class AdapterHttpClient {
       }
       const data = (await res.json()) as { projects: RecentProject[] }
       return data.projects
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async listSessions(options?: {
+    project?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const url = new URL(`${this.httpBaseUrl}/api/sessions`)
+      if (options?.project) url.searchParams.set('project', options.project)
+      if (options?.limit !== undefined) url.searchParams.set('limit', String(options.limit))
+      if (options?.offset !== undefined) url.searchParams.set('offset', String(options.offset))
+      const res = await fetch(url, { signal: controller.signal })
+      if (!res.ok) {
+        throw new Error(`Failed to list sessions: ${res.statusText}`)
+      }
+      return (await res.json()) as { sessions: SessionListItem[]; total: number }
     } finally {
       clearTimeout(timer)
     }

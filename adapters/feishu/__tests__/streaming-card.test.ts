@@ -102,27 +102,38 @@ describe('buildInitialStreamingCard', () => {
     const card = buildInitialStreamingCard() as any
     expect(card.schema).toBe('2.0')
     expect(card.config.streaming_mode).toBe(true)
+    expect(card.header.title.content).toBe('Claude Code')
+    expect(card.header.subtitle.content).toBe('正在生成回复')
     // 唯一元素：streaming_content，初始内容为 loading 提示
     const elements = card.body.elements as any[]
     expect(elements.length).toBe(1)
     const streaming = elements[0]
     expect(streaming.tag).toBe('markdown')
+    expect(streaming.content).toContain('当前状态')
     expect(streaming.content).toContain('正在思考中')
+    expect(streaming.content).toContain('正在准备回复')
     expect(streaming.element_id).toBe(STREAMING_ELEMENT_ID)
   })
 })
 
 describe('buildRenderedCard', () => {
-  it('Schema 2.0, 无 streaming_mode, 单 markdown 元素', () => {
+  it('Schema 2.0, 无 streaming_mode, 带完成态 header 和操作区/footer', () => {
     const card = buildRenderedCard('hello world') as any
     expect(card.schema).toBe('2.0')
     expect(card.config.streaming_mode).toBeUndefined()
-    expect(card.body.elements.length).toBe(1)
+    expect(card.header.title.content).toBe('Claude Code')
+    expect(card.header.subtitle.content).toBe('已完成')
+    expect(card.header.template).toBe('green')
+    expect(card.body.elements.length).toBe(3)
     const el = card.body.elements[0]
     expect(el.tag).toBe('markdown')
     expect(el.content).toBe('hello world')
-    // 最终卡无需 element_id
     expect(el.element_id).toBeUndefined()
+    expect(card.body.elements[1].content).toContain('/new')
+    expect(card.body.elements[1].content).toContain('/status')
+    expect(card.body.elements[1].content).toContain('/sessions')
+    expect(card.body.elements[2].content).toContain('Claude Code · 已完成')
+    expect(card.body.elements[2].text_size).toBe('notation')
   })
 
   it('空字符串保底为单空格', () => {
@@ -132,11 +143,15 @@ describe('buildRenderedCard', () => {
 })
 
 describe('buildErrorCard', () => {
-  it('红色 header + markdown body', () => {
+  it('红色 header + markdown body + 统一操作提示', () => {
     const card = buildErrorCard('oops') as any
     expect((card.header as any).template).toBe('red')
     expect((card.header as any).title.content).toContain('出错')
+    expect((card.header as any).subtitle.content).toContain('回复生成失败')
     expect(card.body.elements[0].content).toBe('oops')
+    expect(card.body.elements[1].content).toContain('/status')
+    expect(card.body.elements[1].content).toContain('/new')
+    expect(card.body.elements[1].content).toContain('/sessions')
   })
 })
 
@@ -166,6 +181,8 @@ describe('StreamingCard: ensureCreated (CardKit 主路径)', () => {
     const cardJson = JSON.parse(calls[0]!.args.data.data)
     expect(cardJson.schema).toBe('2.0')
     expect(cardJson.config.streaming_mode).toBe(true)
+    expect(cardJson.header.title.content).toBe('Claude Code')
+    expect(cardJson.header.subtitle.content).toBe('正在生成回复')
     // 唯一元素即 streaming_content
     expect(cardJson.body.elements[0].element_id).toBe(STREAMING_ELEMENT_ID)
 
@@ -416,7 +433,7 @@ describe('StreamingCard: finalize', () => {
     const lastMidFrame = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    expect(lastMidFrame).toContain('思考中')
+    expect(lastMidFrame).toContain('思考过程')
     expect(lastMidFrame).toContain('Read')
     expect(lastMidFrame).toContain('最终答复正文')
 
@@ -431,11 +448,13 @@ describe('StreamingCard: finalize', () => {
     // H2 → 降级 H5
     expect(finalContent).toContain('##### 答复')
     // reasoning + tools 都不应该出现在终态
-    expect(finalContent).not.toContain('思考中')
+    expect(finalContent).not.toContain('当前状态')
+    expect(finalContent).not.toContain('思考过程')
     expect(finalContent).not.toContain('think about this problem')
     expect(finalContent).not.toContain('Read')
     expect(finalContent).not.toContain('🛠️')
     expect(finalContent).not.toContain('💭')
+    expect(finalContent).not.toContain('📍')
   })
 
   it('finalize 边界: 没有 answerText 时退到组合渲染（保留推理）', async () => {
@@ -453,8 +472,10 @@ describe('StreamingCard: finalize', () => {
     await sc.finalize()
     const updateCall = calls.filter((c) => c.api === 'cardkit.v1.card.update').pop()!
     const finalContent = JSON.parse(updateCall.args.data.card.data).body.elements[0].content as string
-    // 至少能看到推理内容
-    expect(finalContent).toContain('thinking')
+    // 至少能看到中文思考摘要
+    expect(finalContent).toContain('思考过程')
+    expect(finalContent).toContain('正在分析上下文并整理下一步操作。')
+    expect(finalContent).not.toContain('thinking')
   })
 
   it('finalize 失败不抛出', async () => {
@@ -577,7 +598,7 @@ describe('StreamingCard: abort', () => {
 // ---------------------------------------------------------------------------
 
 describe('StreamingCard: appendReasoning', () => {
-  it('累积 thinking delta 并渲染在卡片中（plain markdown，不用 blockquote）', async () => {
+  it('累积 thinking delta 时只渲染中文摘要，不直接显示英文 reasoning 原文', async () => {
     const { client, calls } = makeMockClient({
       'card.create': { code: 0, data: { card_id: 'ck_think' } },
       'im.message.create': { data: { message_id: 'om' } },
@@ -592,13 +613,14 @@ describe('StreamingCard: appendReasoning', () => {
     const contentCalls = calls.filter((c) => c.api === 'cardkit.v1.cardElement.content')
     expect(contentCalls.length).toBeGreaterThan(0)
     const last = contentCalls[contentCalls.length - 1]!
+    expect(last.args.data.content).toContain('📍')
+    expect(last.args.data.content).toContain('当前状态')
+    expect(last.args.data.content).toContain('☁️ 正在思考中')
     expect(last.args.data.content).toContain('💭')
-    expect(last.args.data.content).toContain('思考中')
-    expect(last.args.data.content).toContain('Analyzing the problem.')
-    expect(last.args.data.content).toContain('Let me check file A.')
-    // 没有 blockquote `>` 前缀 —— 这是新格式的关键
-    expect(last.args.data.content).not.toContain('> Analyzing')
-    // 没有 appendText → 不应有普通正文
+    expect(last.args.data.content).toContain('思考过程')
+    expect(last.args.data.content).toContain('正在分析上下文并整理下一步操作。')
+    expect(last.args.data.content).not.toContain('Analyzing the problem.')
+    expect(last.args.data.content).not.toContain('Let me check file A.')
     expect(sc._getAccumulatedReasoning()).toContain('Analyzing')
     expect(sc._getAccumulatedText()).toBe('')
   })
@@ -632,27 +654,28 @@ describe('StreamingCard: startTool / completeTool', () => {
     expect(steps[0]!.name).toBe('Read')
     expect(steps[0]!.status).toBe('running')
 
-    // 卡片也应显示 "🛠️ ⚙️ Read"（inline 形式）
+    // 卡片也应显示工具执行分区和 running 状态
     const runningContent = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .map((c) => c.args.data.content)
       .join('\n')
-    expect(runningContent).toContain('⚙️')
-    expect(runningContent).toContain('Read')
+    expect(runningContent).toContain('📍')
+    expect(runningContent).toContain('⚙️ 正在调用工具（1 个运行中）')
     expect(runningContent).toContain('🛠️')
+    expect(runningContent).toContain('工具执行')
+    expect(runningContent).toContain('共 1 个 · 已完成 0 个 · 运行中 1 个')
+    expect(runningContent).toContain('⚙️ 运行中 Read')
 
     sc.completeTool('tu_1', 'Read')
     await sleep(150)
     steps = sc._getToolSteps()
     expect(steps[0]!.status).toBe('done')
 
-    // 最新 flush 应显示 "✅ Read" 不再有 "⚙️"
+    // 最新 flush 应显示 done 状态，不再有 running 图标
     const lastContent = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    expect(lastContent).toContain('✅')
-    expect(lastContent).toContain('Read')
-    // 这一行整体换成了 `✅ Read`，不该再出现 ⚙️ 图标
+    expect(lastContent).toContain('✅ 已完成 Read')
     expect(lastContent).not.toContain('⚙️')
   })
 
@@ -713,6 +736,32 @@ describe('StreamingCard: startTool / completeTool', () => {
     sc.startTool('tu_1', '')
     expect(sc._getToolSteps().length).toBe(0)
   })
+
+  it('工具较多时只显示最近几条，并折叠更早的已完成工具', async () => {
+    const { client, calls } = makeMockClient({
+      'card.create': { code: 0, data: { card_id: 'ck_many_tools' } },
+      'im.message.create': { data: { message_id: 'om' } },
+    })
+    const sc = new StreamingCard({ larkClient: client, chatId: 'c' })
+    await sc.ensureCreated()
+
+    for (let i = 1; i <= 7; i++) {
+      sc.startTool(`tu_${i}`, `Tool${i}`)
+      sc.completeTool(`tu_${i}`, `Tool${i}`)
+    }
+    await sleep(150)
+
+    const lastContent = calls
+      .filter((c) => c.api === 'cardkit.v1.cardElement.content')
+      .pop()!.args.data.content as string
+
+    expect(lastContent).toContain('共 7 个 · 已完成 7 个 · 运行中 0 个')
+    expect(lastContent).toContain('另外还有 2 个已完成工具已折叠')
+    expect(lastContent).not.toContain('Tool1')
+    expect(lastContent).not.toContain('Tool2')
+    expect(lastContent).toContain('Tool3')
+    expect(lastContent).toContain('Tool7')
+  })
 })
 
 // 复刻用户的真实场景: 用户发消息 → 服务端 thinking → tool_use → 最终 text。
@@ -754,9 +803,11 @@ describe('StreamingCard: 真实事件流（用户场景回归）', () => {
     const lastReasoningContent = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    // 应该包含 reasoning 累积内容
-    expect(lastReasoningContent).toContain('breaking changes')
-    expect(lastReasoningContent).toContain('git log first')
+    // 思考区应只显示中文摘要，不直接显示英文 reasoning
+    expect(lastReasoningContent).toContain('思考过程')
+    expect(lastReasoningContent).toContain('正在分析上下文并整理下一步操作。')
+    expect(lastReasoningContent).not.toContain('breaking changes')
+    expect(lastReasoningContent).not.toContain('git log first')
 
     // 4. 服务端: content_start{tool_use, name: 'Bash'}
     sc.startTool('tu_bash_1', 'Bash')
@@ -765,9 +816,9 @@ describe('StreamingCard: 真实事件流（用户场景回归）', () => {
     const lastWithTool = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    expect(lastWithTool).toContain('Bash')
-    expect(lastWithTool).toContain('⚙️')
     expect(lastWithTool).toContain('🛠️')
+    expect(lastWithTool).toContain('工具执行')
+    expect(lastWithTool).toContain('⚙️ 运行中 Bash')
 
     // 5. 服务端: tool_use_complete
     sc.completeTool('tu_bash_1', 'Bash')
@@ -776,10 +827,10 @@ describe('StreamingCard: 真实事件流（用户场景回归）', () => {
     const lastAfterToolDone = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    expect(lastAfterToolDone).toContain('Bash')
-    // ⚙️ 切到 ✅ —— 当前唯一一步已完成
-    expect(lastAfterToolDone).toContain('✅')
-    expect(lastAfterToolDone).not.toContain('⚙️')
+    expect(lastAfterToolDone).toContain('📍')
+    expect(lastAfterToolDone).toContain('☁️ 正在思考中')
+    expect(lastAfterToolDone).toContain('✅ 已完成 Bash')
+    expect(lastAfterToolDone).toContain('共 1 个 · 已完成 1 个 · 运行中 0 个')
 
     // 6. 第二个 tool 序列
     sc.startTool('tu_read_1', 'Read')
@@ -798,8 +849,10 @@ describe('StreamingCard: 真实事件流（用户场景回归）', () => {
     const lastWithText = calls
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
-    // 应该同时包含 reasoning, tools, answer
-    expect(lastWithText).toContain('git log first') // reasoning
+    // 应该同时包含中文思考摘要、tools、answer
+    expect(lastWithText).toContain('思考过程')
+    expect(lastWithText).toContain('正在分析上下文并整理下一步操作。')
+    expect(lastWithText).not.toContain('git log first')
     expect(lastWithText).toContain('Bash') // tool
     expect(lastWithText).toContain('Read') // tool
     expect(lastWithText).toContain('破坏性变更分析') // answer (post optimize: H2→H5)
@@ -865,14 +918,19 @@ describe('StreamingCard: 组合渲染 (tools + reasoning + text)', () => {
       .filter((c) => c.api === 'cardkit.v1.cardElement.content')
       .pop()!.args.data.content as string
 
+    expect(lastContent).toContain('正在分析上下文并整理下一步操作。')
+    expect(lastContent).not.toContain('Should I read file A first?')
+
+    const idxStatus = lastContent.indexOf('当前状态')
     const idxTools = lastContent.indexOf('🛠️')
-    const idxReasoning = lastContent.indexOf('思考中')
+    const idxReasoning = lastContent.indexOf('思考过程')
     const idxAnswer = lastContent.indexOf('Here is the answer')
 
+    expect(idxStatus).toBeGreaterThan(-1)
     expect(idxTools).toBeGreaterThan(-1)
     expect(idxReasoning).toBeGreaterThan(-1)
     expect(idxAnswer).toBeGreaterThan(-1)
-    // tools 在最顶部 → reasoning 居中 → answer 在底部
+    expect(idxStatus).toBeLessThan(idxTools)
     expect(idxTools).toBeLessThan(idxReasoning)
     expect(idxReasoning).toBeLessThan(idxAnswer)
   })
