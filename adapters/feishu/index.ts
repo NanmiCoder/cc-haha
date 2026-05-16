@@ -952,6 +952,7 @@ function stripMentions(text: string): string {
 // ---------- event handlers ----------
 
 async function handleMessage(data: any): Promise<void> {
+
   const event = data as {
     sender?: { sender_id?: { open_id?: string } }
     message?: {
