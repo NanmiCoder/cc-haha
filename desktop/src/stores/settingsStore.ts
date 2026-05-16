@@ -47,6 +47,7 @@ type SettingsStore = {
   h5AccessError: string | null
   responseLanguage: string
   uiZoom: number
+  observerSessionsHidden: boolean
   isLoading: boolean
   error: string | null
 
@@ -70,6 +71,7 @@ type SettingsStore = {
   }) => Promise<void>
   setResponseLanguage: (language: string) => Promise<void>
   setUiZoom: (zoom: number) => void
+  setObserverSessionsHidden: (hidden: boolean) => Promise<void>
 }
 
 const DEFAULT_H5_ACCESS_SETTINGS: H5AccessSettings = {
@@ -95,6 +97,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   h5AccessError: null,
   responseLanguage: '',
   uiZoom: readStoredAppZoomLevel(),
+  observerSessionsHidden: false,
   isLoading: false,
   error: null,
 
@@ -132,6 +135,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         h5Access: h5AccessResult.settings,
         h5AccessError: h5AccessResult.error,
         responseLanguage: typeof userSettings.language === 'string' ? userSettings.language : '',
+        observerSessionsHidden: userSettings.claudeMemObserverSessionsHidden === true,
         isLoading: false,
         error: null,
       })
@@ -308,6 +312,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ language: language || undefined })
     } catch {
       set({ responseLanguage: prev })
+    }
+  },
+
+  setObserverSessionsHidden: async (hidden) => {
+    const prev = get().observerSessionsHidden
+    set({ observerSessionsHidden: hidden })
+    try {
+      await settingsApi.updateUser({ claudeMemObserverSessionsHidden: hidden || undefined })
+    } catch {
+      set({ observerSessionsHidden: prev })
     }
   },
 }))

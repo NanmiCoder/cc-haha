@@ -10,6 +10,7 @@ import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useSkillStore } from '../../stores/skillStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useMcpStore } from '../../stores/mcpStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 const CAPABILITY_ORDER: PluginCapabilityKey[] = [
   'lspServers',
@@ -35,6 +36,8 @@ export function PluginDetail() {
   const selectAgent = useAgentStore((s) => s.selectAgent)
   const fetchServers = useMcpStore((s) => s.fetchServers)
   const selectServer = useMcpStore((s) => s.selectServer)
+  const observerSessionsHidden = useSettingsStore((s) => s.observerSessionsHidden)
+  const setObserverSessionsHidden = useSettingsStore((s) => s.setObserverSessionsHidden)
   const t = useTranslation()
   const [actionKey, setActionKey] = useState<string | null>(null)
   const [showUninstallDialog, setShowUninstallDialog] = useState(false)
@@ -308,6 +311,41 @@ export function PluginDetail() {
           {t('settings.plugins.applyHint')}
         </p>
       </section>
+
+      {selectedPlugin.id === 'claude-mem@thedotmack' && (
+        <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-5 py-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              aria-label="隐藏 observer 会话标签页"
+              checked={observerSessionsHidden}
+              onChange={(e) => void setObserverSessionsHidden(e.target.checked)}
+              className="sr-only"
+            />
+            <div
+              className={`mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+                observerSessionsHidden
+                  ? 'bg-[var(--color-brand)]'
+                  : 'bg-[var(--color-border)]'
+              }`}
+            >
+              <div
+                className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                  observerSessionsHidden ? 'translate-x-4' : ''
+                }`}
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                隐藏 observer 会话标签页
+              </div>
+              <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
+                claude-mem 在后台静默观察主会话并生成进度摘要，这些观察会话不需要在侧边栏中显示
+              </div>
+            </div>
+          </label>
+        </section>
+      )}
 
       {selectedPlugin.errors.length > 0 && (
         <section className="rounded-2xl border border-[var(--color-error)]/20 bg-[var(--color-error)]/6 px-5 py-4">

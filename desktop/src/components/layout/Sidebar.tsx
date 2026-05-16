@@ -9,6 +9,7 @@ import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID } from '../../stores/tab
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
 const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
@@ -61,6 +62,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
+  const observerSessionsHidden = useSettingsStore((s) => s.observerSessionsHidden)
   const [searchQuery, setSearchQuery] = useState('')
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
@@ -105,12 +107,20 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
 
   const filteredSessions = useMemo(() => {
     let result = sessions
+    if (observerSessionsHidden) {
+      result = result.filter((s) => {
+        const p = (s.projectPath || '').toLowerCase()
+        const w = (s.workDir || '').toLowerCase()
+        return !p.includes('claude-mem') && !p.includes('claude_mem') &&
+               !w.includes('/.claude-mem/observer-sessions')
+      })
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
       result = result.filter((s) => s.title.toLowerCase().includes(q))
     }
     return result
-  }, [sessions, searchQuery])
+  }, [sessions, searchQuery, observerSessionsHidden])
 
   const projectGroups = useMemo(() => groupByProject(filteredSessions, projectSortBy), [filteredSessions, projectSortBy])
   const orderedProjectGroups = useMemo(
