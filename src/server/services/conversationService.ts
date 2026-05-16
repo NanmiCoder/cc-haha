@@ -872,6 +872,8 @@ export class ConversationService {
 
     const cleanEnv = { ...process.env }
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
+    // Web SaaS: never strip API credentials. The parent process env flows to
+    // the child CLI unchanged. Provider config (.json) is a desktop concept.
     if (this.shouldStripInheritedProviderEnv(options?.providerId)) {
       for (const key of PROVIDER_ENV_KEYS) {
         delete cleanEnv[key]
@@ -969,81 +971,19 @@ export class ConversationService {
     return env
   }
 
-  private shouldStripInheritedProviderEnv(providerId?: string | null): boolean {
-    if (providerId !== undefined) {
-      return true
-    }
-
-    const configDir =
-      process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-    const ccHahaDir = path.join(configDir, 'cc-haha')
-    const providersIndexPath = path.join(ccHahaDir, 'providers.json')
-    const settingsPath = path.join(ccHahaDir, 'settings.json')
-
-    if (fs.existsSync(providersIndexPath)) {
-      return true
-    }
-
-    try {
-      const raw = fs.readFileSync(settingsPath, 'utf-8')
-      const parsed = JSON.parse(raw) as { env?: Record<string, string> }
-      const env = parsed.env ?? {}
-      return [
-        'ANTHROPIC_API_KEY',
-        'ANTHROPIC_BASE_URL',
-        'ANTHROPIC_AUTH_TOKEN',
-        'ANTHROPIC_MODEL',
-        'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-        'ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES',
-        'ANTHROPIC_DEFAULT_SONNET_MODEL',
-        'ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES',
-        'ANTHROPIC_DEFAULT_OPUS_MODEL',
-        'ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES',
-        'CC_HAHA_SEND_DISABLED_THINKING',
-        'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
-        'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS',
-      ].some((key) => typeof env[key] === 'string' && env[key]!.trim().length > 0)
-    } catch {
-      return false
-    }
+  private shouldStripInheritedProviderEnv(_providerId?: string | null): boolean {
+    // Web SaaS profile: never strip API credentials from the child environment.
+    // The parent server process holds credentials in its own environment; the
+    // child CLI inherits them directly. Desktop provider config and settings.json
+    // are desktop-UI concepts that do not apply here.
+    return false
   }
 
-  /**
-   * 只有当用户处于"官方"模式(没有激活任何自定义 provider)时,才把 CLI 标记为
-   * managed-OAuth。激活自定义 provider 时 settings.json 里有 ANTHROPIC_AUTH_TOKEN;
-   * 这种情况下 CLI 必须按 token 路径走第三方 endpoint,不能被 managed 规则
-   * 强制切 OAuth。
-   *
-   * 默认 (读不到 settings.json) 按"官方"处理 — 即使用户从未用过 cc-haha
-   * provider 管理,也希望官方 OAuth 能正常工作。
-   */
-  private shouldMarkManagedOAuth(providerId?: string | null): boolean {
-    if (providerId === null) {
-      return true
-    }
-    if (typeof providerId === 'string') {
-      return false
-    }
-
-    const configDir =
-      process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-    const settingsPath = path.join(configDir, 'cc-haha', 'settings.json')
-    try {
-      const raw = fs.readFileSync(settingsPath, 'utf-8')
-      const parsed = JSON.parse(raw) as { env?: Record<string, string> }
-      const env = parsed.env ?? {}
-      const hasProviderEnv = [
-        'ANTHROPIC_API_KEY',
-        'ANTHROPIC_AUTH_TOKEN',
-        'ANTHROPIC_BASE_URL',
-      ].some(
-        (key) =>
-          typeof env[key] === 'string' && env[key]!.trim().length > 0,
-      )
-      return !hasProviderEnv
-    } catch {
-      return true
-    }
+  private shouldMarkManagedOAuth(_providerId?: string | null): boolean {
+    // Web SaaS profile: never force the CLI into managed-OAuth mode.
+    // The parent server process holds API credentials in its environment
+    // and the child CLI inherits them directly. OAuth is a desktop-only flow.
+    return false
   }
 
   private resolveCliArgs(baseArgs: string[]): string[] {
