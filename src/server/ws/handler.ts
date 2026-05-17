@@ -18,6 +18,7 @@ import { sessionService } from '../services/sessionService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { pushNotificationService } from '../services/pushNotificationService.js'
 import { deriveTitle, generateTitle, saveAiTitle } from '../services/titleService.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
 import {
@@ -215,7 +216,10 @@ export const handleWebSocket = {
     }
     computerUseApprovalService.cancelSession(sessionId)
     activeSessions.delete(sessionId)
-    conversationService.clearOutputCallbacks(sessionId)
+
+    // Replace output callbacks with push-only mode so mobile users
+    // get notifications for permission requests and task completions.
+    rebindPushOnlyOutput(sessionId)
 
     // Schedule delayed cleanup: if the client doesn't reconnect within 30 seconds,
     // stop the CLI subprocess to avoid leaking resources.
@@ -1310,6 +1314,56 @@ function getCompactBoundaryMessage(cliMsg: any): string {
   if (content) return content
 
   return 'Context compacted'
+}
+
+/**
+ * Install a push-only output callback for a session whose client has disconnected.
+ * Translates CLI messages and sends push notifications for:
+ *   - permission_request: so the mobile user can approve
+ *   - message_complete (success): so the user knows the task finished
+ */
+function rebindPushOnlyOutput(sessionId: string) {
+  if (!conversationService.hasSession(sessionId)) return
+  if (!pushNotificationService.isInitialized()) return
+
+  conversationService.clearOutputCallbacks(sessionId)
+  conversationService.onOutput(sessionId, (cliMsg) => {
+    const serverMsgs = translateCliMessage(cliMsg, sessionId)
+
+    for (const msg of serverMsgs) {
+      if (msg.type === 'permission_request') {
+        const toolName = 'toolName' in msg ? String(msg.toolName) : 'tool'
+        pushNotificationService.broadcastToAll({
+          title: 'Permission Required',
+          body: `haha needs approval to use: ${toolName}`,
+          data: {
+            type: 'permission_request',
+            sessionId,
+            requestId: 'requestId' in msg ? String(msg.requestId) : '',
+            toolName,
+          },
+        }).catch((err) => {
+          console.error('[WS] Push notification failed:', err)
+        })
+      }
+
+      if (msg.type === 'message_complete') {
+        const usage = 'usage' in msg
+          ? (msg.usage as { input_tokens: number; output_tokens: number })
+          : { input_tokens: 0, output_tokens: 0 }
+        pushNotificationService.broadcastToAll({
+          title: 'Task Complete',
+          body: `Tokens: ${usage.input_tokens} in / ${usage.output_tokens} out`,
+          data: {
+            type: 'task_complete',
+            sessionId,
+          },
+        }).catch((err) => {
+          console.error('[WS] Push notification failed:', err)
+        })
+      }
+    }
+  })
 }
 
 function rebindSessionOutput(

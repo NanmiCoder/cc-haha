@@ -72,5 +72,8 @@ runtime/__pycache__
 # IDE
 .idea
 
+# Mobile push notification SDKs & certs
+apple-sandbox/
+
 # Codex logs
 .codex-logs/

@@ -8,6 +8,7 @@
 import { adapterService, type AdapterFileConfig } from './adapterService.js'
 import type { TaskRun } from './cronScheduler.js'
 import type { TaskNotificationConfig } from './cronService.js'
+import { pushNotificationService } from './pushNotificationService.js'
 
 // ─── Message formatting ──────────────────────────────────────────────────────
 
@@ -224,10 +225,16 @@ export async function sendTaskNotification(
   run: TaskRun,
   notification: TaskNotificationConfig,
 ): Promise<void> {
-  const imChannels = notification.channels.filter((channel): channel is 'telegram' | 'feishu' =>
-    channel === 'telegram' || channel === 'feishu',
+  // Filter channels: IM channels (telegram/feishu) + FCM/push channels
+  const imChannels = notification.channels.filter(
+    (channel): channel is 'telegram' | 'feishu' =>
+      channel === 'telegram' || channel === 'feishu',
   )
-  if (!notification.enabled || imChannels.length === 0) return
+  const hasFcm = notification.channels.includes('desktop') ||
+    notification.channels.includes('fcm')
+
+  if (!notification.enabled) return
+  if (imChannels.length === 0 && !hasFcm) return
 
   let config: AdapterFileConfig
   try {
@@ -276,6 +283,29 @@ export async function sendTaskNotification(
       }
     } catch (err) {
       console.error(`[Notification] ${channel} notification error:`, err)
+    }
+  }
+
+  // FCM push notification
+  if (hasFcm && pushNotificationService.isInitialized()) {
+    try {
+      const emoji = statusEmoji(run.status)
+      await pushNotificationService.broadcastToAll({
+        title: `${emoji} ${run.taskName}`,
+        body:
+          run.status === 'completed'
+            ? `Task completed in ${run.durationMs != null ? formatDuration(run.durationMs) : '—'}`
+            : run.status === 'failed'
+              ? `Task failed: ${run.error ? run.error.slice(0, 100) : 'Unknown error'}`
+              : `Task ${run.status}`,
+        data: {
+          type: 'task_complete',
+          taskId: run.taskId,
+          status: run.status,
+        },
+      })
+    } catch (err) {
+      console.error('[Notification] FCM notification error:', err)
     }
   }
 }

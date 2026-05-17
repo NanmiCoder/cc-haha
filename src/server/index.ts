@@ -7,7 +7,7 @@
 
 import { handleApiRequest } from './router.js'
 import { handleWebSocket, type WebSocketData } from './ws/handler.js'
-import { corsHeaders } from './middleware/cors.js'
+import { corsHeaders, setMobileMode } from './middleware/cors.js'
 import { requireAuth } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
@@ -19,6 +19,7 @@ import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncher
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
 import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
+import { pushNotificationService } from './services/pushNotificationService.js'
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -37,12 +38,14 @@ function resolveServerOptions() {
   const host = readArgValue('--host') || process.env.SERVER_HOST || '127.0.0.1'
   const cliPath = readArgValue('--cli-path')
   const authRequired = hasArgFlag('--auth-required')
+  const mobileMode =
+    hasArgFlag('--mobile') || process.env.SERVER_MOBILE_MODE === '1'
 
   if (cliPath) {
     process.env.CLAUDE_CLI_PATH = cliPath
   }
 
-  return { port, host, authRequired }
+  return { port, host, authRequired, mobileMode }
 }
 
 const SERVER_OPTIONS = resolveServerOptions()
@@ -54,6 +57,16 @@ export function startServer(port = PORT, host = HOST) {
   diagnosticsService.installConsoleCapture()
   diagnosticsService.installProcessCapture()
   ProviderService.setServerPort(port)
+
+  // Enable mobile mode (relaxed CORS, push notifications)
+  if (SERVER_OPTIONS.mobileMode) {
+    setMobileMode(true)
+    console.log('[Server] Mobile mode enabled — CORS allows all origins')
+  }
+
+  // Initialize push notification service if configured
+  pushNotificationService.initialize()
+
   const localConnectHost =
     host === '0.0.0.0' || host === '127.0.0.1' || host === 'localhost'
       ? '127.0.0.1'

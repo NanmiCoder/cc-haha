@@ -22,6 +22,7 @@ import { handleHahaOpenAIOAuthApi } from './api/haha-openai-oauth.js'
 import { handleMcpApi } from './api/mcp.js'
 import { handleDiagnosticsApi } from './api/diagnostics.js'
 import { handleDoctorApi } from './api/doctor.js'
+import { handleMobileApi } from './api/mobile.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -101,6 +102,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'filesystem':
       return handleFilesystemRoute(url.pathname, url)
+
+    case 'mobile':
+      return handleMobileApi(req, url, segments)
 
     default:
       return Response.json(
