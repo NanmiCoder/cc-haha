@@ -924,15 +924,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           update(() => ({ streamingText: text }))
         }
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
-        update(() => ({
-          tokenUsage: msg.usage,
-          chatState: 'idle',
-          activeThinkingId: null,
-          pendingPermission: null,
-          pendingComputerUsePermission: null,
-          elapsedTimer: null,
-        }))
-        useTabStore.getState().updateTabStatus(sessionId, 'idle')
+
+        const hasRunningBgTasks = hasRunningBackgroundTasks(session.backgroundAgentTasks)
+        if (hasRunningBgTasks) {
+          update(() => ({
+            tokenUsage: msg.usage,
+            chatState: 'awaiting_agents',
+            activeThinkingId: null,
+            pendingPermission: null,
+            pendingComputerUsePermission: null,
+            elapsedTimer: null,
+          }))
+        } else {
+          update(() => ({
+            tokenUsage: msg.usage,
+            chatState: 'idle',
+            activeThinkingId: null,
+            pendingPermission: null,
+            pendingComputerUsePermission: null,
+            elapsedTimer: null,
+          }))
+          useTabStore.getState().updateTabStatus(sessionId, 'idle')
+        }
         const notification = wasAgentRunning
           ? buildAgentCompletionNotification(sessionId, completionMessages, text)
           : null
@@ -1132,6 +1145,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 },
               }
             })
+            // Awaiting agents → idle once all background tasks finish
+            const postSession = get().sessions[sessionId]
+            if (
+              postSession?.chatState === 'awaiting_agents' &&
+              !hasRunningBackgroundTasks(postSession.backgroundAgentTasks)
+            ) {
+              set((s) => ({
+                sessions: updateSessionIn(s.sessions, sessionId, () => ({
+                  chatState: 'idle' as const,
+                })),
+              }))
+              useTabStore.getState().updateTabStatus(sessionId, 'idle')
+            }
           }
         }
         break
@@ -1140,6 +1166,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }))
+
+function hasRunningBackgroundTasks(tasks: Record<string, BackgroundAgentTask> | undefined): boolean {
+  if (!tasks) return false
+  return Object.values(tasks).some((t) => t.status === 'running')
+}
 
 function updateOptimisticSessionTitle(sessionId: string, content: string): void {
   const title = deriveSessionTitle(content)

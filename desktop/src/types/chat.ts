@@ -91,7 +91,7 @@ export type TokenUsage = {
   cache_creation_tokens?: number
 }
 
-export type ChatState = 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending'
+export type ChatState = 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'awaiting_agents'
 
 export type TeamMemberStatus = {
   agentId: string
