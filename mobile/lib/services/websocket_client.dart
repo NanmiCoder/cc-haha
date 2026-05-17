@@ -34,7 +34,9 @@ class WebSocketClient {
     if (_isOpen) return;
     _intentionalClose = false;
 
-    final url = '${AppConfig.wsUrl}/ws/$sessionId';
+    // WebSocket can't set custom headers — pass auth token as query param
+    final token = AppConfig.apiKey.isNotEmpty ? '?token=${Uri.encodeComponent(AppConfig.apiKey)}' : '';
+    final url = '${AppConfig.wsUrl}/ws/$sessionId$token';
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));
       _isOpen = true;

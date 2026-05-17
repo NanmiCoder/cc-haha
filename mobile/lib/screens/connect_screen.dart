@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../config/app_config.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
 
@@ -12,7 +13,7 @@ class ConnectScreen extends StatefulWidget {
 
 class _ConnectScreenState extends State<ConnectScreen> {
   final _urlController = TextEditingController(
-    text: 'http://192.168.1.100:3456',
+    text: AppConfig.serverUrl,
   );
   final _keyController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
@@ -90,7 +91,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                     controller: _urlController,
                     decoration: const InputDecoration(
                       labelText: 'Server URL',
-                      hintText: 'http://192.168.1.100:3456',
+                      hintText: 'https://p.v.ailingo.net',
                       prefixIcon: Icon(Icons.dns_outlined),
                       border: OutlineInputBorder(),
                     ),

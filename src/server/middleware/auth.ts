@@ -29,9 +29,9 @@ export function validateAuth(req: Request): AuthResult {
     return parsedAuth
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN
   if (!apiKey) {
-    return { valid: false, error: 'Server ANTHROPIC_API_KEY not configured' }
+    return { valid: false, error: 'Server ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) not configured' }
   }
 
   if (parsedAuth.token !== apiKey) {
@@ -54,13 +54,20 @@ export async function validateRequestAuth(
   }
 
   const parsedAuth = parseBearerToken(req.headers.get('Authorization'))
-  const h5Token = tokenOverride ?? parsedAuth.token
-  if (h5Token) {
-    const h5AccessService = new H5AccessService()
-    if (await h5AccessService.validateToken(h5Token)) {
+  const token = tokenOverride ?? parsedAuth.token
+  if (token) {
+    // Try the token against the standard API key first (supports WebSocket auth via URL param)
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN
+    if (apiKey && token === apiKey) {
       return { valid: true }
     }
-    return { valid: false, error: 'Invalid H5 access token' }
+
+    // Fallback to H5 token validation
+    const h5AccessService = new H5AccessService()
+    if (await h5AccessService.validateToken(token)) {
+      return { valid: true }
+    }
+    return { valid: false, error: 'Invalid API key or H5 access token' }
   }
 
   return anthropicAuth

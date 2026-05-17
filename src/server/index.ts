@@ -147,7 +147,9 @@ export function startServer(port = PORT, host = HOST) {
    */
   const forceAuth =
     SERVER_OPTIONS.authRequired ||
-    process.env.SERVER_AUTH_REQUIRED === '1'
+    process.env.SERVER_AUTH_REQUIRED === '1' ||
+    // Auto-enable auth when binding to non-localhost (mobile/dev access)
+    host !== '127.0.0.1'
   const h5AccessService = new H5AccessService()
 
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
@@ -172,7 +174,8 @@ export function startServer(port = PORT, host = HOST) {
             candidateOrigin === h5PublicOrigin ||
             await h5AccessService.isOriginAllowed(candidateOrigin),
         })
-        const authRequired = shouldRequireH5Token({
+        // H5 auth only applies when mobile mode is off
+        const authRequired = !SERVER_OPTIONS.mobileMode && shouldRequireH5Token({
           request: req,
           url,
           h5Enabled: h5Settings.enabled,
@@ -191,7 +194,8 @@ export function startServer(port = PORT, host = HOST) {
           return h5AccessControlRejectedResponse()
         }
 
-        if (h5AccessDisabledBlocked) {
+        // Mobile mode bypasses H5 access control
+        if (h5AccessDisabledBlocked && !SERVER_OPTIONS.mobileMode) {
           return h5AccessDisabledResponse()
         }
 
@@ -251,12 +255,8 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
 
-          if (forceAuth) {
-            const authError = await requireAuth(req, url.searchParams.get('token'))
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          }
+          // SDK has its own token-based auth (authorizeSdkConnection).
+          // Skip forceAuth/H5 auth for internal SDK connections.
 
           const sessionId = url.pathname.split('/').pop() || ''
           if (!sessionId || !/^[0-9a-zA-Z_-]{1,64}$/.test(sessionId)) {

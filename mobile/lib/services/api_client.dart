@@ -94,7 +94,7 @@ class ApiClient {
   }
 
   Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
-    final data = await get('/api/sessions/$sessionId/chat');
+    final data = await get('/api/sessions/$sessionId/messages');
     final messages = data['messages'] as List<dynamic>? ?? [];
     return messages.cast<Map<String, dynamic>>();
   }

@@ -1,7 +1,7 @@
 /// Application configuration and constants.
 class AppConfig {
   // Will be set by the user on the connect screen
-  static String serverUrl = 'http://localhost:3456';
+  static String serverUrl = 'https://p.v.ailingo.net';
   static String apiKey = '';
 
   /// JPush AppKey — from 极光控制台 → 应用设置.

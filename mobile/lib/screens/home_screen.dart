@@ -17,7 +17,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Load sessions after the first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AppState>().loadSessions();
     });
@@ -45,7 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ? const Center(child: CircularProgressIndicator())
             : appState.sessions.isEmpty
                 ? ListView(
-                    // Need a scrollable for RefreshIndicator to work
                     children: [
                       SizedBox(
                         height: MediaQuery.of(context).size.height * 0.6,
@@ -87,13 +85,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       final session = appState.sessions[index];
                       return _SessionTile(
                         session: session,
-                        onTap: () {
-                          appState.openSession(session.id);
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const ChatScreen(),
-                            ),
-                          );
+                        onTap: () async {
+                          await appState.openSession(session.id);
+                          if (mounted) {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const ChatScreen(),
+                              ),
+                            );
+                          }
                         },
                         onDelete: () =>
                             _confirmDelete(context, appState, session),
@@ -102,19 +102,70 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final session = await appState.createSession();
-          if (session != null && mounted) {
-            appState.openSession(session.id);
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ChatScreen()),
-            );
-          }
-        },
+        onPressed: () => _showCreateDialog(context, appState),
         icon: const Icon(Icons.add),
         label: const Text('New Session'),
       ),
     );
+  }
+
+  void _showCreateDialog(BuildContext context, AppState appState) {
+    final workDirController = TextEditingController(text: '/idw');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Session'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Choose a working directory for this session:'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: workDirController,
+              decoration: const InputDecoration(
+                labelText: 'Work Directory',
+                hintText: '/idw',
+                prefixIcon: Icon(Icons.folder),
+                border: OutlineInputBorder(),
+              ),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (v) async {
+                Navigator.of(ctx).pop();
+                await _createAndOpen(appState, v.trim());
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await _createAndOpen(appState, workDirController.text.trim());
+            },
+            child: const Text('Create'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await _createAndOpen(appState, '/idw');
+            },
+            child: const Text('Default (/idw)'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createAndOpen(AppState appState, String workDir) async {
+    final session = await appState.createSession(workDir: workDir);
+    if (session != null && mounted) {
+      await appState.openSession(session.id);
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ChatScreen()),
+        );
+      }
+    }
   }
 
   void _confirmDelete(
@@ -185,4 +236,3 @@ class _SessionTile extends StatelessWidget {
     );
   }
 }
-

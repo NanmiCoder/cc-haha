@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/message.dart';
 import '../models/session.dart';
@@ -140,13 +141,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Session?> createSession() async {
+  Future<Session?> createSession({String? workDir}) async {
     try {
-      final data = await api.createSession();
+      final data = await api.createSession(workDir: workDir);
       final session = Session(
-        id: data['id'] as String? ?? '',
+        id: (data['sessionId'] ?? data['id']) as String? ?? '',
         title: data['title'] as String? ?? 'New Session',
-        workDir: data['workDir'] as String? ?? '',
+        workDir: data['workDir'] as String? ?? workDir ?? '',
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -177,14 +178,77 @@ class AppState extends ChangeNotifier {
 
   // ─── Chat ─────────────────────────────────────────────────────────────
 
-  void openSession(String sessionId) {
+  Future<void> openSession(String sessionId) async {
     _activeSessionId = sessionId;
     _messages = [];
     _streamingMessage = null;
     _isStreaming = false;
-    _chatStatus = '';
+    _chatStatus = 'Loading...';
+    notifyListeners();
 
-    // Connect WebSocket
+    // Load existing messages via REST API
+    try {
+      final rawMessages = await api.getMessages(sessionId);
+      for (final m in rawMessages) {
+        final type = m['type'] as String?;
+        final content = m['content'];
+        final text = _extractText(content);
+
+        switch (type) {
+          case 'user':
+            _messages.add(ChatMessage(
+              id: m['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              sessionId: sessionId,
+              msgType: ChatMessageType.text,
+              text: text,
+            ));
+            break;
+          case 'assistant':
+            _messages.add(ChatMessage(
+              id: m['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              sessionId: sessionId,
+              msgType: ChatMessageType.text,
+              text: text,
+            ));
+            break;
+          case 'tool_use':
+            final toolBlocks = _extractToolBlocks(content);
+            for (final tb in toolBlocks) {
+              _messages.add(ChatMessage(
+                id: m['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+                sessionId: sessionId,
+                msgType: ChatMessageType.toolUse,
+                toolName: tb['name'] as String? ?? '',
+                toolInput: _formatJson(tb['input']),
+              ));
+            }
+            break;
+          case 'tool_result':
+            _messages.add(ChatMessage(
+              id: m['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              sessionId: sessionId,
+              msgType: ChatMessageType.toolResult,
+              toolResult: _formatJson(content),
+            ));
+            break;
+          case 'system':
+            _messages.add(ChatMessage(
+              id: m['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              sessionId: sessionId,
+              msgType: ChatMessageType.system,
+              text: text,
+            ));
+            break;
+        }
+      }
+    } catch (e) {
+      debugPrint('[haha] Failed to load history: $e');
+    }
+
+    _chatStatus = 'Connected';
+    notifyListeners();
+
+    // Connect WebSocket for real-time streaming
     _ws?.disconnect();
     _ws = WebSocketClient(
       sessionId: sessionId,
@@ -362,6 +426,33 @@ class AppState extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  /// Extract plain text from content which may be a String or an array of blocks.
+  String _extractText(dynamic content) {
+    if (content is String) return content;
+    if (content is List) {
+      final texts = <String>[];
+      for (final block in content) {
+        if (block is Map && block['type'] == 'text') {
+          final t = block['text'];
+          if (t is String) texts.add(t);
+        }
+      }
+      return texts.join('\n');
+    }
+    return '';
+  }
+
+  /// Extract tool_use blocks from an array of content blocks.
+  List<Map<String, dynamic>> _extractToolBlocks(dynamic content) {
+    if (content is List) {
+      return content
+          .whereType<Map<String, dynamic>>()
+          .where((b) => b['type'] == 'tool_use')
+          .toList();
+    }
+    return [];
   }
 
   String _formatJson(dynamic obj) {
