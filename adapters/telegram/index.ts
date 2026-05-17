@@ -392,7 +392,11 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
           const text = accumulatedText.get(chatId)
           if (text?.trim()) {
             try {
-              await bot.api.editMessageText(numericChatId, placeholders.get(chatId)!.messageId, text)
+              const chunks = splitMessage(text, TELEGRAM_TEXT_LIMIT)
+              await bot.api.editMessageText(numericChatId, placeholders.get(chatId)!.messageId, chunks[0]!)
+              for (let i = 1; i < chunks.length; i++) {
+                await bot.api.sendMessage(numericChatId, chunks[i]!)
+              }
             } catch { /* ignore */ }
           }
           placeholders.delete(chatId)
