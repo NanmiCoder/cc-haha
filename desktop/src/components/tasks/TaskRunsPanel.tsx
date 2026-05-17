@@ -5,6 +5,7 @@ import { useTabStore } from '../../stores/tabStore'
 import { useTranslation } from '../../i18n'
 import { parseRunOutput } from '../../lib/parseRunOutput'
 import type { TaskRun } from '../../types/task'
+import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 
 function RunOutput({ run }: { run: TaskRun }) {
   const t = useTranslation()
@@ -28,10 +29,13 @@ function RunOutput({ run }: { run: TaskRun }) {
     )
   }
 
-  // Render AI text response with proper formatting (not monospace <pre>)
   return (
-    <div className="mt-2 p-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] text-xs text-[var(--color-text-secondary)] whitespace-pre-wrap break-words max-h-48 overflow-y-auto leading-relaxed">
-      {text}
+    <div className="mt-2 max-h-48 overflow-y-auto rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-2.5">
+      <MarkdownRenderer
+        content={text}
+        variant="compact"
+        className="break-words"
+      />
     </div>
   )
 }

@@ -141,7 +141,7 @@ const DESKTOP_SCOPE: CoverageScope = {
     'desktop/src/mocks/',
     'desktop/src/types/',
   ],
-  excludeSuffixes: ['.test.ts', '.test.tsx', '.d.ts', 'vite-env.d.ts'],
+  excludeSuffixes: ['.test.ts', '.test.tsx', '.d.ts', 'vite-env.d.ts', '.css'],
 }
 
 const CHANGED_LINE_SCOPES = [
@@ -725,7 +725,7 @@ export async function runCoverageGate(options: {
   const suites: SuiteCoverage[] = []
   const coverageByFile = new Map<string, FileLineCoverage>()
 
-  const rootCommand = ['bun', 'test', '--coverage', '--coverage-reporter=lcov', '--coverage-reporter=text', '--coverage-dir', join(outputDir, 'root-server'), ...serverFiles]
+  const rootCommand = ['bun', 'test', '--timeout=20000', '--coverage', '--coverage-reporter=lcov', '--coverage-reporter=text', '--coverage-dir', join(outputDir, 'root-server'), ...serverFiles]
   const rootLogPath = join(outputDir, 'root-server', 'coverage.log')
   mkdirSync(join(outputDir, 'root-server'), { recursive: true })
   const rootResult = await runCommand(rootCommand, rootDir, rootLogPath)

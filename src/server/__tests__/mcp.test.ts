@@ -12,6 +12,7 @@ let projectRoot: string
 let originalConfigDir: string | undefined
 let connectSpy: ReturnType<typeof spyOn> | undefined
 let getClaudeCodeMcpConfigsSpy: ReturnType<typeof spyOn> | undefined
+let getAllMcpConfigsSpy: ReturnType<typeof spyOn> | undefined
 let reconnectSpy: ReturnType<typeof spyOn> | undefined
 let hostPreflightSpy: ReturnType<typeof spyOn> | undefined
 
@@ -77,6 +78,8 @@ describe('MCP API', () => {
     connectSpy = undefined
     getClaudeCodeMcpConfigsSpy?.mockRestore()
     getClaudeCodeMcpConfigsSpy = undefined
+    getAllMcpConfigsSpy?.mockRestore()
+    getAllMcpConfigsSpy = undefined
     reconnectSpy?.mockRestore()
     reconnectSpy = undefined
     hostPreflightSpy?.mockRestore()
@@ -139,6 +142,37 @@ describe('MCP API', () => {
     expect(body.server.name).toBe('deepwiki')
     expect(body.server.status).toBe('connected')
     expect(connectSpy).toHaveBeenCalled()
+  })
+
+  it('lists runtime-visible claude.ai MCP connectors as read-only settings entries', async () => {
+    getAllMcpConfigsSpy = spyOn(mcpConfig, 'getAllMcpConfigs').mockResolvedValue({
+      servers: {
+        'claude.ai Docs': {
+          type: 'claudeai-proxy',
+          url: 'https://mcp.example.com/docs',
+          id: 'srv_docs',
+          scope: 'claudeai',
+        },
+      },
+      errors: [],
+    })
+
+    const list = makeRequest('GET', `/api/mcp?cwd=${encodeURIComponent(projectRoot)}`)
+    const listRes = await handleMcpApi(list.req, list.url, list.segments)
+
+    expect(listRes.status).toBe(200)
+    const listBody = await listRes.json()
+
+    expect(listBody.servers).toContainEqual(
+      expect.objectContaining({
+        name: 'claude.ai Docs',
+        scope: 'claudeai',
+        transport: 'claudeai-proxy',
+        canEdit: false,
+        canRemove: false,
+      }),
+    )
+    expect(connectSpy).not.toHaveBeenCalled()
   })
 
   it('rejects stdio MCP creation when the host command is unavailable', async () => {

@@ -7,6 +7,8 @@ export type ComputerUseStatus = {
     installed: boolean
     version: string | null
     path: string | null
+    source: 'custom' | 'system' | 'venv' | null
+    error: string | null
   }
   venv: {
     created: boolean
@@ -53,6 +55,7 @@ export type ComputerUseConfig = {
     clipboardWrite: boolean
     systemKeyCombos: boolean
   }
+  pythonPath: string | null
 }
 
 export const computerUseApi = {

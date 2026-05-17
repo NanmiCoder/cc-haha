@@ -61,6 +61,37 @@ export class CardKitApiError extends Error {
 
 type LarkClient = Lark.Client
 
+const DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS = 15_000
+
+function getImCardRequestTimeoutMs(): number {
+  const raw = process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+  const parsed = raw ? Number(raw) : DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS
+}
+
+export async function withImCardRequestTimeout<T>(
+  api: string,
+  request: () => Promise<T>,
+): Promise<T> {
+  const timeoutMs = getImCardRequestTimeoutMs()
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  try {
+    return await Promise.race([
+      Promise.resolve().then(request),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${api} timed out after ${timeoutMs}ms`))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Response check
 // ---------------------------------------------------------------------------
@@ -106,12 +137,14 @@ export async function createCardEntity(
   card: Record<string, unknown>,
 ): Promise<string> {
   // SDK 返回类型不完整，cast 到运行时实际结构
-  const resp = (await client.cardkit.v1.card.create({
-    data: {
-      type: 'card_json',
-      data: JSON.stringify(card),
-    },
-  })) as unknown as CardKitResponse
+  const resp = (await withImCardRequestTimeout('card.create', () =>
+    client.cardkit.v1.card.create({
+      data: {
+        type: 'card_json',
+        data: JSON.stringify(card),
+      },
+    }),
+  )) as unknown as CardKitResponse
 
   assertCardKitOk({
     resp,
@@ -163,10 +196,12 @@ export async function sendCardAsMessage(
   })
 
   if (replyToMessageId) {
-    const resp = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: { content, msg_type: 'interactive' },
-    })
+    const resp = await withImCardRequestTimeout('im.message.reply', () =>
+      client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: { content, msg_type: 'interactive' },
+      }),
+    )
     const messageId = resp.data?.message_id
     if (!messageId) {
       throw new CardKitApiError({
@@ -179,14 +214,16 @@ export async function sendCardAsMessage(
     return messageId
   }
 
-  const resp = await client.im.message.create({
-    params: { receive_id_type: 'chat_id' },
-    data: {
-      receive_id: chatId,
-      msg_type: 'interactive',
-      content,
-    },
-  })
+  const resp = await withImCardRequestTimeout('im.message.create', () =>
+    client.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content,
+      },
+    }),
+  )
   const messageId = resp.data?.message_id
   if (!messageId) {
     throw new CardKitApiError({
@@ -223,10 +260,12 @@ export async function streamCardContent(
   content: string,
   sequence: number,
 ): Promise<void> {
-  const resp = (await client.cardkit.v1.cardElement.content({
-    data: { content, sequence },
-    path: { card_id: cardId, element_id: elementId },
-  })) as unknown as CardKitResponse
+  const resp = (await withImCardRequestTimeout('cardElement.content', () =>
+    client.cardkit.v1.cardElement.content({
+      data: { content, sequence },
+      path: { card_id: cardId, element_id: elementId },
+    }),
+  )) as unknown as CardKitResponse
 
   assertCardKitOk({
     resp,
@@ -249,13 +288,15 @@ export async function setCardStreamingMode(
   streamingMode: boolean,
   sequence: number,
 ): Promise<void> {
-  const resp = (await client.cardkit.v1.card.settings({
-    data: {
-      settings: JSON.stringify({ streaming_mode: streamingMode }),
-      sequence,
-    },
-    path: { card_id: cardId },
-  })) as unknown as CardKitResponse
+  const resp = (await withImCardRequestTimeout('card.settings', () =>
+    client.cardkit.v1.card.settings({
+      data: {
+        settings: JSON.stringify({ streaming_mode: streamingMode }),
+        sequence,
+      },
+      path: { card_id: cardId },
+    }),
+  )) as unknown as CardKitResponse
 
   assertCardKitOk({
     resp,
@@ -278,13 +319,15 @@ export async function updateCardKitCard(
   card: Record<string, unknown>,
   sequence: number,
 ): Promise<void> {
-  const resp = (await client.cardkit.v1.card.update({
-    data: {
-      card: { type: 'card_json', data: JSON.stringify(card) },
-      sequence,
-    },
-    path: { card_id: cardId },
-  })) as unknown as CardKitResponse
+  const resp = (await withImCardRequestTimeout('card.update', () =>
+    client.cardkit.v1.card.update({
+      data: {
+        card: { type: 'card_json', data: JSON.stringify(card) },
+        sequence,
+      },
+      path: { card_id: cardId },
+    }),
+  )) as unknown as CardKitResponse
 
   assertCardKitOk({
     resp,

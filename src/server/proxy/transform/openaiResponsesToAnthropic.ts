@@ -38,8 +38,8 @@ export function openaiResponsesToAnthropic(response: OpenAIResponsesResponse, mo
     stop_reason: mapStatus(response.status, hasToolUse),
     stop_sequence: null,
     usage: {
-      input_tokens: response.usage?.input_tokens || 0,
-      output_tokens: response.usage?.output_tokens || 0,
+      input_tokens: response.usage?.input_tokens ?? response.usage?.prompt_tokens ?? 0,
+      output_tokens: response.usage?.output_tokens ?? response.usage?.completion_tokens ?? 0,
     },
   }
 }

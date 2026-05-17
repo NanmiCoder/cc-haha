@@ -535,6 +535,39 @@ describe('StreamingCard: 错误处理', () => {
     // 不走 patch
     expect(calls.some((c) => c.api === 'im.message.patch')).toBe(false)
   })
+
+  it('CardKit 中间帧请求挂住时不会阻塞 message_complete 收尾', async () => {
+    const previousTimeout = process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+    process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS = '20'
+    try {
+      const { client, calls } = makeMockClient({
+        'card.create': { code: 0, data: { card_id: 'ck_hung' } },
+        'im.message.create': { data: { message_id: 'om' } },
+        'cardElement.content': () => new Promise(() => {}),
+      })
+      const sc = new StreamingCard({ larkClient: client, chatId: 'c' })
+      await sc.ensureCreated()
+
+      sc.appendText('partial text')
+      await sleep(60)
+
+      const completed = await Promise.race([
+        sc.finalize().then(() => true),
+        sleep(250).then(() => false),
+      ])
+
+      expect(completed).toBe(true)
+      expect(sc._getPhase()).toBe('completed')
+      expect(calls.some((c) => c.api === 'cardkit.v1.card.settings')).toBe(true)
+      expect(calls.some((c) => c.api === 'cardkit.v1.card.update')).toBe(true)
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+      } else {
+        process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS = previousTimeout
+      }
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

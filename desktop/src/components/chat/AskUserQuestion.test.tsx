@@ -108,4 +108,156 @@ describe('AskUserQuestion', () => {
       },
     })
   })
+
+  it('allows multiple selections when a question is marked multiSelect', () => {
+    render(
+      <AskUserQuestion
+        toolUseId="tool-1"
+        input={{
+          questions: [
+            {
+              question: 'Which tasks should run?',
+              multiSelect: true,
+              options: [
+                { label: 'Lint' },
+                { label: 'Tests' },
+                { label: 'Build' },
+              ],
+            },
+          ],
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Lint$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Tests$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+      type: 'permission_response',
+      requestId: 'perm-1',
+      allowed: true,
+      updatedInput: {
+        questions: [
+          {
+            question: 'Which tasks should run?',
+            multiSelect: true,
+            options: [
+              { label: 'Lint' },
+              { label: 'Tests' },
+              { label: 'Build' },
+            ],
+          },
+        ],
+        answers: {
+          'Which tasks should run?': 'Lint, Tests',
+        },
+      },
+    })
+  })
+
+  it('preserves multiSelect for single-question input shape', () => {
+    render(
+      <AskUserQuestion
+        toolUseId="tool-1"
+        input={{
+          question: 'Which tasks should run?',
+          multiSelect: true,
+          options: [
+            { label: 'Lint' },
+            { label: 'Tests' },
+            { label: 'Build' },
+          ],
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Lint$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Tests$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+      type: 'permission_response',
+      requestId: 'perm-1',
+      allowed: true,
+      updatedInput: {
+        question: 'Which tasks should run?',
+        multiSelect: true,
+        options: [
+          { label: 'Lint' },
+          { label: 'Tests' },
+          { label: 'Build' },
+        ],
+        answers: {
+          'Which tasks should run?': 'Lint, Tests',
+        },
+      },
+    })
+  })
+
+  it('responds to the provided session instead of the active tab', () => {
+    useTabStore.setState({
+      activeTabId: 'other-tab',
+      tabs: [
+        { sessionId: 'other-tab', title: 'Other', type: 'session', status: 'idle' },
+        { sessionId: 'target-tab', title: 'Target', type: 'session', status: 'idle' },
+      ],
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        'target-tab': {
+          ...state.sessions[ACTIVE_TAB]!,
+          pendingPermission: {
+            requestId: 'perm-target',
+            toolName: 'AskUserQuestion',
+            toolUseId: 'tool-target',
+            input: {
+              questions: [
+                {
+                  question: 'Run tests?',
+                  options: [{ label: 'No' }, { label: 'Yes' }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    }))
+
+    render(
+      <AskUserQuestion
+        sessionId="target-tab"
+        toolUseId="tool-target"
+        input={{
+          questions: [
+            {
+              question: 'Run tests?',
+              options: [{ label: 'No' }, { label: 'Yes' }],
+            },
+          ],
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Yes$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+    expect(sendMock).toHaveBeenCalledWith('target-tab', {
+      type: 'permission_response',
+      requestId: 'perm-target',
+      allowed: true,
+      updatedInput: {
+        questions: [
+          {
+            question: 'Run tests?',
+            options: [{ label: 'No' }, { label: 'Yes' }],
+          },
+        ],
+        answers: {
+          'Run tests?': 'Yes',
+        },
+      },
+    })
+  })
 })

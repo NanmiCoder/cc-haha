@@ -24,6 +24,10 @@ import type { PluginId } from './schemas.js'
  */
 const INLINE_MARKETPLACE = 'inline'
 
+export function isEnabledPluginSettingValue(value: unknown): boolean {
+  return value === true || Array.isArray(value)
+}
+
 /**
  * Normalize a dependency reference to fully-qualified "name@marketplace" form.
  * Bare names (no @) inherit the marketplace of the plugin declaring them —
@@ -277,7 +281,7 @@ export function getEnabledPluginIdsForScope(
 ): Set<PluginId> {
   return new Set(
     Object.entries(getSettingsForSource(settingSource)?.enabledPlugins ?? {})
-      .filter(([, v]) => v === true || Array.isArray(v))
+      .filter(([, v]) => isEnabledPluginSettingValue(v))
       .map(([k]) => k),
   )
 }

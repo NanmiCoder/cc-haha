@@ -54,7 +54,7 @@ export function PluginList() {
 
   const handleReload = async () => {
     try {
-      const reloadSummary = await reloadPlugins(currentWorkDir)
+      const reloadSummary = await reloadPlugins(currentWorkDir, activeSessionId || undefined)
       addToast({
         type: reloadSummary.errors > 0 ? 'warning' : 'success',
         message: t('settings.plugins.reloadToast', {

@@ -16,6 +16,9 @@ import {
 } from '../../api/sessions'
 import { useTranslation } from '../../i18n'
 import { DirectoryPicker } from './DirectoryPicker'
+import { useMobileViewport } from '../../hooks/useMobileViewport'
+import { isTauriRuntime } from '../../lib/desktopRuntime'
+import { MobileBottomSheet } from './MobileBottomSheet'
 
 type Props = {
   workDir: string
@@ -26,6 +29,7 @@ type Props = {
   onUseWorktreeChange: (enabled: boolean) => void
   onLaunchReadyChange?: (ready: boolean) => void
   disabled?: boolean
+  placement?: 'standalone' | 'composer'
 }
 
 const BRANCH_MENU_HEIGHT = 360
@@ -52,8 +56,11 @@ export function RepositoryLaunchControls({
   onUseWorktreeChange,
   onLaunchReadyChange,
   disabled = false,
+  placement = 'standalone',
 }: Props) {
   const t = useTranslation()
+  const isMobileBrowser = useMobileViewport() && !isTauriRuntime()
+  const isComposerPlacement = placement === 'composer' && !isMobileBrowser
   const [context, setContext] = useState<RepositoryContextResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -287,12 +294,57 @@ export function RepositoryLaunchControls({
   const worktreeLabel = useWorktree ? t('repoLaunch.worktreeIsolated') : t('repoLaunch.worktreeCurrent')
   const workbarButtonClassName = 'group inline-flex h-9 min-w-0 items-center gap-1.5 rounded-[7px] border border-transparent px-2.5 text-[13px] font-medium leading-none text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35 disabled:cursor-not-allowed disabled:opacity-50'
 
+  const branchMenuClassName = isMobileBrowser
+    ? 'max-h-[72dvh] overflow-hidden rounded-t-2xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[0_-18px_48px_rgba(54,35,28,0.2)]'
+    : 'w-[390px] overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]'
+  const branchMenuStyle = isMobileBrowser
+    ? {
+        position: 'fixed' as const,
+        left: 12,
+        right: 12,
+        bottom: 'calc(env(safe-area-inset-bottom) + 84px)',
+        zIndex: 9999,
+      }
+    : {
+        position: 'fixed' as const,
+        left: menuPos?.left,
+        ...(menuPos?.direction === 'down'
+          ? { top: menuPos.top }
+          : { bottom: window.innerHeight - (menuPos?.top ?? 0) }),
+        zIndex: 9999,
+      }
+  const worktreeMenuClassName = isMobileBrowser
+    ? 'overflow-hidden rounded-t-2xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-2 shadow-[0_-18px_48px_rgba(54,35,28,0.2)]'
+    : 'w-[226px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)]'
+  const worktreeMenuStyle = isMobileBrowser
+    ? {
+        position: 'fixed' as const,
+        left: 12,
+        right: 12,
+        bottom: 'calc(env(safe-area-inset-bottom) + 84px)',
+        zIndex: 9999,
+      }
+    : {
+        position: 'fixed' as const,
+        left: worktreeMenuPos?.left,
+        ...(worktreeMenuPos?.direction === 'down'
+          ? { top: worktreeMenuPos.top }
+          : { bottom: window.innerHeight - (worktreeMenuPos?.top ?? 0) }),
+        zIndex: 9999,
+      }
+
   return (
-    <div ref={rootRef} className="flex min-w-0 flex-col gap-2">
-      <div className="flex min-h-[48px] min-w-0 flex-nowrap items-center justify-start gap-x-1.5 gap-y-1 overflow-hidden rounded-b-xl border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
+    <div ref={rootRef} className={`flex min-w-0 flex-col ${isMobileBrowser ? 'gap-0' : isComposerPlacement ? 'gap-1' : 'gap-2'}`}>
+      <div className={`flex min-w-0 items-center justify-start gap-x-1.5 gap-y-1 overflow-hidden border-t border-[var(--color-border-separator)] ${
+        isMobileBrowser
+          ? 'min-h-[52px] flex-wrap rounded-none bg-[var(--color-surface-container-lowest)] px-3 py-2 shadow-none'
+          : isComposerPlacement
+            ? 'min-h-[44px] flex-nowrap bg-transparent px-4 py-2'
+          : 'min-h-[48px] flex-nowrap rounded-b-xl bg-[var(--color-surface-container-low)] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]'
+      }`}>
         <DirectoryPicker value={workDir} onChange={onWorkDirChange} variant="workbar" isGitProject={isGitReady} />
 
-        {loading && workDir && (
+        {loading && workDir && !isMobileBrowser && (
           <div className="inline-flex h-9 items-center gap-1.5 rounded-[7px] px-2.5 text-[13px] text-[var(--color-text-secondary)]">
             <Loader2 size={14} className="shrink-0 animate-spin" />
             <span>{t('common.loading')}</span>
@@ -315,7 +367,7 @@ export function RepositoryLaunchControls({
                 setWorktreeMenuOpen(false)
                 setBranchFilter('')
               }}
-              className={`${workbarButtonClassName} max-w-[260px] shrink`}
+              className={`${workbarButtonClassName} ${isMobileBrowser ? 'max-w-[160px] shrink-0 bg-[var(--color-surface-container)]' : 'max-w-[260px] shrink'}`}
             >
               <GitBranch size={17} className="shrink-0 text-[var(--color-text-tertiary)] group-hover:text-[var(--color-text-secondary)]" />
               <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">
@@ -337,7 +389,7 @@ export function RepositoryLaunchControls({
                 setWorktreeMenuOpen((prev) => !prev)
                 setBranchMenuOpen(false)
               }}
-              className={`${workbarButtonClassName} shrink-0 ${
+              className={`${workbarButtonClassName} shrink-0 ${isMobileBrowser ? 'bg-[var(--color-surface-container)]' : ''} ${
                 useWorktree
                   ? 'bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)]'
                   : ''
@@ -371,98 +423,201 @@ export function RepositoryLaunchControls({
         </div>
       )}
 
-      {branchMenuOpen && menuPos && createPortal(
-        <div
-          ref={menuRef}
-          className="w-[390px] overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
-          style={{
-            position: 'fixed',
-            left: menuPos.left,
-            ...(menuPos.direction === 'down'
-              ? { top: menuPos.top }
-              : { bottom: window.innerHeight - menuPos.top }),
-            zIndex: 9999,
-          }}
-        >
-          <div className="border-b border-[var(--color-border)] p-3">
-            <label htmlFor={searchInputId} className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
-              {t('repoLaunch.selectBranch')}
-            </label>
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
-              <Search size={15} className="shrink-0 text-[var(--color-text-tertiary)]" />
-              <input
-                id={searchInputId}
-                ref={searchRef}
-                value={branchFilter}
-                onChange={(event) => setBranchFilter(event.target.value)}
-                onKeyDown={handleBranchKeyDown}
-                aria-controls={listboxId}
-                aria-activedescendant={filteredBranches[selectedIndex] ? `${listboxId}-option-${selectedIndex}` : undefined}
-                placeholder={t('repoLaunch.searchBranch')}
-                className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
-              />
-            </div>
-          </div>
-
-          <div id={listboxId} role="listbox" aria-label={t('repoLaunch.selectBranch')} className="max-h-[280px] overflow-y-auto py-1">
-            {filteredBranches.length === 0 ? (
-              <div className="px-4 py-8 text-center text-xs text-[var(--color-text-tertiary)]">
-                {t('repoLaunch.noBranchMatch')}
+      {branchMenuOpen && menuPos && (
+        isMobileBrowser ? (
+          <MobileBottomSheet
+            open={branchMenuOpen}
+            onClose={() => setBranchMenuOpen(false)}
+            title={t('repoLaunch.selectBranch')}
+            closeLabel={t('tabs.close')}
+            panelRef={menuRef}
+            headerExtra={(
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+                <Search size={15} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <input
+                  id={searchInputId}
+                  ref={searchRef}
+                  value={branchFilter}
+                  onChange={(event) => setBranchFilter(event.target.value)}
+                  onKeyDown={handleBranchKeyDown}
+                  aria-controls={listboxId}
+                  aria-activedescendant={filteredBranches[selectedIndex] ? `${listboxId}-option-${selectedIndex}` : undefined}
+                  placeholder={t('repoLaunch.searchBranch')}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+                />
               </div>
-            ) : filteredBranches.map((candidate, index) => {
-              const isSelected = candidate.name === selectedBranch?.name
-              return (
-                <button
-                  key={candidate.name}
-                  id={`${listboxId}-option-${index}`}
-                  ref={(el) => { itemRefs.current[index] = el }}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onMouseEnter={() => setSelectedIndex(index)}
-                  onClick={() => selectBranch(candidate)}
-                  className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35 ${
-                    index === selectedIndex || isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
-                  }`}
-                >
-                  <span className={`h-8 w-1 rounded-full ${isSelected ? 'bg-[var(--color-brand)]' : 'bg-transparent'}`} />
-                  <GitBranch size={17} className="shrink-0 text-[var(--color-text-secondary)]" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                      {candidate.name}
+            )}
+          >
+            <div id={listboxId} role="listbox" aria-label={t('repoLaunch.selectBranch')} className="py-1">
+              {filteredBranches.length === 0 ? (
+                <div className="px-4 py-8 text-center text-xs text-[var(--color-text-tertiary)]">
+                  {t('repoLaunch.noBranchMatch')}
+                </div>
+              ) : filteredBranches.map((candidate, index) => {
+                const isSelected = candidate.name === selectedBranch?.name
+                return (
+                  <button
+                    key={candidate.name}
+                    id={`${listboxId}-option-${index}`}
+                    ref={(el) => { itemRefs.current[index] = el }}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                    onClick={() => selectBranch(candidate)}
+                    className={`flex min-h-[56px] w-full items-center gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35 ${
+                      index === selectedIndex || isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+                    }`}
+                  >
+                    <span className={`h-8 w-1 rounded-full ${isSelected ? 'bg-[var(--color-brand)]' : 'bg-transparent'}`} />
+                    <GitBranch size={17} className="shrink-0 text-[var(--color-text-secondary)]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                        {candidate.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-[var(--color-text-tertiary)]">
+                        {candidate.current
+                          ? t('repoLaunch.currentBranch')
+                          : candidate.checkedOut
+                            ? t('repoLaunch.checkedOut')
+                            : candidate.remote && !candidate.local
+                              ? candidate.remoteRef || t('repoLaunch.remoteBranch')
+                              : t('repoLaunch.localBranch')}
+                      </span>
                     </span>
-                    <span className="block truncate text-[11px] text-[var(--color-text-tertiary)]">
-                      {candidate.current
-                        ? t('repoLaunch.currentBranch')
-                        : candidate.checkedOut
-                          ? t('repoLaunch.checkedOut')
-                          : candidate.remote && !candidate.local
-                            ? candidate.remoteRef || t('repoLaunch.remoteBranch')
-                            : t('repoLaunch.localBranch')}
+                    {isSelected && <Check size={17} className="shrink-0 text-[var(--color-brand)]" />}
+                  </button>
+                )
+              })}
+            </div>
+          </MobileBottomSheet>
+        ) : createPortal(
+          <div
+            ref={menuRef}
+            className={branchMenuClassName}
+            style={branchMenuStyle}
+          >
+            <div className="border-b border-[var(--color-border)] p-3">
+              <label htmlFor={searchInputId} className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
+                {t('repoLaunch.selectBranch')}
+              </label>
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+                <Search size={15} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <input
+                  id={searchInputId}
+                  ref={searchRef}
+                  value={branchFilter}
+                  onChange={(event) => setBranchFilter(event.target.value)}
+                  onKeyDown={handleBranchKeyDown}
+                  aria-controls={listboxId}
+                  aria-activedescendant={filteredBranches[selectedIndex] ? `${listboxId}-option-${selectedIndex}` : undefined}
+                  placeholder={t('repoLaunch.searchBranch')}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+                />
+              </div>
+            </div>
+
+            <div id={listboxId} role="listbox" aria-label={t('repoLaunch.selectBranch')} className="max-h-[280px] overflow-y-auto py-1">
+              {filteredBranches.length === 0 ? (
+                <div className="px-4 py-8 text-center text-xs text-[var(--color-text-tertiary)]">
+                  {t('repoLaunch.noBranchMatch')}
+                </div>
+              ) : filteredBranches.map((candidate, index) => {
+                const isSelected = candidate.name === selectedBranch?.name
+                return (
+                  <button
+                    key={candidate.name}
+                    id={`${listboxId}-option-${index}`}
+                    ref={(el) => { itemRefs.current[index] = el }}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                    onClick={() => selectBranch(candidate)}
+                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35 ${
+                      index === selectedIndex || isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+                    }`}
+                  >
+                    <span className={`h-8 w-1 rounded-full ${isSelected ? 'bg-[var(--color-brand)]' : 'bg-transparent'}`} />
+                    <GitBranch size={17} className="shrink-0 text-[var(--color-text-secondary)]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                        {candidate.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-[var(--color-text-tertiary)]">
+                        {candidate.current
+                          ? t('repoLaunch.currentBranch')
+                          : candidate.checkedOut
+                            ? t('repoLaunch.checkedOut')
+                            : candidate.remote && !candidate.local
+                              ? candidate.remoteRef || t('repoLaunch.remoteBranch')
+                              : t('repoLaunch.localBranch')}
+                      </span>
                     </span>
-                  </span>
-                  {isSelected && <Check size={17} className="shrink-0 text-[var(--color-brand)]" />}
-                </button>
-              )
-            })}
-          </div>
-        </div>,
-        document.body,
+                    {isSelected && <Check size={17} className="shrink-0 text-[var(--color-brand)]" />}
+                  </button>
+                )
+              })}
+            </div>
+          </div>,
+          document.body,
+        )
       )}
 
-      {worktreeMenuOpen && worktreeMenuPos && createPortal(
-        <div
-          ref={worktreeMenuRef}
-          className="w-[226px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)]"
-          style={{
-            position: 'fixed',
-            left: worktreeMenuPos.left,
-            ...(worktreeMenuPos.direction === 'down'
-              ? { top: worktreeMenuPos.top }
-              : { bottom: window.innerHeight - worktreeMenuPos.top }),
-            zIndex: 9999,
-          }}
-        >
+      {worktreeMenuOpen && worktreeMenuPos && (
+        isMobileBrowser ? (
+          <MobileBottomSheet
+            open={worktreeMenuOpen}
+            onClose={() => setWorktreeMenuOpen(false)}
+            title={t('repoLaunch.selectWorktree')}
+            closeLabel={t('tabs.close')}
+            panelRef={worktreeMenuRef}
+            contentClassName="py-2"
+          >
+            <div id={worktreeListboxId} role="listbox" aria-label={t('repoLaunch.selectWorktree')}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={!useWorktree}
+                onClick={() => selectWorktreeMode(false)}
+                className={`flex min-h-[52px] w-full items-center gap-2.5 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35 disabled:cursor-not-allowed disabled:opacity-45 ${
+                  !useWorktree ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+                }`}
+              >
+                <GitFork size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+                    {t('repoLaunch.worktreeCurrent')}
+                  </span>
+                </span>
+                {!useWorktree && <Check size={16} className="shrink-0 text-[var(--color-brand)]" />}
+              </button>
+
+              <button
+                type="button"
+                role="option"
+                aria-selected={useWorktree}
+                onClick={() => selectWorktreeMode(true)}
+                className={`flex min-h-[52px] w-full items-center gap-2.5 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35 ${
+                  useWorktree ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+                }`}
+              >
+                <GitFork size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+                    {t('repoLaunch.worktreeIsolated')}
+                  </span>
+                </span>
+                {useWorktree && <Check size={16} className="shrink-0 text-[var(--color-brand)]" />}
+              </button>
+            </div>
+          </MobileBottomSheet>
+        ) : createPortal(
+          <div
+            ref={worktreeMenuRef}
+            className={worktreeMenuClassName}
+            style={worktreeMenuStyle}
+          >
           <div id={worktreeListboxId} role="listbox" aria-label={t('repoLaunch.selectWorktree')}>
             <button
               type="button"
@@ -502,6 +657,7 @@ export function RepositoryLaunchControls({
           </div>
         </div>,
         document.body,
+        )
       )}
     </div>
   )

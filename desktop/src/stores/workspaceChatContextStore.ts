@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type WorkspaceChatReferenceKind = 'file' | 'code-comment'
+export type WorkspaceChatReferenceKind = 'file' | 'code-comment' | 'code-selection' | 'chat-selection'
 
 export type WorkspaceChatReference = {
   id: string
@@ -8,10 +8,13 @@ export type WorkspaceChatReference = {
   path: string
   absolutePath?: string
   name: string
+  isDirectory?: boolean
   lineStart?: number
   lineEnd?: number
   note?: string
   quote?: string
+  sourceRole?: 'user' | 'assistant'
+  messageId?: string
 }
 
 type WorkspaceChatContextStore = {
@@ -28,17 +31,29 @@ type WorkspaceChatContextStore = {
 function makeReferenceId(reference: Omit<WorkspaceChatReference, 'id'>) {
   const linePart = reference.lineStart
     ? `${reference.lineStart}-${reference.lineEnd ?? reference.lineStart}`
-    : 'file'
-  const notePart = reference.note ? reference.note.slice(0, 48) : ''
+    : reference.messageId ?? 'file'
+  const notePart = (reference.note?.trim() || reference.quote?.trim() || '').slice(0, 48)
   return `${reference.kind}:${reference.path}:${linePart}:${notePart}`
 }
 
 function getReferenceDedupKey(reference: WorkspaceChatReference) {
   if (reference.kind === 'file') return `${reference.kind}:${reference.path}`
-  return `${reference.kind}:${reference.path}:${reference.lineStart ?? ''}:${reference.lineEnd ?? ''}:${reference.note ?? ''}`
+  return [
+    reference.kind,
+    reference.path,
+    reference.messageId ?? '',
+    reference.sourceRole ?? '',
+    reference.lineStart ?? '',
+    reference.lineEnd ?? '',
+    reference.note?.trim() ?? '',
+    reference.quote?.trim() ?? '',
+  ].join(':')
 }
 
 export function formatWorkspaceReferenceLocation(reference: WorkspaceChatReference) {
+  if (reference.kind === 'chat-selection') {
+    return reference.sourceRole === 'assistant' ? 'Assistant message' : 'User message'
+  }
   if (!reference.lineStart) return reference.path
   const lineEnd = reference.lineEnd && reference.lineEnd !== reference.lineStart
     ? `-L${reference.lineEnd}`
@@ -46,27 +61,79 @@ export function formatWorkspaceReferenceLocation(reference: WorkspaceChatReferen
   return `${reference.path}:L${reference.lineStart}${lineEnd}`
 }
 
+function getFenceForQuote(quote: string) {
+  const runs = quote.match(/`+/g) ?? []
+  const longestRun = runs.reduce((max, run) => Math.max(max, run.length), 0)
+  return '`'.repeat(Math.max(3, longestRun + 1))
+}
+
+function getLanguageHint(reference: WorkspaceChatReference) {
+  if (reference.kind === 'chat-selection') return ''
+  const extension = reference.name.split('.').pop()?.toLowerCase()
+  if (!extension || extension === reference.name.toLowerCase()) return ''
+  const aliases: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'jsx',
+    ts: 'typescript',
+    tsx: 'tsx',
+    md: 'markdown',
+    py: 'python',
+    rb: 'ruby',
+    rs: 'rust',
+    sh: 'bash',
+    yml: 'yaml',
+  }
+  return aliases[extension] ?? extension
+}
+
 export function formatWorkspaceReferencePrompt(references: WorkspaceChatReference[]) {
-  const referencesWithContext = references.filter((reference) =>
+  const workspaceReferencesWithContext = references.filter((reference) =>
     reference.kind === 'code-comment' ||
+    reference.kind === 'code-selection' ||
     !!reference.lineStart ||
     !!reference.note?.trim() ||
     !!reference.quote?.trim(),
+  ).filter((reference) => reference.kind !== 'chat-selection')
+  const chatReferencesWithContext = references.filter((reference) =>
+    reference.kind === 'chat-selection' && !!reference.quote?.trim(),
   )
-  if (referencesWithContext.length === 0) return ''
+  if (workspaceReferencesWithContext.length === 0 && chatReferencesWithContext.length === 0) return ''
 
-  const lines = [
-    'Notes for attached workspace files:',
-    ...referencesWithContext.map((reference) => {
+  const workspaceLines = workspaceReferencesWithContext.length > 0
+    ? [
+        'Referenced workspace context:',
+        ...workspaceReferencesWithContext.map((reference) => {
+          const location = formatWorkspaceReferenceLocation(reference)
+          const parts = [`@"${location}":`]
+          if (reference.note?.trim()) parts.push(`Comment: ${reference.note.trim()}`)
+          if (reference.quote?.trim()) {
+            const fence = getFenceForQuote(reference.quote)
+            const languageHint = getLanguageHint(reference)
+            parts.push(`${fence}${languageHint}`)
+            parts.push(reference.quote.trim())
+            parts.push(fence)
+          }
+          return parts.join('\n')
+        }),
+      ]
+    : []
+  const chatLines = chatReferencesWithContext.length > 0
+    ? [
+        'Referenced chat context:',
+        ...chatReferencesWithContext.map((reference) => {
       const location = formatWorkspaceReferenceLocation(reference)
-      const parts = [`- ${location}`]
-      if (reference.note?.trim()) parts.push(`Comment: ${reference.note.trim()}`)
-      if (reference.quote?.trim()) parts.push(`Selected code: ${reference.quote.trim()}`)
-      return parts.join('\n  ')
-    }),
-  ]
+          const fence = getFenceForQuote(reference.quote ?? '')
+          return [
+            `${location}:`,
+            fence,
+            reference.quote?.trim() ?? '',
+            fence,
+          ].join('\n')
+        }),
+      ]
+    : []
 
-  return lines.join('\n')
+  return [...workspaceLines, ...chatLines].join('\n')
 }
 
 export const useWorkspaceChatContextStore = create<WorkspaceChatContextStore>((set) => ({

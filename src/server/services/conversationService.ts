@@ -13,18 +13,24 @@ import { ProviderService } from './providerService.js'
 import { sessionService } from './sessionService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
+  isMaterializedWorktreeLaunch,
   prepareSessionWorkspace,
+  shouldCreateWorktreeForSessionLaunch,
   type PreparedSessionWorkspace,
 } from './repositoryLaunchService.js'
 import {
   buildClaudeCliArgs,
   resolveClaudeCliLauncher,
 } from '../../utils/desktopBundledCli.js'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { findCanonicalGitRoot } from '../../utils/git.js'
+import { sanitizePath } from '../../utils/path.js'
 
 const MAX_CAPTURED_PROCESS_LINES = 80
 const MAX_CAPTURED_SDK_MESSAGES = 40
 const MAX_CAPTURED_SDK_SUMMARY = 20
 const CONTROL_READY_POLL_MS = 50
+const AUTO_MEMORY_DIRNAME = 'memory'
 
 type AttachmentRef = {
   type: 'file' | 'image'
@@ -32,6 +38,7 @@ type AttachmentRef = {
   path?: string
   data?: string
   mimeType?: string
+  isDirectory?: boolean
 }
 
 type SessionProcess = {
@@ -146,6 +153,10 @@ export class ConversationService {
     const shouldResume = !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
       !!launchInfo && launchInfo.transcriptMessageCount === 0
+    const shouldCreateWorktree =
+      !!launchInfo && shouldCreateWorktreeForSessionLaunch(launchInfo)
+    const hasMaterializedWorktree =
+      !!launchInfo && isMaterializedWorktreeLaunch(launchInfo)
 
     if (this.deletedSessions.has(sessionId)) {
       throw new ConversationStartupError(
@@ -167,9 +178,9 @@ export class ConversationService {
 
     let launchWorkDir = workDir
     let launchRepository = launchInfo?.repository
-    if (!shouldResume && launchRepository?.worktree) {
+    if (shouldCreateWorktree && launchRepository?.worktree) {
       launchWorkDir = launchRepository.requestedWorkDir || launchRepository.repoRoot || workDir
-    } else if (!shouldResume && launchRepository) {
+    } else if (!shouldResume && launchRepository && !hasMaterializedWorktree) {
       const preparedWorkspace = await prepareSessionWorkspace(
         workDir,
         {
@@ -180,6 +191,13 @@ export class ConversationService {
       )
       launchWorkDir = preparedWorkspace.workDir
       launchRepository = preparedWorkspace.repository
+    }
+
+    if (!shouldCreateWorktree && launchRepository?.worktree) {
+      launchRepository = {
+        ...launchRepository,
+        worktree: false,
+      }
     }
 
     if (!fs.existsSync(launchWorkDir) || !fs.statSync(launchWorkDir).isDirectory()) {
@@ -422,6 +440,27 @@ export class ConversationService {
     })
   }
 
+  setMaxThinkingTokens(sessionId: string, maxThinkingTokens: number | null): boolean {
+    return this.sendSdkMessage(sessionId, {
+      type: 'control_request',
+      request_id: crypto.randomUUID(),
+      request: {
+        subtype: 'set_max_thinking_tokens',
+        max_thinking_tokens: maxThinkingTokens,
+      },
+    })
+  }
+
+  setMaxThinkingTokensForActiveSessions(maxThinkingTokens: number | null): number {
+    let sent = 0
+    for (const sessionId of this.getActiveSessions()) {
+      if (this.setMaxThinkingTokens(sessionId, maxThinkingTokens)) {
+        sent += 1
+      }
+    }
+    return sent
+  }
+
   sendInterrupt(sessionId: string): boolean {
     return this.sendSdkMessage(sessionId, {
       type: 'control_request',
@@ -649,8 +688,20 @@ export class ConversationService {
     this.stopSession(sessionId)
   }
 
+  markSessionsDeleted(sessionIds: string[]): void {
+    for (const sessionId of sessionIds) {
+      this.markSessionDeleted(sessionId)
+    }
+  }
+
   unmarkSessionDeleted(sessionId: string): void {
     this.deletedSessions.delete(sessionId)
+  }
+
+  unmarkSessionsDeleted(sessionIds: string[]): void {
+    for (const sessionId of sessionIds) {
+      this.unmarkSessionDeleted(sessionId)
+    }
   }
 
   getActiveSessions(): string[] {
@@ -874,6 +925,7 @@ export class ConversationService {
       CLAUDE_CODE_ENABLE_TASKS: '1',
       CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
       CLAUDE_CODE_DIAGNOSTICS_FILE: cliDiagnosticsPath,
+      CLAUDE_COWORK_MEMORY_PATH_OVERRIDE: this.resolveDesktopAutoMemoryPath(workDir),
       CALLER_DIR: workDir,
       PWD: workDir,
       ...(sdkUrl
@@ -905,6 +957,20 @@ export class ConversationService {
         ? await this.buildOfficialOAuthEnv()
         : {}),
     }
+  }
+
+  private resolveDesktopAutoMemoryPath(workDir: string): string {
+    const memoryProjectRoot = fs.existsSync(workDir)
+      ? findCanonicalGitRoot(workDir) ?? workDir
+      : workDir
+    return (
+      path.join(
+        getClaudeConfigHomeDir(),
+        'projects',
+        sanitizePath(memoryProjectRoot),
+        AUTO_MEMORY_DIRNAME,
+      ) + path.sep
+    ).normalize('NFC')
   }
 
   /**

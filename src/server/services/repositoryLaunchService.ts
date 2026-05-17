@@ -82,6 +82,39 @@ export type PreparedSessionWorkspace = {
   }
 }
 
+export type RepositorySessionLaunchState = {
+  workDir: string
+  repository?: PreparedSessionWorkspace['repository']
+  worktreeSession?: { worktreePath?: string | null } | null
+  transcriptMessageCount: number
+}
+
+function samePath(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false
+  return path.resolve(left) === path.resolve(right)
+}
+
+export function isMaterializedWorktreeLaunch(
+  launchInfo: RepositorySessionLaunchState,
+): boolean {
+  const worktreePath = launchInfo.repository?.worktreePath
+  return (
+    samePath(launchInfo.workDir, worktreePath) ||
+    samePath(launchInfo.workDir, launchInfo.worktreeSession?.worktreePath) ||
+    samePath(worktreePath, launchInfo.worktreeSession?.worktreePath)
+  )
+}
+
+export function shouldCreateWorktreeForSessionLaunch(
+  launchInfo: RepositorySessionLaunchState,
+): boolean {
+  return !!(
+    launchInfo.repository?.worktree &&
+    launchInfo.transcriptMessageCount === 0 &&
+    !isMaterializedWorktreeLaunch(launchInfo)
+  )
+}
+
 type GitResult = {
   stdout: string
   stderr: string

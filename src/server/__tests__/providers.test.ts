@@ -196,6 +196,36 @@ describe('ProviderService', () => {
       )
     })
 
+    test('DeepSeek preset follows the global thinking toggle instead of forcing disabled thinking', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        presetId: 'deepseek',
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/anthropic',
+        models: {
+          main: 'deepseek-v4-pro',
+          haiku: 'deepseek-v4-flash',
+          sonnet: 'deepseek-v4-pro',
+          opus: 'deepseek-v4-pro',
+        },
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.CC_HAHA_SEND_DISABLED_THINKING).toBeUndefined()
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES).toBe(
+        'thinking,effort,adaptive_thinking,max_effort',
+      )
+    })
+
     test('adding additional providers should keep activeId unchanged', async () => {
       const svc = new ProviderService()
       await svc.addProvider(sampleInput({ name: 'First' }))

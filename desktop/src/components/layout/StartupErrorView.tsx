@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from '../../i18n'
 import { Button } from '../shared/Button'
 import { DoctorPanel } from '../doctor/DoctorPanel'
+import { copyTextToClipboard } from '../chat/clipboard'
 
 const LOG_MARKER = '\n\nRecent server logs:\n'
 
@@ -35,7 +36,9 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
-    await navigator.clipboard?.writeText(diagnostics)
+    const ok = await copyTextToClipboard(diagnostics)
+    if (!ok) return
+
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1600)
   }

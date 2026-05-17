@@ -159,6 +159,25 @@ describe('Content-only pages render without errors', () => {
     expect(screen.queryByText('/internal-only')).not.toBeInTheDocument()
   })
 
+  it('EmptySession does not expose the paused /goal command', async () => {
+    vi.mocked(skillsApi.list).mockResolvedValueOnce({ skills: [] })
+
+    render(<EmptySession />)
+
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '/goal', selectionStart: 5 },
+    })
+
+    await waitFor(() => {
+      expect(skillsApi.list).toHaveBeenCalled()
+    })
+    expect(screen.queryByText('/goal', { selector: 'span' })).not.toBeInTheDocument()
+    expect(screen.queryByText('[<condition> | clear]')).not.toBeInTheDocument()
+    expect(screen.queryByText('Set a completion goal')).not.toBeInTheDocument()
+    expect(screen.queryByText('/goal status')).not.toBeInTheDocument()
+    expect(screen.queryByText('/goal --tokens')).not.toBeInTheDocument()
+  })
+
   it('EmptySession renders mascot and composer', async () => {
     let container!: HTMLElement
     await act(async () => {
@@ -192,6 +211,24 @@ describe('Content-only pages render without errors', () => {
     expect(html).toMatch(/aria-label="(Context usage not calculated|上下文用量待计算)"/)
     expect(html).toContain('--')
     expect(html).not.toContain('animate-spin')
+  })
+
+  it('ContextUsageIndicator opens tap details in compact mobile mode', async () => {
+    render(
+      <ContextUsageIndicator
+        chatState="idle"
+        messageCount={0}
+        fallbackModelLabel="kimi-k2.6"
+        draft
+        compact
+      />,
+    )
+
+    fireEvent.click(screen.getByLabelText('Context usage not calculated'))
+
+    expect(await screen.findByRole('button', { name: 'Close' })).toBeInTheDocument()
+    expect(screen.getAllByText('kimi-k2.6')).toHaveLength(2)
+    expect(screen.getAllByText('Context usage will be calculated after the session starts.')).toHaveLength(2)
   })
 
   it('EmptySession plus menu exposes uploads and slash commands before chat starts', async () => {
@@ -1245,7 +1282,8 @@ describe('AppShell layout renders chrome', () => {
     expect(container.querySelector('aside')).toBeInTheDocument()
     expect(container.innerHTML).toContain('New session')
     expect(container.innerHTML).toContain('Scheduled')
-    expect(container.innerHTML).toContain('All projects')
+    expect(container.innerHTML).toContain('Search sessions')
+    expect(container.innerHTML).toContain('Settings')
   })
 })
 

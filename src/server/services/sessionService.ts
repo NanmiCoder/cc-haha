@@ -11,6 +11,7 @@ import * as os from 'node:os'
 import { ApiError } from '../middleware/errorHandler.js'
 import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
 import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
+import { findCanonicalGitRoot } from '../../utils/git.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
   calculateCurrentContextTokenTotal,
@@ -24,6 +25,7 @@ import {
   type CreateSessionRepositoryOptions,
   type PreparedSessionWorkspace,
 } from './repositoryLaunchService.js'
+import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
 
 // ============================================================================
 // Types
@@ -36,8 +38,20 @@ export type SessionListItem = {
   modifiedAt: string
   messageCount: number
   projectPath: string
+  projectRoot: string | null
   workDir: string | null
   workDirExists: boolean
+}
+
+export type DeleteSessionFailure = {
+  sessionId: string
+  message: string
+  code?: string
+}
+
+export type DeleteSessionsResult = {
+  successes: string[]
+  failures: DeleteSessionFailure[]
 }
 
 export type SessionDetail = SessionListItem & {
@@ -76,6 +90,7 @@ export type SessionTaskNotification = {
   status: 'completed' | 'failed' | 'stopped'
   summary?: string
   outputFile?: string
+  timestamp?: string
 }
 
 export type TranscriptUsageSnapshot = {
@@ -147,6 +162,8 @@ export type TranscriptContextEstimate = {
 /** Raw entry parsed from a single JSONL line */
 type RawEntry = {
   type?: string
+  subtype?: string
+  content?: unknown
   uuid?: string
   messageId?: string
   parentUuid?: string | null
@@ -315,6 +332,42 @@ export class SessionService {
     return undefined
   }
 
+  private async resolveProjectRootFromEntries(
+    entries: RawEntry[],
+    workDir: string | null,
+    fallbackProjectDir?: string,
+  ): Promise<string | null> {
+    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
+    const repository = this.resolveRepositoryFromEntries(entries)
+
+    const candidate = worktreeSession?.originalCwd ||
+      repository?.repoRoot ||
+      workDir ||
+      (fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null)
+
+    if (!candidate) return null
+
+    const canonicalCandidate = await this.canonicalizeProjectPath(candidate)
+    const gitRoot = findCanonicalGitRoot(canonicalCandidate)
+    if (gitRoot) return gitRoot
+
+    if (workDir) {
+      const marker = `${path.sep}.claude${path.sep}worktrees${path.sep}`
+      const markerIndex = canonicalCandidate.indexOf(marker)
+      if (markerIndex > 0) return canonicalCandidate.slice(0, markerIndex)
+    }
+
+    return canonicalCandidate
+  }
+
+  private async canonicalizeProjectPath(projectPath: string): Promise<string> {
+    try {
+      return (await fs.realpath(projectPath)).normalize('NFC')
+    } catch {
+      return projectPath.normalize('NFC')
+    }
+  }
+
   private countTranscriptMessages(entries: RawEntry[]): number {
     return entries.filter((entry) =>
       !entry.isMeta &&
@@ -460,7 +513,10 @@ export class SessionService {
     return match?.[1] ? this.decodeXmlText(match[1].trim()) : undefined
   }
 
-  private parseTaskNotificationContent(content: unknown): SessionTaskNotification | null {
+  private parseTaskNotificationContent(
+    content: unknown,
+    timestamp?: string,
+  ): SessionTaskNotification | null {
     const xml = this.extractTextBlocks(content)
       .map((text) => this.extractTaskNotificationXml(text))
       .find((value): value is string => value !== null)
@@ -484,6 +540,7 @@ export class SessionService {
       status,
       ...(summary ? { summary } : {}),
       ...(outputFile ? { outputFile } : {}),
+      ...(timestamp ? { timestamp } : {}),
     }
   }
 
@@ -504,6 +561,66 @@ export class SessionService {
     }
 
     return false
+  }
+
+  private isGoalLocalCommandOutput(output: string): boolean {
+    const trimmed = output.trim()
+    return (
+      trimmed.startsWith('Goal set:') ||
+      trimmed.startsWith('Goal cleared:') ||
+      trimmed === 'Goal cleared.' ||
+      trimmed === 'Goal marked complete.' ||
+      trimmed === 'No active goal.'
+    )
+  }
+
+  private isGoalLocalCommandEntry(entry: RawEntry): boolean {
+    if (
+      entry.type !== 'system' ||
+      entry.subtype !== 'local_command' ||
+      typeof entry.content !== 'string'
+    ) {
+      return false
+    }
+
+    const commandName = this.readXmlTag(entry.content, 'command-name')?.replace(/^\//, '')
+    if (commandName) return commandName === 'goal'
+
+    const output =
+      this.readXmlTag(entry.content, 'local-command-stdout') ??
+      this.readXmlTag(entry.content, 'local-command-stderr')
+    return output ? this.isGoalLocalCommandOutput(output) : false
+  }
+
+  private goalLocalCommandEntryToMessage(entry: RawEntry): MessageEntry | null {
+    if (!this.isGoalLocalCommandEntry(entry)) return null
+    return {
+      id: entry.uuid || crypto.randomUUID(),
+      type: 'system',
+      content: entry.content,
+      timestamp: entry.timestamp || new Date().toISOString(),
+      parentUuid: entry.parentUuid ?? undefined,
+      isSidechain: entry.isSidechain,
+    }
+  }
+
+  private goalCreationCommandTitle(entry: RawEntry): string | null {
+    if (
+      entry.type !== 'system' ||
+      entry.subtype !== 'local_command' ||
+      typeof entry.content !== 'string'
+    ) {
+      return null
+    }
+
+    const commandName = this.readXmlTag(entry.content, 'command-name')?.replace(/^\//, '')
+    if (commandName !== 'goal') return null
+
+    const args = this.readXmlTag(entry.content, 'command-args')?.trim()
+    if (!args || /^clear\b/i.test(args)) return null
+
+    const title = cleanSessionTitleSource(`/goal ${args}`)
+    return title ? title.length > 80 ? title.slice(0, 80) + '...' : title : null
   }
 
   private extractAgentToolUseId(entry: RawEntry): string | undefined {
@@ -730,15 +847,22 @@ export class SessionService {
       }
     }
 
-    // 2. Look for AI-generated title (written by titleService)
+    // 2. Goal sessions should keep the original objective as the stable title.
+    for (const e of entries) {
+      const goalTitle = this.goalCreationCommandTitle(e)
+      if (goalTitle) return goalTitle
+    }
+
+    // 3. Look for AI-generated title (written by titleService)
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
       if (e.type === 'ai-title' && e.aiTitle) {
-        return e.aiTitle as string
+        const title = cleanSessionTitleSource(String(e.aiTitle))
+        if (title) return title
       }
     }
 
-    // 3. Look for first non-meta user message as title
+    // 4. Look for first non-meta user message as title
     for (const e of entries) {
       if (e.type === 'user' && !e.isMeta && e.message?.role === 'user') {
         const content = e.message.content
@@ -752,7 +876,8 @@ export class SessionService {
           if (textBlock) text = textBlock.text as string
         }
         if (text) {
-          return text.length > 80 ? text.slice(0, 80) + '...' : text
+          const title = cleanSessionTitleSource(text)
+          if (title) return title.length > 80 ? title.slice(0, 80) + '...' : title
         }
       }
     }
@@ -852,18 +977,20 @@ export class SessionService {
       return []
     }
 
-    const matches: Array<{ filePath: string; projectDir: string }> = []
+    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
-        await fs.access(filePath)
-        matches.push({ filePath, projectDir: dir })
+        const stat = await fs.stat(filePath)
+        matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
       } catch {
         continue
       }
     }
 
     return matches
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
   }
 
   async findSessionFile(
@@ -962,7 +1089,7 @@ export class SessionService {
       output_tokens: latest.outputTokens,
       cache_read_input_tokens: latest.cacheReadInputTokens,
       cache_creation_input_tokens: latest.cacheCreationInputTokens,
-    })
+    }, rawMaxTokens)
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
     const categories: TranscriptContextEstimate['categories'] = [
       { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
@@ -1163,6 +1290,7 @@ export class SessionService {
       try {
         const entries = await this.readJsonlFile(filePath)
         const workDir = this.resolveWorkDirFromEntries(entries, projectDir)
+        const projectRoot = await this.resolveProjectRootFromEntries(entries, workDir, projectDir)
         const workDirExists = await this.pathExists(workDir)
 
         // Count transcript messages only (user + assistant)
@@ -1188,6 +1316,7 @@ export class SessionService {
           modifiedAt: stat.mtime.toISOString(),
           messageCount,
           projectPath: projectDir,
+          projectRoot,
           workDir,
           workDirExists,
         }
@@ -1218,6 +1347,7 @@ export class SessionService {
     )
     const title = this.extractTitle(entries)
     const workDir = this.resolveWorkDirFromEntries(entries, projectDir)
+    const projectRoot = await this.resolveProjectRootFromEntries(entries, workDir, projectDir)
     const workDirExists = await this.pathExists(workDir)
 
     let createdAt = stat.birthtime.toISOString()
@@ -1235,6 +1365,7 @@ export class SessionService {
       modifiedAt: stat.mtime.toISOString(),
       messageCount: messages.length,
       projectPath: projectDir,
+      projectRoot,
       workDir,
       workDirExists,
       messages,
@@ -1332,6 +1463,39 @@ export class SessionService {
     }
 
     await fs.unlink(found.filePath)
+  }
+
+  async deleteSessions(sessionIds: string[]): Promise<DeleteSessionsResult> {
+    const successes: string[] = []
+    const failures: DeleteSessionFailure[] = []
+
+    const results = await Promise.all(sessionIds.map(async (sessionId) => {
+      try {
+        await this.deleteSession(sessionId)
+        return { type: 'success' as const, sessionId }
+      } catch (error) {
+        return {
+          type: 'failure' as const,
+          sessionId,
+          message: error instanceof Error ? error.message : 'Unknown delete failure',
+          code: error instanceof ApiError ? error.code : undefined,
+        }
+      }
+    }))
+
+    for (const result of results) {
+      if (result.type === 'success') {
+        successes.push(result.sessionId)
+      } else {
+        failures.push({
+          sessionId: result.sessionId,
+          message: result.message,
+          code: result.code,
+        })
+      }
+    }
+
+    return { successes, failures }
   }
 
   /**
@@ -1676,7 +1840,10 @@ export class SessionService {
     const notifications: SessionTaskNotification[] = []
     for (const entry of entries) {
       if (entry.message?.role !== 'user') continue
-      const notification = this.parseTaskNotificationContent(entry.message.content)
+      const notification = this.parseTaskNotificationContent(
+        entry.message.content,
+        entry.timestamp,
+      )
       if (notification) notifications.push(notification)
     }
     return notifications
@@ -1699,6 +1866,12 @@ export class SessionService {
     }
 
     for (const entry of entries) {
+      const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
+      if (goalLocalCommandMessage) {
+        messages.push(goalLocalCommandMessage)
+        continue
+      }
+
       // Only process transcript entries (user / assistant / system with messages)
       if (!entry.message?.role) continue
 

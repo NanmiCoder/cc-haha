@@ -21,6 +21,7 @@ import {
   setCardStreamingMode,
   updateCardKitCard,
   STREAMING_ELEMENT_ID,
+  withImCardRequestTimeout,
 } from './cardkit.js'
 import { isCardRateLimitError, isCardTableLimitError } from './card-errors.js'
 import { optimizeMarkdownForFeishu, sanitizeTextForCard } from './markdown-style.js'
@@ -211,14 +212,16 @@ export class StreamingCard {
         cardKitErr instanceof Error ? cardKitErr.message : cardKitErr,
       )
       try {
-        const fallbackResp = await this.deps.larkClient.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: this.deps.chatId,
-            msg_type: 'interactive',
-            content: JSON.stringify(buildRenderedCard(' ')),
-          },
-        })
+        const fallbackResp = await withImCardRequestTimeout('im.message.create', () =>
+          this.deps.larkClient.im.message.create({
+            params: { receive_id_type: 'chat_id' },
+            data: {
+              receive_id: this.deps.chatId,
+              msg_type: 'interactive',
+              content: JSON.stringify(buildRenderedCard(' ')),
+            },
+          }),
+        )
         const mid = fallbackResp.data?.message_id
         if (!mid) {
           throw new Error('fallback im.message.create returned no message_id')
@@ -343,16 +346,33 @@ export class StreamingCard {
         )
       } else if (this.messageId) {
         // Patch fallback 路径: 全量替换
-        await this.deps.larkClient.im.message.patch({
-          path: { message_id: this.messageId },
-          data: { content: JSON.stringify(buildRenderedCard(finalText)) },
-        })
+        await withImCardRequestTimeout('im.message.patch', () =>
+          this.deps.larkClient.im.message.patch({
+            path: { message_id: this.messageId! },
+            data: { content: JSON.stringify(buildRenderedCard(finalText)) },
+          }),
+        )
       }
     } catch (err) {
       console.error(
         '[Feishu StreamingCard] finalize failed:',
         err instanceof Error ? err.message : err,
       )
+      if (this.messageId) {
+        try {
+          await withImCardRequestTimeout('im.message.patch', () =>
+            this.deps.larkClient.im.message.patch({
+              path: { message_id: this.messageId! },
+              data: { content: JSON.stringify(buildRenderedCard(finalText)) },
+            }),
+          )
+        } catch (fallbackErr) {
+          console.error(
+            '[Feishu StreamingCard] finalize fallback patch failed:',
+            fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+          )
+        }
+      }
       // 不抛出 —— 用户已经看到某种版本的内容，finalize 失败不是致命错误
     } finally {
       this.phase = 'completed'
@@ -395,10 +415,12 @@ export class StreamingCard {
           this.sequence,
         )
       } else {
-        await this.deps.larkClient.im.message.patch({
-          path: { message_id: this.messageId },
-          data: { content: JSON.stringify(errCard) },
-        })
+        await withImCardRequestTimeout('im.message.patch', () =>
+          this.deps.larkClient.im.message.patch({
+            path: { message_id: this.messageId! },
+            data: { content: JSON.stringify(errCard) },
+          }),
+        )
       }
     } catch (renderErr) {
       console.error(
@@ -546,10 +568,12 @@ export class StreamingCard {
     } else {
       // Patch fallback 路径（CardKit 从未成功）
       try {
-        await this.deps.larkClient.im.message.patch({
-          path: { message_id: this.messageId },
-          data: { content: JSON.stringify(buildRenderedCard(finalText)) },
-        })
+        await withImCardRequestTimeout('im.message.patch', () =>
+          this.deps.larkClient.im.message.patch({
+            path: { message_id: this.messageId! },
+            data: { content: JSON.stringify(buildRenderedCard(finalText)) },
+          }),
+        )
         this.lastFlushedText = finalText
       } catch (err) {
         if (isCardRateLimitError(err)) return

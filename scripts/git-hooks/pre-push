@@ -16,7 +16,7 @@ is_enabled() {
   esac
 }
 
-echo "[pre-push] Running PR quality gate: bun run quality:pr"
+echo "[pre-push] Running fast pre-push quality gate: bun run quality:push"
 
 if is_enabled "$(git_config quality.allowCliCoreChange)"; then
   export ALLOW_CLI_CORE_CHANGE=1
@@ -30,7 +30,7 @@ if is_enabled "$(git_config quality.allowCoverageBaselineChange)"; then
   export ALLOW_COVERAGE_BASELINE_CHANGE=1
 fi
 
-bun run quality:pr
+bun run quality:push
 
 live="${QUALITY_PRE_PUSH_LIVE:-$(git_config quality.prePushLive)}"
 

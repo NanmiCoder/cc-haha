@@ -65,6 +65,39 @@ describe('MessageBuffer', () => {
     expect(flushed.length).toBe(0)
   })
 
+  it('waits for an in-flight flush before complete resolves', async () => {
+    let releaseFlush!: () => void
+    let flushStarted = false
+    const flushed: Array<{ text: string; isComplete: boolean }> = []
+    const buf = new MessageBuffer(
+      async (text, isComplete) => {
+        flushStarted = true
+        flushed.push({ text, isComplete })
+        await new Promise<void>((resolve) => {
+          releaseFlush = resolve
+        })
+      },
+      10000,
+      3,
+    )
+
+    buf.append('abcd')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(flushStarted).toBe(true)
+
+    let completeResolved = false
+    const completing = buf.complete().then(() => {
+      completeResolved = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(completeResolved).toBe(false)
+
+    releaseFlush()
+    await completing
+    expect(completeResolved).toBe(true)
+    expect(flushed).toEqual([{ text: 'abcd', isComplete: false }])
+  })
+
   it('resets properly between messages', async () => {
     const flushed: string[] = []
     const buf = new MessageBuffer(

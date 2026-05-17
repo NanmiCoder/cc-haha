@@ -83,7 +83,10 @@ describe('provider presets API', () => {
     expect(deepseek?.defaultModels.haiku).toBe('deepseek-v4-flash')
     expect(deepseek?.defaultModels.sonnet).toBe('deepseek-v4-pro')
     expect(deepseek?.defaultModels.opus).toBe('deepseek-v4-pro')
-    expect(deepseek?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBe('1')
+    expect(deepseek?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBeUndefined()
+    expect(deepseek?.defaultEnv?.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe(
+      'thinking,effort,adaptive_thinking,max_effort',
+    )
     expect(zhipu?.authStrategy).toBe('auth_token')
     expect(zhipu?.defaultModels.main).toBe('glm-5.1')
     expect(zhipu?.defaultModels.haiku).toBe('glm-4.5-air')

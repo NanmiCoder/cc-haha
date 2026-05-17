@@ -1,3 +1,11 @@
+import { THEME_MODES } from '../types/settings'
+import {
+  APP_ZOOM_STORAGE_KEY,
+  LEGACY_UI_ZOOM_STORAGE_KEY,
+  isValidStoredAppZoomLevel,
+  normalizeAppZoomLevel,
+} from './appZoom'
+
 export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 1
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
@@ -112,6 +120,25 @@ function normalizeEnumKey(
   }
 }
 
+function normalizeAppZoomKey(storage: StorageLike, report: DesktopMigrationReport): void {
+  const value = storage.getItem(APP_ZOOM_STORAGE_KEY)
+  if (!isValidStoredAppZoomLevel(value)) {
+    storage.removeItem(APP_ZOOM_STORAGE_KEY)
+    report.migratedKeys.push(APP_ZOOM_STORAGE_KEY)
+  }
+
+  const currentValue = storage.getItem(APP_ZOOM_STORAGE_KEY)
+  const legacyValue = storage.getItem(LEGACY_UI_ZOOM_STORAGE_KEY)
+  if (currentValue === null && legacyValue !== null && isValidStoredAppZoomLevel(legacyValue)) {
+    storage.setItem(APP_ZOOM_STORAGE_KEY, String(normalizeAppZoomLevel(legacyValue)))
+    report.migratedKeys.push(APP_ZOOM_STORAGE_KEY)
+  }
+  if (legacyValue !== null) {
+    storage.removeItem(LEGACY_UI_ZOOM_STORAGE_KEY)
+    report.migratedKeys.push(LEGACY_UI_ZOOM_STORAGE_KEY)
+  }
+}
+
 function runMigrationStep(
   report: DesktopMigrationReport,
   fallbackKey: string,
@@ -138,8 +165,9 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
 
   runMigrationStep(report, TAB_STORAGE_KEY, () => migrateTabs(storage, report))
   runMigrationStep(report, SESSION_RUNTIME_STORAGE_KEY, () => migrateSessionRuntime(storage, report))
-  runMigrationStep(report, THEME_STORAGE_KEY, () => normalizeEnumKey(storage, THEME_STORAGE_KEY, ['light', 'dark'], report))
+  runMigrationStep(report, THEME_STORAGE_KEY, () => normalizeEnumKey(storage, THEME_STORAGE_KEY, [...THEME_MODES], report))
   runMigrationStep(report, LOCALE_STORAGE_KEY, () => normalizeEnumKey(storage, LOCALE_STORAGE_KEY, ['zh', 'en'], report))
+  runMigrationStep(report, APP_ZOOM_STORAGE_KEY, () => normalizeAppZoomKey(storage, report))
   try {
     storage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
   } catch {

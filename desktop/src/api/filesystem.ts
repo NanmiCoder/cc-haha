@@ -4,6 +4,7 @@ type DirEntry = {
   name: string
   path: string
   isDirectory: boolean
+  relativePath?: string
 }
 
 type BrowseResult = {
@@ -23,7 +24,7 @@ export const filesystemApi = {
   },
 
   search(query: string, cwd?: string) {
-    const q = new URLSearchParams({ search: query, maxResults: '200' })
+    const q = new URLSearchParams({ search: query, maxResults: '200', includeFiles: 'true' })
     if (cwd) q.set('path', cwd)
     return api.get<BrowseResult>(`/api/filesystem/browse?${q}`)
   },

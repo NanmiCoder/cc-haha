@@ -56,6 +56,44 @@ describe('desktop persistence migrations', () => {
     expect(window.localStorage.getItem('cc-haha-theme')).toBeNull()
   })
 
+  test('preserves the pure white theme as a valid persisted theme', () => {
+    window.localStorage.setItem('cc-haha-theme', 'white')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).not.toContain('cc-haha-theme')
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('white')
+  })
+
+  test('preserves valid app zoom and removes invalid app zoom values', () => {
+    window.localStorage.setItem('cc-haha-app-zoom', '1.2')
+
+    const validReport = runDesktopPersistenceMigrations()
+
+    expect(validReport.migratedKeys).not.toContain('cc-haha-app-zoom')
+    expect(window.localStorage.getItem('cc-haha-app-zoom')).toBe('1.2')
+
+    window.localStorage.setItem('cc-haha-app-zoom', '4')
+
+    const invalidReport = runDesktopPersistenceMigrations()
+
+    expect(invalidReport.migratedKeys).toContain('cc-haha-app-zoom')
+    expect(window.localStorage.getItem('cc-haha-app-zoom')).toBeNull()
+  })
+
+  test('migrates the legacy UI zoom key into app zoom storage', () => {
+    window.localStorage.setItem('cc-haha-ui-zoom', '1.25')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).toEqual(expect.arrayContaining([
+      'cc-haha-app-zoom',
+      'cc-haha-ui-zoom',
+    ]))
+    expect(window.localStorage.getItem('cc-haha-app-zoom')).toBe('1.25')
+    expect(window.localStorage.getItem('cc-haha-ui-zoom')).toBeNull()
+  })
+
   test('does not throw if schema version persistence is blocked', () => {
     const storage = {
       getItem: window.localStorage.getItem.bind(window.localStorage),
@@ -92,6 +130,7 @@ describe('desktop persistence migrations', () => {
       'cc-haha-session-runtime',
       'cc-haha-theme',
       'cc-haha-locale',
+      'cc-haha-app-zoom',
       DESKTOP_PERSISTENCE_VERSION_KEY,
     ]))
   })

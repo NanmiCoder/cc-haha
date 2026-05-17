@@ -1,12 +1,13 @@
 import { Modal } from './Modal'
 import { Button } from './Button'
+import type { ReactNode } from 'react'
 
 type ConfirmDialogProps = {
   open: boolean
   onClose: () => void
   onConfirm: () => void | Promise<void>
   title: string
-  body: string
+  body: ReactNode
   confirmLabel: string
   cancelLabel: string
   confirmVariant?: 'primary' | 'danger'
@@ -41,9 +42,11 @@ export function ConfirmDialog({
         </>
       )}
     >
-      <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-        {body}
-      </p>
+      {typeof body === 'string' ? (
+        <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+          {body}
+        </p>
+      ) : body}
     </Modal>
   )
 }

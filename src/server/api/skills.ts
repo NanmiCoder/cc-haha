@@ -12,7 +12,7 @@ import { parseFrontmatter } from '../../utils/frontmatterParser.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getProjectDirsUpToHome } from '../../utils/markdownConfigLoader.js'
 import { getCwd } from '../../utils/cwd.js'
-import { loadAllPluginsCacheOnly } from '../../utils/plugins/pluginLoader.js'
+import { loadAllPlugins, loadAllPluginsCacheOnly } from '../../utils/plugins/pluginLoader.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
@@ -224,7 +224,11 @@ async function collectSkillsFromRoots(
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.') || seenNames.has(entry.name)) {
+      if (
+        (!entry.isDirectory() && !entry.isSymbolicLink()) ||
+        entry.name.startsWith('.') ||
+        seenNames.has(entry.name)
+      ) {
         continue
       }
 
@@ -271,6 +275,11 @@ type PluginSkillLocation = {
   pluginName: string
 }
 
+export type SkillSlashCommand = {
+  name: string
+  description: string
+}
+
 function buildPluginSkillName(pluginName: string, skillDir: string): string {
   return `${pluginName}:${path.basename(skillDir)}`
 }
@@ -281,7 +290,11 @@ async function collectPluginSkillDirectories(): Promise<Map<string, PluginSkillL
   let enabledPlugins: LoadedPlugin[]
   try {
     const result = await loadAllPluginsCacheOnly()
-    enabledPlugins = result.enabled
+    if (result.errors.some((error) => error.type === 'plugin-cache-miss')) {
+      enabledPlugins = (await loadAllPlugins()).enabled
+    } else {
+      enabledPlugins = result.enabled
+    }
   } catch {
     return locations
   }
@@ -355,6 +368,27 @@ async function collectPluginSkills(): Promise<SkillMeta[]> {
   return skills
 }
 
+async function collectAllSkills(cwd?: string): Promise<SkillMeta[]> {
+  const [userSkills, projectSkills, pluginSkills] = await Promise.all([
+    collectSkillsFromRoots([getUserSkillsDir()], 'user'),
+    collectSkillsFromRoots(getProjectSkillsDirs(cwd), 'project'),
+    collectPluginSkills(),
+  ])
+
+  const skills = [...userSkills, ...projectSkills, ...pluginSkills]
+  skills.sort((a, b) => a.name.localeCompare(b.name))
+  return skills
+}
+
+export async function listSkillSlashCommands(cwd?: string): Promise<SkillSlashCommand[]> {
+  return (await collectAllSkills(cwd))
+    .filter((skill) => skill.userInvocable)
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description || '',
+    }))
+}
+
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 export async function handleSkillsApi(
@@ -386,14 +420,7 @@ export async function handleSkillsApi(
 
 async function listSkills(url: URL): Promise<Response> {
   const cwd = getRequestedCwd(url)
-  const [userSkills, projectSkills, pluginSkills] = await Promise.all([
-    collectSkillsFromRoots([getUserSkillsDir()], 'user'),
-    collectSkillsFromRoots(getProjectSkillsDirs(cwd), 'project'),
-    collectPluginSkills(),
-  ])
-
-  const skills = [...userSkills, ...projectSkills, ...pluginSkills]
-  skills.sort((a, b) => a.name.localeCompare(b.name))
+  const skills = await collectAllSkills(cwd)
   return Response.json({ skills })
 }
 

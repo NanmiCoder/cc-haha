@@ -4,6 +4,7 @@ import type { SettingSource } from 'src/utils/settings/constants.js'
 import { getManagedFilePath } from 'src/utils/settings/managedPath.js'
 import type { AgentMemoryScope } from '../../tools/AgentTool/agentMemory.js'
 import {
+  clearAgentDefinitionsCache,
   type AgentDefinition,
   isBuiltInAgent,
   isPluginAgent,
@@ -200,6 +201,7 @@ export async function saveAgentToFile(
     }
     throw e
   }
+  clearAgentDefinitionsCache()
 }
 
 /**
@@ -233,6 +235,7 @@ export async function updateAgentFile(
   )
 
   await writeFileAndFlush(filePath, content)
+  clearAgentDefinitionsCache()
 }
 
 /**
@@ -255,6 +258,7 @@ export async function deleteAgentFromFile(
       throw e
     }
   }
+  clearAgentDefinitionsCache()
 }
 
 async function writeFileAndFlush(

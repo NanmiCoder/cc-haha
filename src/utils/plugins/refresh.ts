@@ -27,6 +27,7 @@ import type { PluginError } from '../../types/plugin.js'
 import { logForDebugging } from '../debug.js'
 import { errorMessage } from '../errors.js'
 import { logError } from '../log.js'
+import { resetSettingsCache } from '../settings/settingsCache.js'
 import { clearAllCaches } from './cacheUtils.js'
 import { getPluginCommands } from './loadPluginCommands.js'
 import { loadPluginHooks } from './loadPluginHooks.js'
@@ -72,7 +73,11 @@ export type RefreshActivePluginsResult = {
 export async function refreshActivePlugins(
   setAppState: SetAppState,
 ): Promise<RefreshActivePluginsResult> {
-  logForDebugging('refreshActivePlugins: clearing all plugin caches')
+  logForDebugging('refreshActivePlugins: clearing settings and plugin caches')
+  // Desktop plugin toggles are written by the server process while the active
+  // CLI keeps its own settings cache. /reload-plugins is the explicit handoff
+  // point, so re-read settings before resolving enabledPlugins.
+  resetSettingsCache()
   clearAllCaches()
   // Orphan exclusions are session-frozen by default, but /reload-plugins is
   // an explicit "disk changed, re-read it" signal — recompute them too.

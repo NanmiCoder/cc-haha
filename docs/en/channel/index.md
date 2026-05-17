@@ -25,7 +25,7 @@ A deep dive into the design and implementation of Claude Code's Channel system f
 
 ## Illustrations
 
-All illustrations use dark background (#1a1a2e) with Anthropic brand copper-orange (#D97757) accent color.
+All illustrations use a dark background (#1a1a2e) with Claude Code Haha orange-blue accents (#FF7A00).
 
 | Image | Description | Document |
 |-------|-------------|----------|

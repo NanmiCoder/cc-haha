@@ -597,44 +597,44 @@ export async function runAsyncAgentLifecycle({
     const agentResult = finalizeAgentTool(agentMessages, taskId, metadata)
 
     // Mark task completed FIRST so TaskOutput(block=true) unblocks
-    // immediately. classifyHandoffIfNeeded (API call) and getWorktreeResult
-    // (git exec) are notification embellishments that can hang — they must
-    // not gate the status transition (gh-20236).
+    // immediately, then notify the parent before any optional cleanup. The
+    // parent session depends on this notification to resume its loop.
     completeAsyncAgent(agentResult, rootSetAppState)
-
-    let finalMessage = extractTextContent(agentResult.content, '\n')
-
-    if (feature('TRANSCRIPT_CLASSIFIER')) {
-      const handoffWarning = await classifyHandoffIfNeeded({
-        agentMessages,
-        tools: toolUseContext.options.tools,
-        toolPermissionContext:
-          toolUseContext.getAppState().toolPermissionContext,
-        abortSignal: abortController.signal,
-        subagentType: metadata.agentType,
-        totalToolUseCount: agentResult.totalToolUseCount,
-      })
-      if (handoffWarning) {
-        finalMessage = `${handoffWarning}\n\n${finalMessage}`
-      }
-    }
-
-    const worktreeResult = await getWorktreeResult()
 
     enqueueAgentNotification({
       taskId,
       description,
       status: 'completed',
       setAppState: rootSetAppState,
-      finalMessage,
+      finalMessage: extractTextContent(agentResult.content, '\n'),
       usage: {
         totalTokens: getTokenCountFromTracker(tracker),
         toolUses: agentResult.totalToolUseCount,
         durationMs: agentResult.totalDurationMs,
       },
       toolUseId: toolUseContext.toolUseId,
-      ...worktreeResult,
     })
+
+    void (async () => {
+      try {
+        await getWorktreeResult()
+        if (feature('TRANSCRIPT_CLASSIFIER')) {
+          await classifyHandoffIfNeeded({
+            agentMessages,
+            tools: toolUseContext.options.tools,
+            toolPermissionContext:
+              toolUseContext.getAppState().toolPermissionContext,
+            abortSignal: abortController.signal,
+            subagentType: metadata.agentType,
+            totalToolUseCount: agentResult.totalToolUseCount,
+          })
+        }
+      } catch (cleanupError) {
+        logForDebugging(
+          `Async agent post-completion cleanup failed: ${errorMessage(cleanupError)}`,
+        )
+      }
+    })()
   } catch (error) {
     stopSummarization?.()
     if (error instanceof AbortError) {
@@ -654,7 +654,6 @@ export async function runAsyncAgentLifecycle({
         reason:
           'user_kill_async' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       })
-      const worktreeResult = await getWorktreeResult()
       const partialResult = extractPartialResult(agentMessages)
       enqueueAgentNotification({
         taskId,
@@ -663,13 +662,16 @@ export async function runAsyncAgentLifecycle({
         setAppState: rootSetAppState,
         toolUseId: toolUseContext.toolUseId,
         finalMessage: partialResult,
-        ...worktreeResult,
       })
+      void getWorktreeResult().catch(cleanupError =>
+        logForDebugging(
+          `Async agent post-cancel cleanup failed: ${errorMessage(cleanupError)}`,
+        ),
+      )
       return
     }
     const msg = errorMessage(error)
     failAsyncAgent(taskId, msg, rootSetAppState)
-    const worktreeResult = await getWorktreeResult()
     enqueueAgentNotification({
       taskId,
       description,
@@ -677,8 +679,12 @@ export async function runAsyncAgentLifecycle({
       error: msg,
       setAppState: rootSetAppState,
       toolUseId: toolUseContext.toolUseId,
-      ...worktreeResult,
     })
+    void getWorktreeResult().catch(cleanupError =>
+      logForDebugging(
+        `Async agent post-failure cleanup failed: ${errorMessage(cleanupError)}`,
+      ),
+    )
   } finally {
     clearInvokedSkillsForAgent(agentIdForCleanup)
     clearDumpState(agentIdForCleanup)

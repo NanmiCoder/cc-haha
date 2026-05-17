@@ -1,83 +1,9 @@
 <svg width="2752" height="921" viewBox="0 0 2752 921" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bannerBg" x1="166" y1="84" x2="2550" y2="902" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#2C1814"/>
-      <stop offset="0.48" stop-color="#1D110F"/>
-      <stop offset="1" stop-color="#120B0A"/>
-    </linearGradient>
-    <radialGradient id="bannerGlowLeft" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(726 322) rotate(28) scale(734 480)">
-      <stop stop-color="#FF7A37" stop-opacity="0.4"/>
-      <stop offset="0.54" stop-color="#FF5B2E" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#FF5B2E" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="bannerGlowRight" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2296 222) rotate(180) scale(560 320)">
-      <stop stop-color="#FFD15C" stop-opacity="0.18"/>
-      <stop offset="1" stop-color="#FFD15C" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="iconAccent" x1="256" y1="180" x2="796" y2="606" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF5B2E"/>
-      <stop offset="0.5" stop-color="#FF8134"/>
-      <stop offset="1" stop-color="#FFD15C"/>
-    </linearGradient>
-    <linearGradient id="promptStroke" x1="542" y1="236" x2="650" y2="236" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF8F1"/>
-      <stop offset="1" stop-color="#FFE7B3"/>
-    </linearGradient>
-    <linearGradient id="hahaText" x1="2080" y1="262" x2="2648" y2="494" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF5B2E"/>
-      <stop offset="0.6" stop-color="#FF7C38"/>
-      <stop offset="1" stop-color="#FFB340"/>
-    </linearGradient>
-    <linearGradient id="chipBg" x1="1154" y1="568" x2="1662" y2="568" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#4A231B"/>
-      <stop offset="1" stop-color="#2B1712"/>
-    </linearGradient>
-    <filter id="tileShadow" x="152" y="124" width="714" height="714" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#B54216" flood-opacity="0.28"/>
-    </filter>
-  </defs>
-
-  <rect width="2752" height="921" rx="56" fill="url(#bannerBg)"/>
-  <rect x="24" y="24" width="2704" height="873" rx="36" stroke="#3B231D" stroke-width="2"/>
-  <ellipse cx="742" cy="338" rx="762" ry="486" fill="url(#bannerGlowLeft)"/>
-  <ellipse cx="2260" cy="216" rx="562" ry="328" fill="url(#bannerGlowRight)"/>
-
-  <path d="M132 176C330 70 630 76 842 180" stroke="#7A3926" stroke-width="8" stroke-linecap="round" opacity="0.55"/>
-  <path d="M98 748C332 824 688 812 914 712" stroke="#7A3926" stroke-width="8" stroke-linecap="round" opacity="0.42"/>
-  <path d="M1972 150H2640" stroke="#4B2B24" stroke-width="6" stroke-linecap="round"/>
-  <path d="M2128 764H2644" stroke="#4B2B24" stroke-width="6" stroke-linecap="round"/>
-  <circle cx="2112" cy="230" r="14" fill="#FFD15C"/>
-  <circle cx="2368" cy="142" r="10" fill="#FF7C38"/>
-  <circle cx="2514" cy="238" r="8" fill="#FF5B2E"/>
-  <path d="M2380 254L2394 290L2430 304L2394 318L2380 354L2366 318L2330 304L2366 290L2380 254Z" fill="#FFD15C"/>
-  <path d="M2560 118L2572 146L2600 158L2572 170L2560 198L2548 170L2520 158L2548 146L2560 118Z" fill="#FFB340"/>
-
-  <g filter="url(#tileShadow)">
-    <rect x="216" y="166" width="586" height="586" rx="170" fill="#211514"/>
-    <rect x="219" y="169" width="580" height="580" rx="167" stroke="#422621" stroke-width="6"/>
-  </g>
-
-  <path d="M364 282L500 418L364 554" stroke="url(#iconAccent)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M572 246H650V574H572" stroke="url(#promptStroke)" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M464 514H544" stroke="url(#iconAccent)" stroke-width="28" stroke-linecap="round"/>
-  <path d="M506 236L524 288L576 270L540 310L576 350L524 334L506 386L488 334L436 350L472 310L436 270L488 288L506 236Z" fill="#FFD15C"/>
-
-  <text x="962" y="440" fill="#FFF5EC" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="222" font-weight="800" letter-spacing="-7">
-    Claude Code
-  </text>
-  <text x="2200" y="440" fill="url(#hahaText)" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="222" font-weight="800" letter-spacing="-7">
-    Haha
-  </text>
-
-  <text x="968" y="560" fill="#D2B9AC" font-family="JetBrains Mono, SFMono-Regular, Menlo, monospace" font-size="44" font-weight="700" letter-spacing="8">
-    NEXT-GEN PERSONAL AI AGENT
-  </text>
-
-  <rect x="1148" y="604" width="520" height="70" rx="35" fill="url(#chipBg)" stroke="#6C382A" stroke-width="2"/>
-  <text x="1210" y="650" fill="#FFE8B8" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="3">
-    DESKTOP EDITION
-  </text>
-
-  <path d="M970 714H1830" stroke="url(#iconAccent)" stroke-width="10" stroke-linecap="round"/>
-  <path d="M1866 714H1984" stroke="#FFD15C" stroke-width="10" stroke-linecap="round"/>
+  <rect width="2752" height="921" rx="56" fill="#F7FAFC"/>
+  <rect x="64" y="64" width="2624" height="793" rx="48" fill="#FFFFFF"/>
+  <image x="176" y="160" width="600" height="600" href="app-icon.png" preserveAspectRatio="xMidYMid meet"/>
+  <text x="900" y="390" fill="#122033" font-family="SF Pro Display, Avenir Next, Inter, Helvetica Neue, Arial, sans-serif" font-size="220" font-weight="800">Claude Code</text>
+  <text x="900" y="580" fill="#0F8CEB" font-family="SF Pro Display, Avenir Next, Inter, Helvetica Neue, Arial, sans-serif" font-size="170" font-weight="800">Haha</text>
+  <path d="M902 664H1608" stroke="#FF7A00" stroke-width="22" stroke-linecap="round"/>
+  <path d="M1652 664H1848" stroke="#12C7E8" stroke-width="22" stroke-linecap="round"/>
 </svg>

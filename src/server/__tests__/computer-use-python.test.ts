@@ -24,7 +24,60 @@ describe('detectPythonRuntime', () => {
     expect(result.command).toBe('python3')
     expect(result.prefixArgs).toEqual([])
     expect(result.source).toBe('system')
+    expect(result.error).toBeNull()
     expect(calls).toEqual(['python3 --version', 'where python3'])
+  })
+
+  test('uses a custom Python path before PATH candidates', async () => {
+    const calls: string[] = []
+    const customPython = 'C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe'
+    const result = await detectPythonRuntime(
+      'win32',
+      async (cmd, args) => {
+        calls.push(`${cmd} ${args.join(' ')}`.trim())
+        if (cmd === customPython && args.join(' ') === '--version') {
+          return { ok: true, stdout: 'Python 3.11.9', stderr: '', code: 0 }
+        }
+        return { ok: false, stdout: '', stderr: '', code: 1 }
+      },
+      undefined,
+      customPython,
+    )
+
+    expect(result.installed).toBe(true)
+    expect(result.version).toBe('3.11.9')
+    expect(result.path).toBe(customPython)
+    expect(result.command).toBe(customPython)
+    expect(result.prefixArgs).toEqual([])
+    expect(result.source).toBe('custom')
+    expect(result.error).toBeNull()
+    expect(calls).toEqual([`${customPython} --version`])
+  })
+
+  test('reports an invalid custom Python path without falling back to PATH', async () => {
+    const calls: string[] = []
+    const result = await detectPythonRuntime(
+      'win32',
+      async (cmd, args) => {
+        calls.push(`${cmd} ${args.join(' ')}`.trim())
+        if (cmd === 'C:\\missing\\python.exe') {
+          return { ok: false, stdout: '', stderr: 'not found', code: 1 }
+        }
+        if (cmd === 'python') {
+          return { ok: true, stdout: 'Python 3.12.0', stderr: '', code: 0 }
+        }
+        return { ok: false, stdout: '', stderr: '', code: 1 }
+      },
+      undefined,
+      'C:\\missing\\python.exe',
+    )
+
+    expect(result.installed).toBe(false)
+    expect(result.path).toBe('C:\\missing\\python.exe')
+    expect(result.command).toBe('C:\\missing\\python.exe')
+    expect(result.source).toBe('custom')
+    expect(result.error).toBe('not found')
+    expect(calls).toEqual(['C:\\missing\\python.exe --version'])
   })
 
   test('falls back to py -3 on Windows', async () => {
@@ -50,6 +103,7 @@ describe('detectPythonRuntime', () => {
     expect(result.command).toBe('py')
     expect(result.prefixArgs).toEqual(['-3'])
     expect(result.source).toBe('system')
+    expect(result.error).toBeNull()
   })
 
   test('falls back to venv python when system python is not discoverable', async () => {
@@ -71,5 +125,6 @@ describe('detectPythonRuntime', () => {
     expect(result.command).toBe(venvPython)
     expect(result.prefixArgs).toEqual([])
     expect(result.source).toBe('venv')
+    expect(result.error).toBeNull()
   })
 })

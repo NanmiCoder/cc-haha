@@ -21,9 +21,11 @@ import { logForDebugging } from './debug.js'
 import { safeParseJSON } from './json.js'
 import { lazySchema } from './lazySchema.js'
 import { extractTextContent } from './messages.js'
+import { cleanSessionTitleSource, hasSessionTitleMarkup } from './sessionTitleText.js'
 import { asSystemPrompt } from './systemPromptType.js'
 
 const MAX_CONVERSATION_TEXT = 1000
+const MAX_GENERATED_TITLE_LENGTH = 80
 
 /**
  * Flatten a message array into a single text string for Haiku title input.
@@ -69,6 +71,14 @@ Bad (wrong case): {"title": "Fix Login Button On Mobile"}`
 
 const titleSchema = lazySchema(() => z.object({ title: z.string() }))
 
+export function normalizeGeneratedSessionTitle(title: string): string | null {
+  const cleaned = cleanSessionTitleSource(title)
+  if (!cleaned) return null
+  if (cleaned.length > MAX_GENERATED_TITLE_LENGTH) return null
+  if (hasSessionTitleMarkup(cleaned)) return null
+  return cleaned
+}
+
 /**
  * Generate a sentence-case session title from a description or first message.
  * Returns null on error or if Haiku returns an unparseable response.
@@ -80,7 +90,7 @@ export async function generateSessionTitle(
   description: string,
   signal: AbortSignal,
 ): Promise<string | null> {
-  const trimmed = description.trim()
+  const trimmed = cleanSessionTitleSource(description)
   if (!trimmed) return null
 
   try {
@@ -114,7 +124,9 @@ export async function generateSessionTitle(
     const text = extractTextContent(result.message.content)
 
     const parsed = titleSchema().safeParse(safeParseJSON(text))
-    const title = parsed.success ? parsed.data.title.trim() || null : null
+    const title = parsed.success
+      ? normalizeGeneratedSessionTitle(parsed.data.title)
+      : null
 
     logEvent('tengu_session_title_generated', { success: title !== null })
 

@@ -3,6 +3,7 @@ import type {
   PluginDetail,
   PluginListResponse,
   PluginReloadSummary,
+  PluginSessionReloadSummary,
   PluginScope,
 } from '../types/plugin'
 
@@ -36,10 +37,17 @@ export const pluginsApi = {
   uninstall: (payload: PluginActionPayload) =>
     api.post<{ ok: true; message: string }>('/api/plugins/uninstall', payload),
 
-  reload: (cwd?: string) => {
-    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
-    return api.post<{ ok: true; summary: PluginReloadSummary }>(
-      `/api/plugins/reload${query}`,
+  reload: (cwd?: string, sessionId?: string) => {
+    const query = new URLSearchParams()
+    if (cwd) query.set('cwd', cwd)
+    if (sessionId) query.set('sessionId', sessionId)
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return api.post<{
+      ok: true
+      summary: PluginReloadSummary
+      session?: PluginSessionReloadSummary
+    }>(
+      `/api/plugins/reload${suffix}`,
       undefined,
       { timeout: 120_000 },
     )

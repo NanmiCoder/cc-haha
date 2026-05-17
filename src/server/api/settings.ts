@@ -13,6 +13,7 @@
 import { SettingsService } from '../services/settingsService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureDesktopCliLauncherInstalled } from '../services/desktopCliLauncherService.js'
+import { conversationService } from '../services/conversationService.js'
 
 const settingsService = new SettingsService()
 
@@ -70,6 +71,7 @@ async function handleUserSettings(req: Request): Promise<Response> {
   if (req.method === 'PUT') {
     const body = await parseJsonBody(req)
     await settingsService.updateUserSettings(body)
+    syncThinkingSettingToActiveSessions(body)
     return Response.json({ ok: true })
   }
 
@@ -123,4 +125,17 @@ async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
 
 function methodNotAllowed(method: string): ApiError {
   return new ApiError(405, `Method ${method} not allowed`, 'METHOD_NOT_ALLOWED')
+}
+
+function syncThinkingSettingToActiveSessions(settings: Record<string, unknown>): void {
+  if (
+    !Object.prototype.hasOwnProperty.call(settings, 'alwaysThinkingEnabled') ||
+    typeof settings.alwaysThinkingEnabled !== 'boolean'
+  ) {
+    return
+  }
+
+  conversationService.setMaxThinkingTokensForActiveSessions(
+    settings.alwaysThinkingEnabled ? null : 0,
+  )
 }

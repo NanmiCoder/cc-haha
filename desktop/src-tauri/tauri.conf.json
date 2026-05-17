@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/nicegui/static/tauri-schema-v2.json",
   "productName": "Claude Code Haha",
-  "version": "0.2.2",
+  "version": "0.2.7",
   "identifier": "com.claude-code-haha.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -24,7 +24,7 @@
     ],
     "security": {
       "dangerousDisableAssetCspModification": ["style-src"],
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; media-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost http://127.0.0.1:* http://localhost:*; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; media-src 'self' blob:"
     }
   },
   "plugins": {
@@ -50,7 +50,9 @@
     "externalBin": [
       "binaries/claude-sidecar"
     ],
-    "resources": [],
+    "resources": [
+      "../dist"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

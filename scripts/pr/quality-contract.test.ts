@@ -36,18 +36,25 @@ describe('feature quality contract', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
       scripts?: Record<string, string>
     }
+    const prePushHook = readFileSync('scripts/git-hooks/pre-push', 'utf8')
     const contributing = readFileSync('docs/guide/contributing.md', 'utf8')
     const englishContributing = readFileSync('docs/en/guide/contributing.md', 'utf8')
     const rootContributing = readFileSync('CONTRIBUTING.md', 'utf8')
 
     expect(packageJson.scripts?.verify).toBe('bun run quality:pr')
     expect(packageJson.scripts?.['quality:verify']).toBe('bun run quality:pr')
+    expect(packageJson.scripts?.['quality:push']).toBe('bun run quality:gate --mode pr --skip coverage')
     expect(packageJson.scripts?.['check:persistence-upgrade']).toBe('bun run scripts/quality-gate/persistence-upgrade.ts')
+    expect(prePushHook).toContain('bun run quality:push')
+    expect(prePushHook).not.toContain('\nbun run quality:pr\n')
     expect(contributing).toContain('bun run verify')
+    expect(contributing).toContain('bun run quality:push')
     expect(contributing).toContain('AI Coding Agent 修复循环')
     expect(englishContributing).toContain('bun run verify')
+    expect(englishContributing).toContain('bun run quality:push')
     expect(englishContributing).toContain('AI Coding Agent Fix Loop')
     expect(rootContributing).toContain('bun run verify')
+    expect(rootContributing).toContain('bun run quality:push')
   })
 
   test('keeps general AI coding tools pointed at the same quality bar', () => {

@@ -2,6 +2,7 @@ const DINGTALK_API = 'https://api.dingtalk.com'
 const AI_CARD_TEMPLATE_ID = '02fcf2f4-5e02-4a85-b672-46d1f715543e.schema'
 const CARD_API_MAX_QPS = 20
 const QPS_BACKOFF_DURATION_MS = 2_000
+const DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS = 15_000
 
 const AICardStatus = {
   INPUTING: '2',
@@ -178,21 +179,42 @@ async function requestJson(
   token: string,
   body: Record<string, unknown>,
 ): Promise<void> {
-  const res = await fetch(`${DINGTALK_API}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-acs-dingtalk-access-token': token,
-    },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    const err = new Error(`${method} ${path} failed: ${res.status} ${text}`)
-    ;(err as any).status = res.status
-    ;(err as any).body = text
+  const controller = new AbortController()
+  const timeoutMs = getImCardRequestTimeoutMs()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${DINGTALK_API}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-acs-dingtalk-access-token': token,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      const err = new Error(`${method} ${path} failed: ${res.status} ${text}`)
+      ;(err as any).status = res.status
+      ;(err as any).body = text
+      throw err
+    }
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') {
+      throw new Error(`${method} ${path} timed out after ${timeoutMs}ms`)
+    }
     throw err
+  } finally {
+    clearTimeout(timer)
   }
+}
+
+function getImCardRequestTimeoutMs(): number {
+  const raw = process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+  const parsed = raw ? Number(raw) : DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_IM_CARD_REQUEST_TIMEOUT_MS
 }
 
 async function withCardRateLimit(fn: () => Promise<void>): Promise<void> {

@@ -25,6 +25,8 @@ const readyStatus = {
     installed: true,
     version: '3.12.0',
     path: '/usr/bin/python3',
+    source: 'system',
+    error: null,
   },
   venv: {
     created: false,
@@ -48,6 +50,7 @@ const enabledConfig = {
     clipboardWrite: true,
     systemKeyCombos: true,
   },
+  pythonPath: null,
 }
 
 function deferred<T>() {
@@ -102,6 +105,25 @@ describe('ComputerUseSettings', () => {
     expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
       enabled: false,
     })
+  })
+
+  it('saves a custom Python interpreter path and rechecks status', async () => {
+    render(<ComputerUseSettings />)
+
+    const input = await screen.findByLabelText('Python Interpreter Path')
+
+    await act(async () => {
+      fireEvent.change(input, {
+        target: { value: '  C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe  ' },
+      })
+      fireEvent.click(screen.getByText('Apply'))
+      await Promise.resolve()
+    })
+
+    expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
+      pythonPath: 'C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe',
+    })
+    expect(computerUseApiMock.getStatus).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the user-selected enablement when a stale refresh resolves later', async () => {

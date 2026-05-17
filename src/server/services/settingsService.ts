@@ -15,6 +15,7 @@ import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
 import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
 const VALID_PERMISSION_MODES = [
   'default',
@@ -129,6 +130,7 @@ export class SettingsService {
         await fs.mkdir(dir, { recursive: true })
         await fs.writeFile(tmpFile, contents, 'utf-8')
         await fs.rename(tmpFile, filePath)
+        resetSettingsCache()
         return
       } catch (err) {
         lastError = err

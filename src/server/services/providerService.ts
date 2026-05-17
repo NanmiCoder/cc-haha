@@ -10,7 +10,8 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
-import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
+import { readRecoverableJsonFile } from './recoverableJsonFile.js'
+import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
@@ -171,6 +172,7 @@ function getManagedEnvKeys(): string[] {
 
 export class ProviderService {
   private static serverPort = 3456
+  private managedSettingsService = new ManagedSettingsService()
 
   static setServerPort(port: number): void {
     ProviderService.serverPort = port
@@ -189,10 +191,6 @@ export class ProviderService {
 
   private getIndexPath(): string {
     return path.join(this.getCcHahaDir(), 'providers.json')
-  }
-
-  private getSettingsPath(): string {
-    return path.join(this.getCcHahaDir(), 'settings.json')
   }
 
   private async readIndex(): Promise<ProvidersIndex> {
@@ -221,28 +219,7 @@ export class ProviderService {
   }
 
   private async readSettings(): Promise<Record<string, unknown>> {
-    await ensurePersistentStorageUpgraded()
-    return readRecoverableJsonFile({
-      filePath: this.getSettingsPath(),
-      label: 'cc-haha managed settings',
-      defaultValue: {},
-      normalize: normalizeJsonObject,
-    })
-  }
-
-  private async writeSettings(settings: Record<string, unknown>): Promise<void> {
-    const filePath = this.getSettingsPath()
-    const dir = path.dirname(filePath)
-    await fs.mkdir(dir, { recursive: true })
-
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
-    try {
-      await fs.writeFile(tmpFile, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
-      await fs.rename(tmpFile, filePath)
-    } catch (err) {
-      await fs.unlink(tmpFile).catch(() => {})
-      throw ApiError.internal(`Failed to write settings.json: ${err}`)
-    }
+    return this.managedSettingsService.readSettings()
   }
 
   async getManagedSettings(): Promise<Record<string, unknown>> {
@@ -250,8 +227,10 @@ export class ProviderService {
   }
 
   async updateManagedSettings(settings: Record<string, unknown>): Promise<void> {
-    const current = await this.readSettings()
-    await this.writeSettings(Object.assign({}, current, settings))
+    await this.managedSettingsService.updateSettings((current) => ({
+      settings: Object.assign({}, current, settings),
+      result: undefined,
+    }))
   }
 
   // --- CRUD ---
@@ -415,36 +394,50 @@ export class ProviderService {
   }
 
   private async syncToSettings(provider: SavedProvider): Promise<void> {
-    const settings = await this.readSettings()
-    const existingEnv = (settings.env as Record<string, string>) || {}
-    const cleanedEnv = { ...existingEnv }
+    await this.managedSettingsService.updateSettings((settings) => {
+      const existingEnv = (settings.env as Record<string, string>) || {}
+      const cleanedEnv = { ...existingEnv }
 
-    for (const key of getManagedEnvKeys()) {
-      delete cleanedEnv[key]
-    }
+      for (const key of getManagedEnvKeys()) {
+        delete cleanedEnv[key]
+      }
 
-    settings.env = {
-      ...cleanedEnv,
-      ...this.buildManagedEnv(provider),
-    }
-
-    await this.writeSettings(settings)
+      return {
+        settings: {
+          ...settings,
+          env: {
+            ...cleanedEnv,
+            ...this.buildManagedEnv(provider),
+          },
+        },
+        result: undefined,
+      }
+    })
   }
 
   private async clearProviderFromSettings(): Promise<void> {
-    const settings = await this.readSettings()
-    const env = (settings.env as Record<string, string>) || {}
+    await this.managedSettingsService.updateSettings((settings) => {
+      const env = { ...((settings.env as Record<string, string>) || {}) }
 
-    for (const key of getManagedEnvKeys()) {
-      delete env[key]
-    }
+      for (const key of getManagedEnvKeys()) {
+        delete env[key]
+      }
 
-    settings.env = env
-    if (Object.keys(env).length === 0) {
-      delete settings.env
-    }
+      const nextSettings: Record<string, unknown> = {
+        ...settings,
+      }
 
-    await this.writeSettings(settings)
+      if (Object.keys(env).length === 0) {
+        delete nextSettings.env
+      } else {
+        nextSettings.env = env
+      }
+
+      return {
+        settings: nextSettings,
+        result: undefined,
+      }
+    })
   }
 
   // --- Auth status ---

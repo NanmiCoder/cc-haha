@@ -19,28 +19,47 @@ describe('splitStartupError', () => {
 })
 
 describe('StartupErrorView', () => {
-  it('shows diagnostics and copies the full payload', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
+  it('shows diagnostics and copies the full payload with the legacy fallback', async () => {
+    const originalClipboard = navigator.clipboard
+    const originalExecCommand = document.execCommand
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: vi.fn().mockReturnValue(true),
+    })
+    const execCommand = vi.mocked(document.execCommand)
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'))
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },
       configurable: true,
     })
 
-    render(
-      <StartupErrorView error={'startup failed\n\nRecent server logs:\n[stderr] boom'} />,
-    )
+    try {
+      render(
+        <StartupErrorView error={'startup failed\n\nRecent server logs:\n[stderr] boom'} />,
+      )
 
-    expect(screen.getByText('本地服务启动失败')).toBeInTheDocument()
-    expect(screen.getByText('startup failed')).toBeInTheDocument()
-    expect(screen.getByText('[stderr] boom')).toBeInTheDocument()
+      expect(screen.getByText('本地服务启动失败')).toBeInTheDocument()
+      expect(screen.getByText('startup failed')).toBeInTheDocument()
+      expect(screen.getByText('[stderr] boom')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '复制诊断信息' }))
+      fireEvent.click(screen.getByRole('button', { name: '复制诊断信息' }))
 
-    await waitFor(() => {
+      await waitFor(() => {
+        expect(execCommand).toHaveBeenCalledWith('copy')
+      })
       expect(writeText).toHaveBeenCalledWith(
         'startup failed\n\nRecent server logs:\n[stderr] boom',
       )
-    })
-    expect(screen.getByText('已复制')).toBeInTheDocument()
+      expect(screen.getByText('已复制')).toBeInTheDocument()
+    } finally {
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: originalExecCommand,
+      })
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard,
+      })
+    }
   })
 })

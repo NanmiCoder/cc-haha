@@ -62,10 +62,10 @@ const MCP_GROUP_ORDER: McpGroupKey[] = [
 ]
 
 const STATUS_TONE: Record<McpServerRecord['status'], string> = {
-  connected: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-  checking: 'bg-slate-500/10 text-slate-600 border-slate-500/20',
-  'needs-auth': 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-  failed: 'bg-rose-500/10 text-rose-600 border-rose-500/20',
+  connected: 'bg-[var(--color-inspector-success-bg)] text-[var(--color-inspector-success)] border-[var(--color-border)]',
+  checking: 'bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border-[var(--color-border)]',
+  'needs-auth': 'bg-[var(--color-surface-container-low)] text-[var(--color-warning)] border-[var(--color-border)]',
+  failed: 'bg-[var(--color-inspector-danger-bg)] text-[var(--color-inspector-danger)] border-[var(--color-border)]',
   disabled: 'bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border-[var(--color-border)]',
 }
 

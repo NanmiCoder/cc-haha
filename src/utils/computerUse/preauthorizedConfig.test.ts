@@ -10,6 +10,7 @@ describe('resolveStoredComputerUseConfig', () => {
       enabled: true,
       authorizedApps: [],
       grantFlags: DEFAULT_DESKTOP_GRANT_FLAGS,
+      pythonPath: null,
     })
   })
 
@@ -35,6 +36,20 @@ describe('resolveStoredComputerUseConfig', () => {
         clipboardWrite: true,
         systemKeyCombos: true,
       },
+      pythonPath: null,
+    })
+  })
+
+  test('normalizes a stored custom Python interpreter path', () => {
+    expect(
+      resolveStoredComputerUseConfig({
+        pythonPath: '  C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe  ',
+      }),
+    ).toMatchObject({
+      pythonPath: 'C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe',
+    })
+    expect(resolveStoredComputerUseConfig({ pythonPath: '' })).toMatchObject({
+      pythonPath: null,
     })
   })
 })

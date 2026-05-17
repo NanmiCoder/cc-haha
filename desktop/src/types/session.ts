@@ -7,6 +7,7 @@ export type SessionListItem = {
   modifiedAt: string
   messageCount: number
   projectPath: string
+  projectRoot?: string | null
   workDir: string | null
   workDirExists: boolean
 }

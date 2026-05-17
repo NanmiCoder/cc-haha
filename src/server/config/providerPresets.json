@@ -29,7 +29,9 @@
     "apiKeyUrl": "https://platform.deepseek.com/api_keys",
     "authStrategy": "auth_token",
     "defaultEnv": {
-      "CC_HAHA_SEND_DISABLED_THINKING": "1"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": "thinking,effort,adaptive_thinking,max_effort",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "thinking,effort,adaptive_thinking,max_effort",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "thinking,effort,adaptive_thinking,max_effort"
     },
     "modelContextWindows": {
       "deepseek-v4-pro": 1000000,

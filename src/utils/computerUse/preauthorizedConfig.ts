@@ -13,6 +13,7 @@ export type StoredComputerUseConfig = {
   enabled?: boolean
   authorizedApps?: StoredAuthorizedApp[]
   grantFlags?: Partial<CuGrantFlags>
+  pythonPath?: string | null
 }
 
 export const DEFAULT_COMPUTER_USE_ENABLED = true
@@ -37,6 +38,7 @@ export function resolveStoredComputerUseConfig(
   enabled: boolean
   authorizedApps: StoredAuthorizedApp[]
   grantFlags: CuGrantFlags
+  pythonPath: string | null
 } {
   return {
     enabled: config?.enabled ?? DEFAULT_COMPUTER_USE_ENABLED,
@@ -45,7 +47,14 @@ export function resolveStoredComputerUseConfig(
       ...DEFAULT_DESKTOP_GRANT_FLAGS,
       ...(config?.grantFlags ?? {}),
     },
+    pythonPath: normalizePythonPath(config?.pythonPath),
   }
+}
+
+export function normalizePythonPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
 export async function loadStoredComputerUseConfig(): Promise<

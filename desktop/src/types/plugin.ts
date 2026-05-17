@@ -99,3 +99,14 @@ export type PluginReloadSummary = {
   lspServers: number
   errors: number
 }
+
+export type PluginSessionReloadSummary = {
+  applied: boolean
+  reason?: 'not_running' | 'failed'
+  commands: number
+  agents: number
+  plugins: number
+  mcpServers: number
+  errors: number
+  error?: string
+}

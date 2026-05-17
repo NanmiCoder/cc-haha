@@ -77,6 +77,29 @@ describe('provider-aware thinking support', () => {
     expect(shouldSendExplicitDisabledThinking()).toBe(true)
   })
 
+  test('DeepSeek preset can follow the global thinking setting through capability overrides', () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'deepseek-v4-pro'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES =
+      'thinking,effort,adaptive_thinking,max_effort'
+    delete process.env.CC_HAHA_SEND_DISABLED_THINKING
+    clearCapabilityCache()
+
+    expect(modelSupportsThinking('deepseek-v4-pro')).toBe(true)
+    expect(modelSupportsAdaptiveThinking('deepseek-v4-pro')).toBe(true)
+    expect(shouldSendExplicitDisabledThinking()).toBe(false)
+  })
+
+  test('MiniMax preset models declare thinking support without effort passthrough', () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://api.minimaxi.com/anthropic'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'MiniMax-M2.7'
+    delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES
+    clearCapabilityCache()
+
+    expect(modelSupportsThinking('MiniMax-M2.7')).toBe(true)
+    expect(modelSupportsAdaptiveThinking('MiniMax-M2.7')).toBe(false)
+  })
+
   test('side queries inherit explicit disabled thinking for opted-in providers', () => {
     delete process.env.CC_HAHA_SEND_DISABLED_THINKING
     expect(resolveSideQueryThinkingConfig(undefined, 1024)).toBeUndefined()

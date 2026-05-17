@@ -35,12 +35,12 @@ import {
   logEvent,
 } from '../analytics/index.js'
 import { sanitizeToolNameForAnalytics } from '../analytics/metadata.js'
-import { EMPTY_USAGE } from './emptyUsage.js'
+import { EMPTY_USAGE, normalizeUsage } from './emptyUsage.js'
 import { classifyAPIError } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 
 export type { NonNullableUsage }
-export { EMPTY_USAGE }
+export { EMPTY_USAGE, normalizeUsage }
 
 // Strategy used for global prompt caching
 export type GlobalCacheStrategy = 'tool_based' | 'system_prompt' | 'none'

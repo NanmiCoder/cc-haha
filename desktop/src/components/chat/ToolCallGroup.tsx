@@ -1,14 +1,31 @@
 import { useEffect, useState } from 'react'
+import { BookMarked, ChevronDown, ChevronRight, Settings } from 'lucide-react'
 import { ToolCallBlock } from './ToolCallBlock'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Modal } from '../shared/Modal'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
+import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+import { useUIStore } from '../../stores/uiStore'
 import type { AgentTaskNotification, UIMessage } from '../../types/chat'
 import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
+type MemoryToolAction = 'saved' | 'referenced'
+
+type MemoryToolFile = {
+  path: string
+  label: string
+  action: MemoryToolAction
+  lineHint?: string
+  preview?: string
+}
+
+type MemoryToolActivity = {
+  action: MemoryToolAction
+  files: MemoryToolFile[]
+}
 
 type Props = {
   toolCalls: ToolCall[]
@@ -60,6 +77,59 @@ export function ToolCallGroup({
   agentTaskNotifications,
   isStreaming,
 }: Props) {
+  const memoryActivity = getMemoryToolActivity(toolCalls, resultMap)
+  if (memoryActivity) {
+    const memoryToolCalls = toolCalls.filter(isMemoryToolCall)
+    const regularToolCalls = toolCalls.filter((toolCall) => !isMemoryToolCall(toolCall))
+    if (regularToolCalls.length > 0) {
+      return (
+        <div className="mb-2 space-y-2">
+          <MemoryToolActivityGroup
+            activity={memoryActivity}
+            toolCalls={memoryToolCalls}
+            resultMap={resultMap}
+            childToolCallsByParent={childToolCallsByParent}
+            isStreaming={isStreaming}
+          />
+          <ToolCallGroupContent
+            toolCalls={regularToolCalls}
+            resultMap={resultMap}
+            childToolCallsByParent={childToolCallsByParent}
+            agentTaskNotifications={agentTaskNotifications}
+            isStreaming={isStreaming}
+          />
+        </div>
+      )
+    }
+    return (
+      <MemoryToolActivityGroup
+        activity={memoryActivity}
+        toolCalls={memoryToolCalls}
+        resultMap={resultMap}
+        childToolCallsByParent={childToolCallsByParent}
+        isStreaming={isStreaming}
+      />
+    )
+  }
+
+  return (
+    <ToolCallGroupContent
+      toolCalls={toolCalls}
+      resultMap={resultMap}
+      childToolCallsByParent={childToolCallsByParent}
+      agentTaskNotifications={agentTaskNotifications}
+      isStreaming={isStreaming}
+    />
+  )
+}
+
+function ToolCallGroupContent({
+  toolCalls,
+  resultMap,
+  childToolCallsByParent,
+  agentTaskNotifications,
+  isStreaming,
+}: Props) {
   const allAgents = toolCalls.every((toolCall) => toolCall.toolName === 'Agent')
 
   if (allAgents) {
@@ -94,6 +164,126 @@ export function ToolCallGroup({
       agentTaskNotifications={agentTaskNotifications}
       isStreaming={isStreaming}
     />
+  )
+}
+
+function MemoryToolActivityGroup({
+  activity,
+  toolCalls,
+  resultMap,
+  childToolCallsByParent,
+  isStreaming,
+}: {
+  activity: MemoryToolActivity
+  toolCalls: ToolCall[]
+  resultMap: Map<string, ToolResult>
+  childToolCallsByParent: Map<string, ToolCall[]>
+  isStreaming?: boolean
+}) {
+  const [expanded, setExpanded] = useState(activity.action === 'saved')
+  const [detailsExpanded, setDetailsExpanded] = useState(false)
+  const t = useTranslation()
+  const titleKey = activity.action === 'saved'
+    ? 'chat.memorySavedFromToolsTitle'
+    : 'chat.memoryReferencedTitle'
+  const visibleFiles = activity.files.slice(0, 4)
+  const hiddenCount = Math.max(0, activity.files.length - visibleFiles.length)
+
+  useEffect(() => {
+    if (isStreaming) setExpanded(true)
+  }, [isStreaming])
+
+  return (
+    <div className="mb-2">
+      <div
+        data-testid="memory-tool-activity-card"
+        className="overflow-hidden rounded-lg border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)]"
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]/50"
+        >
+          {expanded ? (
+            <ChevronDown size={15} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+          ) : (
+            <ChevronRight size={15} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+          )}
+          <BookMarked size={15} className="shrink-0 text-[var(--color-memory-accent)]" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+            {t(titleKey, { count: activity.files.length })}
+          </span>
+          {isStreaming ? (
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-memory-accent)] animate-pulse-dot" />
+          ) : null}
+        </button>
+
+        {expanded ? (
+          <div className="border-t border-[var(--color-border)]/55 px-3 py-2.5">
+            <div className="space-y-1.5">
+              {visibleFiles.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  title={file.path}
+                  onClick={() => openMemorySettings(file.path)}
+                  className="group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+                >
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border border-[var(--color-memory-border)] bg-[var(--color-memory-icon-bg)] text-[var(--color-text-tertiary)] group-hover:text-[var(--color-memory-accent)]">
+                    <Settings size={12} aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+                        {file.label}
+                      </span>
+                      {file.lineHint ? (
+                        <span className="shrink-0 text-[12px] text-[var(--color-text-tertiary)]">
+                          {file.lineHint}
+                        </span>
+                      ) : null}
+                    </span>
+                    {file.preview ? (
+                      <span className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-[var(--color-text-secondary)]">
+                        {file.preview}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              ))}
+              {hiddenCount > 0 ? (
+                <div className="px-2 py-1 text-[12px] text-[var(--color-text-tertiary)]">
+                  {t('chat.memoryMoreFiles', { count: hiddenCount })}
+                </div>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDetailsExpanded((value) => !value)}
+              className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2 text-[11px] font-medium text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+            >
+              {detailsExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              {t('chat.memoryTechnicalDetails')}
+            </button>
+
+            {detailsExpanded ? (
+              <div className="mt-2 space-y-1">
+                {toolCalls.map((toolCall) => (
+                  <ToolCallTree
+                    key={toolCall.id}
+                    toolCall={toolCall}
+                    resultMap={resultMap}
+                    childToolCallsByParent={childToolCallsByParent}
+                    compact
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -440,6 +630,108 @@ function ToolCallTree({
       )}
     </div>
   )
+}
+
+function openMemorySettings(path?: string) {
+  const ui = useUIStore.getState()
+  if (path) ui.setPendingMemoryPath(path)
+  ui.setPendingSettingsTab('memory')
+  useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+}
+
+function getMemoryToolActivity(
+  toolCalls: ToolCall[],
+  resultMap: Map<string, ToolResult>,
+): MemoryToolActivity | null {
+  const filesByPath = new Map<string, MemoryToolFile>()
+  let sawSave = false
+
+  for (const toolCall of toolCalls) {
+    const path = getToolFilePath(toolCall.input)
+    if (!path || !isMemoryMarkdownPath(path)) continue
+
+    const isSave = isMemoryWriteTool(toolCall.toolName)
+    const isReference = toolCall.toolName === 'Read'
+    if (!isSave && !isReference) continue
+    sawSave ||= isSave
+
+    const result = resultMap.get(toolCall.toolUseId)
+    const preview = extractMemoryPreview(result?.content)
+    const current = filesByPath.get(path)
+    filesByPath.set(path, {
+      path,
+      label: memoryFileLabel(path),
+      action: isSave ? 'saved' : (current?.action ?? 'referenced'),
+      lineHint: preview.lineHint || current?.lineHint,
+      preview: preview.text || current?.preview,
+    })
+  }
+
+  if (filesByPath.size === 0) return null
+  return {
+    action: sawSave ? 'saved' : 'referenced',
+    files: [...filesByPath.values()],
+  }
+}
+
+function isMemoryToolCall(toolCall: ToolCall): boolean {
+  const path = getToolFilePath(toolCall.input)
+  if (!path || !isMemoryMarkdownPath(path)) return false
+  return toolCall.toolName === 'Read' || isMemoryWriteTool(toolCall.toolName)
+}
+
+function isMemoryWriteTool(toolName: string): boolean {
+  return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit'
+}
+
+function getToolFilePath(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null
+  const record = input as Record<string, unknown>
+  const filePath = record.file_path ?? record.path
+  return typeof filePath === 'string' ? filePath : null
+}
+
+function isMemoryMarkdownPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/')
+  return normalized.endsWith('.md') && normalized.includes('/memory/')
+}
+
+function memoryFileLabel(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  return normalized.split('/').pop() || normalized
+}
+
+function extractMemoryPreview(content: unknown): { text?: string; lineHint?: string } {
+  const raw = extractTextContent(content)
+  if (!raw) return {}
+  const lineHint = extractLineHint(raw)
+  const lines = raw
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\d+\s*/, '').trim())
+    .filter(Boolean)
+
+  let inFrontmatter = false
+  for (const line of lines) {
+    if (line === '---') {
+      inFrontmatter = !inFrontmatter
+      continue
+    }
+    if (inFrontmatter) continue
+    const normalized = line.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').trim()
+    if (!normalized || normalized === '---') continue
+    if (/^(file|lines?|total)\b/i.test(normalized)) continue
+    return {
+      text: normalized.length > 140 ? `${normalized.slice(0, 140)}...` : normalized,
+      lineHint,
+    }
+  }
+  return { lineHint }
+}
+
+function extractLineHint(text: string): string | undefined {
+  const match = text.match(/(\d+)\s+lines?\b/i) ?? text.match(/(\d+)\s+行/)
+  return match?.[1] ? `${match[1]} lines` : undefined
 }
 
 type AgentStatus = 'starting' | 'running' | 'done' | 'failed' | 'stopped'

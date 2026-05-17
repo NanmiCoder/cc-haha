@@ -5,6 +5,7 @@ export type DingTalkStreamingState = {
   aiCardBuffers: Map<string, MessageBuffer>
   streamingCards: Map<string, Promise<DingTalkAiCardInstance | null>>
   streamingCardText: Map<string, string>
+  finalize?: () => Promise<void>
 }
 
 export function resetDingTalkStreamingState(
@@ -22,5 +23,8 @@ export async function finishAndResetDingTalkStreamingState(
   chatId: string,
 ): Promise<void> {
   await state.aiCardBuffers.get(chatId)?.complete()
+  if (state.finalize && (state.streamingCards.has(chatId) || state.streamingCardText.has(chatId))) {
+    await state.finalize()
+  }
   resetDingTalkStreamingState(state, chatId)
 }

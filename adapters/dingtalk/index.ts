@@ -402,7 +402,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'message_complete':
       runtime.state = 'idle'
       runtime.verb = undefined
-      await aiCardBuffers.get(chatId)?.complete()
+      await finishAndResetDingTalkStreamingState({ aiCardBuffers, streamingCards, streamingCardText, finalize: () => flushToAiCard(chatId, '', true) }, chatId)
       break
     case 'error':
       runtime.state = 'idle'
@@ -425,7 +425,7 @@ async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promis
   const runtime = getRuntimeState(chatId)
   runtime.pendingPermissionCount += 1
   runtime.state = 'permission_pending'
-  await finishAndResetDingTalkStreamingState({ aiCardBuffers, streamingCards, streamingCardText }, chatId)
+  await finishAndResetDingTalkStreamingState({ aiCardBuffers, streamingCards, streamingCardText, finalize: () => flushToAiCard(chatId, '', true) }, chatId)
 
   const set = pendingPermissions.get(chatId) ?? new Set<string>()
   set.add(msg.requestId)

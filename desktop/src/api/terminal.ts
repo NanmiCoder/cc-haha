@@ -55,4 +55,12 @@ export const terminalApi = {
     const events = await import('@tauri-apps/api/event')
     return events.listen<TerminalExitPayload>('terminal-exit', (event) => handler(event.payload))
   },
+
+  getBashPath() {
+    return invoke<string | null>('get_terminal_bash_path', undefined)
+  },
+
+  setBashPath(path: string | null) {
+    return invoke<void>('set_terminal_bash_path', { path })
+  },
 }

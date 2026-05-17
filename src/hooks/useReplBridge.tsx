@@ -404,7 +404,7 @@ export function useReplBridge(messages: Message[], setMessages: (action: React.S
               });
             },
             onSetMaxThinkingTokens(maxTokens) {
-              const enabled = maxTokens !== null;
+              const enabled = maxTokens !== 0;
               setAppState(prev_11 => {
                 if (prev_11.thinkingEnabled === enabled) return prev_11;
                 return {

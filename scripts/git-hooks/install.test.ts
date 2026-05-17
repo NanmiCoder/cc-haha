@@ -69,6 +69,29 @@ describe('installPrePushHook', () => {
     }
   })
 
+  test('disables stale live smoke settings during default install', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'git-hook-install-test-'))
+    try {
+      runGit(tempDir, ['init'])
+      runGit(tempDir, ['config', '--local', 'quality.prePushLive', 'true'])
+      runGit(tempDir, ['config', '--local', 'quality.prePushProviderModels', 'codingplan:main:codingplan-main'])
+      const sourcePath = join(tempDir, 'source-pre-push')
+      writeFileSync(sourcePath, '#!/usr/bin/env bash\necho default\n')
+
+      const result = installPrePushHook({
+        rootDir: tempDir,
+        sourcePath,
+      })
+
+      expect(result.liveConfigured).toBe(false)
+      expect(readFileSync(result.hookPath, 'utf8')).toContain('echo default')
+      expect(runGit(tempDir, ['config', '--local', '--get', 'quality.prePushLive'])).toBe('false')
+      expect(runGit(tempDir, ['config', '--local', '--get', 'quality.prePushProviderModels'])).toBe('codingplan:main:codingplan-main')
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('stores live gate settings in local git config', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'git-hook-install-test-'))
     try {

@@ -127,7 +127,7 @@ export function WorkspaceDiffSurface({
             return (
               <div
                 key={index}
-                className={`grid grid-cols-[48px_18px_minmax(0,1fr)] gap-2 px-3 ${
+                className={`grid min-w-full w-max grid-cols-[48px_18px_max-content] gap-2 px-3 ${
                   isAdded
                     ? 'bg-[var(--color-diff-added-bg)]'
                     : isRemoved

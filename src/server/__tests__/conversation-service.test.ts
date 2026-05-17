@@ -81,7 +81,24 @@ describe('ConversationService', () => {
     expect(env.ANTHROPIC_BASE_URL).toBe('https://example.invalid/anthropic')
     expect(env.ANTHROPIC_MODEL).toBe('test-model')
     expect(env.CLAUDE_CODE_DIAGNOSTICS_FILE).toBe(path.join(tmpDir, 'cc-haha', 'diagnostics', 'cli-diagnostics.jsonl'))
+    expect(env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE).toBe(
+      `${path.join(tmpDir, 'projects', 'D--workspace-code-myself-code-cc-haha', 'memory')}${path.sep}`,
+    )
     await expect(fs.stat(path.dirname(env.CLAUDE_CODE_DIAGNOSTICS_FILE))).resolves.toBeTruthy()
+  })
+
+  test('buildChildEnv pins desktop memory to the current sanitized project directory', async () => {
+    const service = new ConversationService() as any
+    const workDir = path.join(tmpDir, 'workspace', 'myself_code', 'claude-code-haha')
+    await fs.mkdir(workDir, { recursive: true })
+
+    const env = (await service.buildChildEnv(workDir)) as Record<string, string>
+
+    expect(env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE).toBe(
+      `${path.join(tmpDir, 'projects', sanitizeMemoryPath(workDir), 'memory')}${path.sep}`,
+    )
+    expect(env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE).toContain('myself-code')
+    expect(env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE).not.toContain('myself_code')
   })
 
   test('strips inherited provider env when desktop provider config exists', async () => {
@@ -372,3 +389,7 @@ describe('ConversationService', () => {
     expect(args).toContain('feature/rail')
   })
 })
+
+function sanitizeMemoryPath(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, '-')
+}

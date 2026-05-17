@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileNoThrow } from '../execFileNoThrow.js'
 import { logForDebugging } from '../debug.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
+import { loadStoredComputerUseConfig } from './preauthorizedConfig.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../../..')
@@ -60,6 +61,12 @@ async function runOrThrow(file: string, args: string[], label: string): Promise<
   return stdout
 }
 
+async function getVenvCreationPythonCommand(): Promise<string> {
+  const config = await loadStoredComputerUseConfig()
+  if (config.pythonPath) return config.pythonPath
+  return isWindows ? 'python' : 'python3'
+}
+
 /**
  * Ensure runtime source files exist in ~/.claude/.runtime/.
  * In dev mode, copies from the project's runtime/ directory on first run.
@@ -92,7 +99,7 @@ export async function ensureBootstrapped(): Promise<void> {
 
     if (!(await pathExists(pythonBinPath()))) {
       logForDebugging('creating runtime venv at %s', { level: 'debug' })
-      const pythonCmd = isWindows ? 'python' : 'python3'
+      const pythonCmd = await getVenvCreationPythonCommand()
       await runOrThrow(pythonCmd, ['-m', 'venv', venvRoot], 'python venv creation')
     }
 

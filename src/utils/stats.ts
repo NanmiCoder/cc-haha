@@ -32,7 +32,7 @@ export type DailyActivity = {
 
 export type DailyModelTokens = {
   date: string // YYYY-MM-DD format
-  tokensByModel: { [modelName: string]: number } // total tokens (input + output) per model
+  tokensByModel: { [modelName: string]: number } // total tokens (input + output + cache read + cache creation) per model
 }
 
 export type StreakInfo = {
@@ -110,6 +110,40 @@ type ProcessOptions = {
   toDate?: string
 }
 
+type UsageLike = {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
+function getTotalUsageTokens(usage: UsageLike): number {
+  return (
+    (usage.input_tokens || 0) +
+    (usage.output_tokens || 0) +
+    (usage.cache_read_input_tokens || 0) +
+    (usage.cache_creation_input_tokens || 0)
+  )
+}
+
+function isDateInRange(
+  date: string,
+  fromDate?: string,
+  toDate?: string,
+): boolean {
+  if (fromDate && isDateBefore(date, fromDate)) return false
+  if (toDate && isDateBefore(toDate, date)) return false
+  return true
+}
+
+function getMessageDateKey(
+  message: Pick<TranscriptMessage, 'timestamp'>,
+): string | null {
+  const messageTimestamp = new Date(message.timestamp)
+  if (isNaN(messageTimestamp.getTime())) return null
+  return toDateString(messageTimestamp)
+}
+
 /**
  * Process session files and extract stats.
  * Can filter by date range.
@@ -122,6 +156,7 @@ async function processSessionFiles(
   const fs = getFsImplementation()
 
   const dailyActivityMap = new Map<string, DailyActivity>()
+  const dailySessionIdsMap = new Map<string, Set<string>>()
   const dailyModelTokensMap = new Map<string, { [modelName: string]: number }>()
   const sessions: SessionStats[] = []
   const hourCounts = new Map<number, number>()
@@ -134,6 +169,30 @@ async function processSessionFiles(
   // Track parent sessions that already recorded a shot count (dedup across subagents)
   const sessionsWithShotCount = new Set<string>()
 
+  const getDailyActivity = (date: string): DailyActivity => {
+    let activity = dailyActivityMap.get(date)
+    if (!activity) {
+      activity = {
+        date,
+        messageCount: 0,
+        sessionCount: 0,
+        toolCallCount: 0,
+      }
+      dailyActivityMap.set(date, activity)
+    }
+    return activity
+  }
+
+  const markSessionActiveOnDate = (date: string, parentSessionId: string) => {
+    let sessionIds = dailySessionIdsMap.get(date)
+    if (!sessionIds) {
+      sessionIds = new Set()
+      dailySessionIdsMap.set(date, sessionIds)
+    }
+    sessionIds.add(parentSessionId)
+    getDailyActivity(date)
+  }
+
   // Process session files in parallel batches for better performance
   const BATCH_SIZE = 20
   for (let i = 0; i < sessionFiles.length; i += BATCH_SIZE) {
@@ -143,7 +202,6 @@ async function processSessionFiles(
         try {
           // If we have a fromDate filter, skip files that haven't been modified since then
           if (fromDate) {
-            let fileSize = 0
             try {
               const fileStat = await fs.stat(sessionFile)
               const fileModifiedDate = toDateString(fileStat.mtime)
@@ -155,23 +213,8 @@ async function processSessionFiles(
                   skipped: true,
                 }
               }
-              fileSize = fileStat.size
             } catch {
               // If we can't stat the file, try to read it anyway
-            }
-            // For large files, peek at the session start date before reading everything.
-            // Sessions that pass the mtime filter but started before fromDate are skipped
-            // (e.g. a month-old session resumed today gets a new mtime write but old start date).
-            if (fileSize > 65536) {
-              const startDate = await readSessionStartDate(sessionFile)
-              if (startDate && isDateBefore(startDate, fromDate)) {
-                return {
-                  sessionFile,
-                  entries: null,
-                  error: null,
-                  skipped: true,
-                }
-              }
             }
           }
           const entries = await readJSONLFile<Entry>(sessionFile)
@@ -207,15 +250,14 @@ async function processSessionFiles(
       // Subagent transcripts mark all messages as sidechain. We still want
       // their token usage counted, but not as separate sessions.
       const isSubagentFile = sessionFile.includes(`${sep}subagents${sep}`)
+      const parentSessionId = isSubagentFile
+        ? basename(dirname(dirname(sessionFile)))
+        : sessionId
 
       // Extract shot count from PR attribution in gh pr create calls (ant-only)
       // This must run before the sidechain filter since subagent transcripts
       // mark all messages as sidechain
       if (feature('SHOT_STATS') && shotDistributionMap) {
-        const parentSessionId = isSubagentFile
-          ? basename(dirname(dirname(sessionFile)))
-          : sessionId
-
         if (!sessionsWithShotCount.has(parentSessionId)) {
           const shotCount = extractShotCountFromMessages(messages)
           if (shotCount !== null) {
@@ -253,21 +295,12 @@ async function processSessionFiles(
       }
 
       const dateKey = toDateString(firstTimestamp)
+      const includeSessionInRange = isDateInRange(dateKey, fromDate, toDate)
 
-      // Apply date filters
-      if (fromDate && isDateBefore(dateKey, fromDate)) continue
-      if (toDate && isDateBefore(toDate, dateKey)) continue
-
-      // Track daily activity (use first message date as session date)
-      const existing = dailyActivityMap.get(dateKey) || {
-        date: dateKey,
-        messageCount: 0,
-        sessionCount: 0,
-        toolCallCount: 0,
-      }
-
-      // Subagent files contribute tokens and tool calls, but aren't sessions.
-      if (!isSubagentFile) {
+      // Session-level aggregates still represent newly started top-level
+      // sessions. Daily activity is tracked below by each message date so token
+      // totals and visible per-day session counts share one date bucket.
+      if (!isSubagentFile && includeSessionInRange) {
         const duration = lastTimestamp.getTime() - firstTimestamp.getTime()
 
         sessions.push({
@@ -279,28 +312,34 @@ async function processSessionFiles(
 
         totalMessages += mainMessages.length
 
-        existing.sessionCount++
-        existing.messageCount += mainMessages.length
-
         const hour = firstTimestamp.getHours()
         hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
       }
 
-      if (!isSubagentFile || dailyActivityMap.has(dateKey)) {
-        dailyActivityMap.set(dateKey, existing)
-      }
-
       // Process messages for tool usage and model stats
       for (const message of mainMessages) {
+        const messageDateKey = getMessageDateKey(message)
+        const includeMessageInRange =
+          messageDateKey !== null &&
+          isDateInRange(messageDateKey, fromDate, toDate)
+
+        if (includeMessageInRange && messageDateKey !== null) {
+          markSessionActiveOnDate(messageDateKey, parentSessionId)
+          if (!isSubagentFile) {
+            getDailyActivity(messageDateKey).messageCount++
+          }
+        }
+
         if (message.type === 'assistant') {
           const content = message.message?.content
-          if (Array.isArray(content)) {
+          if (
+            includeMessageInRange &&
+            messageDateKey !== null &&
+            Array.isArray(content)
+          ) {
             for (const block of content) {
               if (block.type === 'tool_use') {
-                const activity = dailyActivityMap.get(dateKey)
-                if (activity) {
-                  activity.toolCallCount++
-                }
+                getDailyActivity(messageDateKey).toolCallCount++
               }
             }
           }
@@ -312,6 +351,10 @@ async function processSessionFiles(
 
             // Skip synthetic messages - they are internal and shouldn't appear in stats
             if (model === SYNTHETIC_MODEL) {
+              continue
+            }
+
+            if (!includeMessageInRange || messageDateKey === null) {
               continue
             }
 
@@ -336,17 +379,21 @@ async function processSessionFiles(
               usage.cache_creation_input_tokens || 0
 
             // Track daily tokens per model
-            const totalTokens =
-              (usage.input_tokens || 0) + (usage.output_tokens || 0)
+            const totalTokens = getTotalUsageTokens(usage)
             if (totalTokens > 0) {
-              const dayTokens = dailyModelTokensMap.get(dateKey) || {}
+              const tokenDateKey = messageDateKey
+              const dayTokens = dailyModelTokensMap.get(tokenDateKey) || {}
               dayTokens[model] = (dayTokens[model] || 0) + totalTokens
-              dailyModelTokensMap.set(dateKey, dayTokens)
+              dailyModelTokensMap.set(tokenDateKey, dayTokens)
             }
           }
         }
       }
     }
+  }
+
+  for (const [date, sessionIds] of dailySessionIdsMap) {
+    getDailyActivity(date).sessionCount = sessionIds.size
   }
 
   return {
@@ -733,10 +780,12 @@ export async function aggregateClaudeCodeStatsForRange(
   const fromDate = new Date(today)
   fromDate.setDate(today.getDate() - daysBack + 1) // +1 to include today
   const fromDateStr = toDateString(fromDate)
+  const toDateStr = toDateString(today)
 
   // Process session files for the date range
   const stats = await processSessionFiles(allSessionFiles, {
     fromDate: fromDateStr,
+    toDate: toDateStr,
   })
 
   return processedStatsToClaudeCodeStats(stats)

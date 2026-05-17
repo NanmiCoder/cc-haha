@@ -13,15 +13,19 @@ type Question = {
   question: string
   header?: string
   options?: QuestionOption[]
+  multiSelect?: boolean
 }
 
 type AskUserInput = {
   questions?: Question[]
   question?: string
+  header?: string
   options?: QuestionOption[]
+  multiSelect?: boolean
 }
 
 type Props = {
+  sessionId?: string | null
   toolUseId: string
   input: unknown
   result?: unknown
@@ -41,21 +45,34 @@ function parseInput(input: unknown): Question[] {
 
   // Shape 2: { question: "...", options: [...] }
   if (typeof obj.question === 'string') {
-    return [{ question: obj.question, options: obj.options }]
+    return [{
+      question: obj.question,
+      header: obj.header,
+      options: obj.options,
+      multiSelect: obj.multiSelect,
+    }]
   }
 
   return []
 }
 
-export function AskUserQuestion({ toolUseId, input, result }: Props) {
+type QuestionSelections = Record<number, string[]>
+
+function getSelectedAnswer(question: Question, selected: string[] | undefined) {
+  if (!selected || selected.length === 0) return ''
+  return question.multiSelect ? selected.join(', ') : selected[0] ?? ''
+}
+
+export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) {
   const { respondToPermission } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const pendingPermission = useChatStore((s) => activeTabId ? s.sessions[activeTabId]?.pendingPermission : undefined)
+  const targetSessionId = sessionId ?? activeTabId
+  const pendingPermission = useChatStore((s) => targetSessionId ? s.sessions[targetSessionId]?.pendingPermission : undefined)
   const t = useTranslation()
   const questions = parseInput(input)
   const inputObject = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
   const [activeTab, setActiveTab] = useState(0)
-  const [selections, setSelections] = useState<Record<number, string>>({})
+  const [selections, setSelections] = useState<QuestionSelections>({})
   const [freeText, setFreeText] = useState('')
   const [hasSubmitted, setHasSubmitted] = useState(false)
   const composingRef = useRef(false)
@@ -78,20 +95,36 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
         .filter((answer): answer is string => typeof answer === 'string' && answer.trim().length > 0)
         .join(', ')
     }
-    return freeText.trim() || Object.values(selections).join(', ')
+    return freeText.trim() || questions
+      .map((question, index) => getSelectedAnswer(question, selections[index]))
+      .filter(Boolean)
+      .join('; ')
   }, [freeText, questions, resultAnswers, selections])
   const submitted = Object.keys(resultAnswers).length > 0 || hasSubmitted
 
   const handleSelect = (qIndex: number, label: string) => {
     if (submitted) return
     setSelections((prev) => {
-      // Toggle: deselect if already selected
-      if (prev[qIndex] === label) {
+      const question = questions[qIndex]
+      const selected = prev[qIndex] ?? []
+      if (question?.multiSelect) {
+        const nextSelected = selected.includes(label)
+          ? selected.filter((value) => value !== label)
+          : [...selected, label]
+        const next = { ...prev }
+        if (nextSelected.length > 0) {
+          next[qIndex] = nextSelected
+        } else {
+          delete next[qIndex]
+        }
+        return next
+      }
+      if (selected[0] === label) {
         const next = { ...prev }
         delete next[qIndex]
         return next
       }
-      return { ...prev, [qIndex]: label }
+      return { ...prev, [qIndex]: [label] }
     })
     setFreeText('')
   }
@@ -101,25 +134,26 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
 
     const parts: string[] = []
     for (let i = 0; i < questions.length; i++) {
-      const selected = selections[i]
+      const selected = getSelectedAnswer(questions[i]!, selections[i])
       if (selected) parts.push(selected)
     }
     const response = freeText.trim() || parts.join('; ') || ''
     if (!response) return
 
-    if (!activeTabId || !pendingRequest) return
+    if (!targetSessionId || !pendingRequest) return
 
     const answers = questions.reduce<Record<string, string>>((acc, question, index) => {
       if (freeText.trim()) {
         acc[question.question] = freeText.trim()
-      } else if (selections[index]) {
-        acc[question.question] = selections[index]!
+      } else {
+        const selected = getSelectedAnswer(question, selections[index])
+        if (selected) acc[question.question] = selected
       }
       return acc
     }, {})
 
     setHasSubmitted(true)
-    respondToPermission(activeTabId, pendingRequest.requestId, true, {
+    respondToPermission(targetSessionId, pendingRequest.requestId, true, {
       updatedInput: {
         ...inputObject,
         answers,
@@ -128,7 +162,7 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
   }
 
   // All questions must be answered (via selection or free text) to enable submit
-  const allAnswered = freeText.trim().length > 0 || questions.every((_, i) => selections[i] !== undefined)
+  const allAnswered = freeText.trim().length > 0 || questions.every((_, i) => (selections[i]?.length ?? 0) > 0)
   const safeActiveTab = Math.min(activeTab, questions.length - 1)
   const activeQuestion = questions[safeActiveTab]
 
@@ -168,7 +202,7 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
         <div className="flex px-4 border-b border-[var(--color-outline-variant)]/20 bg-[var(--color-surface-container-low)] overflow-x-auto">
           {questions.map((q, i) => {
             const isActive = safeActiveTab === i
-            const isAnswered = selections[i] !== undefined
+            const isAnswered = (selections[i]?.length ?? 0) > 0
             const tabLabel = q.header || `Q${i + 1}`
             return (
               <button
@@ -203,7 +237,8 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
         {activeQuestion.options && activeQuestion.options.length > 0 && (
           <div className="space-y-2 mb-3">
             {activeQuestion.options.map((opt, optIndex) => {
-              const isSelected = selections[activeTab] === opt.label
+              const isSelected = selections[safeActiveTab]?.includes(opt.label) ?? false
+              const isMultiSelect = activeQuestion.multiSelect === true
               return (
                 <button
                   key={optIndex}
@@ -216,12 +251,12 @@ export function AskUserQuestion({ toolUseId, input, result }: Props) {
                   } ${submitted ? 'cursor-default' : ''}`}
                 >
                   <div className="flex items-start gap-3">
-                    {/* Check indicator */}
+                    {/* Selection indicator */}
                     <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
                       isSelected
                         ? 'border-[var(--color-secondary)] bg-[var(--color-secondary)]'
                         : 'border-[var(--color-outline)]'
-                    }`}>
+                    } ${isMultiSelect ? 'rounded-[var(--radius-xs)]' : 'rounded-full'}`}>
                       {isSelected && (
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="20 6 9 17 4 12" />

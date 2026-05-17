@@ -13,6 +13,7 @@ type DropdownProps<T extends string> = {
   onChange: (value: T) => void
   trigger: ReactNode
   width?: CSSProperties['width']
+  maxHeight?: CSSProperties['maxHeight']
   align?: 'left' | 'right'
   className?: string
 }
@@ -23,6 +24,7 @@ export function Dropdown<T extends string>({
   onChange,
   trigger,
   width = 320,
+  maxHeight,
   align = 'left',
   className = '',
 }: DropdownProps<T>) {
@@ -56,13 +58,14 @@ export function Dropdown<T extends string>({
       {open && (
         <div
           className={`
-            absolute z-50 mt-1 overflow-hidden rounded-[var(--radius-lg)]
+            absolute z-50 mt-1 rounded-[var(--radius-lg)]
             bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]
             shadow-[var(--shadow-dropdown)]
             animate-in fade-in slide-in-from-top-1
+            ${maxHeight ? 'overflow-y-auto' : 'overflow-hidden'}
             ${align === 'right' ? 'right-0' : 'left-0'}
           `}
-          style={{ width }}
+          style={{ width, maxHeight }}
         >
           {items.map((item, i) => (
             <button

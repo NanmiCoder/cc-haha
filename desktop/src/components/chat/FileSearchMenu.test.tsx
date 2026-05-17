@@ -56,7 +56,7 @@ describe('FileSearchMenu', () => {
     })
   })
 
-  it('navigates directories without selecting them as attachments', async () => {
+  it('selects directories from search results and keeps a separate drill-in action', async () => {
     const onSelect = vi.fn()
     const onNavigate = vi.fn()
     vi.mocked(filesystemApi.search).mockResolvedValueOnce({
@@ -64,7 +64,7 @@ describe('FileSearchMenu', () => {
       parentPath: '/',
       query: 'backend',
       entries: [
-        { name: 'backend', path: '/repo/backend', isDirectory: true },
+        { name: 'backend', path: '/repo/backend', relativePath: 'backend', isDirectory: true },
       ],
     })
     vi.mocked(filesystemApi.browse).mockResolvedValueOnce({
@@ -72,6 +72,13 @@ describe('FileSearchMenu', () => {
       parentPath: '/repo',
       entries: [
         { name: 'src', path: '/repo/backend/src', isDirectory: true },
+      ],
+    })
+    vi.mocked(filesystemApi.browse).mockResolvedValueOnce({
+      currentPath: '/repo/backend/src',
+      parentPath: '/repo/backend',
+      entries: [
+        { name: 'commands', path: '/repo/backend/src/commands', isDirectory: true },
       ],
     })
 
@@ -84,23 +91,36 @@ describe('FileSearchMenu', () => {
       />,
     )
 
-    fireEvent.click(await screen.findByText('backend'))
+    fireEvent.click(await screen.findByText('backend/'))
 
-    expect(onSelect).not.toHaveBeenCalled()
+    expect(onSelect).toHaveBeenCalledWith('/repo/backend', 'backend', true)
+    expect(onNavigate).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByLabelText('Open folder'))
+
     expect(onNavigate).toHaveBeenCalledWith('backend/')
     await waitFor(() => {
       expect(filesystemApi.browse).toHaveBeenCalledWith('/repo/backend', { includeFiles: true })
+    })
+
+    fireEvent.click(await screen.findByText('src'))
+    expect(onSelect).toHaveBeenLastCalledWith('/repo/backend/src', 'backend/src', true)
+
+    fireEvent.click(screen.getByLabelText('Open folder'))
+    expect(onNavigate).toHaveBeenLastCalledWith('backend/src/')
+    await waitFor(() => {
+      expect(filesystemApi.browse).toHaveBeenCalledWith('/repo/backend/src', { includeFiles: true })
     })
   })
 
   it('passes nested relative file paths when selecting a file', async () => {
     const onSelect = vi.fn()
     vi.mocked(filesystemApi.search).mockResolvedValueOnce({
-      currentPath: '/repo/backend/src',
-      parentPath: '/repo/backend',
+      currentPath: '/repo',
+      parentPath: '/',
       query: 'pictactic',
       entries: [
-        { name: 'pictactic', path: '/repo/backend/src/pictactic', isDirectory: false },
+        { name: 'pictactic', path: '/repo/backend/src/pictactic', relativePath: 'backend/src/pictactic', isDirectory: false },
       ],
     })
 
@@ -112,8 +132,71 @@ describe('FileSearchMenu', () => {
       />,
     )
 
-    fireEvent.click(await screen.findByText('pictactic'))
+    fireEvent.click(await screen.findByText('backend/src/pictactic'))
 
-    expect(onSelect).toHaveBeenCalledWith('/repo/backend/src/pictactic', 'backend/src/pictactic')
+    expect(onSelect).toHaveBeenCalledWith('/repo/backend/src/pictactic', 'backend/src/pictactic', false)
+  })
+
+  it('renders search results as insertable paths instead of repeated basenames', async () => {
+    vi.mocked(filesystemApi.search).mockResolvedValueOnce({
+      currentPath: '/repo',
+      parentPath: '/',
+      query: 'src',
+      entries: [
+        { name: 'src', path: '/repo/src', relativePath: 'src', isDirectory: true },
+        { name: 'hooks', path: '/repo/src/hooks', relativePath: 'src/hooks', isDirectory: true },
+        { name: 'src', path: '/repo/desktop/src', relativePath: 'desktop/src', isDirectory: true },
+      ],
+    })
+
+    render(
+      <FileSearchMenu
+        cwd="/repo"
+        filter="src"
+        onSelect={() => {}}
+      />,
+    )
+
+    expect(await screen.findByText('src/')).toBeInTheDocument()
+    expect(screen.getByText('src/hooks/')).toBeInTheDocument()
+    expect(screen.getByText('desktop/src/')).toBeInTheDocument()
+  })
+
+  it('uses the resolved home root for typed folder filters when no workspace is selected', async () => {
+    vi.mocked(filesystemApi.search).mockResolvedValueOnce({
+      currentPath: '/Users/nanmi',
+      parentPath: '/',
+      query: 'workspace',
+      entries: [
+        { name: 'workspace', path: '/Users/nanmi/workspace', relativePath: 'workspace', isDirectory: true },
+      ],
+    })
+    vi.mocked(filesystemApi.browse).mockResolvedValueOnce({
+      currentPath: '/Users/nanmi/workspace',
+      parentPath: '/Users/nanmi',
+      entries: [],
+    })
+
+    const { rerender } = render(
+      <FileSearchMenu
+        cwd=""
+        filter="workspace"
+        onSelect={() => {}}
+      />,
+    )
+
+    expect(await screen.findByText('workspace/')).toBeInTheDocument()
+
+    rerender(
+      <FileSearchMenu
+        cwd=""
+        filter="workspace/"
+        onSelect={() => {}}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(filesystemApi.browse).toHaveBeenCalledWith('/Users/nanmi/workspace', { includeFiles: true })
+    })
   })
 })

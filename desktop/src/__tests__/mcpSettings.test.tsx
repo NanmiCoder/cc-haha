@@ -26,15 +26,12 @@ describe('McpSettings', () => {
       activeSessionId: 'session-1',
       isLoading: false,
       error: null,
-      selectedProjects: [],
-      availableProjects: [],
       fetchSessions: vi.fn(),
       createSession: vi.fn(),
       deleteSession: vi.fn(),
       renameSession: vi.fn(),
       updateSessionTitle: vi.fn(),
       setActiveSession: vi.fn(),
-      setSelectedProjects: vi.fn(),
     })
     useMcpStore.setState({
       servers: [],

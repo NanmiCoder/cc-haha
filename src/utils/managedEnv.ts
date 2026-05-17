@@ -8,6 +8,7 @@ import {
   isProviderManagedEnvVar,
   SAFE_ENV_VARS,
 } from './managedEnvConstants.js'
+import { normalizeLegacyDeepSeekManagedEnv } from './providerManagedEnvCompat.js'
 import { clearMTLSCache } from './mtls.js'
 import { clearProxyCache, configureGlobalAgents } from './proxy.js'
 import { isSettingSourceEnabled } from './settings/constants.js'
@@ -103,7 +104,7 @@ function getCcHahaSettingsEnv(): Record<string, string> {
     const ccHahaSettings = join(getClaudeConfigHomeDir(), 'cc-haha', 'settings.json')
     const raw = readFileSync(ccHahaSettings, 'utf-8')
     const parsed = JSON.parse(raw) as { env?: Record<string, string> }
-    return parsed.env ?? {}
+    return normalizeLegacyDeepSeekManagedEnv(parsed.env ?? {}).env
   } catch {
     return {}
   }

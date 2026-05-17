@@ -951,44 +951,42 @@ export const AgentTool = buildTool({
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, metadata);
 
                     // Mark task completed FIRST so TaskOutput(block=true)
-                    // unblocks immediately. classifyHandoffIfNeeded and
-                    // cleanupWorktreeIfNeeded can hang — they must not gate
-                    // the status transition (gh-20236).
+                    // unblocks immediately, then notify the parent before
+                    // optional classifier/worktree cleanup. The parent loop
+                    // depends on this notification to resume.
                     completeAsyncAgent(agentResult, rootSetAppState);
 
-                    // Extract text from agent result content for the notification
-                    let finalMessage = extractTextContent(agentResult.content, '\n');
-                    if (feature('TRANSCRIPT_CLASSIFIER')) {
-                      const backgroundedAppState = toolUseContext.getAppState();
-                      const handoffWarning = await classifyHandoffIfNeeded({
-                        agentMessages,
-                        tools: toolUseContext.options.tools,
-                        toolPermissionContext: backgroundedAppState.toolPermissionContext,
-                        abortSignal: task.abortController!.signal,
-                        subagentType: selectedAgent.agentType,
-                        totalToolUseCount: agentResult.totalToolUseCount
-                      });
-                      if (handoffWarning) {
-                        finalMessage = `${handoffWarning}\n\n${finalMessage}`;
-                      }
-                    }
-
-                    // Clean up worktree before notification so we can include it
-                    const worktreeResult = await cleanupWorktreeIfNeeded();
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
                       description,
                       status: 'completed',
                       setAppState: rootSetAppState,
-                      finalMessage,
+                      finalMessage: extractTextContent(agentResult.content, '\n'),
                       usage: {
                         totalTokens: getTokenCountFromTracker(tracker),
                         toolUses: agentResult.totalToolUseCount,
                         durationMs: agentResult.totalDurationMs
                       },
-                      toolUseId: toolUseContext.toolUseId,
-                      ...worktreeResult
+                      toolUseId: toolUseContext.toolUseId
                     });
+                    void (async () => {
+                      try {
+                        await cleanupWorktreeIfNeeded();
+                        if (feature('TRANSCRIPT_CLASSIFIER')) {
+                          const backgroundedAppState = toolUseContext.getAppState();
+                          await classifyHandoffIfNeeded({
+                            agentMessages,
+                            tools: toolUseContext.options.tools,
+                            toolPermissionContext: backgroundedAppState.toolPermissionContext,
+                            abortSignal: task.abortController!.signal,
+                            subagentType: selectedAgent.agentType,
+                            totalToolUseCount: agentResult.totalToolUseCount
+                          });
+                        }
+                      } catch (cleanupError) {
+                        logForDebugging(`Backgrounded sync agent post-completion cleanup failed: ${errorMessage(cleanupError)}`);
+                      }
+                    })();
                   } catch (error) {
                     if (error instanceof AbortError) {
                       // Transition status BEFORE worktree cleanup so
@@ -1002,7 +1000,6 @@ export const AgentTool = buildTool({
                         is_built_in_agent: metadata.isBuiltInAgent,
                         reason: 'user_cancel_background' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
                       });
-                      const worktreeResult = await cleanupWorktreeIfNeeded();
                       const partialResult = extractPartialResult(agentMessages);
                       enqueueAgentNotification({
                         taskId: backgroundedTaskId,
@@ -1010,23 +1007,22 @@ export const AgentTool = buildTool({
                         status: 'killed',
                         setAppState: rootSetAppState,
                         toolUseId: toolUseContext.toolUseId,
-                        finalMessage: partialResult,
-                        ...worktreeResult
+                        finalMessage: partialResult
                       });
+                      void cleanupWorktreeIfNeeded().catch(cleanupError => logForDebugging(`Backgrounded sync agent post-cancel cleanup failed: ${errorMessage(cleanupError)}`));
                       return;
                     }
                     const errMsg = errorMessage(error);
                     failAsyncAgent(backgroundedTaskId, errMsg, rootSetAppState);
-                    const worktreeResult = await cleanupWorktreeIfNeeded();
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
                       description,
                       status: 'failed',
                       error: errMsg,
                       setAppState: rootSetAppState,
-                      toolUseId: toolUseContext.toolUseId,
-                      ...worktreeResult
+                      toolUseId: toolUseContext.toolUseId
                     });
+                    void cleanupWorktreeIfNeeded().catch(cleanupError => logForDebugging(`Backgrounded sync agent post-failure cleanup failed: ${errorMessage(cleanupError)}`));
                   } finally {
                     stopBackgroundedSummarization?.();
                     clearInvokedSkillsForAgent(syncAgentId);
@@ -1326,7 +1322,8 @@ The agent is now running and will receive instructions via mailbox.`
     }
     if (data.status === 'async_launched') {
       const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. Use SendMessage with to: '${data.agentId}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.`;
-      const instructions = data.canReadOutputFile ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion by using ${FILE_READ_TOOL_NAME} or ${BASH_TOOL_NAME} tail on the output file.` : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`;
+      const stopGuidance = `Do not stop this agent just because you have enough partial output. Stop it only if the user asks to cancel it, or if it is clearly runaway, harmful, duplicative, or no longer useful.`;
+      const instructions = data.canReadOutputFile ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\n${stopGuidance}\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion by using ${FILE_READ_TOOL_NAME} or ${BASH_TOOL_NAME} tail on the output file.` : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.\n${stopGuidance}`;
       const text = `${prefix}\n${instructions}`;
       return {
         tool_use_id: toolUseID,

@@ -22,9 +22,11 @@ import { pushNotificationService } from '../services/pushNotificationService.js'
 import { deriveTitle, generateTitle, saveAiTitle } from '../services/titleService.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
 import {
+  COMMAND_NAME_TAG,
   LOCAL_COMMAND_STDERR_TAG,
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../../constants/xml.js'
+import { shouldCreateWorktreeForSessionLaunch } from '../services/repositoryLaunchService.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -32,7 +34,13 @@ const providerService = new ProviderService()
 /**
  * Cache slash commands from CLI init messages, keyed by sessionId.
  */
-const sessionSlashCommands = new Map<string, Array<{ name: string; description: string }>>()
+export type SessionSlashCommand = {
+  name: string
+  description: string
+  argumentHint?: string
+}
+
+const sessionSlashCommands = new Map<string, SessionSlashCommand[]>()
 
 /**
  * Timers for delayed session cleanup after client disconnect.
@@ -81,12 +89,12 @@ async function sendRepositoryStartupStatus(
   const repository = launchInfo?.repository
   if (!repository) return
 
-  if (repository.worktree) {
+  if (shouldCreateWorktreeForSessionLaunch(launchInfo)) {
     sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Creating worktree' })
   }
 }
 
-export function getSlashCommands(sessionId: string): Array<{ name: string; description: string }> {
+export function getSlashCommands(sessionId: string): SessionSlashCommand[] {
   return sessionSlashCommands.get(sessionId) || []
 }
 
@@ -290,12 +298,15 @@ async function handleUserMessage(
     }
     sessionTitleState.set(sessionId, titleState)
   }
-  titleState.userMessageCount++
-  titleState.allUserMessages.push(message.content)
-  if (titleState.userMessageCount === 1) {
-    titleState.firstUserMessage = message.content
+  const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
+  if (titleInput) {
+    titleState.userMessageCount++
+    titleState.allUserMessages.push(titleInput)
+    if (titleState.userMessageCount === 1) {
+      titleState.firstUserMessage = titleInput
+    }
+    triggerTitleGeneration(ws, sessionId)
   }
-  triggerTitleGeneration(ws, sessionId)
 
   // 启动 CLI 子进程（如果还没有）
   try {
@@ -329,9 +340,16 @@ async function handleUserMessage(
   // Keep output muted until the current user turn is enqueued to avoid forwarding
   // any pre-turn SDK chatter as fresh chat history.
   let userMessageSent = false
+  const shouldForwardCurrentTurnLocalCommand =
+    createCurrentTurnLocalCommandForwarder(desktopSlashCommand)
 
   rebindSessionOutput(sessionId, ws, {
-    shouldForward: (cliMsg) => userMessageSent || (cliMsg.type === 'result' && cliMsg.is_error),
+    shouldForward: (cliMsg) => {
+      if (userMessageSent || (cliMsg.type === 'result' && cliMsg.is_error)) {
+        return true
+      }
+      return shouldForwardCurrentTurnLocalCommand(cliMsg)
+    },
   })
 
   const sent = conversationService.sendMessage(
@@ -695,8 +713,9 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
  */
 type SessionStreamState = {
   hasReceivedStreamEvents: boolean
-  activeBlockTypes: Map<number, 'text' | 'tool_use'>
+  activeBlockTypes: Map<number, 'text' | 'tool_use' | 'thinking'>
   activeToolBlocks: Map<number, { toolName: string; toolUseId: string; inputJson: string }>
+  pendingLocalCommand?: { name: string; args: string }
   /** Tool blocks whose input JSON failed to parse in content_block_stop.
    *  The assistant message carries the complete input — defer to that. */
   pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
@@ -715,6 +734,7 @@ function getStreamState(sessionId: string): SessionStreamState {
       hasReceivedStreamEvents: false,
       activeBlockTypes: new Map(),
       activeToolBlocks: new Map(),
+      pendingLocalCommand: undefined,
       pendingToolBlocks: new Map(),
       lastApiError: undefined,
     }
@@ -788,10 +808,7 @@ function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
     })()
   }
   if (cliMsg.slash_commands && Array.isArray(cliMsg.slash_commands)) {
-    sessionSlashCommands.set(sessionId, cliMsg.slash_commands.map((cmd: any) => ({
-      name: typeof cmd === 'string' ? cmd : (cmd.name || cmd.command || ''),
-      description: typeof cmd === 'string' ? '' : (cmd.description || ''),
-    })))
+    updateSessionSlashCommands(sessionId, cliMsg.slash_commands, { notifyClient: false })
   }
 }
 
@@ -887,7 +904,7 @@ async function ensureCliSessionStarted(
   }
 }
 
-function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
+export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
   const streamState = getStreamState(sessionId)
   switch (cliMsg.type) {
     case 'assistant': {
@@ -962,8 +979,22 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         cliMsg.message?.content,
       )
       if (localCommandOutput) {
-        messages.push({ type: 'content_start', blockType: 'text' })
-        messages.push({ type: 'content_delta', text: localCommandOutput })
+        const goalEvent = extractGoalEvent(
+          localCommandOutput,
+          streamState.pendingLocalCommand,
+        )
+        streamState.pendingLocalCommand = undefined
+        if (goalEvent) {
+          messages.push({
+            type: 'system_notification',
+            subtype: 'goal_event',
+            message: goalEvent.message,
+            data: goalEvent,
+          })
+        } else {
+          messages.push({ type: 'content_start', blockType: 'text' })
+          messages.push({ type: 'content_delta', text: localCommandOutput })
+        }
       }
 
       if (cliMsg.message?.content && Array.isArray(cliMsg.message.content)) {
@@ -993,7 +1024,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
 
       switch (event.type) {
         case 'message_start': {
-          return [{ type: 'status', state: 'streaming' }]
+          return [{ type: 'status', state: 'thinking' }]
         }
 
         case 'content_block_start': {
@@ -1001,9 +1032,9 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
           if (!contentBlock) return []
 
           const index = event.index ?? 0
-          streamState.activeBlockTypes.set(index, contentBlock.type === 'tool_use' ? 'tool_use' : 'text')
 
           if (contentBlock.type === 'tool_use') {
+            streamState.activeBlockTypes.set(index, 'tool_use')
             // Track tool info so content_block_stop can emit complete data
             streamState.activeToolBlocks.set(index, {
               toolName: contentBlock.name || '',
@@ -1021,6 +1052,13 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
                   : undefined,
             }]
           }
+
+          if (contentBlock.type === 'thinking' || contentBlock.type === 'redacted_thinking') {
+            streamState.activeBlockTypes.set(index, 'thinking')
+            return [{ type: 'status', state: 'thinking', verb: 'Thinking' }]
+          }
+
+          streamState.activeBlockTypes.set(index, 'text')
           return [{ type: 'content_start', blockType: 'text' }]
         }
 
@@ -1186,16 +1224,47 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         }
         return messages
       }
+      if (subtype === 'memory_saved') {
+        return [{
+          type: 'system_notification',
+          subtype: 'memory_saved',
+          message: cliMsg.message,
+          data: {
+            writtenPaths: Array.isArray(cliMsg.writtenPaths) ? cliMsg.writtenPaths : [],
+            teamCount: typeof cliMsg.teamCount === 'number' ? cliMsg.teamCount : undefined,
+            verb: typeof cliMsg.verb === 'string' ? cliMsg.verb : undefined,
+          },
+        }]
+      }
       if (subtype === 'hook_started' || subtype === 'hook_response') {
         // Hook 执行中 — 不转发给前端
         return []
       }
       if (subtype === 'local_command' || subtype === 'local_command_output') {
+        const localCommand = extractLocalCommand(cliMsg.content ?? cliMsg.message)
+        if (localCommand) {
+          streamState.pendingLocalCommand = localCommand
+          return []
+        }
+
         const localCommandOutput = extractLocalCommandOutput(
           cliMsg.content ?? cliMsg.message,
           { allowUntagged: subtype === 'local_command_output' },
         )
         if (!localCommandOutput) return []
+        const goalEvent = extractGoalEvent(
+          localCommandOutput,
+          streamState.pendingLocalCommand,
+        )
+        streamState.pendingLocalCommand = undefined
+        if (goalEvent) {
+          return [{
+            type: 'system_notification',
+            subtype: 'goal_event',
+            message: goalEvent.message,
+            data: goalEvent,
+          }]
+        }
         return [
           { type: 'content_start', blockType: 'text' },
           { type: 'content_delta', text: localCommandOutput },
@@ -1211,18 +1280,34 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         }]
       }
       if (subtype === 'task_started') {
-        return [{
-          type: 'status',
-          state: 'tool_executing',
-          verb: cliMsg.message || 'Task started',
-        }]
+        return [
+          {
+            type: 'system_notification',
+            subtype: 'task_started',
+            message: cliMsg.message || cliMsg.description || 'Task started',
+            data: cliMsg,
+          },
+          {
+            type: 'status',
+            state: 'tool_executing',
+            verb: cliMsg.message || cliMsg.description || 'Task started',
+          },
+        ]
       }
       if (subtype === 'task_progress') {
-        return [{
-          type: 'status',
-          state: 'tool_executing',
-          verb: cliMsg.message || 'Task in progress',
-        }]
+        return [
+          {
+            type: 'system_notification',
+            subtype: 'task_progress',
+            message: cliMsg.message || cliMsg.summary || cliMsg.description || 'Task in progress',
+            data: cliMsg,
+          },
+          {
+            type: 'status',
+            state: 'tool_executing',
+            verb: cliMsg.message || cliMsg.summary || cliMsg.description || 'Task in progress',
+          },
+        ]
       }
       if (subtype === 'session_state_changed') {
         return [{
@@ -1269,6 +1354,77 @@ function getDesktopSlashCommand(content: string): ReturnType<typeof parseSlashCo
   return parsed
 }
 
+function getTitleInputForUserMessage(
+  content: string,
+  command: ReturnType<typeof parseSlashCommand>,
+): string | null {
+  if (command?.commandName !== 'goal') return content
+
+  const args = command.args.trim()
+  if (!args || args === 'clear') return null
+  return args
+}
+
+export function createCurrentTurnLocalCommandForwarder(
+  command: ReturnType<typeof parseSlashCommand>,
+): (cliMsg: any) => boolean {
+  let awaitingCurrentTurnLocalCommandOutput = false
+
+  return (cliMsg: any) => {
+    if (command && isMatchingCurrentTurnLocalCommand(cliMsg, command)) {
+      awaitingCurrentTurnLocalCommandOutput = true
+      return true
+    }
+    if (command?.commandName === 'goal' && isLocalCommandOutputMessage(cliMsg)) {
+      const output = extractLocalCommandOutput(
+        cliMsg.content ?? cliMsg.message,
+        { allowUntagged: cliMsg.subtype === 'local_command_output' },
+      )
+      if (output && looksLikeGoalCommandOutput(output)) {
+        awaitingCurrentTurnLocalCommandOutput = false
+        return true
+      }
+    }
+    if (
+      awaitingCurrentTurnLocalCommandOutput &&
+      isLocalCommandOutputMessage(cliMsg)
+    ) {
+      awaitingCurrentTurnLocalCommandOutput = false
+      return true
+    }
+    return false
+  }
+}
+
+function isMatchingCurrentTurnLocalCommand(
+  cliMsg: any,
+  command: NonNullable<ReturnType<typeof parseSlashCommand>>,
+): boolean {
+  if (cliMsg?.type !== 'system' || cliMsg?.subtype !== 'local_command') {
+    return false
+  }
+  const localCommand = extractLocalCommand(cliMsg.content ?? cliMsg.message)
+  if (!localCommand) return false
+  return (
+    localCommand.name === command.commandName &&
+    localCommand.args.trim() === command.args.trim()
+  )
+}
+
+function isLocalCommandOutputMessage(cliMsg: any): boolean {
+  if (
+    cliMsg?.type !== 'system' ||
+    (cliMsg?.subtype !== 'local_command' &&
+      cliMsg?.subtype !== 'local_command_output')
+  ) {
+    return false
+  }
+  return extractLocalCommandOutput(
+    cliMsg.content ?? cliMsg.message,
+    { allowUntagged: cliMsg.subtype === 'local_command_output' },
+  ) !== null
+}
+
 function extractLocalCommandOutput(
   content: unknown,
   options: { allowUntagged?: boolean } = {},
@@ -1304,6 +1460,80 @@ function extractLocalCommandOutput(
 function extractTaggedContent(raw: string, tag: string): string | null {
   const match = raw.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
   return match?.[1]?.trim() ?? null
+}
+
+function extractLocalCommand(content: unknown): { name: string; args: string } | null {
+  const raw = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content
+        .flatMap((block) => {
+          if (!block || typeof block !== 'object') return []
+          const text = (block as { text?: unknown }).text
+          return typeof text === 'string' ? [text] : []
+        })
+        .join('\n')
+      : ''
+
+  const name = extractTaggedContent(raw, COMMAND_NAME_TAG)
+  if (!name) return null
+  return {
+    name: name.replace(/^\//, ''),
+    args: extractTaggedContent(raw, 'command-args') ?? '',
+  }
+}
+
+type GoalEventData = {
+  action: 'created' | 'replaced' | 'status' | 'paused' | 'resumed' | 'completed' | 'cleared' | 'message'
+  status?: string
+  objective?: string
+  budget?: string
+  elapsed?: string
+  continuations?: string
+  message?: string
+}
+
+function extractGoalEvent(
+  output: string,
+  command?: { name: string; args: string },
+): GoalEventData | null {
+  if (command && command.name !== 'goal') return null
+
+  const trimmed = output.trim()
+  if (!trimmed) return null
+
+  if (trimmed === 'Goal cleared.' || trimmed.startsWith('Goal cleared:')) {
+    return { action: 'cleared', message: trimmed }
+  }
+  if (trimmed === 'Goal marked complete.') {
+    return { action: 'completed', message: trimmed }
+  }
+  if (trimmed === 'No active goal.') {
+    return { action: 'message', message: trimmed }
+  }
+
+  if (trimmed.startsWith('Goal set:')) {
+    const objective = trimmed.slice('Goal set:'.length).trim()
+    return {
+      action: 'created',
+      status: 'active',
+      objective: objective || undefined,
+      message: trimmed,
+    }
+  }
+
+  return command?.name === 'goal' ? { action: 'message', message: trimmed } : null
+}
+
+function looksLikeGoalCommandOutput(output: string): boolean {
+  const trimmed = output.trim()
+  return (
+    trimmed.startsWith('Goal set:') ||
+    trimmed.startsWith('Goal cleared:') ||
+    trimmed === 'Goal cleared.' ||
+    trimmed === 'Goal marked complete.' ||
+    trimmed === 'No active goal.'
+  )
 }
 
 function getCompactBoundaryMessage(cliMsg: any): string {
@@ -1607,6 +1837,55 @@ export function sendToSession(sessionId: string, message: ServerMessage): boolea
   if (!ws) return false
   ws.send(JSON.stringify(message))
   return true
+}
+
+export function updateSessionSlashCommands(
+  sessionId: string,
+  commands: unknown[],
+  options: { notifyClient?: boolean } = {},
+): SessionSlashCommand[] {
+  const normalized = commands
+    .map(normalizeSessionSlashCommand)
+    .filter((command): command is SessionSlashCommand => command !== null)
+
+  sessionSlashCommands.set(sessionId, normalized)
+
+  if (options.notifyClient !== false) {
+    sendToSession(sessionId, {
+      type: 'system_notification',
+      subtype: 'slash_commands',
+      data: normalized,
+    })
+  }
+
+  return normalized
+}
+
+function normalizeSessionSlashCommand(command: unknown): SessionSlashCommand | null {
+  if (typeof command === 'string') {
+    return command.trim() ? { name: command, description: '' } : null
+  }
+  if (!command || typeof command !== 'object') return null
+
+  const record = command as {
+    name?: unknown
+    command?: unknown
+    description?: unknown
+    argumentHint?: unknown
+  }
+  const name =
+    typeof record.name === 'string'
+      ? record.name
+      : typeof record.command === 'string'
+        ? record.command
+        : ''
+  if (!name.trim()) return null
+
+  return {
+    name,
+    description: typeof record.description === 'string' ? record.description : '',
+    ...(typeof record.argumentHint === 'string' ? { argumentHint: record.argumentHint } : {}),
+  }
 }
 
 export function closeSessionConnection(sessionId: string, reason = 'session closed'): boolean {

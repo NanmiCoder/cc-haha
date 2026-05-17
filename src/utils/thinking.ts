@@ -109,8 +109,16 @@ export function modelSupportsThinking(model: string): boolean {
   ) {
     return !canonical.includes('claude-3-')
   }
+  if (isMiniMaxAnthropicEndpoint() && canonical.includes('minimax')) {
+    return true
+  }
   // 3P (Bedrock/Vertex): only Opus 4+ and Sonnet 4+
   return canonical.includes('sonnet-4') || canonical.includes('opus-4')
+}
+
+function isMiniMaxAnthropicEndpoint(): boolean {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL?.toLowerCase() ?? ''
+  return baseUrl.includes('minimax') || baseUrl.includes('minimaxi')
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports adaptive thinking.

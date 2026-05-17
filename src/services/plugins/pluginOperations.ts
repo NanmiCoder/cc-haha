@@ -25,6 +25,7 @@ import {
 import {
   findReverseDependents,
   formatReverseDependentsSuffix,
+  isEnabledPluginSettingValue,
 } from '../../utils/plugins/dependencyResolver.js'
 import {
   loadInstalledPluginsFromDisk,
@@ -126,8 +127,8 @@ export function getProjectPathForScope(scope: PluginScope): string | undefined {
  * enablement active — the plugin keeps running.
  */
 export function isPluginEnabledAtProjectScope(pluginId: string): boolean {
-  return (
-    getSettingsForSource('projectSettings')?.enabledPlugins?.[pluginId] === true
+  return isEnabledPluginSettingValue(
+    getSettingsForSource('projectSettings')?.enabledPlugins?.[pluginId],
   )
 }
 
@@ -697,7 +698,7 @@ export async function setPluginEnabledOp(
   // `false` that masks the lower scope's `true`.
   const isCurrentlyEnabled =
     scope && !isOverride
-      ? scopeSettingsValue === true
+      ? isEnabledPluginSettingValue(scopeSettingsValue)
       : getPluginEditableScopes().has(pluginId)
   if (enabled === isCurrentlyEnabled) {
     return {

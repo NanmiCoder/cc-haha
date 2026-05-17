@@ -15,6 +15,9 @@ import {
 import { conversationService } from '../services/conversationService.js'
 import { clearCommandsCache } from '../../commands.js'
 import { sanitizePath } from '../../utils/sessionStoragePortable.js'
+import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
+import { clearPluginCache } from '../../utils/plugins/pluginLoader.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
 // ============================================================================
 // Test helpers
@@ -397,10 +400,16 @@ describe('SessionService', () => {
   beforeEach(async () => {
     await setupTmpConfigDir()
     service = new SessionService()
+    clearInstalledPluginsCache()
+    clearPluginCache('sessions-api-test-setup')
+    resetSettingsCache()
   })
 
   afterEach(async () => {
     clearCommandsCache()
+    clearInstalledPluginsCache()
+    clearPluginCache('session-service-test-teardown')
+    resetSettingsCache()
     await cleanupTmpDir()
   })
 
@@ -431,6 +440,32 @@ describe('SessionService', () => {
     expect(session.title).toBe('Hello Claude')
     expect(session.messageCount).toBe(2) // 1 user + 1 assistant
     expect(session.projectPath).toBe('-tmp-testproject')
+    expect(session.projectRoot).toBe('/tmp/test')
+  })
+
+  it('should expose the source project root for persisted worktree sessions', async () => {
+    const sourceWorkDir = path.join(tmpDir, 'source-repo')
+    const worktreePath = path.join(sourceWorkDir, '.claude', 'worktrees', 'desktop-main-12345678')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile(sanitizePath(worktreePath), sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(worktreePath),
+      makeWorktreeStateEntry(sessionId, worktreePath, {
+        originalCwd: sourceWorkDir,
+      }),
+      makeUserEntry('Hello from worktree'),
+    ])
+
+    const result = await service.listSessions()
+
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]).toMatchObject({
+      id: sessionId,
+      projectPath: sanitizePath(worktreePath),
+      projectRoot: await fs.realpath(sourceWorkDir),
+      workDir: worktreePath,
+    })
   })
 
   it('should paginate results with limit and offset', async () => {
@@ -704,6 +739,52 @@ describe('SessionService', () => {
     })
   })
 
+  it('should keep /goal local command transcript entries for desktop history restore', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      {
+        parentUuid: null,
+        isSidechain: false,
+        type: 'system',
+        subtype: 'local_command',
+        content: '<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>ship persisted goal</command-args>',
+        level: 'info',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        uuid: 'goal-command',
+      },
+      {
+        parentUuid: 'goal-command',
+        isSidechain: false,
+        type: 'system',
+        subtype: 'local_command',
+        content: '<local-command-stdout>Goal set: ship persisted goal</local-command-stdout>',
+        level: 'info',
+        timestamp: '2026-01-01T00:00:02.000Z',
+        uuid: 'goal-output',
+      },
+      makeAssistantEntry('正常助手消息', crypto.randomUUID()),
+    ])
+
+    const messages = await service.getSessionMessages(sessionId)
+
+    expect(messages).toMatchObject([
+      {
+        id: 'goal-command',
+        type: 'system',
+        content: expect.stringContaining('<command-name>/goal</command-name>'),
+      },
+      {
+        id: 'goal-output',
+        type: 'system',
+        content: expect.stringContaining('Goal set: ship persisted goal'),
+      },
+      {
+        type: 'assistant',
+      },
+    ])
+  })
+
   it('should hide task-notification turns and their automatic responses from history', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const firstUserId = crypto.randomUUID()
@@ -792,6 +873,7 @@ describe('SessionService', () => {
         toolUseId: 'toolu_bg',
         status: 'completed',
         summary: 'Background command completed',
+        timestamp: '2026-01-01T00:01:00.000Z',
       },
     ])
   })
@@ -909,6 +991,26 @@ describe('SessionService', () => {
 
     const workDir = await service.getSessionWorkDir(sessionId)
     expect(workDir).toBe('/tmp/latest-worktree')
+  })
+
+  it('should prefer the newest duplicate session file when worktree metadata moves', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const sourceFile = await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry('/tmp/project'),
+    ])
+    const worktreeFile = await writeSessionFile('-tmp-project--claude-worktrees-desktop-main-12345678', sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry('/tmp/project/.claude/worktrees/desktop-main-12345678'),
+    ])
+
+    const oldTime = new Date('2026-01-01T00:00:00.000Z')
+    const newTime = new Date('2026-01-01T00:00:01.000Z')
+    await fs.utimes(sourceFile, oldTime, oldTime)
+    await fs.utimes(worktreeFile, newTime, newTime)
+
+    const workDir = await service.getSessionWorkDir(sessionId)
+    expect(workDir).toBe('/tmp/project/.claude/worktrees/desktop-main-12345678')
   })
 
   it('should recover CLI worktree state from transcript metadata', async () => {
@@ -1304,6 +1406,66 @@ describe('SessionService', () => {
     expect(detail!.title).toBe('This is my first real question')
   })
 
+  it('should derive a clean title from slash command breadcrumb metadata', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      makeUserEntry([
+        '<command-message>frontend-design</command-message>',
+        '<command-name>/frontend-design</command-name>',
+        '<command-args>@website 重新设计首页</command-args>',
+      ].join('\n')),
+    ])
+
+    const detail = await service.getSession(sessionId)
+    expect(detail!.title).toBe('/frontend-design @website 重新设计首页')
+  })
+
+  it('should keep a goal creation title instead of later goal status titles', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      {
+        parentUuid: null,
+        isSidechain: false,
+        type: 'system',
+        subtype: 'local_command',
+        content: '<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>ship the actual objective</command-args>',
+        level: 'info',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        uuid: 'goal-command',
+      },
+      {
+        type: 'ai-title',
+        aiTitle: '/goal status',
+        timestamp: '2026-01-01T00:02:00.000Z',
+      },
+    ])
+
+    const detail = await service.getSession(sessionId)
+    expect(detail!.title).toBe('/goal ship the actual objective')
+  })
+
+  it('should display stored AI titles without internal XML tags', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      makeUserEntry('fallback message'),
+      {
+        type: 'ai-title',
+        aiTitle: [
+          '<command-message>frontend-design</command-message>',
+          '<command-name>/frontend-design</command-name>',
+          '<command-args>@website</command-args>',
+        ].join(' '),
+        timestamp: '2026-01-01T00:02:00.000Z',
+      },
+    ])
+
+    const detail = await service.getSession(sessionId)
+    expect(detail!.title).toBe('/frontend-design @website')
+  })
+
   it('should truncate long titles to 80 chars', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const longMessage = 'A'.repeat(120)
@@ -1400,6 +1562,9 @@ describe('Sessions API', () => {
       server.stop(true)
       server = null
     }
+    clearInstalledPluginsCache()
+    clearPluginCache('sessions-api-test-teardown')
+    resetSettingsCache()
     await cleanupTmpDir()
   })
 
@@ -1542,6 +1707,7 @@ describe('Sessions API', () => {
         status: 'failed',
         summary: 'Background command failed & stopped',
         outputFile: 'C:\\Temp\\bg.output',
+        timestamp: expect.any(String),
       },
     ])
   })
@@ -1803,6 +1969,97 @@ describe('Sessions API', () => {
     }
   })
 
+  it('POST /api/sessions/batch-delete should delete sessions and clean adapter mappings', async () => {
+    const sessionIdA = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const sessionIdB = 'ffffffff-1111-2222-3333-ffffffffffff'
+    const otherSessionId = '99999999-1111-2222-3333-999999999999'
+    await writeSessionFile('-tmp-api-test', sessionIdA, [makeSnapshotEntry()])
+    await writeSessionFile('-tmp-api-test', sessionIdB, [makeSnapshotEntry()])
+    await fs.writeFile(
+      path.join(tmpDir, 'adapter-sessions.json'),
+      JSON.stringify({
+        'wechat-chat-a': {
+          sessionId: sessionIdA,
+          workDir: '/tmp/project-a',
+          updatedAt: 1,
+        },
+        'wechat-chat-b': {
+          sessionId: sessionIdB,
+          workDir: '/tmp/project-b',
+          updatedAt: 2,
+        },
+        'other-chat': {
+          sessionId: otherSessionId,
+          workDir: '/tmp/project-c',
+          updatedAt: 3,
+        },
+      }, null, 2),
+      'utf-8',
+    )
+
+    const res = await fetch(`${baseUrl}/api/sessions/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionIds: [sessionIdA, sessionIdB] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      successes: [sessionIdA, sessionIdB],
+      failures: [],
+    })
+
+    expect((await fetch(`${baseUrl}/api/sessions/${sessionIdA}`)).status).toBe(404)
+    expect((await fetch(`${baseUrl}/api/sessions/${sessionIdB}`)).status).toBe(404)
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'adapter-sessions.json'), 'utf-8'),
+    )
+    expect(persisted['wechat-chat-a']).toBeUndefined()
+    expect(persisted['wechat-chat-b']).toBeUndefined()
+    expect(persisted['other-chat'].sessionId).toBe(otherSessionId)
+  })
+
+  it('POST /api/sessions/batch-delete should report partial failures and roll back failed delete markers', async () => {
+    const successSessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const failedSessionId = 'ffffffff-1111-2222-3333-ffffffffffff'
+    await writeSessionFile('-tmp-api-test', successSessionId, [makeSnapshotEntry()])
+    await writeSessionFile('-tmp-api-test', failedSessionId, [makeSnapshotEntry()])
+
+    const originalDeleteSession = sessionService.deleteSession.bind(sessionService)
+    sessionService.deleteSession = (async (targetSessionId: string) => {
+      if (targetSessionId === failedSessionId) {
+        throw new Error('simulated batch unlink failure')
+      }
+      return originalDeleteSession(targetSessionId)
+    }) as typeof sessionService.deleteSession
+
+    try {
+      const res = await fetch(`${baseUrl}/api/sessions/batch-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionIds: [successSessionId, failedSessionId] }),
+      })
+
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({
+        ok: false,
+        successes: [successSessionId],
+        failures: [{
+          sessionId: failedSessionId,
+          message: 'simulated batch unlink failure',
+        }],
+      })
+      expect((conversationService as any).deletedSessions.has(failedSessionId)).toBe(false)
+      expect((await fetch(`${baseUrl}/api/sessions/${successSessionId}`)).status).toBe(404)
+      expect((await fetch(`${baseUrl}/api/sessions/${failedSessionId}`)).status).toBe(200)
+    } finally {
+      sessionService.deleteSession = originalDeleteSession as typeof sessionService.deleteSession
+      conversationService.unmarkSessionDeleted(successSessionId)
+      conversationService.unmarkSessionDeleted(failedSessionId)
+    }
+  })
+
   it('PATCH /api/sessions/:id should rename the session', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-api-test', sessionId, [
@@ -1851,6 +2108,95 @@ describe('Sessions API', () => {
     )
     expect(body.commands).toContainEqual(
       expect.objectContaining({ name: 'project-skill', description: 'Project skill description' }),
+    )
+  })
+
+  it('GET /api/sessions/:id/slash-commands should include enabled plugin skills before CLI init', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-ffffffffffff'
+    const workDir = path.join(tmpDir, 'workspace', 'app')
+    const marketplaceRoot = path.join(tmpDir, 'marketplace-root')
+    const pluginRoot = path.join(marketplaceRoot, 'plugins', 'superpowers')
+    const pluginsDir = path.join(tmpDir, 'plugins')
+    const marketplaceFile = path.join(
+      marketplaceRoot,
+      '.claude-plugin',
+      'marketplace.json',
+    )
+
+    await fs.mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.dirname(marketplaceFile), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+    await fs.mkdir(workDir, { recursive: true })
+    await writeSkill(
+      path.join(pluginRoot, 'skills'),
+      'brainstorming',
+      'Superpowers brainstorming skill',
+    )
+    await fs.writeFile(
+      path.join(pluginRoot, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'superpowers',
+        version: '5.0.7',
+        description: 'Core skills library',
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      marketplaceFile,
+      JSON.stringify({
+        name: 'claude-plugins-official',
+        owner: { name: 'Test' },
+        plugins: [
+          {
+            name: 'superpowers',
+            source: './plugins/superpowers',
+            version: '5.0.7',
+          },
+        ],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(pluginsDir, 'known_marketplaces.json'),
+      JSON.stringify({
+        'claude-plugins-official': {
+          source: { source: 'directory', path: marketplaceRoot },
+          installLocation: marketplaceRoot,
+          lastUpdated: new Date(0).toISOString(),
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        enabledPlugins: {
+          'superpowers@claude-plugins-official': true,
+        },
+      }),
+      'utf-8',
+    )
+
+    resetSettingsCache()
+    clearPluginCache('sessions-api-plugin-skills')
+    clearCommandsCache()
+    await writeSessionFile('-tmp-api-test', sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(workDir),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      commands: Array<{ name: string; description: string }>
+    }
+
+    expect(body.commands).toContainEqual(
+      expect.objectContaining({
+        name: 'superpowers:brainstorming',
+        description: 'Superpowers brainstorming skill',
+      }),
     )
   })
 

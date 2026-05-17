@@ -61,4 +61,41 @@ describe('DingTalk AI Card streaming', () => {
     expect(calls[0]!.body.isFinalize).toBe(true)
     expect(calls[1]!.body.cardData.cardParamMap.flowStatus).toBe('3')
   })
+
+  it('times out a hung card streaming request', async () => {
+    const previousTimeout = process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+    process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS = '20'
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      })
+      return await new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'))
+        })
+      })
+    }) as any
+
+    try {
+      const service = new DingTalkAiCardService(async () => 'token-1', 'robot-1')
+      const card = {
+        cardInstanceId: 'card-hung',
+        accessToken: 'token-1',
+        tokenExpireTime: Date.now() + 60_000,
+        inputingStarted: true,
+      }
+
+      await expect(service.stream(card, 'Hello', false)).rejects.toThrow(
+        'PUT /v1.0/card/streaming timed out after 20ms',
+      )
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS
+      } else {
+        process.env.CC_HAHA_IM_CARD_REQUEST_TIMEOUT_MS = previousTimeout
+      }
+    }
+  })
 })

@@ -9,6 +9,7 @@ import {
 } from '../../services/mcp/client.js'
 import {
   addMcpConfig,
+  getAllMcpConfigs,
   getClaudeCodeMcpConfigs,
   getMcpConfigByName,
   isMcpServerDisabled,
@@ -301,7 +302,7 @@ async function resolveServerForRuntimeAction(
     return configured
   }
 
-  const { servers } = await getClaudeCodeMcpConfigs()
+  const { servers } = await getAllMcpConfigs()
   return servers[name] ?? null
 }
 
@@ -386,7 +387,7 @@ function cleanupSecureStorage(name: string, config: ScopedMcpServerConfig) {
 }
 
 async function listServers(): Promise<Response> {
-  const { servers } = await getClaudeCodeMcpConfigs()
+  const { servers } = await getAllMcpConfigs()
   const visibleServers = Object.entries(servers)
     .filter(([name, config]) => isVisibleServer(name, config))
     .sort((a, b) => a[0].localeCompare(b[0]))

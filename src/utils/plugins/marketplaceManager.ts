@@ -111,6 +111,12 @@ export function getMarketplacesCacheDir(): string {
   return join(getPluginsDirectory(), 'marketplaces')
 }
 
+export function isStrictMarketplaceCachePath(targetPath: string): boolean {
+  const cacheDir = resolve(getMarketplacesCacheDir())
+  const resolvedTarget = resolve(targetPath)
+  return resolvedTarget.startsWith(cacheDir + sep)
+}
+
 /**
  * Memoized inner function to get marketplace data.
  * This caches the marketplace in memory after loading from disk or network.
@@ -1887,19 +1893,16 @@ export async function addMarketplaceSource(
     // any) is harmless, and blocking the re-add would prevent the user from
     // fixing the corruption.
     if (!isLocalMarketplaceSource(oldEntry.source)) {
-      const cacheDir = resolve(getMarketplacesCacheDir())
       const resolvedOld = resolve(oldEntry.installLocation)
       const resolvedNew = resolve(cachePath)
       if (resolvedOld === resolvedNew) {
         // Same dir — loadAndCacheMarketplace already overwrote in place.
         // Nothing to clean.
-      } else if (
-        resolvedOld === cacheDir ||
-        resolvedOld.startsWith(cacheDir + sep)
-      ) {
+      } else if (isStrictMarketplaceCachePath(oldEntry.installLocation)) {
         const fs = getFsImplementation()
         await fs.rm(oldEntry.installLocation, { recursive: true, force: true })
       } else {
+        const cacheDir = resolve(getMarketplacesCacheDir())
         logForDebugging(
           `Skipping cleanup of old installLocation (${oldEntry.installLocation}) — ` +
             `outside ${cacheDir}. The path is corrupted; leaving it alone and ` +
@@ -2413,8 +2416,7 @@ export async function refreshMarketplace(
     // Refuse instead of auto-fixing so the user knows their state is corrupted.
     if (!isLocalMarketplaceSource(source)) {
       const cacheDir = resolve(getMarketplacesCacheDir())
-      const resolvedLoc = resolve(installLocation)
-      if (resolvedLoc !== cacheDir && !resolvedLoc.startsWith(cacheDir + sep)) {
+      if (!isStrictMarketplaceCachePath(installLocation)) {
         throw new Error(
           `Marketplace '${name}' has a corrupted installLocation ` +
             `(${installLocation}) — expected a path inside ${cacheDir}. ` +

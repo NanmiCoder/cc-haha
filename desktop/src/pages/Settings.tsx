@@ -1,5 +1,7 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { useSettingsStore } from '../stores/settingsStore'
+import { useState, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
+import QRCode from 'qrcode'
+import { Copy, Eye, EyeOff, PowerOff, QrCode, RotateCw } from 'lucide-react'
+import { useSettingsStore, UI_ZOOM_DEFAULT, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP } from '../stores/settingsStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useTranslation } from '../i18n'
 import { Modal } from '../components/shared/Modal'
@@ -7,7 +9,7 @@ import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { Input } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
 import { Dropdown } from '../components/shared/Dropdown'
-import type { PermissionMode, EffortLevel, ThemeMode, WebSearchMode } from '../types/settings'
+import type { PermissionMode, EffortLevel, ThemeMode, WebSearchMode, AppMode } from '../types/settings'
 import type { Locale } from '../i18n'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ProviderAuthStrategy } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
@@ -26,6 +28,8 @@ import { ComputerUseSettings } from './ComputerUseSettings'
 import { McpSettings } from './McpSettings'
 import { TerminalSettings } from './TerminalSettings'
 import { DiagnosticsSettings } from './DiagnosticsSettings'
+import { ActivitySettings } from './ActivitySettings'
+import { MemorySettings } from './MemorySettings'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
 import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
 import { useUpdateStore } from '../stores/updateStore'
@@ -44,6 +48,24 @@ import {
   restoreSettingsJsonSecrets,
   stripProviderSettingsJsonEnv,
 } from '../lib/providerSettingsJson'
+import { copyTextToClipboard } from '../components/chat/clipboard'
+
+function buildH5LaunchUrl(baseUrl: string | null, token: string | null): string | null {
+  if (!baseUrl) return null
+
+  try {
+    const url = new URL(baseUrl)
+    if (token) {
+      url.searchParams.set('serverUrl', baseUrl)
+      url.searchParams.set('h5Token', token)
+    }
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return token
+      ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}serverUrl=${encodeURIComponent(baseUrl)}&h5Token=${encodeURIComponent(token)}`
+      : baseUrl
+  }
+}
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('providers')
@@ -65,13 +87,16 @@ export function Settings() {
             <TabButton icon="dns" label={t('settings.tab.providers')} active={activeTab === 'providers'} onClick={() => setActiveTab('providers')} />
             <TabButton icon="shield" label={t('settings.tab.permissions')} active={activeTab === 'permissions'} onClick={() => setActiveTab('permissions')} />
             <TabButton icon="tune" label={t('settings.tab.general')} active={activeTab === 'general'} onClick={() => setActiveTab('general')} />
+            <TabButton icon="qr_code_2" label={t('settings.tab.h5Access')} active={activeTab === 'h5Access'} onClick={() => setActiveTab('h5Access')} />
             <TabButton icon="chat" label={t('settings.tab.adapters')} active={activeTab === 'adapters'} onClick={() => setActiveTab('adapters')} />
             <TabButton icon="terminal" label={t('settings.tab.terminal')} active={activeTab === 'terminal'} onClick={() => setActiveTab('terminal')} />
             <TabButton icon="dns" label={t('settings.tab.mcp')} active={activeTab === 'mcp'} onClick={() => setActiveTab('mcp')} />
             <TabButton icon="smart_toy" label={t('settings.tab.agents')} active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} />
             <TabButton icon="auto_awesome" label={t('settings.tab.skills')} active={activeTab === 'skills'} onClick={() => setActiveTab('skills')} />
+            <TabButton icon="history_edu" label={t('settings.tab.memory')} active={activeTab === 'memory'} onClick={() => setActiveTab('memory')} />
             <TabButton icon="extension" label={t('settings.tab.plugins')} active={activeTab === 'plugins'} onClick={() => setActiveTab('plugins')} />
             <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
+            <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
             <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
           </div>
           <div className="border-t border-[var(--color-border)]/40 pt-1">
@@ -83,12 +108,15 @@ export function Settings() {
         <div className="flex-1 overflow-y-auto px-8 py-6">
           {activeTab === 'providers' && <ProviderSettings />}
           {activeTab === 'permissions' && <PermissionSettings />}
+          {activeTab === 'activity' && <ActivitySettings />}
           {activeTab === 'general' && <GeneralSettings />}
+          {activeTab === 'h5Access' && <H5AccessSettings />}
           {activeTab === 'adapters' && <AdapterSettings />}
           {activeTab === 'terminal' && <TerminalSettings />}
           {activeTab === 'mcp' && <McpSettings />}
           {activeTab === 'agents' && <AgentsSettings />}
           {activeTab === 'skills' && <SkillSettings />}
+          {activeTab === 'memory' && <MemorySettings />}
           {activeTab === 'plugins' && <PluginSettings />}
           {activeTab === 'computerUse' && <ComputerUseSettings />}
           {activeTab === 'diagnostics' && <DiagnosticsSettings />}
@@ -1355,16 +1383,37 @@ function GeneralSettings() {
     setDesktopNotificationsEnabled,
     webSearch,
     setWebSearch,
+    responseLanguage,
+    setResponseLanguage,
+    appMode,
+    appModeRequiresRestart,
+    fetchAppMode,
+    setAppMode: setAppModeAction,
+    uiZoom,
+    setUiZoom,
   } = useSettingsStore()
   const t = useTranslation()
   const [webSearchDraft, setWebSearchDraft] = useState(webSearch)
   const [notificationPermission, setNotificationPermission] = useState<DesktopNotificationPermission>('default')
   const [notificationActionRunning, setNotificationActionRunning] = useState(false)
+  const [modeSwitchConfirmOpen, setModeSwitchConfirmOpen] = useState(false)
+  const [pendingMode, setPendingMode] = useState<AppMode | null>(null)
+  const [uiZoomDraft, setUiZoomDraft] = useState(uiZoom)
+  const [isUiZoomDragging, setIsUiZoomDragging] = useState(false)
+  const isUiZoomDraggingRef = useRef(false)
   const webSearchDirty = JSON.stringify(webSearchDraft) !== JSON.stringify(webSearch)
+  const uiZoomPercent = Math.round(uiZoomDraft * 100)
+  const uiZoomRangeProgress = `${Math.round(((uiZoomDraft - UI_ZOOM_MIN) / (UI_ZOOM_MAX - UI_ZOOM_MIN)) * 1000) / 10}%`
 
   useEffect(() => {
     setWebSearchDraft(webSearch)
   }, [webSearch])
+
+  useEffect(() => {
+    if (!isUiZoomDragging) {
+      setUiZoomDraft(uiZoom)
+    }
+  }, [isUiZoomDragging, uiZoom])
 
   useEffect(() => {
     let cancelled = false
@@ -1375,6 +1424,11 @@ function GeneralSettings() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    void fetchAppMode()
+  }, [fetchAppMode])
 
   const EFFORT_LABELS: Record<EffortLevel, string> = {
     low: t('settings.general.effort.low'),
@@ -1388,7 +1442,35 @@ function GeneralSettings() {
     { value: 'zh', label: '中文' },
   ]
 
+  const RESPONSE_LANGUAGES: Array<{ value: string; label: string }> = [
+    { value: '', label: t('settings.general.responseLangDefault') },
+    { value: 'english', label: 'English' },
+    { value: 'chinese', label: '中文 (Chinese)' },
+    { value: 'japanese', label: '日本語 (Japanese)' },
+    { value: 'korean', label: '한국어 (Korean)' },
+    { value: 'spanish', label: 'Español (Spanish)' },
+    { value: 'french', label: 'Français (French)' },
+    { value: 'german', label: 'Deutsch (German)' },
+    { value: 'portuguese', label: 'Português (Portuguese)' },
+    { value: 'italian', label: 'Italiano (Italian)' },
+    { value: 'russian', label: 'Русский (Russian)' },
+    { value: 'dutch', label: 'Nederlands (Dutch)' },
+    { value: 'polish', label: 'Polski (Polish)' },
+    { value: 'turkish', label: 'Türkçe (Turkish)' },
+    { value: 'hindi', label: 'हिन्दी (Hindi)' },
+    { value: 'indonesian', label: 'Bahasa Indonesia' },
+    { value: 'ukrainian', label: 'Українська (Ukrainian)' },
+    { value: 'greek', label: 'Ελληνικά (Greek)' },
+    { value: 'czech', label: 'Čeština (Czech)' },
+    { value: 'danish', label: 'Dansk (Danish)' },
+    { value: 'swedish', label: 'Svenska (Swedish)' },
+    { value: 'norwegian', label: 'Norsk (Norwegian)' },
+  ]
+  const selectedResponseLanguageLabel =
+    RESPONSE_LANGUAGES.find(({ value }) => value === responseLanguage)?.label ?? RESPONSE_LANGUAGES[0]!.label
+
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
+    { value: 'white', label: t('settings.general.appearance.white') },
     { value: 'light', label: t('settings.general.appearance.light') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
   ]
@@ -1453,8 +1535,194 @@ function GeneralSettings() {
     }
   }
 
+  const setUiZoomDraggingState = (dragging: boolean) => {
+    isUiZoomDraggingRef.current = dragging
+    setIsUiZoomDragging(dragging)
+  }
+
+  const commitUiZoom = (value: number) => {
+    const nextZoom = Number.isFinite(value) ? value : UI_ZOOM_DEFAULT
+    setUiZoomDraggingState(false)
+    setUiZoomDraft(nextZoom)
+    setUiZoom(nextZoom)
+  }
+
+  const uiZoomSection = (
+    <div className="mt-8">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.uiZoom')}</h2>
+          <p className="text-sm text-[var(--color-text-tertiary)]">{t('settings.general.uiZoomDescription')}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
+            <span>{t('settings.general.uiZoomShortcutHint')}</span>
+            <span className="inline-flex items-center gap-1">
+              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
+              <kbd className="settings-zoom-kbd">⌘</kbd>
+              <kbd className="settings-zoom-kbd">+</kbd>
+              <span>/</span>
+              <kbd className="settings-zoom-kbd">⌘</kbd>
+              <kbd className="settings-zoom-kbd">-</kbd>
+              <span>/</span>
+              <kbd className="settings-zoom-kbd">⌘</kbd>
+              <kbd className="settings-zoom-kbd">0</kbd>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
+              <kbd className="settings-zoom-kbd">Ctrl</kbd>
+              <kbd className="settings-zoom-kbd">+</kbd>
+              <span>/</span>
+              <kbd className="settings-zoom-kbd">Ctrl</kbd>
+              <kbd className="settings-zoom-kbd">-</kbd>
+              <span>/</span>
+              <kbd className="settings-zoom-kbd">Ctrl</kbd>
+              <kbd className="settings-zoom-kbd">0</kbd>
+            </span>
+            <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <span className="min-w-[48px] rounded-md bg-[var(--color-surface-container-low)] px-2 py-1 text-center text-sm font-medium text-[var(--color-text-secondary)]">
+            {uiZoomPercent}%
+          </span>
+          <button
+            type="button"
+            aria-label={t('settings.general.uiZoomReset')}
+            title={t('settings.general.uiZoomReset')}
+            onClick={() => {
+              setIsUiZoomDragging(false)
+              setUiZoomDraft(UI_ZOOM_DEFAULT)
+              setUiZoom(UI_ZOOM_DEFAULT)
+            }}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          >
+            <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+            100%
+          </button>
+        </div>
+      </div>
+      <div
+        className={`settings-zoom-control flex items-center gap-3 ${isUiZoomDragging ? 'is-dragging' : ''}`}
+        style={{ '--settings-zoom-range-progress': uiZoomRangeProgress } as CSSProperties}
+      >
+        <span className="w-9 text-right text-xs text-[var(--color-text-tertiary)]">{Math.round(UI_ZOOM_MIN * 100)}%</span>
+        <div className="settings-zoom-range-wrap flex-1">
+          <div className="settings-zoom-preview" aria-hidden="true">
+            {uiZoomPercent}%
+          </div>
+          <input
+            type="range"
+            aria-label={t('settings.general.uiZoom')}
+            min={UI_ZOOM_MIN}
+            max={UI_ZOOM_MAX}
+            step={UI_ZOOM_STEP}
+            value={uiZoomDraft}
+            onPointerDown={() => {
+              setUiZoomDraggingState(true)
+            }}
+            onPointerUp={(e) => commitUiZoom(e.currentTarget.valueAsNumber)}
+            onPointerCancel={() => {
+              setUiZoomDraggingState(false)
+              setUiZoomDraft(uiZoom)
+            }}
+            onChange={(e) => {
+              const nextZoom = Number.isFinite(e.currentTarget.valueAsNumber)
+                ? e.currentTarget.valueAsNumber
+                : UI_ZOOM_DEFAULT
+              setUiZoomDraft(nextZoom)
+              if (!isUiZoomDraggingRef.current) {
+                setUiZoom(nextZoom)
+              }
+            }}
+            onBlur={(e) => {
+              if (uiZoomDraft !== uiZoom) {
+                commitUiZoom(e.currentTarget.valueAsNumber)
+              } else {
+                setUiZoomDraggingState(false)
+              }
+            }}
+            className="settings-zoom-range w-full"
+          />
+        </div>
+        <span className="w-9 text-xs text-[var(--color-text-tertiary)]">{Math.round(UI_ZOOM_MAX * 100)}%</span>
+      </div>
+    </div>
+  )
+
   return (
     <div className="max-w-xl">
+      {/* Mode Section */}
+      {isTauriRuntime() && (
+        <div className="mb-8">
+          <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.modeTitle')}</h2>
+          <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.modeDescription')}</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                if (appMode.mode === 'default') return
+                setPendingMode('default')
+                setModeSwitchConfirmOpen(true)
+              }}
+              aria-pressed={appMode.mode === 'default'}
+              className={`flex-1 py-3 text-sm font-semibold rounded-lg border transition-all ${
+                appMode.mode === 'default'
+                  ? 'bg-[image:var(--gradient-btn-primary)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-button-primary)]'
+                  : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+              }`}
+            >
+              <div className="flex flex-col items-center gap-1">
+                <span className="material-symbols-outlined text-[22px]">settings_applications</span>
+                <span>{t('settings.general.modeDefault')}</span>
+              </div>
+            </button>
+            <button
+              onClick={() => {
+                if (appMode.mode === 'portable') return
+                setPendingMode('portable')
+                setModeSwitchConfirmOpen(true)
+              }}
+              aria-pressed={appMode.mode === 'portable'}
+              className={`flex-1 py-3 text-sm font-semibold rounded-lg border transition-all ${
+                appMode.mode === 'portable'
+                  ? 'bg-[image:var(--gradient-btn-primary)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-button-primary)]'
+                  : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+              }`}
+            >
+              <div className="flex flex-col items-center gap-1">
+                <span className="material-symbols-outlined text-[22px]">drive_file_move</span>
+                <span>{t('settings.general.modePortable')}</span>
+              </div>
+            </button>
+          </div>
+          {appMode.mode === 'portable' && appMode.portableDir && (
+            <div className="mt-2 text-xs text-[var(--color-text-tertiary)] font-mono break-all">
+              {t('settings.general.modePortableDir')}: {appMode.portableDir}
+            </div>
+          )}
+          {appMode.mode === 'default' && (
+            <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+              {t('settings.general.modeDefaultHint')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Restart Required Banner */}
+      {appModeRequiresRestart && (
+        <div className="mb-6 rounded-xl border border-[var(--color-warning)] bg-[var(--color-warning)]/10 px-4 py-3 flex items-center gap-3">
+          <span className="material-symbols-outlined text-[20px] text-[var(--color-warning)]" style={{ fontVariationSettings: "'FILL' 1" }}>
+            warning
+          </span>
+          <div>
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.general.modeRestartTitle')}
+            </div>
+            <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+              {t('settings.general.modeRestartHint')}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Appearance selector */}
       <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.appearanceTitle')}</h2>
       <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.appearanceDescription')}</p>
@@ -1463,6 +1731,7 @@ function GeneralSettings() {
           <button
             key={value}
             onClick={() => void setTheme(value)}
+            aria-pressed={theme === value}
             className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-all ${
               theme === value
                 ? 'bg-[image:var(--gradient-btn-primary)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-button-primary)]'
@@ -1493,6 +1762,28 @@ function GeneralSettings() {
         ))}
       </div>
 
+      {/* Response Language */}
+      <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.responseLangTitle')}</h2>
+      <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.responseLangDescription')}</p>
+      <Dropdown<string>
+        items={RESPONSE_LANGUAGES}
+        value={responseLanguage}
+        onChange={(value) => void setResponseLanguage(value)}
+        width="100%"
+        maxHeight={320}
+        className="mb-8 block w-full"
+        trigger={
+          <button
+            type="button"
+            aria-label={t('settings.general.responseLangTitle')}
+            className="flex h-10 w-full items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-left text-sm text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)] focus-visible:border-[var(--color-border-focus)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+          >
+            <span className="min-w-0 flex-1 truncate">{selectedResponseLanguageLabel}</span>
+            <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+          </button>
+        }
+      />
+
       {/* Effort Level */}
       <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.effortTitle')}</h2>
       <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.effortDescription')}</p>
@@ -1521,8 +1812,9 @@ function GeneralSettings() {
             aria-label={t('settings.general.thinkingEnabled')}
             checked={thinkingEnabled}
             onChange={(e) => void setThinkingEnabled(e.target.checked)}
-            className="mt-0.5 h-4 w-4 rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+            className="peer sr-only"
           />
+          <SettingsCheckboxMark checked={thinkingEnabled} />
           <div className="min-w-0">
             <div className="text-sm font-medium text-[var(--color-text-primary)]">
               {t('settings.general.thinkingEnabled')}
@@ -1544,8 +1836,9 @@ function GeneralSettings() {
               aria-label={t('settings.general.notificationsEnabled')}
               checked={desktopNotificationsEnabled}
               onChange={(e) => void handleDesktopNotificationsToggle(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+              className="peer sr-only"
             />
+            <SettingsCheckboxMark checked={desktopNotificationsEnabled} />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">
                 {t('settings.general.notificationsEnabled')}
@@ -1580,6 +1873,8 @@ function GeneralSettings() {
         </div>
       </div>
 
+      {uiZoomSection}
+
       <div className="mt-8">
         <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.webFetchPreflightTitle')}</h2>
         <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webFetchPreflightDescription')}</p>
@@ -1589,8 +1884,9 @@ function GeneralSettings() {
             aria-label={t('settings.general.webFetchPreflightEnabled')}
             checked={skipWebFetchPreflight}
             onChange={(e) => void setSkipWebFetchPreflight(e.target.checked)}
-            className="mt-0.5 h-4 w-4 rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+            className="peer sr-only"
           />
+          <SettingsCheckboxMark checked={skipWebFetchPreflight} />
           <div className="min-w-0">
             <div className="text-sm font-medium text-[var(--color-text-primary)]">
               {t('settings.general.webFetchPreflightEnabled')}
@@ -1694,7 +1990,383 @@ function GeneralSettings() {
           </div>
         </div>
       </div>
+      {/* Confirm dialog for mode switch */}
+      <ConfirmDialog
+        open={modeSwitchConfirmOpen}
+        onClose={() => { setModeSwitchConfirmOpen(false); setPendingMode(null); }}
+        onConfirm={() => {
+          if (pendingMode) { void setAppModeAction(pendingMode); }
+          setModeSwitchConfirmOpen(false);
+          setPendingMode(null);
+        }}
+        title={t('settings.general.modeSwitchTitle')}
+        body={t('settings.general.modeSwitchBody', {
+          mode: pendingMode === 'portable' ? t('settings.general.modePortable') : t('settings.general.modeDefault'),
+        })}
+        confirmLabel={t('settings.general.modeSwitchConfirm')}
+        cancelLabel={t('common.cancel')}
+      />
     </div>
+  )
+}
+
+// ─── H5 Access Settings ──────────────────────────────────────
+
+function H5AccessSettings() {
+  const {
+    h5Access,
+    h5AccessError,
+    enableH5Access,
+    disableH5Access,
+    regenerateH5AccessToken,
+    updateH5AccessSettings,
+  } = useSettingsStore()
+  const t = useTranslation()
+  const addToast = useUIStore((s) => s.addToast)
+  const [h5PublicBaseUrlDraft, setH5PublicBaseUrlDraft] = useState(h5Access.publicBaseUrl ?? '')
+  const [h5GeneratedToken, setH5GeneratedToken] = useState<string | null>(null)
+  const [h5TokenVisible, setH5TokenVisible] = useState(false)
+  const [h5EnableConfirmOpen, setH5EnableConfirmOpen] = useState(false)
+  const [h5QrDataUrl, setH5QrDataUrl] = useState<string | null>(null)
+  const [h5ActionRunning, setH5ActionRunning] = useState(false)
+  const h5AccessUrl = h5Access.publicBaseUrl
+  const h5LaunchUrl = useMemo(
+    () => buildH5LaunchUrl(h5AccessUrl, h5GeneratedToken),
+    [h5AccessUrl, h5GeneratedToken],
+  )
+  const h5AccessDirty = h5PublicBaseUrlDraft.trim() !== (h5Access.publicBaseUrl ?? '')
+
+  useEffect(() => {
+    setH5PublicBaseUrlDraft(h5Access.publicBaseUrl ?? '')
+  }, [h5Access])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!h5Access.enabled || !h5LaunchUrl || !h5GeneratedToken) {
+      setH5QrDataUrl(null)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    QRCode.toDataURL(h5LaunchUrl, { margin: 1, width: 192 })
+      .then((dataUrl) => {
+        if (!cancelled) setH5QrDataUrl(dataUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setH5QrDataUrl(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [h5Access.enabled, h5LaunchUrl, h5GeneratedToken])
+
+  const runH5Action = async (action: () => Promise<void>) => {
+    setH5ActionRunning(true)
+    try {
+      await action()
+    } catch {
+      // The store owns H5-specific error state.
+    } finally {
+      setH5ActionRunning(false)
+    }
+  }
+
+  const handleH5SettingsSave = async () => {
+    await runH5Action(async () => {
+      await updateH5AccessSettings({
+        publicBaseUrl: h5PublicBaseUrlDraft.trim() || null,
+      })
+    })
+  }
+
+  const handleH5UrlCopy = async () => {
+    if (!h5AccessUrl) return
+    const copied = await copyTextToClipboard(h5AccessUrl)
+    addToast({
+      type: copied ? 'success' : 'error',
+      message: copied ? t('settings.general.h5AccessUrlCopied') : t('common.copyFailed'),
+    })
+  }
+
+  const handleH5LaunchUrlCopy = async () => {
+    if (!h5LaunchUrl) return
+    const copied = await copyTextToClipboard(h5LaunchUrl)
+    addToast({
+      type: copied ? 'success' : 'error',
+      message: copied ? t('settings.general.h5AccessLaunchUrlCopied') : t('common.copyFailed'),
+    })
+  }
+
+  const handleH5EnableConfirm = async () => {
+    await runH5Action(async () => {
+      const token = await enableH5Access()
+      setH5GeneratedToken(token)
+      setH5TokenVisible(false)
+      setH5EnableConfirmOpen(false)
+    })
+  }
+
+  const handleH5Disable = async () => {
+    await runH5Action(async () => {
+      await disableH5Access()
+      setH5GeneratedToken(null)
+      setH5TokenVisible(false)
+    })
+  }
+
+  const handleH5Regenerate = async () => {
+    await runH5Action(async () => {
+      const token = await regenerateH5AccessToken()
+      setH5GeneratedToken(token)
+      setH5TokenVisible(false)
+    })
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <section aria-labelledby="h5-access-title" role="region">
+        <div className="mb-5 flex items-start gap-3">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-brand)]">
+            <QrCode className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h2
+              id="h5-access-title"
+              className="text-base font-semibold text-[var(--color-text-primary)] mb-1"
+            >
+              {t('settings.general.h5AccessTitle')}
+            </h2>
+            <p className="text-sm text-[var(--color-text-tertiary)]">
+              {t('settings.general.h5AccessDescription')}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <label className="flex min-w-0 items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-primary)]"
+                checked={h5Access.enabled}
+                disabled={h5ActionRunning}
+                aria-label={t('settings.general.h5AccessEnabled')}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    setH5EnableConfirmOpen(true)
+                  } else {
+                    void handleH5Disable()
+                  }
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-[var(--color-text-primary)]">
+                  {t('settings.general.h5AccessEnabled')}
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-[var(--color-text-tertiary)]">
+                  {t('settings.general.h5AccessEnabledHint')}
+                </span>
+              </span>
+            </label>
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                h5Access.enabled
+                  ? 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
+                  : 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)] border border-[var(--color-border)]'
+              }`}
+            >
+              {h5Access.enabled ? t('settings.general.h5AccessStatusEnabled') : t('settings.general.h5AccessDisabledValue')}
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-3">
+            <Input
+              id="h5-access-public-url"
+              label={t('settings.general.h5AccessPublicUrl')}
+              value={h5PublicBaseUrlDraft}
+              placeholder={t('settings.general.h5AccessPublicUrlPlaceholder')}
+              onChange={(event) => setH5PublicBaseUrlDraft(event.target.value)}
+            />
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-[var(--color-text-tertiary)]">
+                {t('settings.general.h5AccessOpenHint')}
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleH5SettingsSave()}
+                disabled={!h5AccessDirty || h5ActionRunning}
+                aria-label={t('settings.general.h5AccessSave')}
+              >
+                {t('settings.general.h5AccessSave')}
+              </Button>
+            </div>
+          </div>
+
+          {h5AccessUrl && (
+            <div className="mt-4 border-t border-[var(--color-border)]/60 pt-4">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    {t('settings.general.h5AccessUrl')}
+                  </div>
+                  <div className="mt-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] break-all">
+                    {h5AccessUrl}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="shrink-0"
+                  icon={<Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                  aria-label={t('settings.general.h5AccessCopyUrl')}
+                  onClick={() => void handleH5UrlCopy()}
+                >
+                  {t('settings.general.h5AccessCopy')}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {h5Access.enabled && h5AccessUrl && (
+            <div className="mt-4 border-t border-[var(--color-border)]/60 pt-4">
+              <div className="flex flex-col gap-4 sm:flex-row">
+                <div className="flex h-48 w-48 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] bg-white p-3">
+                  {h5QrDataUrl ? (
+                    <img
+                      src={h5QrDataUrl}
+                      alt={t('settings.general.h5AccessQrAlt')}
+                      className="h-full w-full"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-3 px-4 text-center">
+                      <QrCode className="h-12 w-12 text-neutral-400" aria-hidden="true" />
+                      <p className="text-xs leading-5 text-neutral-500">
+                        {t('settings.general.h5AccessQrEmptyHint')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium uppercase text-[var(--color-text-tertiary)]">
+                    {t('settings.general.h5AccessQrTitle')}
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                    {h5GeneratedToken
+                      ? t('settings.general.h5AccessQrHint')
+                      : t('settings.general.h5AccessQrRefreshHint')}
+                  </p>
+                  {h5LaunchUrl && (
+                    <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] break-all">
+                      {h5LaunchUrl}
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={<Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                      disabled={!h5LaunchUrl || !h5GeneratedToken}
+                      onClick={() => void handleH5LaunchUrlCopy()}
+                    >
+                      {t('settings.general.h5AccessCopyLaunchUrl')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={h5GeneratedToken ? 'secondary' : 'primary'}
+                      icon={<RotateCw className="h-3.5 w-3.5" aria-hidden="true" />}
+                      loading={h5ActionRunning}
+                      onClick={() => void handleH5Regenerate()}
+                    >
+                      {h5GeneratedToken ? t('settings.general.h5AccessRegenerate') : t('settings.general.h5AccessGenerateToken')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {h5Access.enabled && (
+            <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium uppercase text-[var(--color-text-tertiary)]">
+                    {t('settings.general.h5AccessTokenPreview')}
+                  </div>
+                  <div className="mt-1 break-all text-sm text-[var(--color-text-primary)]">
+                    {h5TokenVisible && h5GeneratedToken
+                      ? h5GeneratedToken
+                      : h5Access.tokenPreview || t('settings.general.h5AccessTokenNotAvailable')}
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={h5TokenVisible ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
+                    disabled={!h5GeneratedToken}
+                    onClick={() => setH5TokenVisible((visible) => !visible)}
+                  >
+                    {h5TokenVisible ? t('settings.general.h5AccessHideToken') : t('settings.general.h5AccessShowToken')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    icon={<PowerOff className="h-3.5 w-3.5" aria-hidden="true" />}
+                    loading={h5ActionRunning}
+                    onClick={() => void handleH5Disable()}
+                  >
+                    {t('settings.general.h5AccessDisable')}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <p className="mt-4 text-xs text-[var(--color-text-tertiary)] leading-5">
+            {t('settings.general.h5AccessSafetyNote')}
+          </p>
+          {h5AccessError && (
+            <p className="mt-2 text-xs text-[var(--color-error)]">
+              {h5AccessError}
+            </p>
+          )}
+        </div>
+      </section>
+
+      <ConfirmDialog
+        open={h5EnableConfirmOpen}
+        onClose={() => {
+          if (!h5ActionRunning) setH5EnableConfirmOpen(false)
+        }}
+        onConfirm={handleH5EnableConfirm}
+        title={t('settings.general.h5AccessConfirmTitle')}
+        body={t('settings.general.h5AccessConfirmBody')}
+        confirmLabel={t('settings.general.h5AccessConfirmEnable')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={h5ActionRunning}
+      />
+    </div>
+  )
+}
+
+function SettingsCheckboxMark({ checked, disabled = false }: { checked: boolean; disabled?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-brand)]/40 ${
+        checked
+          ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white shadow-[var(--shadow-button-primary)]'
+          : 'border-[var(--color-border-focus)] bg-[var(--color-surface)] text-transparent'
+      } ${disabled ? 'opacity-50' : ''}`}
+    >
+      <span className="material-symbols-outlined text-[16px] leading-none" style={{ fontVariationSettings: "'FILL' 1" }}>
+        check
+      </span>
+    </span>
   )
 }
 

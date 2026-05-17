@@ -8,6 +8,15 @@ type MessagesResponse = {
   taskNotifications?: AgentTaskNotification[]
 }
 type CreateSessionResponse = { sessionId: string; workDir?: string }
+export type BatchDeleteSessionsResponse = {
+  ok: boolean
+  successes: string[]
+  failures: Array<{
+    sessionId: string
+    message: string
+    code?: string
+  }>
+}
 export type SessionGitWorktreeInfo = {
   enabled: boolean
   path: string | null
@@ -307,6 +316,10 @@ export const sessionsApi = {
 
   delete(sessionId: string) {
     return api.delete<{ ok: true }>(`/api/sessions/${sessionId}`)
+  },
+
+  batchDelete(sessionIds: string[]) {
+    return api.post<BatchDeleteSessionsResponse>('/api/sessions/batch-delete', { sessionIds })
   },
 
   rename(sessionId: string, title: string) {

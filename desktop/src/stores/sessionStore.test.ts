@@ -41,8 +41,6 @@ describe('sessionStore', () => {
       activeSessionId: null,
       isLoading: false,
       error: null,
-      selectedProjects: [],
-      availableProjects: [],
     })
     useTabStore.setState({ tabs: [], activeTabId: null })
   })

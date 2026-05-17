@@ -7,6 +7,7 @@ import { Button } from '../shared/Button'
 import { DiffViewer } from './DiffViewer'
 
 type Props = {
+  sessionId?: string | null
   requestId: string
   toolName: string
   input: unknown
@@ -111,10 +112,11 @@ function renderPermissionPreview(toolName: string, input: unknown) {
   return null
 }
 
-export function PermissionDialog({ requestId, toolName, input, description }: Props) {
+export function PermissionDialog({ sessionId, requestId, toolName, input, description }: Props) {
   const { respondToPermission } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const pendingPermission = useChatStore((s) => activeTabId ? s.sessions[activeTabId]?.pendingPermission : undefined)
+  const targetSessionId = sessionId ?? activeTabId
+  const pendingPermission = useChatStore((s) => targetSessionId ? s.sessions[targetSessionId]?.pendingPermission : undefined)
   const t = useTranslation()
   const isPending = pendingPermission?.requestId === requestId
   const [showRaw, setShowRaw] = useState(false)
@@ -227,7 +229,7 @@ export function PermissionDialog({ requestId, toolName, input, description }: Pr
           <Button
             variant="primary"
             size="sm"
-            onClick={() => activeTabId && respondToPermission(activeTabId, requestId, true)}
+            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true)}
             icon={
               <span className="material-symbols-outlined text-[14px]">check</span>
             }
@@ -237,7 +239,7 @@ export function PermissionDialog({ requestId, toolName, input, description }: Pr
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => activeTabId && respondToPermission(activeTabId, requestId, true, { rule: 'always' })}
+            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
             icon={
               <span className="material-symbols-outlined text-[14px]">verified</span>
             }
@@ -248,7 +250,7 @@ export function PermissionDialog({ requestId, toolName, input, description }: Pr
           <Button
             variant="danger"
             size="sm"
-            onClick={() => activeTabId && respondToPermission(activeTabId, requestId, false)}
+            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, false)}
             icon={
               <span className="material-symbols-outlined text-[14px]">close</span>
             }

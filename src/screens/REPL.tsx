@@ -2415,7 +2415,9 @@ export function REPL({
         debug,
         verbose: s.verbose,
         mainLoopModel,
-        thinkingConfig: s.thinkingEnabled !== false ? thinkingConfig : {
+        thinkingConfig: s.thinkingEnabled !== false ? (
+          thinkingConfig.type === 'disabled' ? { type: 'adaptive' } : thinkingConfig
+        ) : {
           type: 'disabled'
         },
         // Merge fresh from store rather than closing over useMergedClients'

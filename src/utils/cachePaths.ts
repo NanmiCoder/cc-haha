@@ -3,7 +3,13 @@ import { join } from 'path'
 import { getFsImplementation } from './fsOperations.js'
 import { djb2Hash } from './hash.js'
 
-const paths = envPaths('claude-cli')
+// When CLAUDE_CONFIG_DIR is set (portable mode), place cache under it
+// so the install is fully self-contained. Otherwise fall back to the
+// system default (%LOCALAPPDATA%\claude-cli-nodejs\Cache on Windows).
+function getCacheRoot() {
+  const claudeConfigDir = (process.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR
+  return claudeConfigDir ? join(claudeConfigDir, 'Cache') : envPaths('claude-cli').cache
+}
 
 // Local sanitizePath using djb2Hash — NOT the shared version from
 // sessionStoragePortable.ts which uses Bun.hash (wyhash) when available.
@@ -23,14 +29,14 @@ function getProjectDir(cwd: string): string {
 }
 
 export const CACHE_PATHS = {
-  baseLogs: () => join(paths.cache, getProjectDir(getFsImplementation().cwd())),
+  baseLogs: () => join(getCacheRoot(), getProjectDir(getFsImplementation().cwd())),
   errors: () =>
-    join(paths.cache, getProjectDir(getFsImplementation().cwd()), 'errors'),
+    join(getCacheRoot(), getProjectDir(getFsImplementation().cwd()), 'errors'),
   messages: () =>
-    join(paths.cache, getProjectDir(getFsImplementation().cwd()), 'messages'),
+    join(getCacheRoot(), getProjectDir(getFsImplementation().cwd()), 'messages'),
   mcpLogs: (serverName: string) =>
     join(
-      paths.cache,
+      getCacheRoot(),
       getProjectDir(getFsImplementation().cwd()),
       // Sanitize server name for Windows compatibility (colons are reserved for drive letters)
       `mcp-logs-${sanitizePath(serverName)}`,

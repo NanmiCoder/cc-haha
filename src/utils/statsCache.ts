@@ -11,8 +11,8 @@ import { logError } from './log.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { DailyActivity, DailyModelTokens, SessionStats } from './stats.js'
 
-export const STATS_CACHE_VERSION = 3
-const MIN_MIGRATABLE_VERSION = 1
+export const STATS_CACHE_VERSION = 5
+const MIN_MIGRATABLE_VERSION = 5
 const STATS_CACHE_FILENAME = 'stats-cache.json'
 
 /**
@@ -99,10 +99,10 @@ function getEmptyCache(): PersistedStatsCache {
  * Migrate an older cache to the current schema.
  * Returns null if the version is unknown or too old to migrate.
  *
- * Preserves historical aggregates that would otherwise be lost when
- * transcript files have already aged out past cleanupPeriodDays.
- * Pre-migration days may undercount (e.g. v2 lacked subagent tokens);
- * we accept that rather than drop the history.
+ * Daily activity accounting changed in v5 to count per-day active parent
+ * sessions from message timestamps instead of session-start dates. Older
+ * caches are intentionally rejected so the next aggregation recomputes daily
+ * session counts and token buckets with the same date semantics.
  */
 function migrateStatsCache(
   parsed: Partial<PersistedStatsCache> & { version: number },

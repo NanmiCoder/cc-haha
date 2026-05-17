@@ -82,8 +82,6 @@ describe('Settings > Skills tab', () => {
       activeSessionId: 'session-1',
       isLoading: false,
       error: null,
-      selectedProjects: [],
-      availableProjects: ['/workspace/project'],
     })
     useTabStore.setState({ tabs: [], activeTabId: null })
     useUIStore.setState({ pendingSettingsTab: null })

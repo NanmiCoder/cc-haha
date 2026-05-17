@@ -1,68 +1,8 @@
 <svg width="2200" height="640" viewBox="0 0 2200 640" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="iconAura" x1="48" y1="70" x2="500" y2="426" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF5B2E"/>
-      <stop offset="0.52" stop-color="#FF8A2B"/>
-      <stop offset="1" stop-color="#FFD15C"/>
-    </linearGradient>
-    <linearGradient id="accentRibbon" x1="86" y1="122" x2="424" y2="384" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF5B2E"/>
-      <stop offset="0.46" stop-color="#FF7C38"/>
-      <stop offset="1" stop-color="#FFB340"/>
-    </linearGradient>
-    <linearGradient id="promptStroke" x1="263" y1="152" x2="345" y2="152" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF7EF"/>
-      <stop offset="1" stop-color="#FFE8B8"/>
-    </linearGradient>
-    <linearGradient id="hahaText" x1="1508" y1="174" x2="2040" y2="308" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF5B2E"/>
-      <stop offset="0.55" stop-color="#FF7A37"/>
-      <stop offset="1" stop-color="#FFB340"/>
-    </linearGradient>
-    <linearGradient id="taglineLine" x1="598" y1="434" x2="1572" y2="434" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFB340"/>
-      <stop offset="0.52" stop-color="#FF7A37"/>
-      <stop offset="1" stop-color="#FF5B2E"/>
-    </linearGradient>
-    <filter id="softBlur" x="-120" y="-120" width="760" height="760" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feGaussianBlur stdDeviation="46"/>
-    </filter>
-    <filter id="tileShadow" x="42" y="44" width="464" height="464" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#B64516" flood-opacity="0.18"/>
-    </filter>
-  </defs>
-
-  <g filter="url(#softBlur)" opacity="0.34">
-    <ellipse cx="264" cy="250" rx="188" ry="150" fill="url(#iconAura)"/>
-  </g>
-
-  <path d="M80 166C152 114 248 96 354 116" stroke="url(#accentRibbon)" stroke-width="26" stroke-linecap="round" opacity="0.9"/>
-  <path d="M98 404C194 456 318 458 414 410" stroke="url(#accentRibbon)" stroke-width="22" stroke-linecap="round" opacity="0.82"/>
-  <circle cx="110" cy="286" r="10" fill="#FFD15C"/>
-  <circle cx="418" cy="166" r="11" fill="#FF7A37"/>
-  <circle cx="450" cy="338" r="8" fill="#FF5B2E"/>
-  <path d="M390 96L400 122L426 132L400 142L390 168L380 142L354 132L380 122L390 96Z" fill="#FFD15C"/>
-
-  <g filter="url(#tileShadow)">
-    <rect x="96" y="102" width="356" height="356" rx="108" fill="#211514"/>
-    <rect x="98" y="104" width="352" height="352" rx="106" stroke="#3A2522" stroke-width="4"/>
-  </g>
-
-  <path d="M184 186L268 270L184 354" stroke="url(#accentRibbon)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M300 168H364V372H300" stroke="url(#promptStroke)" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M234 324H270" stroke="url(#accentRibbon)" stroke-width="18" stroke-linecap="round"/>
-  <path d="M262 162L272 191L302 181L281 204L301 227L272 218L262 247L252 218L223 227L243 204L222 181L252 191L262 162Z" fill="#FFD15C"/>
-
-  <text x="598" y="292" fill="#271714" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="800" letter-spacing="-7">
-    Claude Code
-  </text>
-  <text x="1558" y="292" fill="url(#hahaText)" font-family="Avenir Next, SF Pro Display, Inter, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="800" letter-spacing="-7">
-    Haha
-  </text>
-
-  <text x="602" y="394" fill="#7A5C51" font-family="JetBrains Mono, SFMono-Regular, Menlo, monospace" font-size="36" font-weight="700" letter-spacing="7">
-    NEXT-GEN PERSONAL AI AGENT
-  </text>
-  <path d="M602 434H1548" stroke="url(#taglineLine)" stroke-width="8" stroke-linecap="round"/>
-  <path d="M1578 434H1682" stroke="#FFD15C" stroke-width="8" stroke-linecap="round"/>
+  <rect width="2200" height="640" rx="64" fill="#FFFFFF"/>
+  <image x="104" y="80" width="480" height="480" href="app-icon.png" preserveAspectRatio="xMidYMid meet"/>
+  <text x="680" y="300" fill="#122033" font-family="SF Pro Display, Avenir Next, Inter, Helvetica Neue, Arial, sans-serif" font-size="168" font-weight="800">Claude Code</text>
+  <text x="680" y="448" fill="#0F8CEB" font-family="SF Pro Display, Avenir Next, Inter, Helvetica Neue, Arial, sans-serif" font-size="132" font-weight="800">Haha</text>
+  <path d="M1040 414H1502" stroke="#FF7A00" stroke-width="16" stroke-linecap="round"/>
+  <path d="M1538 414H1666" stroke="#12C7E8" stroke-width="16" stroke-linecap="round"/>
 </svg>

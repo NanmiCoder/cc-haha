@@ -662,11 +662,15 @@ export class CronScheduler {
     return {
       ...cleanEnv,
       CLAUDE_CODE_ENABLE_TASKS: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-cli',
       CALLER_DIR: workDir,
       PWD: workDir,
       CC_HAHA_SKIP_DOTENV: '1',
       ...(explicitProviderEnv
-        ? { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' }
+        ? {
+            CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+            CLAUDE_CODE_ENTRYPOINT: 'sdk-cli',
+          }
         : {}),
       ...(explicitProviderEnv ?? {}),
       ...(this.shouldMarkManagedOAuth(task.providerId)

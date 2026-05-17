@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -28,6 +28,8 @@ const terminalMocks = vi.hoisted(() => {
     kill: vi.fn(),
     onOutput: vi.fn(),
     onExit: vi.fn(),
+    getBashPath: vi.fn(),
+    setBashPath: vi.fn(),
   }
 })
 
@@ -48,6 +50,8 @@ vi.mock('../api/terminal', () => ({
     kill: terminalMocks.kill,
     onOutput: terminalMocks.onOutput,
     onExit: terminalMocks.onExit,
+    getBashPath: terminalMocks.getBashPath,
+    setBashPath: terminalMocks.setBashPath,
   },
 }))
 
@@ -55,6 +59,7 @@ import { TerminalSettings } from './TerminalSettings'
 
 describe('TerminalSettings', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     useSettingsStore.setState({ locale: 'en' })
     terminalMocks.available = false
     terminalMocks.spawn.mockReset()
@@ -63,6 +68,8 @@ describe('TerminalSettings', () => {
     terminalMocks.kill.mockReset()
     terminalMocks.onOutput.mockReset()
     terminalMocks.onExit.mockReset()
+    terminalMocks.getBashPath.mockReset()
+    terminalMocks.setBashPath.mockReset()
     terminalMocks.terminalInstance.loadAddon.mockClear()
     terminalMocks.terminalInstance.open.mockClear()
     terminalMocks.terminalInstance.dispose.mockClear()
@@ -73,6 +80,8 @@ describe('TerminalSettings', () => {
     terminalMocks.fitInstance.fit.mockClear()
     terminalMocks.onOutput.mockResolvedValue(vi.fn())
     terminalMocks.onExit.mockResolvedValue(vi.fn())
+    terminalMocks.getBashPath.mockResolvedValue(null)
+    terminalMocks.setBashPath.mockResolvedValue(undefined)
     terminalMocks.write.mockResolvedValue(undefined)
     terminalMocks.resize.mockResolvedValue(undefined)
     terminalMocks.kill.mockResolvedValue(undefined)
@@ -85,6 +94,7 @@ describe('TerminalSettings', () => {
       observe = vi.fn()
       disconnect = vi.fn()
     })
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   })
 
   it('shows a desktop-runtime empty state outside Tauri', () => {
@@ -141,5 +151,36 @@ describe('TerminalSettings', () => {
 
     expect(terminalMocks.terminalInstance.write).toHaveBeenCalledWith('hello\r\n')
     expect(terminalMocks.terminalInstance.write).not.toHaveBeenCalledWith('ignored\r\n')
+  })
+
+  it('saves a custom Windows bash path from the terminal settings panel', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    terminalMocks.available = true
+    terminalMocks.getBashPath.mockResolvedValue('C:\\Program Files\\Git\\bin\\bash.exe')
+
+    render(<TerminalSettings />)
+
+    const input = await screen.findByDisplayValue('C:\\Program Files\\Git\\bin\\bash.exe')
+    fireEvent.change(input, { target: { value: ' C:\\Tools\\Git\\bin\\bash.exe ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(terminalMocks.setBashPath).toHaveBeenCalledWith('C:\\Tools\\Git\\bin\\bash.exe')
+    })
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeInTheDocument()
+  })
+
+  it('shows an invalid path message when native bash path validation fails', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    terminalMocks.available = true
+    terminalMocks.setBashPath.mockRejectedValue(new Error('terminal bash path does not exist'))
+
+    render(<TerminalSettings />)
+
+    const input = await screen.findByPlaceholderText('Bash Path')
+    fireEvent.change(input, { target: { value: 'C:\\missing\\bash.exe' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('Path does not exist. Select a valid Bash executable.')).toBeInTheDocument()
   })
 })

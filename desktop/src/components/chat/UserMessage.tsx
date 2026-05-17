@@ -22,8 +22,12 @@ export function UserMessage({ content, attachments }: Props) {
 
         {hasText && (
           <div
-            className="bg-[var(--color-surface-user-msg)] px-4 py-3 text-sm leading-relaxed text-[var(--color-text-primary)] whitespace-pre-wrap break-words"
-            style={{ borderRadius: '18px 4px 18px 18px' }}
+            className="min-w-0 max-w-full bg-[var(--color-surface-user-msg)] px-4 py-3 text-sm leading-relaxed text-[var(--color-text-primary)] whitespace-pre-wrap break-words"
+            style={{
+              borderRadius: '18px 4px 18px 18px',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+            }}
           >
             {content}
           </div>

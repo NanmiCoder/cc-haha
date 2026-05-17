@@ -165,15 +165,12 @@ describe('Settings > Agents tab', () => {
       activeSessionId: 'session-1',
       isLoading: false,
       error: null,
-      selectedProjects: [],
-      availableProjects: [],
       fetchSessions: noopFetch,
       createSession: vi.fn(),
       deleteSession: vi.fn(),
       renameSession: vi.fn(),
       updateSessionTitle: vi.fn(),
       setActiveSession: vi.fn(),
-      setSelectedProjects: vi.fn(),
     })
     useAgentStore.setState({
       activeAgents: [],

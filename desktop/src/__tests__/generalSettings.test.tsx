@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore'
 import { useUpdateStore } from '../stores/updateStore'
 import type { SavedProvider } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
+import type { ThemeMode } from '../types/settings'
 
 const MOCK_DELETE_PROVIDER = vi.fn()
 const MOCK_GET_SETTINGS = vi.fn()
@@ -17,6 +18,9 @@ const desktopNotificationsMock = vi.hoisted(() => ({
   notifyDesktop: vi.fn(),
   requestDesktopNotificationPermission: vi.fn(),
   openDesktopNotificationSettings: vi.fn(),
+}))
+const clipboardMock = vi.hoisted(() => ({
+  copyTextToClipboard: vi.fn(),
 }))
 const providerStoreState = {
   providers: [] as SavedProvider[],
@@ -54,6 +58,12 @@ vi.mock('../api/providers', () => ({
 }))
 
 vi.mock('../lib/desktopNotifications', () => desktopNotificationsMock)
+vi.mock('../components/chat/clipboard', () => clipboardMock)
+vi.mock('qrcode', () => ({
+  default: {
+    toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,h5qr'),
+  },
+}))
 
 vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
   ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
@@ -61,6 +71,10 @@ vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
 
 vi.mock('../pages/AdapterSettings', () => ({
   AdapterSettings: () => <div>Adapter Settings Mock</div>,
+}))
+
+vi.mock('../pages/ActivitySettings', () => ({
+  ActivitySettings: () => <div>Activity Settings Mock</div>,
 }))
 
 vi.mock('../stores/agentStore', () => ({
@@ -94,6 +108,7 @@ vi.mock('../components/chat/CodeViewer', () => ({
 
 describe('Settings > General tab', () => {
   beforeEach(() => {
+    vi.useRealTimers()
     MOCK_DELETE_PROVIDER.mockReset()
     desktopNotificationsMock.getDesktopNotificationPermission.mockReset()
     desktopNotificationsMock.notifyDesktop.mockReset()
@@ -103,6 +118,8 @@ describe('Settings > General tab', () => {
     desktopNotificationsMock.notifyDesktop.mockResolvedValue(true)
     desktopNotificationsMock.requestDesktopNotificationPermission.mockResolvedValue('granted')
     desktopNotificationsMock.openDesktopNotificationSettings.mockResolvedValue(true)
+    clipboardMock.copyTextToClipboard.mockReset()
+    clipboardMock.copyTextToClipboard.mockResolvedValue(true)
     MOCK_GET_SETTINGS.mockResolvedValue({})
     MOCK_UPDATE_SETTINGS.mockResolvedValue({})
     providerStoreState.providers = []
@@ -122,12 +139,25 @@ describe('Settings > General tab', () => {
 
     useSettingsStore.setState({
       locale: 'en',
+      theme: 'light',
       thinkingEnabled: true,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
+      responseLanguage: '',
+      uiZoom: 1,
       webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
+      h5Access: {
+        enabled: false,
+        tokenPreview: null,
+        allowedOrigins: [],
+        publicBaseUrl: null,
+      },
+      h5AccessError: null,
       setThinkingEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ thinkingEnabled: enabled })
+      }),
+      setTheme: vi.fn().mockImplementation(async (theme: ThemeMode) => {
+        useSettingsStore.setState({ theme })
       }),
       setSkipWebFetchPreflight: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ skipWebFetchPreflight: enabled })
@@ -135,9 +165,48 @@ describe('Settings > General tab', () => {
       setDesktopNotificationsEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ desktopNotificationsEnabled: enabled })
       }),
+      setResponseLanguage: vi.fn().mockImplementation(async (language: string) => {
+        useSettingsStore.setState({ responseLanguage: language })
+      }),
+      setUiZoom: vi.fn().mockImplementation((uiZoom: number) => {
+        useSettingsStore.setState({ uiZoom })
+      }),
       setWebSearch: vi.fn().mockImplementation(async (webSearch) => {
         useSettingsStore.setState({ webSearch })
       }),
+      enableH5Access: vi.fn().mockImplementation(async () => {
+        const current = useSettingsStore.getState().h5Access
+        useSettingsStore.setState({
+          h5Access: {
+            ...current,
+            enabled: true,
+            tokenPreview: 'h5_default_generated_token'.slice(0, 8),
+          },
+        })
+        return 'h5_default_generated_token'
+      }),
+      disableH5Access: vi.fn().mockImplementation(async () => {
+        const current = useSettingsStore.getState().h5Access
+        useSettingsStore.setState({
+          h5Access: {
+            ...current,
+            enabled: false,
+            tokenPreview: null,
+          },
+        })
+      }),
+      regenerateH5AccessToken: vi.fn().mockImplementation(async () => {
+        const current = useSettingsStore.getState().h5Access
+        useSettingsStore.setState({
+          h5Access: {
+            ...current,
+            enabled: true,
+            tokenPreview: 'h5_default_regenerated_token'.slice(0, 8),
+          },
+        })
+        return 'h5_default_regenerated_token'
+      }),
+      updateH5AccessSettings: vi.fn(),
     })
 
     useUIStore.setState({ pendingSettingsTab: null })
@@ -167,6 +236,113 @@ describe('Settings > General tab', () => {
     expect(toggle).toBeChecked()
   })
 
+  it('offers the pure white appearance theme', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    const pureWhite = screen.getByRole('button', { name: 'Pure White' })
+    const warmClassic = screen.getByRole('button', { name: 'Warm Classic' })
+    const dark = screen.getByRole('button', { name: 'Dark' })
+
+    expect((pureWhite.compareDocumentPosition(warmClassic) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    expect((warmClassic.compareDocumentPosition(dark) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Pure White' }))
+
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('white')
+  })
+
+  it('marks the pure white appearance theme as selected', () => {
+    useSettingsStore.setState({ theme: 'white' })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Warm Classic' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('keeps UI zoom below system notifications because it is a secondary setting', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    const notificationsHeading = screen.getByRole('heading', { name: 'System Notifications' })
+    const uiZoomHeading = screen.getByRole('heading', { name: 'UI Zoom' })
+    const webFetchHeading = screen.getByRole('heading', { name: 'WebFetch Preflight' })
+
+    expect((notificationsHeading.compareDocumentPosition(uiZoomHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    expect((uiZoomHeading.compareDocumentPosition(webFetchHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+  })
+
+  it('previews UI zoom while dragging and applies it once on release', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.getByText('Shortcuts are faster:')).toBeInTheDocument()
+    expect(screen.getByText('macOS')).toBeInTheDocument()
+    expect(screen.getByText('Windows / Linux')).toBeInTheDocument()
+    expect(screen.getByText('0 resets zoom to 100%.')).toBeInTheDocument()
+
+    const slider = screen.getByLabelText('UI Zoom')
+    expect(slider).toHaveAttribute('step', '0.01')
+
+    fireEvent.pointerDown(slider, { pointerId: 1 })
+    await act(async () => {
+      fireEvent.change(slider, {
+        target: { value: '1.25', valueAsNumber: 1.25 },
+      })
+    })
+
+    expect(screen.getAllByText('125%')).toHaveLength(2)
+    expect(useSettingsStore.getState().setUiZoom).not.toHaveBeenCalledWith(1.25)
+    expect(useSettingsStore.getState().uiZoom).toBe(1)
+    expect(slider).toHaveValue('1.25')
+    expect(slider).toHaveClass('settings-zoom-range')
+    expect(slider.closest('.settings-zoom-control')).toHaveClass('is-dragging')
+    expect(slider.closest('.settings-zoom-control')).toHaveStyle({ '--settings-zoom-range-progress': '50%' })
+
+    await act(async () => {
+      fireEvent.pointerUp(slider, { pointerId: 1 })
+    })
+
+    expect(useSettingsStore.getState().setUiZoom).toHaveBeenCalledWith(1.25)
+    expect(slider.closest('.settings-zoom-control')).not.toHaveClass('is-dragging')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset UI zoom to 100%' }))
+    })
+
+    expect(useSettingsStore.getState().setUiZoom).toHaveBeenLastCalledWith(1)
+  })
+
+  it('updates the UI zoom slider when shortcut zoom changes the shared setting while Settings is open', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    const slider = screen.getByLabelText('UI Zoom')
+
+    await act(async () => {
+      useSettingsStore.setState({ uiZoom: 1.1 })
+    })
+
+    expect(slider).toHaveValue('1.1')
+    expect(screen.getAllByText('110%')).toHaveLength(2)
+    expect(slider.closest('.settings-zoom-control')).toHaveStyle({ '--settings-zoom-range-progress': '40%' })
+  })
+
+  it('opens the Token usage tab from Settings navigation above Diagnostics', () => {
+    render(<Settings />)
+
+    const usageTab = screen.getByText('Token usage')
+    const diagnosticsTab = screen.getByText('Diagnostics')
+    expect((usageTab.compareDocumentPosition(diagnosticsTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+
+    fireEvent.click(usageTab)
+
+    expect(screen.getByText('Activity Settings Mock')).toBeInTheDocument()
+  })
+
   it('lets the user disable WebFetch preflight skipping', () => {
     render(<Settings />)
 
@@ -188,6 +364,22 @@ describe('Settings > General tab', () => {
     fireEvent.click(toggle)
 
     expect(useSettingsStore.getState().setThinkingEnabled).toHaveBeenCalledWith(false)
+  })
+
+  it('uses the shared dropdown for response language', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    expect(screen.queryByRole('combobox', { name: 'Response Language' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Response Language' })).not.toBeInTheDocument()
+
+    const trigger = screen.getByRole('button', { name: 'Response Language' })
+    expect(trigger).toHaveTextContent('Default (English)')
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: '中文 (Chinese)' }))
+
+    expect(useSettingsStore.getState().setResponseLanguage).toHaveBeenCalledWith('chinese')
   })
 
   it('lets the user disable desktop system notifications', () => {
@@ -234,6 +426,197 @@ describe('Settings > General tab', () => {
 
     await vi.waitFor(() => {
       expect(desktopNotificationsMock.openDesktopNotificationSettings).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('moves H5 access out of General into its own Settings tab', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.queryByRole('region', { name: 'H5 Access' })).not.toBeInTheDocument()
+
+    const generalTab = screen.getByText('General')
+    const h5Tab = screen.getByText('H5 Access')
+    expect((generalTab.compareDocumentPosition(h5Tab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    fireEvent.click(h5Tab)
+
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    expect(within(section).getByLabelText('Enable H5 access')).not.toBeChecked()
+    expect(within(section).getByText('Disabled')).toBeInTheDocument()
+    expect(within(section).queryByText('Token preview')).not.toBeInTheDocument()
+    expect(within(section).queryByRole('button', { name: 'Regenerate token' })).not.toBeInTheDocument()
+    expect(within(section).queryByLabelText('Allowed origins')).not.toBeInTheDocument()
+  })
+
+  it('confirms the LAN risk before enabling H5 access and renders a token QR link', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: false,
+        tokenPreview: null,
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:3456',
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+
+    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
+    const dialog = screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })
+    expect(within(dialog).getByText(/desktop H5 app on your LAN address and port/i)).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable H5 access' }))
+    })
+
+    expect(useSettingsStore.getState().enableH5Access).toHaveBeenCalledTimes(1)
+    expect(await within(section).findByAltText('H5 access QR code')).toBeInTheDocument()
+    expect(within(section).getByText('http://192.168.0.102:3456/?serverUrl=http%3A%2F%2F192.168.0.102%3A3456&h5Token=h5_default_generated_token')).toBeInTheDocument()
+  })
+
+  it('copies the QR launch URL with the generated H5 token', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: false,
+        tokenPreview: null,
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:3456',
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })).getByRole('button', { name: 'Enable H5 access' }))
+    })
+
+    await within(section).findByAltText('H5 access QR code')
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Copy QR link' }))
+    })
+
+    expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith(
+      'http://192.168.0.102:3456/?serverUrl=http%3A%2F%2F192.168.0.102%3A3456&h5Token=h5_default_generated_token',
+    )
+    expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
+      type: 'success',
+      message: 'QR link copied.',
+    })
+  })
+
+  it('guides enabled H5 users to generate a token before the QR code exists', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        tokenPreview: 'h5oldtok',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:3456',
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+
+    expect(within(section).getByText('Generate a token to create the QR code.')).toBeInTheDocument()
+    expect(within(section).getByText('Click Generate token to create a QR link that can be scanned.')).toBeInTheDocument()
+    expect(within(section).queryByAltText('H5 access QR code')).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Generate token' }))
+    })
+
+    expect(useSettingsStore.getState().regenerateH5AccessToken).toHaveBeenCalledTimes(1)
+    expect(await within(section).findByAltText('H5 access QR code')).toBeInTheDocument()
+  })
+
+  it('shows the generated H5 token as a fallback when requested', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: false,
+        tokenPreview: null,
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:3456',
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })).getByRole('button', { name: 'Enable H5 access' }))
+    })
+
+    fireEvent.click(within(section).getByRole('button', { name: 'Show token' }))
+
+    expect(within(section).getByText('h5_default_generated_token')).toBeInTheDocument()
+  })
+
+  it('copies the H5 URL when available', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        tokenPreview: 'h5url123',
+        allowedOrigins: ['https://phone.example'],
+        publicBaseUrl: 'https://phone.example/app',
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Copy H5 URL' }))
+    })
+
+    expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith('https://phone.example/app')
+    expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
+      type: 'success',
+      message: 'H5 URL copied.',
+    })
+  })
+
+  it('shows the H5-specific store error when the H5 settings load failed', () => {
+    useSettingsStore.setState({ h5AccessError: 'H5 unavailable' })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    expect(within(section).getByText('H5 unavailable')).toBeInTheDocument()
+  })
+
+  it('updates H5 public URL from General settings', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: false,
+        tokenPreview: 'h5a1b2c3',
+        allowedOrigins: ['https://old.example'],
+        publicBaseUrl: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Public URL'), {
+      target: { value: 'https://phone.example/app' },
+    })
+
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Save H5 settings' }))
+    })
+
+    expect(useSettingsStore.getState().updateH5AccessSettings).toHaveBeenCalledWith({
+      publicBaseUrl: 'https://phone.example/app',
     })
   })
 

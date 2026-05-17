@@ -22,35 +22,35 @@ export default function NewTaskModal() {
   return (
     <div className="bg-[var(--color-background)] text-[var(--color-on-surface)] font-[var(--font-body)] min-h-screen flex flex-col">
       {/* ─── TopAppBar / Header ──────────────────────────────────── */}
-      <header className="bg-[#FAF9F5] flex justify-between items-center px-6 h-12 w-full z-40">
+      <header className="bg-[var(--color-background)] flex justify-between items-center px-6 h-12 w-full z-40">
         <div className="flex items-center gap-6">
-          <span className="text-sm font-bold text-[#1B1C1A] uppercase tracking-tighter font-[var(--font-headline)]">
+          <span className="text-sm font-bold text-[var(--color-text-primary)] uppercase tracking-tighter font-[var(--font-headline)]">
             Claude Code Companion
           </span>
           <nav className="hidden md:flex gap-4 font-[var(--font-headline)] font-semibold tracking-wide text-sm">
-            <a className="text-[#87736D] hover:text-[#8F482F] transition-colors cursor-pointer">Code</a>
-            <a className="text-[#87736D] hover:text-[#8F482F] transition-colors cursor-pointer">Terminal</a>
-            <a className="text-[#87736D] hover:text-[#8F482F] transition-colors cursor-pointer">History</a>
+            <a className="text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)] transition-colors cursor-pointer">Code</a>
+            <a className="text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)] transition-colors cursor-pointer">Terminal</a>
+            <a className="text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)] transition-colors cursor-pointer">History</a>
           </nav>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-[#8F482F]">
+          <div className="flex items-center gap-2 text-[var(--color-brand)]">
             <span className="material-symbols-outlined cursor-pointer active:opacity-70 text-sm">arrow_back_ios</span>
             <span className="material-symbols-outlined cursor-pointer active:opacity-70 text-sm">arrow_forward_ios</span>
           </div>
-          <span className="font-[var(--font-headline)] font-semibold tracking-wide text-sm text-[#87736D] cursor-pointer hover:text-[#8F482F] transition-colors">
+          <span className="font-[var(--font-headline)] font-semibold tracking-wide text-sm text-[var(--color-text-tertiary)] cursor-pointer hover:text-[var(--color-brand)] transition-colors">
             Settings
           </span>
         </div>
       </header>
 
       {/* header divider */}
-      <div className="bg-[#F4F4F0] h-px w-full" />
+      <div className="bg-[var(--color-surface-container-low)] h-px w-full" />
 
       {/* ─── Main area (sidebar + content + overlay) ──────────────── */}
       <main className="flex-1 flex overflow-hidden relative">
         {/* ── Sidebar (dimmed) ────────────────────────────────────── */}
-        <aside className="hidden md:flex flex-col p-4 gap-2 bg-[#F4F4F0] h-full w-[280px] opacity-30 pointer-events-none">
+        <aside className="hidden md:flex flex-col p-4 gap-2 bg-[var(--color-surface-container-low)] h-full w-[280px] opacity-30 pointer-events-none">
           {/* project selector */}
           <div className="flex items-center gap-3 px-2 py-3 mb-2">
             <div className="w-8 h-8 rounded bg-[var(--color-surface-dim)] flex items-center justify-center">
@@ -64,22 +64,22 @@ export default function NewTaskModal() {
 
           {/* nav items -- session counts derived from mockSessions */}
           <div className="font-[var(--font-body)] text-sm font-medium space-y-1">
-            <div className="flex items-center gap-3 px-3 py-2 text-[#87736D]">
+            <div className="flex items-center gap-3 px-3 py-2 text-[var(--color-text-tertiary)]">
               <span className="material-symbols-outlined">add</span>New session
             </div>
-            <div className="flex items-center gap-3 px-3 py-2 bg-[#FAF9F5] text-[#1B1C1A] rounded-lg relative before:content-[''] before:absolute before:left-[-8px] before:w-1 before:h-4 before:bg-[#8F482F] before:rounded-full">
+            <div className="flex items-center gap-3 px-3 py-2 bg-[var(--color-background)] text-[var(--color-text-primary)] rounded-lg relative before:content-[''] before:absolute before:left-[-8px] before:w-1 before:h-4 before:bg-[var(--color-brand)] before:rounded-full">
               <span className="material-symbols-outlined">calendar_today</span>Scheduled
             </div>
-            <div className="flex items-center gap-3 px-3 py-2 text-[#87736D]">
+            <div className="flex items-center gap-3 px-3 py-2 text-[var(--color-text-tertiary)]">
               <span className="material-symbols-outlined">history</span>Today
               {mockSessions.today.length > 0 && (
-                <span className="ml-auto text-[10px] text-[#87736D]">{mockSessions.today.length}</span>
+                <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">{mockSessions.today.length}</span>
               )}
             </div>
-            <div className="flex items-center gap-3 px-3 py-2 text-[#87736D]">
+            <div className="flex items-center gap-3 px-3 py-2 text-[var(--color-text-tertiary)]">
               <span className="material-symbols-outlined">event_note</span>Previous 7 Days
               {mockSessions.previous7Days.length > 0 && (
-                <span className="ml-auto text-[10px] text-[#87736D]">{mockSessions.previous7Days.length}</span>
+                <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">{mockSessions.previous7Days.length}</span>
               )}
             </div>
           </div>
@@ -317,25 +317,25 @@ export default function NewTaskModal() {
       </main>
 
       {/* ─── Footer / Status Bar ─────────────────────────────────── */}
-      <footer className="bg-[#FAF9F5] flex items-center justify-between px-4 z-50 fixed bottom-0 left-0 w-full h-8 border-t border-[#87736D]/20 font-[var(--font-body)] text-xs tracking-tight">
+      <footer className="bg-[var(--color-background)] flex items-center justify-between px-4 z-50 fixed bottom-0 left-0 w-full h-8 border-t border-[var(--color-border)]/20 font-[var(--font-body)] text-xs tracking-tight">
         <div className="flex items-center gap-3">
-          <span className="text-[#87736D]">
+          <span className="text-[var(--color-text-tertiary)]">
             {mockStatusBar.user} &bull; {mockStatusBar.username} &bull; {mockStatusBar.plan}
           </span>
           <div className="flex items-center gap-4 ml-4">
-            <span className="text-[#87736D] hover:bg-[#F4F4F0] px-2 py-0.5 rounded cursor-pointer transition-colors">
+            <span className="text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-container-low)] px-2 py-0.5 rounded cursor-pointer transition-colors">
               {mockStatusBar.branch}
             </span>
-            <span className="text-[#87736D] hover:bg-[#F4F4F0] px-2 py-0.5 rounded cursor-pointer transition-colors">
+            <span className="text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-container-low)] px-2 py-0.5 rounded cursor-pointer transition-colors">
               {mockStatusBar.worktreeToggle}
             </span>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-[#8F482F] font-bold cursor-pointer">
+          <span className="text-[var(--color-brand)] font-bold cursor-pointer">
             {mockStatusBar.localSwitch}
           </span>
-          <div className="flex items-center gap-1 text-[#87736D]">
+          <div className="flex items-center gap-1 text-[var(--color-text-tertiary)]">
             <span className="material-symbols-outlined text-[14px]">terminal</span>
             <span>{mockStatusBar.status === 'Ready' ? 'Active' : mockStatusBar.status}</span>
           </div>

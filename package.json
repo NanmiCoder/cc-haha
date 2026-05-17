@@ -26,6 +26,7 @@
     "quality:verify": "bun run quality:pr",
     "quality:providers": "bun run scripts/quality-gate/providers.ts",
     "quality:pr": "bun run quality:gate --mode pr",
+    "quality:push": "bun run quality:gate --mode pr --skip coverage",
     "quality:baseline": "bun run quality:gate --mode baseline",
     "quality:release": "bun run quality:gate --mode release",
     "quality:smoke": "bun run quality:gate --mode baseline --allow-live --only 'provider-smoke:*' --only 'desktop-smoke:*'",

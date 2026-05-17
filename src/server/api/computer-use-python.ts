@@ -25,7 +25,8 @@ export type PythonRuntimeResolution = {
   path: string | null
   command: string | null
   prefixArgs: string[]
-  source: 'system' | 'venv' | null
+  source: 'custom' | 'system' | 'venv' | null
+  error: string | null
 }
 
 function getPythonCandidates(platform: NodeJS.Platform): PythonCandidate[] {
@@ -90,7 +91,34 @@ export async function detectPythonRuntime(
   platform: NodeJS.Platform,
   runCommand: CommandRunner,
   venvPythonPath?: string,
+  customPythonPath?: string | null,
 ): Promise<PythonRuntimeResolution> {
+  const normalizedCustomPath = customPythonPath?.trim()
+  if (normalizedCustomPath) {
+    const customResult = await runCommand(normalizedCustomPath, ['--version'])
+    if (customResult.ok) {
+      return {
+        installed: true,
+        version: extractPythonVersion(`${customResult.stdout}\n${customResult.stderr}`),
+        path: normalizedCustomPath,
+        command: normalizedCustomPath,
+        prefixArgs: [],
+        source: 'custom',
+        error: null,
+      }
+    }
+
+    return {
+      installed: false,
+      version: null,
+      path: normalizedCustomPath,
+      command: normalizedCustomPath,
+      prefixArgs: [],
+      source: 'custom',
+      error: customResult.stderr || customResult.stdout || `Failed to run ${normalizedCustomPath}`,
+    }
+  }
+
   for (const candidate of getPythonCandidates(platform)) {
     const versionResult = await runCommand(candidate.command, [...candidate.prefixArgs, '--version'])
     if (!versionResult.ok) continue
@@ -102,6 +130,7 @@ export async function detectPythonRuntime(
       command: candidate.command,
       prefixArgs: candidate.prefixArgs,
       source: 'system',
+      error: null,
     }
   }
 
@@ -115,6 +144,7 @@ export async function detectPythonRuntime(
         command: venvPythonPath,
         prefixArgs: [],
         source: 'venv',
+        error: null,
       }
     }
   }
@@ -126,6 +156,6 @@ export async function detectPythonRuntime(
     command: null,
     prefixArgs: [],
     source: null,
+    error: null,
   }
 }
-

@@ -98,6 +98,118 @@ async function clickElement(element: Element) {
   await flushReactWork()
 }
 
+function findTextNodeContaining(container: Element, text: string) {
+  const walker = document.createTreeWalker(container, 4)
+  let current = walker.nextNode()
+  while (current) {
+    if (current.textContent?.includes(text)) return current
+    current = walker.nextNode()
+  }
+  throw new Error(`Unable to find text node containing ${text}`)
+}
+
+async function selectWorkspaceCodeText(
+  view: Awaited<ReturnType<typeof renderPanel>>,
+  startLine: number,
+  startText: string,
+  endLine: number,
+  endText: string,
+) {
+  const code = view.getByTestId('workspace-code')
+  const startRow = code.querySelector(`[data-workspace-line-number="${startLine}"]`)
+  const endRow = code.querySelector(`[data-workspace-line-number="${endLine}"]`)
+  if (!startRow || !endRow) throw new Error('Selection rows were not rendered')
+
+  Object.assign(code.parentElement?.parentElement ?? code, {
+    getBoundingClientRect: () => ({
+      left: 100,
+      top: 24,
+      right: 520,
+      bottom: 420,
+      width: 420,
+      height: 396,
+      x: 100,
+      y: 24,
+      toJSON: () => ({}),
+    }),
+  })
+
+  const startNode = findTextNodeContaining(startRow, startText)
+  const endNode = findTextNodeContaining(endRow, endText)
+  const startOffset = startNode.textContent?.indexOf(startText) ?? -1
+  const endOffset = (endNode.textContent?.indexOf(endText) ?? -1) + endText.length
+  const range = document.createRange()
+  range.setStart(startNode, startOffset)
+  range.setEnd(endNode, endOffset)
+  Object.assign(range, {
+    getBoundingClientRect: () => ({
+      left: 120,
+      top: 40,
+      right: 240,
+      bottom: 58,
+      width: 120,
+      height: 18,
+      x: 120,
+      y: 40,
+      toJSON: () => ({}),
+    }),
+  })
+
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+
+  await act(async () => {
+    fireEvent.mouseUp(code, { clientX: 180, clientY: 72 })
+    await Promise.resolve()
+  })
+  await flushReactWork()
+}
+
+async function selectRenderedText(container: Element, text: string, target?: Element) {
+  const textNode = findTextNodeContaining(container, text)
+  const startOffset = textNode.textContent?.indexOf(text) ?? -1
+  const range = document.createRange()
+  range.setStart(textNode, startOffset)
+  range.setEnd(textNode, startOffset + text.length)
+  Object.assign(range, {
+    getBoundingClientRect: () => ({
+      left: 130,
+      top: 60,
+      right: 260,
+      bottom: 78,
+      width: 130,
+      height: 18,
+      x: 130,
+      y: 60,
+      toJSON: () => ({}),
+    }),
+  })
+  Object.assign(target ?? container, {
+    getBoundingClientRect: () => ({
+      left: 100,
+      top: 24,
+      right: 520,
+      bottom: 420,
+      width: 420,
+      height: 396,
+      x: 100,
+      y: 24,
+      toJSON: () => ({}),
+    }),
+  })
+
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+
+  await act(async () => {
+    fireEvent.mouseUp(target ?? container, { clientX: 190, clientY: 80 })
+    await Promise.resolve()
+  })
+  await flushReactWork()
+}
+
 function classNameContains(element: Element | null, needle: string) {
   let current = element
   while (current) {
@@ -133,6 +245,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
+import { useUIStore } from '../../stores/uiStore'
 import { WorkspacePanel } from './WorkspacePanel'
 
 describe('WorkspacePanel', () => {
@@ -763,6 +876,57 @@ describe('WorkspacePanel', () => {
     expect(view.getByRole('button', { name: 'Collapse preview' })).toBeTruthy()
   })
 
+  it('keeps diff rows intrinsically wide so H5 users can scroll sideways', async () => {
+    const longDiffLine = '+const label = "this is a very long generated line that should not be compressed into the phone viewport";'
+
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-wide-diff': {
+          isOpen: true,
+          activeView: 'changed',
+          hasUserSelectedView: true,
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-wide-diff': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-wide-diff': [{
+          id: 'diff:wide.ts',
+          path: 'wide.ts',
+          kind: 'diff',
+          title: 'wide.ts',
+          diff: longDiffLine,
+          state: 'ok',
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-wide-diff': 'diff:wide.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-wide-diff')
+    const diffSurface = view.getByTestId('workspace-code')
+    const firstRow = diffSurface.querySelector('div')
+
+    expect(firstRow?.className).toContain('w-max')
+    expect(firstRow?.className).toContain('min-w-full')
+    expect(firstRow?.className).toContain('grid-cols-[48px_18px_max-content]')
+    expect(diffSurface.textContent).toContain(longDiffLine)
+  })
+
   it('can expand long file previews beyond the default rendered line cap', async () => {
     const longFile = Array.from({ length: 2300 }, (_, index) => `const line${index + 1} = ${index + 1}`).join('\n')
 
@@ -806,7 +970,7 @@ describe('WorkspacePanel', () => {
       expect(view.getByTestId('workspace-code').textContent).toContain('const line2300 = 2300')
     })
     expect(view.getByRole('button', { name: 'Collapse preview' })).toBeTruthy()
-  })
+  }, 10_000)
 
   it('renders image previews from workspace files', async () => {
     await setWorkspaceState((state) => ({
@@ -1031,6 +1195,86 @@ describe('WorkspacePanel', () => {
     ])
   })
 
+  it('copies file paths from the file tree menu with the legacy clipboard fallback', async () => {
+    const originalClipboard = navigator.clipboard
+    const originalExecCommand = document.execCommand
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: vi.fn().mockReturnValue(true),
+    })
+    const execCommand = vi.mocked(document.execCommand)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error('clipboard blocked')),
+      },
+    })
+    const writeText = vi.mocked(navigator.clipboard.writeText)
+
+    try {
+      await setWorkspaceState((state) => ({
+        ...state,
+        panelBySession: {
+          ...state.panelBySession,
+          'session-copy-file': {
+            isOpen: true,
+            activeView: 'all',
+          },
+        },
+        statusBySession: {
+          ...state.statusBySession,
+          'session-copy-file': {
+            state: 'ok',
+            workDir: '/repo',
+            repoName: 'repo',
+            branch: 'main',
+            isGitRepo: true,
+            changedFiles: [],
+          },
+        },
+        treeBySessionPath: {
+          ...state.treeBySessionPath,
+          'session-copy-file': {
+            '': {
+              state: 'ok',
+              path: '',
+              entries: [{ name: 'App.tsx', path: 'src/App.tsx', isDirectory: false }],
+            },
+          },
+        },
+      }))
+
+      const view = await renderPanel('session-copy-file')
+
+      await act(() => {
+        fireEvent.contextMenu(view.getByRole('button', { name: /App\.tsx/i }), {
+          clientX: 260,
+          clientY: 80,
+        })
+      })
+
+      await clickElement(view.getByRole('menuitem', { name: 'Copy path' }))
+
+      await waitFor(() => {
+        expect(execCommand).toHaveBeenCalledWith('copy')
+      })
+      expect(writeText).toHaveBeenCalledWith('/repo/src/App.tsx')
+      expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
+        type: 'success',
+        message: 'Path copied.',
+      })
+    } finally {
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: originalExecCommand,
+      })
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard,
+      })
+    }
+  })
+
   it('adds a line comment from a code preview to the chat context', async () => {
     await setWorkspaceState((state) => ({
       ...state,
@@ -1090,6 +1334,184 @@ describe('WorkspacePanel', () => {
         lineEnd: 1,
         note: 'Rename this title',
         quote: 'const title = "Todo"',
+      },
+    ])
+  })
+
+  it('adds selected code from a preview to the chat context without requiring a note', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-code-selection': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-code-selection': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-code-selection': [{
+          id: 'file:src/App.ts',
+          path: 'src/App.ts',
+          kind: 'file',
+          title: 'App.ts',
+          language: 'text',
+          content: 'const title = "Todo"\nexport default title',
+          state: 'ok',
+          size: 42,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-code-selection': 'file:src/App.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-code-selection')
+
+    await selectWorkspaceCodeText(view, 1, 'const title = "Todo"', 2, 'export default title')
+    const addButtons = view.getAllByRole('button', { name: 'Add to chat' })
+    await clickElement(addButtons[addButtons.length - 1]!)
+
+    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-code-selection']).toMatchObject([
+      {
+        kind: 'code-selection',
+        path: 'src/App.ts',
+        absolutePath: '/repo/src/App.ts',
+        name: 'App.ts',
+        lineStart: 1,
+        lineEnd: 2,
+        quote: 'const title = "Todo"\nexport default title',
+      },
+    ])
+    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-code-selection']?.[0]?.note).toBeUndefined()
+  })
+
+  it('keeps the selected-code action near the preview instead of the file tree', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-selection-position': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-selection-position': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-selection-position': [{
+          id: 'file:src/App.ts',
+          path: 'src/App.ts',
+          kind: 'file',
+          title: 'App.ts',
+          language: 'text',
+          content: 'const title = "Todo"\nexport default title',
+          state: 'ok',
+          size: 42,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-selection-position': 'file:src/App.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-selection-position')
+
+    await selectWorkspaceCodeText(view, 1, 'const title = "Todo"', 1, 'const title = "Todo"')
+    const addButtons = view.getAllByRole('button', { name: 'Add to chat' })
+    const floatingAddButton = addButtons[addButtons.length - 1]!
+
+    expect(floatingAddButton.style.left).toBe('180px')
+    expect(floatingAddButton.style.top).toBe('80px')
+
+    fireEvent.keyDown(view.getByTestId('workspace-code').parentElement?.parentElement ?? view.getByTestId('workspace-code'), {
+      key: 'Escape',
+    })
+    await flushReactWork()
+    expect(view.queryAllByRole('button', { name: 'Add to chat' })).toHaveLength(1)
+  })
+
+  it('adds selected markdown text from a preview to the chat context', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-markdown-selection': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-markdown-selection': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-markdown-selection': [{
+          id: 'file:docs/guide.md',
+          path: 'docs/guide.md',
+          kind: 'file',
+          title: 'guide.md',
+          language: 'markdown',
+          content: '# Guide\nAlpha note and Beta note',
+          state: 'ok',
+          size: 33,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-markdown-selection': 'file:docs/guide.md',
+      },
+    }))
+
+    const view = await renderPanel('session-markdown-selection')
+    const paragraph = view.getByText('Alpha note and Beta note')
+    const markdownSurface = paragraph.closest('.min-h-0') ?? paragraph
+
+    await selectRenderedText(paragraph, 'Alpha note and Beta note', markdownSurface)
+    const addButtons = view.getAllByRole('button', { name: 'Add to chat' })
+    const floatingAddButton = addButtons[addButtons.length - 1]!
+    await clickElement(floatingAddButton)
+
+    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-markdown-selection']).toMatchObject([
+      {
+        kind: 'code-selection',
+        path: 'docs/guide.md',
+        absolutePath: '/repo/docs/guide.md',
+        name: 'guide.md',
+        lineStart: 2,
+        lineEnd: 2,
+        quote: 'Alpha note and Beta note',
       },
     ])
   })

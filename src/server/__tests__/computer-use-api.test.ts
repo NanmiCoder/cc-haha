@@ -65,4 +65,21 @@ describe('Computer Use API authorized app config', () => {
     )
     expect(JSON.parse(raw)).toMatchObject({ enabled: false })
   })
+
+  it('persists and normalizes a custom Python interpreter path', async () => {
+    const pythonPath = '  C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe  '
+    const putRes = await callAuthorizedApps('PUT', { pythonPath })
+    expect(putRes.status).toBe(200)
+
+    const getRes = await callAuthorizedApps('GET')
+    expect(await getRes.json()).toMatchObject({
+      pythonPath: 'C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe',
+    })
+
+    const resetRes = await callAuthorizedApps('PUT', { pythonPath: '' })
+    expect(resetRes.status).toBe(200)
+
+    const resetGetRes = await callAuthorizedApps('GET')
+    expect(await resetGetRes.json()).toMatchObject({ pythonPath: null })
+  })
 })

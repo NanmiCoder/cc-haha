@@ -10,6 +10,9 @@ const windowControlsMock = vi.hoisted(() => ({
   show: true,
 }))
 const scrollIntoViewMock = vi.hoisted(() => vi.fn())
+const openProjectMenuMock = vi.hoisted(() => ({
+  paths: [] as Array<string | null | undefined>,
+}))
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: getCurrentWindowMock,
@@ -30,10 +33,21 @@ vi.mock('../../i18n', () => ({
       'tabs.openTerminal': 'Open Terminal',
       'tabs.showWorkspace': 'Show Workspace',
       'tabs.hideWorkspace': 'Hide Workspace',
+      'openProject.openProject': 'Open project',
+      'openProject.openIn': 'Open in {target}',
+      'openProject.openFailed': 'Could not open project',
       'common.cancel': 'Cancel',
     }
 
     return translations[key] ?? key
+  },
+}))
+
+vi.mock('./OpenProjectMenu', () => ({
+  OpenProjectMenu: ({ path }: { path: string | null | undefined }) => {
+    if (!path) return null
+    openProjectMenuMock.paths.push(path)
+    return <div data-testid="open-project-menu">{path}</div>
   },
 }))
 
@@ -73,6 +87,7 @@ describe('TabBar', () => {
     startDraggingMock.mockClear()
     getCurrentWindowMock.mockClear()
     scrollIntoViewMock.mockClear()
+    openProjectMenuMock.paths = []
     windowControlsMock.show = true
     vi.resetModules()
   })
@@ -82,6 +97,7 @@ describe('TabBar', () => {
 
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
     const { useWorkspacePanelStore } = await import('../../stores/workspacePanelStore')
     const { useTerminalPanelStore } = await import('../../stores/terminalPanelStore')
 
@@ -89,6 +105,14 @@ describe('TabBar', () => {
     useChatStore.setState({
       sessions: {},
     } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      sessions: [],
+      activeSessionId: null,
+      isLoading: false,
+      error: null,
+      isBatchMode: false,
+      selectedSessionIds: new Set(),
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
     useWorkspacePanelStore.setState(useWorkspacePanelStore.getInitialState(), true)
     useTerminalPanelStore.setState(useTerminalPanelStore.getInitialState(), true)
 
@@ -228,6 +252,148 @@ describe('TabBar', () => {
 
     expect(screen.getByTestId('tab-bar')).not.toHaveAttribute('data-tauri-drag-region')
     expect(screen.getByTestId('tab-bar-drag-gutter')).toHaveAttribute('data-tauri-drag-region')
+  })
+
+  it('keeps the desktop tab strip at a roomier titlebar height', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'Untitled Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    const tabBar = screen.getByTestId('tab-bar')
+    const tab = screen.getByText('Untitled Session').closest('.tab-bar-hit-area')
+
+    expect(tabBar).toHaveClass('min-h-11')
+    expect(tab).toHaveClass('min-h-11')
+    expect(screen.getByTestId('tab-bar-drag-gutter')).toHaveClass('min-h-11')
+  })
+
+  it('passes the active session workdir into the open-project control', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'Workspace Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      sessions: [{
+        id: 'tab-1',
+        title: 'Workspace Session',
+        createdAt: '2026-05-13T00:00:00.000Z',
+        modifiedAt: '2026-05-13T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        workDir: '/repo/worktree',
+        workDirExists: true,
+      }],
+      activeSessionId: 'tab-1',
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByTestId('open-project-menu')).toHaveTextContent('/repo/worktree')
+    expect(openProjectMenuMock.paths[openProjectMenuMock.paths.length - 1]).toBe('/repo/worktree')
+  })
+
+  it('hides the open-project control when the active session workdir is unavailable', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'Workspace Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      sessions: [{
+        id: 'tab-1',
+        title: 'Workspace Session',
+        createdAt: '2026-05-13T00:00:00.000Z',
+        modifiedAt: '2026-05-13T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        workDir: '/repo/worktree',
+        workDirExists: false,
+      }],
+      activeSessionId: 'tab-1',
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByTestId('open-project-menu')).not.toBeInTheDocument()
+  })
+
+  it('hides the open-project control outside the desktop shell', async () => {
+    delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__
+
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'Workspace Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      sessions: [{
+        id: 'tab-1',
+        title: 'Workspace Session',
+        createdAt: '2026-05-13T00:00:00.000Z',
+        modifiedAt: '2026-05-13T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        workDir: '/repo/worktree',
+        workDirExists: true,
+      }],
+      activeSessionId: 'tab-1',
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByTestId('open-project-menu')).not.toBeInTheDocument()
   })
 
   it('starts dragging when clicking the empty tab-bar gutter', async () => {

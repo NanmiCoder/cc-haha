@@ -13,7 +13,7 @@
  * plugins active).
  */
 
-import { dirname, join } from 'path'
+import { dirname, join, resolve, sep } from 'path'
 import { logForDebugging } from '../debug.js'
 import { errorMessage, isENOENT, toError } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
@@ -962,10 +962,24 @@ export function removeInstalledPlugin(
  */
 export { getGitCommitSha }
 
+function assertPluginCacheDeletionPath(installPath: string): void {
+  const cachePath = resolve(getPluginCachePath())
+  const resolvedInstallPath = resolve(installPath)
+  if (
+    resolvedInstallPath === cachePath ||
+    !resolvedInstallPath.startsWith(cachePath + sep)
+  ) {
+    throw new Error(
+      `Refusing to delete plugin cache outside managed cache directory: ${installPath}`,
+    )
+  }
+}
+
 export function deletePluginCache(installPath: string): void {
   const fs = getFsImplementation()
 
   try {
+    assertPluginCacheDeletionPath(installPath)
     fs.rmSync(installPath, { recursive: true, force: true })
     logForDebugging(`Deleted plugin cache at ${installPath}`)
 

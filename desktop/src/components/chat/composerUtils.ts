@@ -11,6 +11,7 @@ export const PANEL_SLASH_COMMANDS = [
 
 export const SETTINGS_SLASH_COMMANDS = [
   { name: 'plugin', description: 'Open desktop plugin controls in Settings', tab: 'plugins' as const },
+  { name: 'memory', description: 'Open project memory files in Settings', tab: 'memory' as const },
   { name: 'doctor', description: 'Open Doctor in Diagnostics', tab: 'diagnostics' as const },
 ] as const
 
@@ -31,7 +32,6 @@ export const FALLBACK_SLASH_COMMANDS = [
   { name: 'config', description: 'Open configuration' },
   { name: 'login', description: 'Switch Anthropic accounts' },
   { name: 'logout', description: 'Sign out of current account' },
-  { name: 'memory', description: 'Edit CLAUDE.md memory files' },
   { name: 'model', description: 'Switch AI model' },
   { name: 'permissions', description: 'View or manage tool permissions' },
   { name: 'terminal-setup', description: 'Set up terminal integration' },
@@ -41,6 +41,7 @@ export const FALLBACK_SLASH_COMMANDS = [
 export type SlashCommandOption = {
   name: string
   description: string
+  argumentHint?: string
 }
 
 export type SlashUiAction =
@@ -79,6 +80,7 @@ export function mergeSlashCommands(
     merged.set(command.name, {
       name: command.name,
       description: command.description?.trim() || '',
+      ...(command.argumentHint?.trim() && { argumentHint: command.argumentHint.trim() }),
     })
   }
 
@@ -86,10 +88,11 @@ export function mergeSlashCommands(
     if (!command?.name) continue
     const existing = merged.get(command.name)
     if (existing) {
-      if (!existing.description && command.description) {
+      if ((!existing.description && command.description) || (!existing.argumentHint && command.argumentHint)) {
         merged.set(command.name, {
           ...existing,
-          description: command.description,
+          description: existing.description || command.description,
+          argumentHint: existing.argumentHint || command.argumentHint,
         })
       }
       continue
@@ -100,6 +103,39 @@ export function mergeSlashCommands(
   return [...merged.values()]
 }
 
+function getSlashCommandMatchRank(command: SlashCommandOption, filter: string): number {
+  const name = command.name.toLowerCase()
+  const description = command.description.toLowerCase()
+  const argumentHint = command.argumentHint?.toLowerCase() ?? ''
+  const nameParts = name.split(/[:/._-]+/).filter(Boolean)
+
+  if (name === filter) return 0
+  if (name.startsWith(filter)) return 1
+  if (nameParts.some((part) => part.startsWith(filter))) return 2
+  if (name.includes(filter)) return 3
+  if (description.includes(filter)) return 4
+  if (argumentHint.includes(filter)) return 5
+  return Number.POSITIVE_INFINITY
+}
+
+export function filterSlashCommands(
+  commands: ReadonlyArray<SlashCommandOption>,
+  filter: string,
+): SlashCommandOption[] {
+  const normalized = filter.toLowerCase()
+  if (!normalized.trim()) return [...commands]
+
+  return commands
+    .map((command, index) => ({
+      command,
+      index,
+      rank: getSlashCommandMatchRank(command, normalized),
+    }))
+    .filter((item) => Number.isFinite(item.rank))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((item) => item.command)
+}
+
 export type SlashTrigger = {
   slashPos: number
   filter: string
@@ -107,25 +143,12 @@ export type SlashTrigger = {
 
 export function findSlashTrigger(value: string, cursorPos: number): SlashTrigger | null {
   const textBeforeCursor = value.slice(0, cursorPos)
-  let slashPos = -1
-
-  for (let i = textBeforeCursor.length - 1; i >= 0; i--) {
-    const ch = textBeforeCursor[i]!
-    if (ch === '/') {
-      if (i === 0 || /\s/.test(textBeforeCursor[i - 1]!)) {
-        slashPos = i
-        break
-      }
-      break
-    }
-    if (/\s/.test(ch)) {
-      break
-    }
-  }
-
+  const slashPos = textBeforeCursor.lastIndexOf('/')
   if (slashPos < 0) return null
+  if (slashPos > 0 && !/\s/.test(textBeforeCursor[slashPos - 1]!)) return null
 
   const filter = textBeforeCursor.slice(slashPos + 1)
+  if (filter.includes('\n')) return null
   if (/\s/.test(filter)) return null
 
   return { slashPos, filter }

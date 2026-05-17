@@ -34,6 +34,7 @@ export type AttachmentRef = {
   path?: string
   data?: string // base64 for images
   mimeType?: string
+  isDirectory?: boolean
 }
 
 // ============================================================================

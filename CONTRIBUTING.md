@@ -54,7 +54,7 @@ explicitly requested it.
 bun run hooks:install
 ```
 
-安装后，每次 push 都会先运行同一套验证入口（内部是 `bun run quality:pr`，等价于 `bun run verify`），失败则 push 中止。维护者机器可以把真实模型/桌面 smoke 也纳入 pre-push：
+安装后，每次 push 都会先运行快速本地门禁（内部是 `bun run quality:push`）。它复用 PR gate 的 impact/policy/路径检查，但默认跳过耗时的 coverage lane；完整覆盖率仍保留在 `bun run verify`、`bun run quality:pr` 和 CI。维护者机器可以把真实模型/桌面 smoke 也纳入 pre-push：
 
 ```bash
 bun run quality:providers

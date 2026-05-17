@@ -1202,9 +1202,12 @@ export async function analyzeContextUsage(
   // Use the larger of the local estimate and the latest API-reported context.
   // This keeps the context meter from dropping when a response completes and
   // the output tokens become part of the next turn's context.
+  // Clamp to contextWindow so providers whose input_tokens already approach the
+  // limit (e.g. DeepSeek with 1M context) don't push the display over 100%.
   const finalTotalTokens = calculateCurrentContextTokenTotal(
     totalIncludingReserved,
     apiUsage,
+    contextWindow,
   )
 
   // Pre-calculate grid based on model context window and terminal width

@@ -97,7 +97,7 @@ Git hooks are local, so each clone needs to install the hook once:
 bun run hooks:install
 ```
 
-After installation, every `git push` runs the same verification entrypoint internally (`bun run quality:pr`, equivalent to `bun run verify`). If unit tests, coverage, docs/native/adapter checks, or any other selected path-aware lane fails, the local hook blocks the push.
+After installation, every `git push` runs the fast local gate internally (`bun run quality:push`). It reuses the PR gate impact, policy, and path-aware checks, but skips the expensive coverage lane by default; full coverage remains in `bun run verify`, `bun run quality:pr`, and CI. If unit tests, docs/native/adapter checks, or any other selected fast path-aware lane fails, the local hook blocks the push.
 
 Maintainers or contributors with model quota can also add real provider smoke and desktop agent-browser smoke to the pre-push hook:
 
@@ -114,7 +114,7 @@ bun run hooks:install -- --live-provider-model minimax:main:minimax-main --live-
 
 These options are stored in local `.git/config` as `quality.prePush*` keys, so provider selectors and secrets are not committed. `smoke` mode covers real provider connectivity plus the desktop UI chat smoke; `baseline` mode also runs every real Coding Agent baseline case.
 
-Maintainer-level overrides must also be explicit local config before the hook passes them to `quality:pr`:
+Maintainer-level overrides must also be explicit local config before the hook passes them to `quality:push`:
 
 ```bash
 bun run hooks:install -- --allow-cli-core-change --allow-coverage-baseline-change

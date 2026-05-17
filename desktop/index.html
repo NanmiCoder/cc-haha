@@ -1,14 +1,103 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="white">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Claude Code Companion</title>
     <!-- Fonts are self-hosted in /fonts/ and declared via @font-face in globals.css -->
     <style>
-      /* Prevent white flash on load */
-      html { background: #FAF9F5; }
+      /* Prevent a warm flash before the theme is hydrated. */
+      html { background: #FFFFFF; }
+      html, body, #root { min-height: 100%; margin: 0; }
     </style>
+    <script>
+      (function () {
+        var bootDeadlineMs = 8000
+
+        function summarize(value) {
+          if (!value) return 'Unknown startup error'
+          if (typeof value === 'string') return value
+          if (value.message) return value.message
+          try {
+            return JSON.stringify(value)
+          } catch (_) {
+            return String(value)
+          }
+        }
+
+        function renderStartupError(reason) {
+          if (window.__CC_HAHA_BOOTSTRAPPED__) return
+          var root = document.getElementById('root')
+          if (!root) return
+
+          var summary = summarize(reason)
+          var details = [
+            summary,
+            '',
+            'URL: ' + window.location.href,
+            'User Agent: ' + navigator.userAgent,
+            'Time: ' + new Date().toISOString()
+          ].join('\n')
+
+          root.innerHTML = ''
+          var shell = document.createElement('main')
+          shell.style.cssText = [
+            'box-sizing:border-box',
+            'min-height:100vh',
+            'padding:32px',
+            'background:#fff',
+            'color:#151515',
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+            'display:flex',
+            'align-items:center',
+            'justify-content:center'
+          ].join(';')
+
+          var panel = document.createElement('section')
+          panel.style.cssText = 'width:min(760px,100%);border:1px solid #d8d8d8;border-radius:8px;padding:24px;background:#fff'
+
+          var title = document.createElement('h1')
+          title.textContent = 'Desktop startup failed'
+          title.style.cssText = 'margin:0 0 8px;font-size:20px;line-height:1.3;font-weight:700;color:#111'
+
+          var body = document.createElement('p')
+          body.textContent = 'The app could not finish booting. Keep this text when reporting the issue.'
+          body.style.cssText = 'margin:0 0 16px;font-size:14px;line-height:1.6;color:#555'
+
+          var pre = document.createElement('pre')
+          pre.textContent = details
+          pre.style.cssText = 'box-sizing:border-box;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;padding:14px;border-radius:6px;background:#f6f6f6;color:#222;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace'
+
+          panel.appendChild(title)
+          panel.appendChild(body)
+          panel.appendChild(pre)
+          shell.appendChild(panel)
+          root.appendChild(shell)
+        }
+
+        window.__CC_HAHA_SHOW_STARTUP_ERROR__ = renderStartupError
+
+        window.addEventListener('error', function (event) {
+          var target = event.target
+          if (target && target !== window) {
+            var tagName = target.tagName
+            if (tagName === 'SCRIPT' || tagName === 'LINK') {
+              renderStartupError('Startup resource failed to load: ' + (target.src || target.href || tagName))
+            }
+            return
+          }
+          renderStartupError(event.message || event.error || 'Startup script error')
+        }, true)
+
+        window.addEventListener('unhandledrejection', function (event) {
+          renderStartupError(event.reason || 'Unhandled startup promise rejection')
+        })
+
+        window.setTimeout(function () {
+          renderStartupError('Desktop app did not finish bootstrapping within ' + bootDeadlineMs + 'ms. This usually means the WebView could not execute the app bundle or startup code stopped before React mounted.')
+        }, bootDeadlineMs)
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

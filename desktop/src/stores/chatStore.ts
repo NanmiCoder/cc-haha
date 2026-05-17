@@ -14,11 +14,16 @@ import type { MessageEntry } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import type {
+  ActiveGoalState,
   AgentTaskNotification,
   AttachmentRef,
+  BackgroundAgentTask,
+  BackgroundAgentTaskUsage,
   ChatState,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
+  GoalEventAction,
+  MemoryEventFile,
   UIAttachment,
   UIMessage,
   ServerMessage,
@@ -50,8 +55,10 @@ export type PerSessionState = {
   tokenUsage: TokenUsage
   elapsedSeconds: number
   statusVerb: string
-  slashCommands: Array<{ name: string; description: string }>
+  slashCommands: Array<{ name: string; description: string; argumentHint?: string }>
   agentTaskNotifications: Record<string, AgentTaskNotification>
+  backgroundAgentTasks?: Record<string, BackgroundAgentTask>
+  activeGoal?: ActiveGoalState | null
   elapsedTimer: ReturnType<typeof setInterval> | null
   composerPrefill?: {
     text: string
@@ -76,6 +83,8 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   statusVerb: '',
   slashCommands: [],
   agentTaskNotifications: {},
+  backgroundAgentTasks: {},
+  activeGoal: null,
   elapsedTimer: null,
   composerPrefill: null,
 }
@@ -210,6 +219,79 @@ function appendAssistantTextMessage(
   ]
 }
 
+function upsertBackgroundTaskMessage(
+  messages: UIMessage[],
+  task: BackgroundAgentTask,
+  timestamp: number,
+): UIMessage[] {
+  const existingIndex = messages.findIndex((message) =>
+    message.type === 'background_task' &&
+    (message.task.taskId === task.taskId ||
+      (task.toolUseId && message.task.toolUseId === task.toolUseId)))
+  if (existingIndex === -1) {
+    return [...messages, {
+      id: `background-task-${task.taskId}`,
+      type: 'background_task',
+      task,
+      timestamp,
+    }]
+  }
+
+  return messages.map((message, index) =>
+    index === existingIndex && message.type === 'background_task'
+      ? { ...message, task: { ...message.task, ...task }, timestamp: message.timestamp || timestamp }
+      : message)
+}
+
+function mergeBackgroundTaskMessages(
+  messages: UIMessage[],
+  tasks: Record<string, BackgroundAgentTask>,
+): UIMessage[] {
+  const merged = Object.values(tasks).reduce(
+    (current, task) => upsertBackgroundTaskMessage(current, task, task.updatedAt),
+    messages,
+  )
+  return [...merged].sort((a, b) => a.timestamp - b.timestamp)
+}
+
+function mergeRestoredTerminalGoalEvents(
+  messages: UIMessage[],
+  restoredMessages: UIMessage[],
+): UIMessage[] {
+  const existingKeys = new Set(messages
+    .filter((message): message is Extract<UIMessage, { type: 'goal_event' }> =>
+      message.type === 'goal_event')
+    .map((message) => `${message.action}:${message.message ?? ''}:${message.objective ?? ''}`))
+
+  const missingTerminalEvents = restoredMessages.filter((
+    message,
+  ): message is Extract<UIMessage, { type: 'goal_event' }> =>
+    message.type === 'goal_event' &&
+    (message.action === 'completed' || message.action === 'cleared') &&
+    !existingKeys.has(`${message.action}:${message.message ?? ''}:${message.objective ?? ''}`))
+
+  return missingTerminalEvents.length > 0
+    ? [...messages, ...missingTerminalEvents]
+    : messages
+}
+
+function normalizeMemoryEventFiles(data: unknown): MemoryEventFile[] {
+  if (!data || typeof data !== 'object') return []
+  const writtenPaths = (data as { writtenPaths?: unknown }).writtenPaths
+  if (!Array.isArray(writtenPaths)) return []
+  return writtenPaths
+    .filter((path): path is string => typeof path === 'string' && path.trim().length > 0)
+    .map((path) => ({ path, action: 'saved' as const }))
+}
+
+function normalizeMemoryTeamCount(data: unknown): number | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const teamCount = (data as { teamCount?: unknown }).teamCount
+  return typeof teamCount === 'number' && Number.isFinite(teamCount)
+    ? teamCount
+    : undefined
+}
+
 function normalizeNotificationPreview(content: string): string {
   return content
     .replace(/```[\s\S]*?```/g, ' code block ')
@@ -251,13 +333,17 @@ function updateSessionIn(
 
 async function fetchAndMapSessionHistory(sessionId: string) {
   const { messages, taskNotifications } = await sessionsApi.getMessages(sessionId)
+  const uiMessages = mapHistoryMessagesToUiMessages(messages)
+  const restoredNotifications = {
+    ...reconstructAgentNotifications(messages),
+    ...agentNotificationRecordFromList(taskNotifications ?? []),
+  }
   return {
     rawMessages: messages,
-    uiMessages: mapHistoryMessagesToUiMessages(messages),
-    restoredNotifications: {
-      ...reconstructAgentNotifications(messages),
-      ...agentNotificationRecordFromList(taskNotifications ?? []),
-    },
+    uiMessages,
+    activeGoal: deriveActiveGoalFromMessages(uiMessages),
+    restoredNotifications,
+    restoredBackgroundTasks: backgroundTaskRecordFromNotifications(Object.values(restoredNotifications)),
     lastTodos: extractLastTodoWriteFromHistory(messages),
     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
   }
@@ -281,6 +367,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ...createDefaultSessionState(),
           connectionState: 'connecting',
           messages: existing?.messages ?? [],
+          activeGoal: existing?.activeGoal ?? null,
         },
       },
     }))
@@ -509,16 +596,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       const {
         uiMessages,
+        activeGoal,
         restoredNotifications,
+        restoredBackgroundTasks,
         lastTodos,
         hasMessagesAfterTaskCompletion,
       } = await fetchAndMapSessionHistory(sessionId)
       set((state) => {
         const session = state.sessions[sessionId]
-        if (!session || session.messages.length > 0) return state
+        if (!session) return state
+        if (session.messages.length > 0) {
+          return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
+            activeGoal: activeGoal ?? s.activeGoal ?? null,
+            agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
+            backgroundAgentTasks: mergeBackgroundAgentTaskRecords(
+              s.backgroundAgentTasks ?? {},
+              restoredBackgroundTasks,
+            ),
+            messages: mergeRestoredTerminalGoalEvents(
+              mergeBackgroundTaskMessages(s.messages, restoredBackgroundTasks),
+              uiMessages,
+            ),
+          })) }
+        }
         return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
-          messages: uiMessages,
+          messages: mergeBackgroundTaskMessages(uiMessages, restoredBackgroundTasks),
+          activeGoal,
           agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
+          backgroundAgentTasks: mergeBackgroundAgentTaskRecords(
+            s.backgroundAgentTasks ?? {},
+            restoredBackgroundTasks,
+          ),
         })) }
       })
       if (lastTodos && lastTodos.length > 0) {
@@ -539,7 +647,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       const {
         uiMessages,
+        activeGoal,
         restoredNotifications,
+        restoredBackgroundTasks,
         lastTodos,
         hasMessagesAfterTaskCompletion,
       } = await fetchAndMapSessionHistory(sessionId)
@@ -550,8 +660,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
         return {
           sessions: updateSessionIn(state.sessions, sessionId, () => ({
-            messages: uiMessages,
+            messages: mergeBackgroundTaskMessages(uiMessages, restoredBackgroundTasks),
+            activeGoal,
             agentTaskNotifications: restoredNotifications,
+            backgroundAgentTasks: restoredBackgroundTasks,
             chatState: 'idle',
             activeThinkingId: null,
             activeToolUseId: null,
@@ -593,7 +705,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   clearMessages: (sessionId) => {
     clearPendingTaskToolUseIds(sessionId)
-    set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], streamingText: '', chatState: 'idle' })) }))
+    set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], activeGoal: null, streamingText: '', chatState: 'idle' })) }))
   },
 
   handleServerMessage: (sessionId, msg) => {
@@ -820,6 +932,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingComputerUsePermission: null,
           elapsedTimer: null,
         }))
+        useTabStore.getState().updateTabStatus(sessionId, 'idle')
         const notification = wasAgentRunning
           ? buildAgentCompletionNotification(sessionId, completionMessages, text)
           : null
@@ -879,7 +992,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
       case 'system_notification':
         if (msg.subtype === 'slash_commands' && Array.isArray(msg.data)) {
-          update(() => ({ slashCommands: msg.data as Array<{ name: string; description: string }> }))
+          update(() => ({ slashCommands: msg.data as Array<{ name: string; description: string; argumentHint?: string }> }))
         }
         if (msg.subtype === 'session_cleared') {
           const session = get().sessions[sessionId]
@@ -899,6 +1012,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             statusVerb: '',
             tokenUsage: { input_tokens: 0, output_tokens: 0 },
             slashCommands: [],
+            activeGoal: null,
+            backgroundAgentTasks: {},
+            agentTaskNotifications: {},
           }))
           clearPendingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
@@ -922,40 +1038,100 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ],
           }))
         }
+        if (msg.subtype === 'memory_saved') {
+          const files = normalizeMemoryEventFiles(msg.data)
+          if (files.length > 0) {
+            update((session) => ({
+              messages: [
+                ...session.messages,
+                {
+                  id: nextId(),
+                  type: 'memory_event',
+                  event: 'saved',
+                  files,
+                  message: msg.message,
+                  teamCount: normalizeMemoryTeamCount(msg.data),
+                  timestamp: Date.now(),
+                },
+              ],
+            }))
+          }
+        }
+        if (msg.subtype === 'goal_event') {
+          const goalEvent = normalizeGoalEventData(msg.data, msg.message)
+          if (goalEvent) {
+            update((session) => ({
+              activeGoal: applyGoalEventToActiveGoal(session.activeGoal ?? null, goalEvent, Date.now()),
+              messages: [
+                ...session.messages,
+                {
+                  id: nextId(),
+                  type: 'goal_event',
+                  ...goalEvent,
+                  timestamp: Date.now(),
+                },
+              ],
+            }))
+          }
+        }
+        if ((msg.subtype === 'task_started' || msg.subtype === 'task_progress') && msg.data && typeof msg.data === 'object') {
+          const taskEvent = normalizeBackgroundAgentTaskEvent(msg.data, msg.subtype)
+          if (taskEvent) {
+            const now = Date.now()
+            update((session) => {
+              const backgroundAgentTasks = upsertBackgroundAgentTask(
+                session.backgroundAgentTasks ?? {},
+                taskEvent,
+                now,
+              )
+              const task = backgroundAgentTasks[taskEvent.taskId]
+              return {
+                backgroundAgentTasks,
+                ...(task ? { messages: upsertBackgroundTaskMessage(session.messages, task, now) } : {}),
+              }
+            })
+          }
+        }
         if (msg.subtype === 'task_notification' && msg.data && typeof msg.data === 'object') {
           const data = msg.data as Record<string, unknown>
+          const taskEvent = normalizeBackgroundAgentTaskEvent(data, 'task_notification')
           const toolUseId =
             typeof data.tool_use_id === 'string' && data.tool_use_id.trim()
               ? data.tool_use_id
               : null
           const taskStatus = data.status
-          if (
-            toolUseId &&
-            (taskStatus === 'completed' ||
-              taskStatus === 'failed' ||
-              taskStatus === 'stopped')
-          ) {
-            update((session) => ({
-              agentTaskNotifications: {
-                ...session.agentTaskNotifications,
-                [toolUseId]: {
-                  taskId:
-                    typeof data.task_id === 'string' && data.task_id.trim()
-                      ? data.task_id
-                      : toolUseId,
-                  toolUseId,
-                  status: taskStatus,
-                  summary:
-                    typeof data.summary === 'string' && data.summary.trim()
-                      ? data.summary
-                      : undefined,
-                  outputFile:
-                    typeof data.output_file === 'string' && data.output_file.trim()
-                      ? data.output_file
-                      : undefined,
+          if (taskEvent) {
+            const now = Date.now()
+            update((session) => {
+              const backgroundAgentTasks = upsertBackgroundAgentTask(
+                session.backgroundAgentTasks ?? {},
+                taskEvent,
+                now,
+              )
+              const task = backgroundAgentTasks[taskEvent.taskId]
+              return {
+                backgroundAgentTasks,
+                ...(task ? { messages: upsertBackgroundTaskMessage(session.messages, task, now) } : {}),
+                agentTaskNotifications: {
+                  ...session.agentTaskNotifications,
+                  ...(toolUseId &&
+                  (taskStatus === 'completed' ||
+                    taskStatus === 'failed' ||
+                    taskStatus === 'stopped')
+                    ? {
+                        [toolUseId]: {
+                          taskId: taskEvent.taskId,
+                          toolUseId,
+                          status: taskStatus,
+                          summary: taskEvent.summary,
+                          outputFile: taskEvent.outputFile,
+                          usage: taskEvent.usage,
+                        },
+                      }
+                    : {}),
                 },
-              },
-            }))
+              }
+            })
           }
         }
         break
@@ -982,6 +1158,16 @@ type AssistantHistoryBlock = { type: string; text?: string; thinking?: string; n
 type UserHistoryBlock = { type: string; text?: string; tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { data?: string }; mimeType?: string; media_type?: string; name?: string }
 
 const TASK_NOTIFICATION_RE = /^<task-notification>\s*[\s\S]*<\/task-notification>$/i
+const GOAL_EVENT_ACTIONS = new Set<GoalEventAction>([
+  'created',
+  'replaced',
+  'status',
+  'paused',
+  'resumed',
+  'completed',
+  'cleared',
+  'message',
+])
 
 /**
  * Check if text is a teammate-message (internal agent-to-agent communication).
@@ -1033,6 +1219,213 @@ function readXmlTag(xml: string, tag: string): string | undefined {
   return match?.[1] ? decodeXmlText(match[1].trim()) : undefined
 }
 
+function readNonEmptyString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+function normalizeBackgroundTaskUsage(value: unknown): BackgroundAgentTaskUsage | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const usage: BackgroundAgentTaskUsage = {}
+  const totalTokens = record.total_tokens ?? record.totalTokens
+  const toolUses = record.tool_uses ?? record.toolUses
+  const durationMs = record.duration_ms ?? record.durationMs
+  if (typeof totalTokens === 'number') usage.totalTokens = totalTokens
+  if (typeof toolUses === 'number') usage.toolUses = toolUses
+  if (typeof durationMs === 'number') usage.durationMs = durationMs
+  return Object.keys(usage).length > 0 ? usage : undefined
+}
+
+function normalizeBackgroundAgentTaskEvent(
+  data: unknown,
+  subtype: string,
+): Partial<BackgroundAgentTask> & Pick<BackgroundAgentTask, 'taskId' | 'status'> | null {
+  if (!data || typeof data !== 'object') return null
+  const record = data as Record<string, unknown>
+  const taskId = readNonEmptyString(record, 'task_id', 'taskId')
+  const toolUseId = readNonEmptyString(record, 'tool_use_id', 'toolUseId')
+  const id = taskId ?? toolUseId
+  if (!id) return null
+
+  const rawStatus = readNonEmptyString(record, 'status')
+  const status = rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'stopped'
+    ? rawStatus
+    : rawStatus === 'killed'
+      ? 'stopped'
+      : subtype === 'task_notification'
+        ? 'completed'
+        : 'running'
+
+  return {
+    taskId: id,
+    toolUseId,
+    status,
+    description: readNonEmptyString(record, 'description', 'message', 'title'),
+    taskType: readNonEmptyString(record, 'task_type', 'taskType'),
+    workflowName: readNonEmptyString(record, 'workflow_name', 'workflowName'),
+    prompt: readNonEmptyString(record, 'prompt'),
+    summary: readNonEmptyString(record, 'summary'),
+    lastToolName: readNonEmptyString(record, 'last_tool_name', 'lastToolName'),
+    outputFile: readNonEmptyString(record, 'output_file', 'outputFile'),
+    usage: normalizeBackgroundTaskUsage(record.usage),
+  }
+}
+
+function upsertBackgroundAgentTask(
+  current: Record<string, BackgroundAgentTask>,
+  event: Partial<BackgroundAgentTask> & Pick<BackgroundAgentTask, 'taskId' | 'status'>,
+  now: number,
+): Record<string, BackgroundAgentTask> {
+  const existingKey = current[event.taskId]
+    ? event.taskId
+    : event.toolUseId
+      ? Object.keys(current).find((key) =>
+        key === event.toolUseId || current[key]?.toolUseId === event.toolUseId)
+      : undefined
+  const existing = existingKey ? current[existingKey] : undefined
+  const next = { ...current }
+  if (existingKey && existingKey !== event.taskId) {
+    delete next[existingKey]
+  }
+  return {
+    ...next,
+    [event.taskId]: {
+      taskId: event.taskId,
+      toolUseId: event.toolUseId ?? existing?.toolUseId,
+      status: event.status,
+      description: event.description ?? existing?.description,
+      taskType: event.taskType ?? existing?.taskType,
+      workflowName: event.workflowName ?? existing?.workflowName,
+      prompt: event.prompt ?? existing?.prompt,
+      summary: event.summary ?? existing?.summary,
+      lastToolName: event.lastToolName ?? existing?.lastToolName,
+      outputFile: event.outputFile ?? existing?.outputFile,
+      usage: event.usage ?? existing?.usage,
+      startedAt: existing?.startedAt ?? now,
+      updatedAt: now,
+    },
+  }
+}
+
+function normalizeGoalEventData(
+  data: unknown,
+  fallbackMessage?: string,
+): Omit<Extract<UIMessage, { type: 'goal_event' }>, 'id' | 'type' | 'timestamp'> | null {
+  if (!data || typeof data !== 'object') {
+    const message = typeof fallbackMessage === 'string' ? fallbackMessage.trim() : ''
+    return message ? { action: 'message', message } : null
+  }
+
+  const record = data as Record<string, unknown>
+  const action = typeof record.action === 'string' && GOAL_EVENT_ACTIONS.has(record.action as GoalEventAction)
+    ? record.action as GoalEventAction
+    : 'message'
+  const read = (key: string) =>
+    typeof record[key] === 'string' && record[key].trim()
+      ? record[key].trim()
+      : undefined
+  return {
+    action,
+    status: read('status'),
+    objective: read('objective'),
+    budget: read('budget'),
+    elapsed: read('elapsed'),
+    continuations: read('continuations'),
+    message: read('message') ?? (typeof fallbackMessage === 'string' ? fallbackMessage.trim() : undefined),
+  }
+}
+
+function applyGoalEventToActiveGoal(
+  current: ActiveGoalState | null,
+  event: Omit<Extract<UIMessage, { type: 'goal_event' }>, 'id' | 'type' | 'timestamp'>,
+  updatedAt: number,
+): ActiveGoalState | null {
+  if (event.action === 'cleared') return null
+  if (
+    event.action === 'message' &&
+    event.message &&
+    /no (active )?goal/i.test(event.message)
+  ) {
+    return current
+  }
+  if (event.action === 'message') return current
+  const baseGoal = event.action === 'created' || event.action === 'replaced' ? null : current
+
+  return {
+    action: event.action,
+    status: event.status ?? (event.action === 'completed' ? 'complete' : baseGoal?.status),
+    objective: event.objective ?? baseGoal?.objective,
+    budget: event.budget ?? baseGoal?.budget,
+    elapsed: event.elapsed ?? baseGoal?.elapsed,
+    continuations: event.continuations ?? baseGoal?.continuations,
+    message: event.message ?? baseGoal?.message,
+    updatedAt,
+  }
+}
+
+function deriveActiveGoalFromMessages(messages: UIMessage[]): ActiveGoalState | null {
+  return messages.reduce<ActiveGoalState | null>((activeGoal, message) => {
+    if (message.type !== 'goal_event') return activeGoal
+    return applyGoalEventToActiveGoal(activeGoal, message, message.timestamp)
+  }, null)
+}
+
+function extractLocalCommandText(content: unknown): string | null {
+  if (typeof content !== 'string') return null
+  return content.trim() || null
+}
+
+function parseGoalCommandFromLocalCommand(content: unknown): { name: string; args: string } | null {
+  const text = extractLocalCommandText(content)
+  if (!text) return null
+  const commandName = readXmlTag(text, 'command-name')
+  if (!commandName) return null
+  return {
+    name: commandName.replace(/^\//, ''),
+    args: readXmlTag(text, 'command-args') ?? '',
+  }
+}
+
+function formatVisibleLocalCommand(command: { name: string; args: string }): string {
+  const normalizedName = command.name.replace(/^\//, '')
+  const args = command.args.trim()
+  return `/${normalizedName}${args ? ` ${args}` : ''}`
+}
+
+function extractLocalCommandOutputText(content: unknown): string | null {
+  const text = extractLocalCommandText(content)
+  if (!text) return null
+  return readXmlTag(text, 'local-command-stdout') ?? readXmlTag(text, 'local-command-stderr') ?? null
+}
+
+function parseGoalEventFromLocalCommandOutput(
+  output: string,
+  command: { name: string; args: string } | null,
+): Omit<Extract<UIMessage, { type: 'goal_event' }>, 'id' | 'type' | 'timestamp'> | null {
+  if (command && command.name !== 'goal') return null
+  const trimmed = output.trim()
+  if (!trimmed) return null
+
+  if (trimmed === 'Goal cleared.' || trimmed.startsWith('Goal cleared:')) return { action: 'cleared', message: trimmed }
+  if (trimmed === 'Goal marked complete.') return { action: 'completed', message: trimmed }
+  if (trimmed === 'No active goal.') return { action: 'message', message: trimmed }
+  if (trimmed.startsWith('Goal set:')) {
+    const objective = trimmed.slice('Goal set:'.length).trim()
+    return {
+      action: 'created',
+      status: 'active',
+      objective: objective || undefined,
+      message: trimmed,
+    }
+  }
+
+  return command?.name === 'goal' ? { action: 'message', message: trimmed } : null
+}
+
 function extractTaskNotification(content: unknown): AgentTaskNotification | null {
   const xml = extractHistoryTextBlocks(content)
     .map((text) => extractTaskNotificationXml(text))
@@ -1065,6 +1458,33 @@ function agentNotificationRecordFromList(
 ): Record<string, AgentTaskNotification> {
   return Object.fromEntries(
     notifications.map((notification) => [notification.toolUseId, notification]),
+  )
+}
+
+function backgroundTaskRecordFromNotifications(
+  notifications: AgentTaskNotification[],
+): Record<string, BackgroundAgentTask> {
+  return notifications.reduce<Record<string, BackgroundAgentTask>>((tasks, notification) => {
+    const parsedTimestamp = notification.timestamp ? new Date(notification.timestamp).getTime() : NaN
+    const now = Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now()
+    return upsertBackgroundAgentTask(tasks, {
+      taskId: notification.taskId,
+      toolUseId: notification.toolUseId,
+      status: notification.status,
+      summary: notification.summary,
+      outputFile: notification.outputFile,
+      usage: notification.usage,
+    }, now)
+  }, {})
+}
+
+function mergeBackgroundAgentTaskRecords(
+  current: Record<string, BackgroundAgentTask>,
+  restored: Record<string, BackgroundAgentTask>,
+): Record<string, BackgroundAgentTask> {
+  return Object.values(restored).reduce(
+    (tasks, task) => upsertBackgroundAgentTask(tasks, task, task.updatedAt),
+    current,
   )
 }
 
@@ -1261,6 +1681,7 @@ export function mapHistoryMessagesToUiMessages(
   const includeTeammateMessages = options?.includeTeammateMessages === true
   const uiMessages: UIMessage[] = []
   let suppressTaskNotificationResponse = false
+  let pendingGoalCommand: { name: string; args: string } | null = null
 
   for (const msg of messages) {
     if (msg.type === 'user' && isTaskNotificationContent(msg.content)) {
@@ -1274,6 +1695,36 @@ export function mapHistoryMessagesToUiMessages(
     }
 
     const timestamp = new Date(msg.timestamp).getTime()
+    if (msg.type === 'system' && typeof msg.content === 'string') {
+      const localCommand = parseGoalCommandFromLocalCommand(msg.content)
+      if (localCommand) {
+        pendingGoalCommand = localCommand
+        if (localCommand.name === 'goal') {
+          uiMessages.push({
+            id: msg.id || nextId(),
+            type: 'user_text',
+            content: formatVisibleLocalCommand(localCommand),
+            timestamp,
+          })
+        }
+        continue
+      }
+
+      const localCommandOutput = extractLocalCommandOutputText(msg.content)
+      if (localCommandOutput) {
+        const goalEvent = parseGoalEventFromLocalCommandOutput(localCommandOutput, pendingGoalCommand)
+        pendingGoalCommand = null
+        if (goalEvent) {
+          uiMessages.push({
+            id: msg.id || nextId(),
+            type: 'goal_event',
+            ...goalEvent,
+            timestamp,
+          })
+        }
+        continue
+      }
+    }
     if (msg.type === 'user' && typeof msg.content === 'string') {
       if (isTeammateMessage(msg.content)) {
         if (!includeTeammateMessages) continue
@@ -1336,6 +1787,25 @@ export function mapHistoryMessagesToUiMessages(
           attachments: allAttachments.length > 0 ? allAttachments : undefined,
           timestamp,
         })
+      }
+    }
+    if (msg.type === 'system' && msg.content && typeof msg.content === 'object') {
+      const subtype = (msg.content as { subtype?: unknown }).subtype
+      if (subtype === 'memory_saved') {
+        const files = normalizeMemoryEventFiles(msg.content)
+        if (files.length > 0) {
+          uiMessages.push({
+            id: msg.id || nextId(),
+            type: 'memory_event',
+            event: 'saved',
+            files,
+            message: typeof (msg.content as { message?: unknown }).message === 'string'
+              ? (msg.content as { message: string }).message
+              : undefined,
+            teamCount: normalizeMemoryTeamCount(msg.content),
+            timestamp,
+          })
+        }
       }
     }
   }

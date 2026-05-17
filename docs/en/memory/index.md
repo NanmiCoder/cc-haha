@@ -55,7 +55,7 @@ Claude's "dreaming" mechanism -- a deep dive into background silent memory conso
 
 ## Illustrations
 
-All illustrations use a dark background (#1a1a2e) + Anthropic brand copper-orange (#D97757) style, consistent with the official Claude Code documentation.
+All illustrations use a dark background (#1a1a2e) + Claude Code Haha orange-blue accent (#FF7A00) style, consistent with the official Claude Code documentation.
 
 | Image | Description | Size |
 |-------|-------------|------|

@@ -243,6 +243,7 @@ import {
   logAPIError,
   logAPIQuery,
   logAPISuccessAndDuration,
+  normalizeUsage,
   type NonNullableUsage,
 } from "./logging.js";
 import {
@@ -1612,7 +1613,7 @@ async function* queryModel(
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
     const modelCanThink = modelSupportsThinking(options.model)
     const sendsExplicitDisabledThinking =
-      !(hasThinking && modelCanThink) && shouldSendExplicitDisabledThinking()
+      !hasThinking && (modelCanThink || shouldSendExplicitDisabledThinking())
 
     const outputConfig: BetaOutputConfig = {
       ...((extraBodyParams.output_config as BetaOutputConfig) ?? {}),
@@ -2635,6 +2636,7 @@ async function* queryModel(
       const m: AssistantMessage = {
         message: {
           ...result,
+          usage: normalizeUsage(result.usage),
           content: normalizeContentFromAPI(
             result.content,
             tools,
@@ -2732,6 +2734,7 @@ async function* queryModel(
         const m: AssistantMessage = {
           message: {
             ...result,
+            usage: normalizeUsage(result.usage),
             content: normalizeContentFromAPI(
               result.content,
               tools,
@@ -2882,8 +2885,9 @@ async function* queryModel(
     // message_delta handler before any yield. Fallback pushes to newMessages
     // then yields, so tracking must be here to survive .return() at the yield.
     if (fallbackMessage) {
-      const fallbackUsage = fallbackMessage.message.usage;
-      usage = updateUsage(EMPTY_USAGE, fallbackUsage);
+      const fallbackUsage = normalizeUsage(fallbackMessage.message.usage);
+      fallbackMessage.message.usage = fallbackUsage;
+      usage = fallbackUsage;
       stopReason = fallbackMessage.message.stop_reason;
       const fallbackCost = calculateUSDCost(resolvedModel, fallbackUsage);
       costUSD += addToTotalSessionCost(

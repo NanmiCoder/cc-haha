@@ -242,6 +242,34 @@ describe('ConversationService', () => {
     ])
   })
 
+  it('should send thinking token controls to active CLI sessions', () => {
+    const svc = new ConversationService() as any
+    const sent: string[] = []
+    svc.sessions.set('session-thinking-control', {
+      sdkSocket: { send: (data: string) => sent.push(data) },
+      pendingOutbound: [],
+    })
+
+    expect(svc.setMaxThinkingTokens('session-thinking-control', 0)).toBe(true)
+    expect(svc.setMaxThinkingTokens('session-thinking-control', null)).toBe(true)
+    expect(svc.setMaxThinkingTokensForActiveSessions(0)).toBe(1)
+
+    expect(sent.map((line) => JSON.parse(line).request)).toEqual([
+      {
+        subtype: 'set_max_thinking_tokens',
+        max_thinking_tokens: 0,
+      },
+      {
+        subtype: 'set_max_thinking_tokens',
+        max_thinking_tokens: null,
+      },
+      {
+        subtype: 'set_max_thinking_tokens',
+        max_thinking_tokens: 0,
+      },
+    ])
+  })
+
   it('should return false when sending interrupt to non-existent session', () => {
     const svc = new ConversationService()
     const result = svc.sendInterrupt('no-such-session')
@@ -863,6 +891,31 @@ describe('WebSocket Chat Integration', () => {
     expect(statusVerbs).toContain('Creating worktree')
   })
 
+  it('does not emit worktree startup status for an already materialized worktree session', async () => {
+    const repoDir = await createCleanGitRepo()
+    const { sessionId } = await sessionService.createSession(repoDir, {
+      branch: 'feature/rail',
+      worktree: true,
+    })
+
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    const worktreePath = launchInfo?.repository?.worktreePath
+    expect(worktreePath).toBeTruthy()
+    await fs.mkdir(worktreePath!, { recursive: true })
+    await sessionService.appendSessionMetadata(sessionId, {
+      workDir: worktreePath!,
+      repository: launchInfo!.repository,
+    })
+
+    const messages = await runTurn(sessionId, 'Continue in the existing worktree')
+    const statusVerbs = messages
+      .filter((msg) => msg.type === 'status')
+      .map((msg) => msg.verb)
+
+    expect(statusVerbs).toContain('Thinking')
+    expect(statusVerbs).not.toContain('Creating worktree')
+  })
+
   it('keeps the default startup status for current-worktree repository sessions', async () => {
     const repoDir = await createCleanGitRepo()
     const { sessionId } = await sessionService.createSession(repoDir, {
@@ -920,6 +973,43 @@ describe('WebSocket Chat Integration', () => {
     expect(titleIndex).toBeLessThan(completionIndex)
   })
 
+  it('uses the /goal objective for the derived session title', async () => {
+    const sessionId = `title-goal-${crypto.randomUUID()}`
+    const messages: any[] = []
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        ws.close()
+        reject(new Error('Timed out waiting for goal title'))
+      }, 5000)
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data as string)
+        messages.push(msg)
+        if (msg.type === 'connected') {
+          ws.send(JSON.stringify({
+            type: 'user_message',
+            content: '/goal ship the desktop goal card',
+          }))
+          return
+        }
+        if (msg.type === 'session_title_updated') {
+          clearTimeout(timeout)
+          ws.close()
+          resolve()
+        }
+      }
+      ws.onerror = () => {
+        clearTimeout(timeout)
+        reject(new Error(`WebSocket error for goal title session ${sessionId}`))
+      }
+    })
+
+    const title = messages.find((msg) => msg.type === 'session_title_updated')?.title
+    expect(title).toBe('ship the desktop goal card')
+  })
+
   it('should start desktop sessions with disabled thinking when configured', async () => {
     const sessionId = `chat-thinking-disabled-${crypto.randomUUID()}`
     const originalStartSession = conversationService.startSession.bind(conversationService)
@@ -954,6 +1044,90 @@ describe('WebSocket Chat Integration', () => {
       await fs.writeFile(path.join(tmpDir, 'settings.json'), '{}\n', 'utf-8')
     }
   })
+
+  it('should let the global Thinking setting control DeepSeek desktop sessions', async () => {
+    const providerService = new ProviderService()
+    const provider = await providerService.addProvider({
+      presetId: 'deepseek',
+      name: 'DeepSeek Thinking Toggle',
+      apiKey: 'key-deepseek-toggle',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'deepseek-v4-pro',
+        haiku: 'deepseek-v4-flash',
+        sonnet: 'deepseek-v4-pro',
+        opus: 'deepseek-v4-pro',
+      },
+    })
+    await providerService.activateProvider(provider.id)
+
+    const originalStartSession = conversationService.startSession.bind(conversationService)
+    const startOptions: Array<{
+      sessionId: string
+      thinking?: string
+      providerId?: string | null
+    }> = []
+    const sessionIds: string[] = []
+
+    conversationService.startSession = (async function patchedStartSession(
+      sid: string,
+      workDir: string,
+      sdkUrl: string,
+      options?: { permissionMode?: string; model?: string; effort?: string; thinking?: 'enabled' | 'adaptive' | 'disabled'; providerId?: string | null },
+    ) {
+      if (sessionIds.includes(sid)) {
+        startOptions.push({
+          sessionId: sid,
+          thinking: options?.thinking,
+          providerId: options?.providerId,
+        })
+      }
+      return originalStartSession(sid, workDir, sdkUrl, options)
+    }) as typeof conversationService.startSession
+
+    try {
+      const disabledSessionId = `ds-think-off-${crypto.randomUUID()}`
+      sessionIds.push(disabledSessionId)
+      await fs.writeFile(
+        path.join(tmpDir, 'settings.json'),
+        JSON.stringify({ alwaysThinkingEnabled: false }, null, 2),
+        'utf-8',
+      )
+      const disabledMessages = await runTurn(disabledSessionId, 'DeepSeek with global thinking off')
+      expect(disabledMessages.some((m) => m.type === 'message_complete')).toBe(true)
+
+      const enabledSessionId = `ds-think-on-${crypto.randomUUID()}`
+      sessionIds.push(enabledSessionId)
+      await fs.writeFile(
+        path.join(tmpDir, 'settings.json'),
+        JSON.stringify({ alwaysThinkingEnabled: true }, null, 2),
+        'utf-8',
+      )
+      const enabledMessages = await runTurn(enabledSessionId, 'DeepSeek with global thinking on')
+      expect(enabledMessages.some((m) => m.type === 'message_complete')).toBe(true)
+
+      expect(startOptions).toEqual([
+        {
+          sessionId: disabledSessionId,
+          thinking: 'disabled',
+          providerId: provider.id,
+        },
+        {
+          sessionId: enabledSessionId,
+          thinking: undefined,
+          providerId: provider.id,
+        },
+      ])
+    } finally {
+      conversationService.startSession = originalStartSession as typeof conversationService.startSession
+      for (const sessionId of sessionIds) {
+        conversationService.stopSession(sessionId)
+      }
+      await providerService.activateOfficial()
+      await fs.writeFile(path.join(tmpDir, 'settings.json'), '{}\n', 'utf-8')
+    }
+  }, 20_000)
 
   it('should continue chat when SDK init arrives only after the first user turn', async () => {
     const messages = await withMockInitMode('on_first_user', () =>

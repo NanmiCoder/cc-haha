@@ -82,13 +82,14 @@ export function installPrePushHook(options: InstallPrePushHookOptions = {}): Ins
     gitConfig(rootDir, 'quality.allowMissingTests', 'true')
   }
 
-  if (options.live === false) {
-    gitConfig(rootDir, 'quality.prePushLive', 'false')
-  }
+  const shouldWriteGitConfig = !options.hookPath
+  const shouldEnableLive = options.live !== false && Boolean(options.liveProviderModels?.length)
 
-  if (options.liveProviderModels && options.liveProviderModels.length > 0) {
+  if (shouldWriteGitConfig && shouldEnableLive) {
     gitConfig(rootDir, 'quality.prePushLive', 'true')
-    gitConfig(rootDir, 'quality.prePushProviderModels', options.liveProviderModels.join(' '))
+    gitConfig(rootDir, 'quality.prePushProviderModels', options.liveProviderModels?.join(' ') ?? '')
+  } else if (shouldWriteGitConfig) {
+    gitConfig(rootDir, 'quality.prePushLive', 'false')
   }
 
   if (options.liveMode) {
@@ -162,11 +163,12 @@ function printHelp() {
   console.log(`Install the repository pre-push quality gate.
 
 Usage:
-  bun run hooks:install [-- --force] [-- --live-provider-model <selector>] [-- --live-mode smoke|baseline]
+  bun run hooks:install [-- --force] [-- --no-live] [-- --live-provider-model <selector>] [-- --live-mode smoke|baseline]
   bun run hooks:install -- --allow-cli-core-change --allow-coverage-baseline-change
 
 Examples:
   bun run hooks:install
+  bun run hooks:install -- --no-live
   bun run quality:providers
   bun run hooks:install -- --live-provider-model codingplan:main:codingplan-main
   bun run hooks:install -- --live-provider-model codingplan:main:codingplan-main --live-mode baseline
@@ -194,7 +196,8 @@ if (import.meta.main) {
     })
 
     console.log(`Installed pre-push quality gate: ${result.hookPath}`)
-    console.log('Every git push now runs: bun run quality:pr')
+    console.log('Every git push now runs: bun run quality:push')
+    console.log('Coverage remains in bun run verify, quality:pr, and CI.')
 
     if (args.liveProviderModels.length > 0) {
       console.log(`Live ${args.liveMode ?? 'smoke'} gate is enabled for ${args.liveProviderModels.length} provider selector(s).`)
