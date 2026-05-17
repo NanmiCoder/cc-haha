@@ -15,13 +15,13 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
+  final _focusNode = FocusNode();
   int _lastMessageCount = 0;
   bool _initialScrollDone = false;
 
   @override
   void initState() {
     super.initState();
-    // Schedule initial scroll after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
@@ -29,6 +29,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -40,7 +41,6 @@ class _ChatScreenState extends State<ChatScreen> {
   void _maybeScrollToBottom() {
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
-    // Auto-scroll only if user is near the bottom (within 200px)
     if (position.maxScrollExtent - position.pixels < 200) {
       _scrollToBottom();
     }
@@ -53,7 +53,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final messages = appState.messages;
     final streamingMessage = appState.streamingMessage;
 
-    // Auto-scroll on new messages
     if (messages.length > _lastMessageCount) {
       _lastMessageCount = messages.length;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -66,18 +65,32 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     }
 
-    // Auto-scroll while streaming
     if (streamingMessage != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeScrollToBottom());
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(appState.activeSessionId ?? 'Chat'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              appState.currentWorkDir?.split('/').last ?? 'Chat',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            if (appState.currentWorkDir != null)
+              Text(
+                appState.currentWorkDir!,
+                style: TextStyle(fontSize: 10, color: colorScheme.onSurfaceVariant),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+          ],
+        ),
         actions: [
           if (appState.isStreaming)
             IconButton(
-              icon: const Icon(Icons.stop),
+              icon: const Icon(Icons.stop_circle_outlined),
               tooltip: 'Stop generation',
               onPressed: () => appState.stopGeneration(),
             ),
@@ -88,6 +101,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ConnectionStatus(
             status: appState.chatStatus,
             isStreaming: appState.isStreaming,
+            workDir: appState.currentWorkDir,
           ),
 
           Expanded(
@@ -96,26 +110,21 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.chat,
-                            size: 48, color: colorScheme.onSurfaceVariant),
+                        Icon(Icons.chat, size: 48, color: colorScheme.onSurfaceVariant),
                         const SizedBox(height: 12),
                         Text(
                           'Send a message to start',
-                          style: TextStyle(
-                              color: colorScheme.onSurfaceVariant),
+                          style: TextStyle(color: colorScheme.onSurfaceVariant),
                         ),
                       ],
                     ),
                   )
                 : ListView.builder(
                     controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    itemCount: messages.length +
-                        (streamingMessage != null ? 1 : 0),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    itemCount: messages.length + (streamingMessage != null ? 1 : 0),
                     itemBuilder: (context, index) {
-                      if (streamingMessage != null &&
-                          index == messages.length) {
+                      if (streamingMessage != null && index == messages.length) {
                         return ChatBubble(
                           message: streamingMessage,
                           isStreaming: true,
@@ -157,40 +166,59 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
           ),
 
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _textController,
-                      decoration: InputDecoration(
-                        hintText: appState.isStreaming
-                            ? 'AI is responding...'
-                            : 'Type a message...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
+          // Composer
+          Container(
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              border: Border(
+                top: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
+              ),
+            ),
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _textController,
+                        focusNode: _focusNode,
+                        decoration: InputDecoration(
+                          hintText: appState.isStreaming
+                              ? 'AI is responding...'
+                              : 'Type a message...',
+                          filled: true,
+                          fillColor: colorScheme.surfaceContainerHighest,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 12,
+                          ),
+                          isDense: true,
                         ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 12,
-                        ),
+                        enabled: !appState.isStreaming,
+                        textInputAction: TextInputAction.send,
+                        maxLines: 4,
+                        minLines: 1,
+                        onSubmitted: (_) => _send(_textController.text),
                       ),
-                      enabled: !appState.isStreaming,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: _send,
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: colorScheme.primary,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
-                      onPressed: () => _send(_textController.text),
+                    const SizedBox(width: 8),
+                    Material(
+                      color: colorScheme.primary,
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
+                        onPressed: () => _send(_textController.text),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -204,6 +232,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (trimmed.isEmpty) return;
 
     _textController.clear();
+    _focusNode.requestFocus();
     context.read<AppState>().sendMessage(trimmed);
     Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
   }

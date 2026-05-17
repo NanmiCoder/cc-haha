@@ -95,6 +95,7 @@ class ChatMessage {
   final String sessionId;
   final DateTime timestamp;
   ChatMessageType msgType;
+  ChatRole role;
   String? text; // Accumulated text for streaming
   String? toolName;
   String? toolInput;
@@ -112,6 +113,7 @@ class ChatMessage {
     required this.sessionId,
     DateTime? timestamp,
     this.msgType = ChatMessageType.text,
+    this.role = ChatRole.assistant,
     this.text,
     this.toolName,
     this.toolInput,
@@ -136,3 +138,5 @@ enum ChatMessageType {
   error,
   system,
 }
+
+enum ChatRole { user, assistant }

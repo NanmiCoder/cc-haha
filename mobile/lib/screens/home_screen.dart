@@ -86,7 +86,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       return _SessionTile(
                         session: session,
                         onTap: () async {
-                          await appState.openSession(session.id);
+                          await appState.openSession(session.id, workDir: session.workDir);
                           if (mounted) {
                             Navigator.of(context).push(
                               MaterialPageRoute(
@@ -159,7 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _createAndOpen(AppState appState, String workDir) async {
     final session = await appState.createSession(workDir: workDir);
     if (session != null && mounted) {
-      await appState.openSession(session.id);
+      await appState.openSession(session.id, workDir: session.workDir);
       if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const ChatScreen()),

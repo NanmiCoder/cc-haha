@@ -41,6 +41,9 @@ class AppState extends ChangeNotifier {
   String? _activeSessionId;
   String? get activeSessionId => _activeSessionId;
 
+  String? _currentWorkDir;
+  String? get currentWorkDir => _currentWorkDir;
+
   List<ChatMessage> _messages = [];
   List<ChatMessage> get messages => _messages;
 
@@ -181,8 +184,9 @@ class AppState extends ChangeNotifier {
 
   // ─── Chat ─────────────────────────────────────────────────────────────
 
-  Future<void> openSession(String sessionId) async {
+  Future<void> openSession(String sessionId, {String? workDir}) async {
     _activeSessionId = sessionId;
+    _currentWorkDir = workDir;
     _messages = [];
     _streamingMessage = null;
     _isStreaming = false;
@@ -286,6 +290,7 @@ class AppState extends ChangeNotifier {
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       sessionId: _activeSessionId ?? '',
       msgType: ChatMessageType.text,
+      role: ChatRole.user,
       text: content,
     ));
 

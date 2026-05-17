@@ -29,7 +29,7 @@ class ChatBubble extends StatelessWidget {
       child: () {
         switch (message.msgType) {
           case ChatMessageType.text:
-            return _textBubble(colorScheme);
+            return _textBubble(colorScheme, context);
           case ChatMessageType.thinking:
             return ThinkingBlock(
               content: message.thinking ?? '',
@@ -59,28 +59,43 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
-  Widget _textBubble(ColorScheme colorScheme) {
+  Widget _textBubble(ColorScheme colorScheme, BuildContext ctx) {
     final text = message.text ?? '';
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SelectableText(
-            text,
-            style: TextStyle(color: colorScheme.onSurface),
+    final isUser = message.role == ChatRole.user;
+
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(ctx).size.width * 0.82,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isUser
+              ? colorScheme.primaryContainer
+              : colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isUser ? 16 : 4),
+            bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
-          if (isStreaming)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: _cursor(colorScheme),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SelectableText(
+              text,
+              style: TextStyle(color: colorScheme.onSurface),
             ),
-        ],
+            if (isStreaming)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: _cursor(colorScheme),
+              ),
+          ],
+        ),
       ),
     );
   }
