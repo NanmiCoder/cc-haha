@@ -666,47 +666,60 @@ function CodeSurface({
           </div>
         )}
       </div>
-        </Highlight>
-      ) : (
-        <Highlight
-          code={visibleCode}
-          language={language}
-          className="overflow-y-auto"
-        >
-          {renderLineComments()}
-          {lines.slice(0, WORKSPACE_PREVIEW_LINE_LIMIT).map((line, index) => {
-            const lineNumber = index + 1
-            return (
-              <span key={lineNumber}>
-                <CodeLine lineNumber={lineNumber} hasComment={commentLine === lineNumber} />
-              </span>
-            )
-          })}
-        </Highlight>
-      )}
-      {showAllLines && lines.length <= WORKSPACE_PREVIEW_LINE_LIMIT && (
-        <Highlight
-          code={visibleCode}
-          language={language}
-          className="min-h-0 flex-1 overflow-y-auto"
-        >
-          {renderLineComments()}
-          {lines.map((line, index) => {
-            const lineNumber = index + 1
-            return (
-              <span key={lineNumber}>
-                <CodeLine lineNumber={lineNumber} hasComment={commentLine === lineNumber} />
-              </span>
-            )
-          })}
-        </Highlight>
-      )}
-      {(!showAllLines || lines.length <= WORKSPACE_PREVIEW_LINE_LIMIT) && (
-        <CodeSurfaceSelectionArea
-          lines={visibleLines}
-          onMouseUp={handleSelectionMouseUp}
+      <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} onDismiss={() => setSelectionMenu(null)} />
+    </div>
+  )
+}
+
+function MarkdownSurface({
+  value,
+  onAddSelection,
+}: {
+  value: string
+  onAddSelection: (selection: WorkspaceTextSelection) => void
+}) {
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const [selectionMenu, setSelectionMenu] = useState<FloatingSelectionMenuState | null>(null)
+
+  useEffect(() => {
+    setSelectionMenu(null)
+  }, [value])
+
+  const handleSelectionMouseUp = (event: MouseEvent<HTMLDivElement>) => {
+    setSelectionMenu(getTextSelectionFromContainer(
+      surfaceRef.current,
+      (text) => getLineRangeForText(value, text),
+      event,
+    ))
+  }
+
+  const addCurrentSelectionToChat = () => {
+    if (!selectionMenu) return
+    onAddSelection({
+      text: selectionMenu.text,
+      startLine: selectionMenu.startLine,
+      endLine: selectionMenu.endLine,
+    })
+    setSelectionMenu(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  return (
+    <div
+      ref={surfaceRef}
+      className="min-h-0 flex-1 overflow-auto bg-[var(--color-surface)]"
+      onMouseUp={handleSelectionMouseUp}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setSelectionMenu(null)
+      }}
+    >
+      <div className="mx-auto w-full max-w-[860px] px-6 py-5">
+        <MarkdownRenderer
+          content={value}
+          variant="document"
+          className="workspace-markdown-preview prose-p:text-[14px] prose-p:leading-7 prose-h1:text-[24px] prose-h2:text-[18px] prose-h3:text-[15px] prose-code:text-[12px] prose-pre:my-4"
         />
-      )}
+      </div>
       <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} onDismiss={() => setSelectionMenu(null)} />
     </div>
   )
