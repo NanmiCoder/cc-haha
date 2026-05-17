@@ -111,8 +111,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   TextFormField(
                     controller: _keyController,
                     decoration: InputDecoration(
-                      labelText: AppConfig.isDesktop ? 'Password (optional)' : 'Password',
-                      hintText: AppConfig.isDesktop ? 'Not needed for local server' : 'Server REMOT_PASSWORD',
+                      labelText: 'Password',
+                      hintText: 'Server REMOT_PASSWORD',
                       prefixIcon: const Icon(Icons.lock_outlined),
                       border: const OutlineInputBorder(),
                       suffixIcon: IconButton(
@@ -126,14 +126,12 @@ class _ConnectScreenState extends State<ConnectScreen> {
                       ),
                     ),
                     obscureText: _obscureKey,
-                    validator: AppConfig.isDesktop
-                        ? null
-                        : (v) {
-                            if (v == null || v.trim().isEmpty) {
-                              return 'Password is required';
-                            }
-                            return null;
-                          },
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Password is required';
+                      }
+                      return null;
+                    },
                   ),
                   const SizedBox(height: 24),
                   FilledButton.icon(
