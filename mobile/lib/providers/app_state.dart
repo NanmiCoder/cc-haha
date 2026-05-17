@@ -317,6 +317,14 @@ class AppState extends ChangeNotifier {
             toolName: msg.toolName,
             toolInput: '',
           );
+        } else if (blockType == 'thinking') {
+          _streamingMessage = ChatMessage(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            sessionId: _activeSessionId ?? '',
+            msgType: ChatMessageType.thinking,
+            thinking: '',
+          );
+          _messages.add(_streamingMessage!);
         }
         break;
 
@@ -328,6 +336,9 @@ class AppState extends ChangeNotifier {
           } else if (_streamingMessage!.msgType == ChatMessageType.toolUse) {
             _streamingMessage!.toolInput =
                 (_streamingMessage!.toolInput ?? '') + (msg.toolInput ?? '');
+          } else if (_streamingMessage!.msgType == ChatMessageType.thinking) {
+            _streamingMessage!.thinking =
+                (_streamingMessage!.thinking ?? '') + (msg.text ?? '');
           }
         }
         break;
@@ -367,13 +378,20 @@ class AppState extends ChangeNotifier {
         break;
 
       case 'thinking':
-        final thinkMsg = ChatMessage(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          sessionId: _activeSessionId ?? '',
-          msgType: ChatMessageType.thinking,
-          thinking: msg.text,
-        );
-        _messages.add(thinkMsg);
+        // Accumulate thinking deltas into a single streaming message
+        if (_streamingMessage != null &&
+            _streamingMessage!.msgType == ChatMessageType.thinking) {
+          _streamingMessage!.thinking =
+              (_streamingMessage!.thinking ?? '') + (msg.text ?? '');
+        } else {
+          _streamingMessage = ChatMessage(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            sessionId: _activeSessionId ?? '',
+            msgType: ChatMessageType.thinking,
+            thinking: msg.text ?? '',
+          );
+          _messages.add(_streamingMessage!);
+        }
         break;
 
       case 'message_complete':

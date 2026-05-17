@@ -145,11 +145,14 @@ export function startServer(port = PORT, host = HOST) {
    * Explicit deployment auth remains a stronger override than H5-scoped
    * request gating.
    */
+  // Mobile mode trusts the phone as a local client — auth is handled
+  // by the server's API key (env vars), not by the mobile app itself.
   const forceAuth =
-    SERVER_OPTIONS.authRequired ||
-    process.env.SERVER_AUTH_REQUIRED === '1' ||
-    // Auto-enable auth when binding to non-localhost (mobile/dev access)
-    host !== '127.0.0.1'
+    !SERVER_OPTIONS.mobileMode && (
+      SERVER_OPTIONS.authRequired ||
+      process.env.SERVER_AUTH_REQUIRED === '1' ||
+      host !== '127.0.0.1'
+    )
   const h5AccessService = new H5AccessService()
 
   let server: ReturnType<typeof Bun.serve<WebSocketData>>

@@ -828,12 +828,18 @@ export class ConversationService {
     mode: string | undefined,
     dangerousMode: boolean,
   ): string[] {
-    if (dangerousMode) {
+    const isRoot = process.getuid?.() === 0
+
+    if (dangerousMode && !isRoot) {
       return ['--dangerously-skip-permissions']
     }
 
     const resolvedMode = mode || 'default'
     if (resolvedMode === 'bypassPermissions') {
+      // --dangerously-skip-permissions is rejected by CLI when running as root
+      if (isRoot) {
+        return ['--permission-mode', 'acceptEdits']
+      }
       return ['--dangerously-skip-permissions']
     }
 
@@ -887,12 +893,19 @@ export class ConversationService {
       'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS',
     ] as const
 
-    const cleanEnv = { ...process.env }
+    const cleanEnv: Record<string, string> = { ...process.env as Record<string, string> }
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
-    if (this.shouldStripInheritedProviderEnv(options?.providerId)) {
+    const shouldStrip = this.shouldStripInheritedProviderEnv(options?.providerId)
+    console.error(
+      `[ConversationService] buildChildEnv: shouldStrip=${shouldStrip}, providerId=${options?.providerId ?? 'undefined'}, ANTHROPIC_API_KEY=${cleanEnv.ANTHROPIC_API_KEY ? 'PRESENT' : 'MISSING'}`,
+    )
+    if (shouldStrip) {
       for (const key of PROVIDER_ENV_KEYS) {
         delete cleanEnv[key]
       }
+      console.error(
+        `[ConversationService] buildChildEnv: stripped PROVIDER_ENV_KEYS, ANTHROPIC_API_KEY now=${cleanEnv.ANTHROPIC_API_KEY ?? 'MISSING'}`,
+      )
     }
 
     let desktopServerUrl: string | undefined
@@ -1002,7 +1015,7 @@ export class ConversationService {
   }
 
   private shouldStripInheritedProviderEnv(providerId?: string | null): boolean {
-    if (providerId !== undefined) {
+    if (providerId) {
       return true
     }
 
@@ -1125,6 +1138,13 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     const capturedOutput = this.buildCapturedProcessOutputDetail(session)
     const recentMessages = session?.sdkMessages ?? []
+    // Debug: log actual CLI error
+    console.error(
+      `[ConversationService] CLI startup error for ${sessionId}: capturedOutput=${JSON.stringify(capturedOutput)}`,
+    )
+    console.error(
+      `[ConversationService] CLI startup error for ${sessionId}: recentSdkMessages=${JSON.stringify(recentMessages.slice(-5))}`,
+    )
     const resultMessage = [...recentMessages]
       .reverse()
       .find((msg) => msg?.type === 'result' && msg.is_error)

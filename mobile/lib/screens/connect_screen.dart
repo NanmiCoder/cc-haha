@@ -111,7 +111,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   TextFormField(
                     controller: _keyController,
                     decoration: InputDecoration(
-                      labelText: 'API Key',
+                      labelText: 'API Key (optional)',
+                      hintText: 'Server auth disabled in mobile mode',
                       prefixIcon: const Icon(Icons.vpn_key_outlined),
                       border: const OutlineInputBorder(),
                       suffixIcon: IconButton(
