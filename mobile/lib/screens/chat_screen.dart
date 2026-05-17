@@ -22,7 +22,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+      context.read<AppState>().loadModels();
+    });
   }
 
   @override
@@ -88,6 +91,39 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          // Model selector
+          if (appState.availableModels.isNotEmpty)
+            PopupMenuButton<String>(
+              tooltip: 'Select model',
+              initialValue: appState.currentModel,
+              onSelected: (modelId) => appState.setModel(modelId),
+              itemBuilder: (_) => appState.availableModels.map((m) {
+                final id = m['id'] as String? ?? '';
+                return PopupMenuItem<String>(
+                  value: id,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (id == appState.currentModel)
+                        Icon(Icons.check, size: 16, color: colorScheme.primary)
+                      else
+                        const SizedBox(width: 16),
+                      const SizedBox(width: 8),
+                      Text(id, style: const TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                );
+              }).toList(),
+              child: Chip(
+                label: Text(
+                  appState.currentModel.isNotEmpty ? appState.currentModel : 'Model',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                avatar: const Icon(Icons.smart_toy, size: 14),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
           if (appState.isStreaming)
             IconButton(
               icon: const Icon(Icons.stop_circle_outlined),

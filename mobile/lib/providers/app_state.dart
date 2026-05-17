@@ -44,6 +44,11 @@ class AppState extends ChangeNotifier {
   String? _currentWorkDir;
   String? get currentWorkDir => _currentWorkDir;
 
+  String _currentModel = '';
+  String get currentModel => _currentModel;
+  List<Map<String, dynamic>> _availableModels = [];
+  List<Map<String, dynamic>> get availableModels => _availableModels;
+
   List<ChatMessage> _messages = [];
   List<ChatMessage> get messages => _messages;
 
@@ -282,6 +287,30 @@ class AppState extends ChangeNotifier {
     _streamingMessage = null;
     _isStreaming = false;
     notifyListeners();
+  }
+
+  Future<void> loadModels() async {
+    try {
+      final data = await api.getModels();
+      _availableModels = (data['models'] as List<dynamic>?)
+              ?.cast<Map<String, dynamic>>() ??
+          [];
+      final current = await api.get('/api/models/current');
+      _currentModel = (current['model'] as Map<String, dynamic>?)?['id'] as String? ?? '';
+    } catch (_) {
+      // Models optional, use empty list
+    }
+    notifyListeners();
+  }
+
+  Future<void> setModel(String modelId) async {
+    try {
+      await api.setModel(modelId);
+      _currentModel = modelId;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[haha] Failed to set model: $e');
+    }
   }
 
   void sendMessage(String content) {

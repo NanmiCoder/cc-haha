@@ -40,6 +40,16 @@ class ApiClient {
     return _handleResponse(resp);
   }
 
+  Future<Map<String, dynamic>> put(
+    String path, {
+    dynamic body,
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path');
+    final resp = await _client
+        .put(uri, headers: _headers, body: jsonEncode(body));
+    return _handleResponse(resp);
+  }
+
   Future<Map<String, dynamic>> patch(
     String path, {
     dynamic body,
@@ -101,6 +111,14 @@ class ApiClient {
     final data = await get(path);
     final messages = data['messages'] as List<dynamic>? ?? [];
     return messages.cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>> getModels() async {
+    return get('/api/models');
+  }
+
+  Future<void> setModel(String modelId) async {
+    await put('/api/models/current', body: {'modelId': modelId});
   }
 
   Future<Map<String, dynamic>> healthCheck() async {
