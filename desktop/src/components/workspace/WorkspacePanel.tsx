@@ -321,15 +321,31 @@ function getLineRangeForText(value: string, text: string) {
 function FloatingSelectionMenu({
   selection,
   onAdd,
+  onDismiss,
 }: {
   selection: FloatingSelectionMenuState | null
   onAdd: () => void
+  onDismiss: () => void
 }) {
   const t = useTranslation()
+  const ref = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!selection) return
+    const handle = (event: globalThis.MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        onDismiss()
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [selection, onDismiss])
+
   if (!selection) return null
 
   return (
     <button
+      ref={ref}
       type="button"
       onMouseDown={(event) => event.preventDefault()}
       onClick={onAdd}
@@ -650,7 +666,7 @@ function CodeSurface({
           </div>
         )}
       </div>
-      <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} />
+      <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} onDismiss={() => setSelectionMenu(null)} />
     </div>
   )
 }
@@ -704,7 +720,7 @@ function MarkdownSurface({
           className="workspace-markdown-preview prose-p:text-[14px] prose-p:leading-7 prose-h1:text-[24px] prose-h2:text-[18px] prose-h3:text-[15px] prose-code:text-[12px] prose-pre:my-4"
         />
       </div>
-      <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} />
+      <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} onDismiss={() => setSelectionMenu(null)} />
     </div>
   )
 }

@@ -129,15 +129,31 @@ function getChatSelectionFromContainer(
 function ChatSelectionMenu({
   selection,
   onAdd,
+  onDismiss,
 }: {
   selection: ChatSelectionState | null
   onAdd: () => void
+  onDismiss: () => void
 }) {
   const t = useTranslation()
+  const ref = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!selection) return
+    const handle = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        onDismiss()
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [selection, onDismiss])
+
   if (!selection) return null
 
   return (
     <button
+      ref={ref}
       type="button"
       onMouseDown={(event) => event.preventDefault()}
       onClick={onAdd}
@@ -335,7 +351,7 @@ function SelectableChatMessage({
       }}
     >
       {children}
-      <ChatSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} />
+      <ChatSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} onDismiss={() => setSelectionMenu(null)} />
     </div>
   )
 }

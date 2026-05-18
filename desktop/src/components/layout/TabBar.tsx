@@ -167,7 +167,10 @@ export function TabBar() {
     setContextMenu(null)
     const otherTabs = tabs.filter((t) => t.sessionId !== sessionId)
     for (const tab of otherTabs) {
-      if (isSessionTab(tab)) disconnectSession(tab.sessionId)
+      if (isSessionTab(tab)) {
+        const state = useChatStore.getState().sessions[tab.sessionId]
+        if (!state || state.chatState === 'idle') disconnectSession(tab.sessionId)
+      }
       closeTabWithCleanup(tab)
     }
   }
@@ -177,7 +180,10 @@ export function TabBar() {
     const idx = tabs.findIndex((t) => t.sessionId === sessionId)
     const leftTabs = tabs.slice(0, idx)
     for (const tab of leftTabs) {
-      if (isSessionTab(tab)) disconnectSession(tab.sessionId)
+      if (isSessionTab(tab)) {
+        const state = useChatStore.getState().sessions[tab.sessionId]
+        if (!state || state.chatState === 'idle') disconnectSession(tab.sessionId)
+      }
       closeTabWithCleanup(tab)
     }
   }
@@ -187,7 +193,10 @@ export function TabBar() {
     const idx = tabs.findIndex((t) => t.sessionId === sessionId)
     const rightTabs = tabs.slice(idx + 1)
     for (const tab of rightTabs) {
-      if (isSessionTab(tab)) disconnectSession(tab.sessionId)
+      if (isSessionTab(tab)) {
+        const state = useChatStore.getState().sessions[tab.sessionId]
+        if (!state || state.chatState === 'idle') disconnectSession(tab.sessionId)
+      }
       closeTabWithCleanup(tab)
     }
   }
@@ -195,7 +204,10 @@ export function TabBar() {
   const handleCloseAll = () => {
     setContextMenu(null)
     for (const tab of tabs) {
-      if (isSessionTab(tab)) disconnectSession(tab.sessionId)
+      if (isSessionTab(tab)) {
+        const state = useChatStore.getState().sessions[tab.sessionId]
+        if (!state || state.chatState === 'idle') disconnectSession(tab.sessionId)
+      }
       closeTabWithCleanup(tab)
     }
   }

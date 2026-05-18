@@ -512,12 +512,14 @@ export class WorkspaceService {
       }
     }
     const visibleEntries = entries
-      .filter((entry) => !entry.name.startsWith('.'))
       .sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) {
           return a.isDirectory() ? -1 : 1
         }
-        return a.name.localeCompare(b.name)
+        const aDot = a.name.startsWith('.') ? 0 : 1
+        const bDot = b.name.startsWith('.') ? 0 : 1
+        if (aDot !== bDot) return aDot - bDot
+        return a.name.replace(/^\./, '').localeCompare(b.name.replace(/^\./, ''))
       })
       .map((entry) => ({
         name: entry.name,

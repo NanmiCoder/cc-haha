@@ -394,7 +394,7 @@ describe('WorkspaceService', () => {
     })
   })
 
-  it('lists a single directory level with dotfiles excluded and directories first', async () => {
+  it('lists a single directory level with dotfiles included and directories first', async () => {
     const workDir = await makeTempDir('workspace-service-tree-')
     const service = new WorkspaceService(async () => workDir)
 
@@ -411,6 +411,7 @@ describe('WorkspaceService', () => {
       entries: [
         { name: 'a-dir', path: 'a-dir', isDirectory: true },
         { name: 'b-dir', path: 'b-dir', isDirectory: true },
+        { name: '.hidden.txt', path: '.hidden.txt', isDirectory: false },
         { name: 'z-file.txt', path: 'z-file.txt', isDirectory: false },
       ],
     })
