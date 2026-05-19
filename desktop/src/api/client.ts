@@ -5,7 +5,18 @@ const ENV_BASE_URL =
     ? import.meta.env.VITE_DESKTOP_SERVER_URL
     : undefined
 
-const DEFAULT_BASE_URL = ENV_BASE_URL || 'http://127.0.0.1:3456'
+const IS_WEB_TARGET =
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_BUILD_TARGET === 'web'
+
+function deriveDefaultBaseUrl(): string {
+  if (ENV_BASE_URL) return ENV_BASE_URL
+  if (IS_WEB_TARGET && typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin.replace(/\/$/, '')
+  }
+  return 'http://127.0.0.1:3456'
+}
+
+const DEFAULT_BASE_URL = deriveDefaultBaseUrl()
 
 let baseUrl = DEFAULT_BASE_URL
 let authToken: string | null = null
