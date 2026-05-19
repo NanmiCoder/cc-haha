@@ -24,6 +24,7 @@ import {
   H5_TOKEN_STORAGE_KEY,
   initializeDesktopServerUrl,
   isLoopbackHostname,
+  isWebTarget,
   requiresH5AuthForServerUrl,
   saveAndVerifyH5Connection,
 } from './desktopRuntime'
@@ -258,5 +259,44 @@ describe('desktopRuntime browser H5 bootstrap', () => {
       serverUrl: 'http://192.168.0.102:28670',
       reason: 'missing-token',
     } satisfies Partial<H5ConnectionRequiredError>)
+  })
+})
+
+describe('isWebTarget', () => {
+  const originalWindow = globalThis.window
+  const importMetaEnv = (import.meta as ImportMeta & {
+    env: Record<string, string | undefined>
+  }).env
+  const originalBuildTarget = importMetaEnv.VITE_BUILD_TARGET
+
+  afterEach(() => {
+    if (originalWindow) {
+      ;(globalThis as { window?: unknown }).window = originalWindow
+    } else {
+      delete (globalThis as { window?: unknown }).window
+    }
+    if (originalBuildTarget === undefined) {
+      delete importMetaEnv.VITE_BUILD_TARGET
+    } else {
+      importMetaEnv.VITE_BUILD_TARGET = originalBuildTarget
+    }
+  })
+
+  it('true when VITE_BUILD_TARGET=web', () => {
+    ;(globalThis as { window?: unknown }).window = {} as Window
+    importMetaEnv.VITE_BUILD_TARGET = 'web'
+    expect(isWebTarget()).toBe(true)
+  })
+
+  it('true when not in Tauri (browser without injection)', () => {
+    ;(globalThis as { window?: unknown }).window = {} as Window
+    importMetaEnv.VITE_BUILD_TARGET = 'desktop'
+    expect(isWebTarget()).toBe(true)
+  })
+
+  it('false when running inside Tauri', () => {
+    ;(globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} } as Window
+    importMetaEnv.VITE_BUILD_TARGET = 'desktop'
+    expect(isWebTarget()).toBe(false)
   })
 })

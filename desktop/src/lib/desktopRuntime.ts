@@ -41,6 +41,21 @@ export function isBrowserH5Runtime() {
   return typeof window !== 'undefined' && !isTauriRuntime()
 }
 
+/**
+ * Web target gate. Vite injects `import.meta.env.VITE_BUILD_TARGET = 'web'` for
+ * the browser bundle (`BUILD_TARGET=web vite build`). At runtime any non-Tauri
+ * window is also treated as web target, so the gate works in unit tests and
+ * dev-server fallback paths even before the define has been applied.
+ */
+export function isWebTarget(): boolean {
+  if (typeof import.meta !== 'undefined') {
+    const target = (import.meta as ImportMeta & { env?: { VITE_BUILD_TARGET?: string } })
+      .env?.VITE_BUILD_TARGET
+    if (target === 'web') return true
+  }
+  return !isTauriRuntime()
+}
+
 export function readStoredH5Connection(): StoredH5Connection {
   if (typeof window === 'undefined') {
     return { serverUrl: null, token: null }
