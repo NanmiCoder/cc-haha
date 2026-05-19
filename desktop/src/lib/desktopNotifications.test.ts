@@ -47,6 +47,11 @@ import { useSettingsStore } from '../stores/settingsStore'
 describe('desktopNotifications', () => {
   beforeEach(() => {
     vi.useRealTimers()
+    // Pretend we are running inside Tauri so isWebTarget() returns false and
+    // the legacy Tauri-plugin path is exercised. The web fallback has its own
+    // suite in `desktopNotifications.web.test.ts`.
+    ;(globalThis as { window: Window & { __TAURI_INTERNALS__?: unknown } }).window
+      .__TAURI_INTERNALS__ = {}
     resetDesktopNotificationsForTests()
     coreApiMock.invoke.mockReset()
     eventApiMock.listen.mockReset()

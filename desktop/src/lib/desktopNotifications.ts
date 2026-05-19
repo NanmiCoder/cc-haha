@@ -1,4 +1,5 @@
 import { useSettingsStore } from '../stores/settingsStore'
+import { isWebTarget } from './desktopRuntime'
 
 const DEFAULT_COOLDOWN_MS = 750
 
@@ -290,7 +291,39 @@ export async function openDesktopNotificationSettings(): Promise<boolean> {
   }
 }
 
+async function ensureBrowserNotificationPermission(): Promise<NotificationPermission> {
+  if (typeof Notification === 'undefined') return 'denied'
+  if (Notification.permission === 'default') {
+    try {
+      return await Notification.requestPermission()
+    } catch {
+      return 'denied'
+    }
+  }
+  return Notification.permission
+}
+
+async function sendBrowserNotification(options: {
+  title: string
+  body?: string
+}): Promise<boolean> {
+  if (typeof Notification === 'undefined') return false
+  const permission = await ensureBrowserNotificationPermission()
+  if (permission !== 'granted') return false
+  try {
+    // eslint-disable-next-line no-new
+    new Notification(options.title, { body: options.body })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function sendNativeNotification(options: { title: string; body?: string; target?: DesktopNotificationTarget }): Promise<boolean> {
+  if (isWebTarget()) {
+    return sendBrowserNotification({ title: options.title, body: options.body })
+  }
+
   const macSent = await sendMacNotification(options)
   if (macSent !== null) return macSent
 
