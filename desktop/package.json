@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "build:web": "tsc -b && BUILD_TARGET=web vite build",
     "build:web:watch": "BUILD_TARGET=web vite build --watch",
+    "e2e:web": "playwright test --config=e2e/playwright.config.ts",
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
     "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
@@ -36,6 +37,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.6.3",

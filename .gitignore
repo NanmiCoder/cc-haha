@@ -29,11 +29,14 @@ artifacts/coverage/
 
 # Desktop build output
 desktop/dist/
+desktop/dist-web/
 desktop/build-artifacts/
 desktop/src-tauri/binaries/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 desktop/package-lock.json
+desktop/test-results/
+desktop/playwright-report/
 
 # Desktop brand asset candidates (keep only selected ones in public/)
 desktop/brand-assets/

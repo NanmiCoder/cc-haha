@@ -295,7 +295,7 @@ describe('isWebTarget', () => {
   })
 
   it('false when running inside Tauri', () => {
-    ;(globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} } as Window
+    ;(globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} } as unknown as Window
     importMetaEnv.VITE_BUILD_TARGET = 'desktop'
     expect(isWebTarget()).toBe(false)
   })

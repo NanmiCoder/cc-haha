@@ -20,6 +20,7 @@
     "check:docs": "npm ci --loglevel=error && npm run --loglevel=error docs:build",
     "check:persistence-upgrade": "bun run scripts/quality-gate/persistence-upgrade.ts",
     "check:quarantine": "bun run scripts/quality-gate/quarantine.ts --enforce-review-date",
+    "check:web-e2e": "cd desktop && bun run e2e:web",
     "check:coverage": "bun run scripts/quality-gate/coverage.ts",
     "hooks:install": "bun run scripts/git-hooks/install.ts",
     "verify": "bun run quality:pr",
