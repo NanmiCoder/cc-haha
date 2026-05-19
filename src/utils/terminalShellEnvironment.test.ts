@@ -101,4 +101,42 @@ describe('terminal shell environment', () => {
 
     expect(env).toBeNull()
   })
+
+  it('does not capture shell env when the current process owns an interactive TTY', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    })
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    })
+
+    try {
+      const shellPath = path.join(tmpDir, 'zsh')
+      await writeFakeZsh(shellPath)
+
+      const env = await getTerminalShellEnvironment({
+        HOME: tmpDir,
+        SHELL: shellPath,
+        PATH: '/usr/bin:/bin',
+      })
+
+      expect(env).toBeNull()
+    } finally {
+      if (stdinDescriptor) {
+        Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor)
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY
+      }
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor)
+      } else {
+        delete (process.stdout as { isTTY?: boolean }).isTTY
+      }
+    }
+  })
 })

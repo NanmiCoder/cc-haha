@@ -104,7 +104,10 @@ async function captureTerminalShellEnvironment(
 ): Promise<Record<string, string> | null> {
   if (
     process.platform === 'win32' ||
-    isEnvTruthy(baseEnv.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV)
+    isEnvTruthy(baseEnv.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV) ||
+    // Direct terminal launches already inherit shell env; spawning an
+    // interactive login shell here can interfere with the active TTY.
+    (process.stdin.isTTY && process.stdout.isTTY)
   ) {
     return null
   }
