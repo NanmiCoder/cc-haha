@@ -7,6 +7,9 @@ import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import { FallbackTriggeredError } from './services/api/withRetry.js'
 import {
   calculateTokenWarningState,
+  COMPACT_PRECHECK_FOLD_RATIO,
+  estimateTurnStartUsage,
+  getEffectiveContextWindowSize,
   isAutoCompactEnabled,
   type AutoCompactTrackingState,
 } from './services/compact/autoCompact.js'
@@ -452,6 +455,31 @@ async function* queryLoop(
     )
 
     queryCheckpoint('query_autocompact_start')
+
+    // Turn-start pre-estimation: log a diagnostic signal before the autocompact
+    // check so we can observe whether the context was already near capacity
+    // before the next API call. The existing autocompact path (line below)
+    // handles the actual trigger via percentage-based thresholds (75%/78%/80%).
+    // This checkpoint is purely for observability.
+    if (feature('TURN_START_PRE_ESTIMATION')) {
+      const { ratio, estimateTokens } = estimateTurnStartUsage(
+        messagesForQuery,
+        getEffectiveContextWindowSize(toolUseContext.options.mainLoopModel),
+      )
+      if (ratio >= COMPACT_PRECHECK_FOLD_RATIO) {
+        logForDebugging(
+          `turnStartPreEstimate: context at ${(ratio * 100).toFixed(1)}% ` +
+          `(~${estimateTokens.toLocaleString()} tokens) before API call — ` +
+          `pre-fold may be needed`,
+          { level: 'warn' },
+        )
+        logEvent('tengu_turn_start_prefold_detected', {
+          estimatedTokens: estimateTokens,
+          ratio: Math.round(ratio * 100),
+        })
+      }
+    }
+
     const { compactionResult, consecutiveFailures } = await deps.autocompact(
       messagesForQuery,
       toolUseContext,

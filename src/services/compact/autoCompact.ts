@@ -64,6 +64,56 @@ export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 
+// ---------------------------------------------------------------------------
+// Percentage-based multi-level compaction thresholds (supplement, not replace)
+//
+// The fixed-buffer threshold (effectiveWindow - 13_000) is the "final defense"
+// at ~93-98% of the window. These percentage thresholds provide earlier,
+// gentler interventions that work well across all context window sizes
+// (200K through 1M+).
+// ---------------------------------------------------------------------------
+
+/** Normal fold: compact older messages, keep 20% of context window as tail budget */
+export const COMPACT_NORMAL_FOLD_RATIO = 0.75
+export const COMPACT_NORMAL_FOLD_TAIL_RATIO = 0.20
+
+/** Aggressive fold: compact harder, keep 10% of context window as tail budget */
+export const COMPACT_AGGRESSIVE_FOLD_RATIO = 0.78
+export const COMPACT_AGGRESSIVE_FOLD_TAIL_RATIO = 0.10
+
+/** Force summary exit: stop the agent with a summary — no more room for folds */
+export const COMPACT_FORCE_SUMMARY_RATIO = 0.80
+
+/** Turn-start pre-fold: pre-check before the API call (used by estimateTurnStartUsage) */
+export const COMPACT_PRECHECK_FOLD_RATIO = 0.90
+
+/**
+ * Compaction levels ordered by severity.
+ *  - none / turn_start_prefold are soft checks
+ *  - normal_fold / aggressive_fold are actual compactions with tail budgets
+ *  - force_summary / fixed_buffer are hard exits (no more folds)
+ */
+export type CompactionLevel =
+  | 'none'
+  | 'turn_start_prefold'
+  | 'normal_fold'
+  | 'aggressive_fold'
+  | 'force_summary'
+  | 'fixed_buffer'
+
+export type CompactionLevelResult = {
+  level: CompactionLevel
+  /** Token budget for the recent tail when level is normal_fold or aggressive_fold */
+  tailBudgetTokens: number
+  effectiveWindow: number
+  fixedBufferThreshold: number
+}
+
+// Minimum fraction of context that must be in the compactable "head" portion
+// for compaction to be worthwhile. Prevents wasting a compact API call when
+// the savings are marginal (Reasonix reference: HISTORY_FOLD_MIN_SAVINGS_FRACTION).
+export const MIN_COMPACTION_SAVINGS_RATIO = 0.30
+
 // Stop trying autocompact after this many consecutive failures.
 // BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
 // in a single session, wasting ~250K API calls/day globally.
@@ -88,6 +138,147 @@ export function getAutoCompactThreshold(model: string): number {
   }
 
   return autocompactThreshold
+}
+
+/**
+ * Gate for the multi-level percentage-based compaction feature.
+ * When disabled, the existing fixed-buffer behavior is unchanged.
+ */
+export function isPercentageCompactionEnabled(): boolean {
+  if (!isAutoCompactEnabled()) return false
+  return getFeatureValue_CACHED_MAY_BE_STALE('tengu_multi_level_compact', true)
+}
+
+/**
+ * Determine the compaction level based on percentage thresholds AND the
+ * fixed-buffer threshold. Percentage thresholds act as earlier, gentler
+ * interventions; the fixed-buffer threshold is the "final defense."
+ *
+ * Checks in descending severity order so the most urgent level wins.
+ *
+ * @param tokenCount - current estimated token usage
+ * @param model - model name for context window lookup
+ */
+export function getCompactionLevel(
+  tokenCount: number,
+  model: string,
+): CompactionLevelResult {
+  const effectiveWindow = getEffectiveContextWindowSize(model)
+  const fixedBufferThreshold = effectiveWindow - AUTOCOMPACT_BUFFER_TOKENS
+
+  // Fixed buffer is the "final defense" — triggers closest to the window limit
+  if (tokenCount >= fixedBufferThreshold) {
+    return {
+      level: 'fixed_buffer',
+      tailBudgetTokens: Math.floor(effectiveWindow * 0.05),
+      effectiveWindow,
+      fixedBufferThreshold,
+    }
+  }
+
+  const forceSummaryThreshold = Math.floor(
+    effectiveWindow * COMPACT_FORCE_SUMMARY_RATIO,
+  )
+  if (tokenCount >= forceSummaryThreshold) {
+    return {
+      level: 'force_summary',
+      tailBudgetTokens: 0, // No tail — force exit
+      effectiveWindow,
+      fixedBufferThreshold,
+    }
+  }
+
+  const aggressiveFoldThreshold = Math.floor(
+    effectiveWindow * COMPACT_AGGRESSIVE_FOLD_RATIO,
+  )
+  if (tokenCount >= aggressiveFoldThreshold) {
+    return {
+      level: 'aggressive_fold',
+      tailBudgetTokens: Math.floor(
+        effectiveWindow * COMPACT_AGGRESSIVE_FOLD_TAIL_RATIO,
+      ),
+      effectiveWindow,
+      fixedBufferThreshold,
+    }
+  }
+
+  const normalFoldThreshold = Math.floor(
+    effectiveWindow * COMPACT_NORMAL_FOLD_RATIO,
+  )
+  if (tokenCount >= normalFoldThreshold) {
+    return {
+      level: 'normal_fold',
+      tailBudgetTokens: Math.floor(
+        effectiveWindow * COMPACT_NORMAL_FOLD_TAIL_RATIO,
+      ),
+      effectiveWindow,
+      fixedBufferThreshold,
+    }
+  }
+
+  return {
+    level: 'none',
+    tailBudgetTokens: effectiveWindow,
+    effectiveWindow,
+    fixedBufferThreshold,
+  }
+}
+
+/**
+ * Estimate whether compaction would save enough tokens to justify its cost.
+ *
+ * The "head portion" is the messages that would be summarized (those before
+ * the last compact boundary). If this portion is less than
+ * MIN_COMPACTION_SAVINGS_RATIO of the total context, the compact agent's own
+ * token consumption would exceed or nearly match the savings.
+ *
+ * @returns true if compaction is worthwhile, false to skip
+ */
+export function isCompactionWorthwhile(
+  estimatedTotalTokens: number,
+  effectiveWindow: number,
+): boolean {
+  // Circuit breaker: if total tokens are somehow higher than the window,
+  // compaction is definitely worthwhile (emergency scenario).
+  if (estimatedTotalTokens >= effectiveWindow) return true
+
+  // Head portion = tokens above the normal fold threshold that could be freed.
+  // If most tokens are already in the "tail" (recent messages), compaction
+  // would save very little — the summary alone costs thousands of tokens.
+  const headFraction = estimatedTotalTokens / effectiveWindow
+
+  logForDebugging(
+    `compaction_savings_check: tokens=${estimatedTotalTokens} window=${effectiveWindow} ` +
+      `headFraction=${(headFraction * 100).toFixed(1)}% ` +
+      `minRequired=${(MIN_COMPACTION_SAVINGS_RATIO * 100).toFixed(0)}%`,
+  )
+
+  return headFraction >= MIN_COMPACTION_SAVINGS_RATIO
+}
+
+/**
+ * Fast turn-start token estimation using rough heuristics.
+ * Does NOT make an API call — intentionally a coarse estimate.
+ *
+ * Uses the existing roughTokenCountEstimationForMessages (~4 chars/token)
+ * plus fixed overhead estimates for system prompt and tool schemas.
+ *
+ * @returns estimated token count for messages + overhead
+ */
+export function estimateTurnStartUsage(
+  messages: Message[],
+  effectiveWindow: number,
+): { estimateTokens: number; ratio: number } {
+  // Use the same token estimation pipeline that shouldAutoCompact uses
+  const dynamicTokens = tokenCountWithEstimation(messages)
+  // Pre-check ratio: compare against the effective context window
+  const ratio = effectiveWindow > 0 ? dynamicTokens / effectiveWindow : 0
+
+  logForDebugging(
+    `turnStartEstimate: tokens=${dynamicTokens} window=${effectiveWindow} ratio=${(ratio * 100).toFixed(1)}%`,
+  )
+
+  return { estimateTokens: dynamicTokens, ratio }
 }
 
 export function calculateTokenWarningState(
@@ -230,12 +421,26 @@ export async function shouldAutoCompact(
     `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${snipTokensFreed > 0 ? ` snipFreed=${snipTokensFreed}` : ''}`,
   )
 
+  // Existing fixed-buffer check: final defense at ~93-98% of window
   const { isAboveAutoCompactThreshold } = calculateTokenWarningState(
     tokenCount,
     model,
   )
 
-  return isAboveAutoCompactThreshold
+  if (isAboveAutoCompactThreshold) return true
+
+  // New: percentage-based multi-level check — earlier, gentler intervention
+  if (isPercentageCompactionEnabled()) {
+    const level = getCompactionLevel(tokenCount, model)
+    if (level.level !== 'none' && level.level !== 'turn_start_prefold') {
+      logForDebugging(
+        `autocompact: percentage threshold triggered (level=${level.level}, ratio=${(tokenCount / effectiveWindow * 100).toFixed(1)}%)`,
+      )
+      return true
+    }
+  }
+
+  return false
 }
 
 export async function autoCompactIfNeeded(
@@ -276,6 +481,29 @@ export async function autoCompactIfNeeded(
     return { wasCompacted: false }
   }
 
+  // Minimum savings gate: skip compaction when the head portion is too small
+  // to save meaningful tokens. Prevents wasting a compact API call when the
+  // summary alone costs nearly as many tokens as it frees.
+  if (isPercentageCompactionEnabled()) {
+    const tokenCount = tokenCountWithEstimation(messages) - (snipTokensFreed ?? 0)
+    const effectiveWindow = getEffectiveContextWindowSize(model)
+    if (
+      !isCompactionWorthwhile(tokenCount, effectiveWindow)
+    ) {
+      logForDebugging(
+        `autocompact: skipping — head portion too small for worthwhile savings (tokens=${tokenCount}, window=${effectiveWindow})`,
+      )
+      return { wasCompacted: false }
+    }
+  }
+
+  // Compute the compaction level for use in recompactionInfo and to guide
+  // the compaction strategy (tail budget, aggressiveness).
+  const tokenCount = tokenCountWithEstimation(messages) - (snipTokensFreed ?? 0)
+  const compactionLevel = isPercentageCompactionEnabled()
+    ? getCompactionLevel(tokenCount, model).level
+    : 'fixed_buffer'
+
   const recompactionInfo: RecompactionInfo = {
     isRecompactionInChain: tracking?.compacted === true,
     turnsSincePreviousCompact: tracking?.turnCounter ?? -1,
@@ -283,6 +511,10 @@ export async function autoCompactIfNeeded(
     autoCompactThreshold: getAutoCompactThreshold(model),
     querySource,
   }
+
+  logForDebugging(
+    `autocompact: triggering compaction (level=${compactionLevel}, tokens=${tokenCount})`,
+  )
 
   // EXPERIMENT: Try session memory compaction first
   const sessionMemoryResult = await trySessionMemoryCompaction(
