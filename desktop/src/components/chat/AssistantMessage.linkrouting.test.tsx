@@ -111,6 +111,23 @@ describe('AssistantMessage output-target cards', () => {
     expect(screen.queryByText('assistantOutputs.kind.image')).toBeNull()
   })
 
+  it('renders a relative video inline (a <video>) but NOT as a card', () => {
+    const { container } = render(
+      <AssistantMessage
+        sessionId="s1"
+        content={'生成的视频见 outputs/demo.mp4'}
+        isStreaming={false}
+      />,
+    )
+    // Video renders inline through InlineVideoGallery (workDir is undefined in this
+    // test's mock, so the relative path resolves as-is and is served via /preview-fs).
+    const video = container.querySelector('video') as HTMLVideoElement
+    expect(video).not.toBeNull()
+    expect(video.getAttribute('src')).toBe('http://127.0.0.1:4321/preview-fs/s1/outputs/demo.mp4')
+    // ...and is NOT duplicated as an output-target card (no extra open/copy controls).
+    expect(screen.queryByText('assistantOutputs.kind.image')).toBeNull()
+  })
+
   it('still renders md/html/localhost cards when those references are present', () => {
     render(
       <AssistantMessage

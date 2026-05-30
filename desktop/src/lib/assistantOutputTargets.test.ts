@@ -21,6 +21,38 @@ describe('extractAssistantOutputTargets', () => {
     ])
   })
 
+  it('detects a naked relative video path as a video target', () => {
+    const targets = extractAssistantOutputTargets('渲染完成，见 outputs/clip.mp4 。', { workDir })
+
+    expect(targets).toMatchObject([
+      {
+        kind: 'video',
+        href: 'outputs/clip.mp4',
+        normalizedPath: 'outputs/clip.mp4',
+        source: 'plain-path',
+      },
+    ])
+  })
+
+  it('detects a markdown link to a video as a video target', () => {
+    const targets = extractAssistantOutputTargets('[v](demo.webm)', { workDir })
+
+    expect(targets).toMatchObject([
+      {
+        kind: 'video',
+        href: 'demo.webm',
+        normalizedPath: 'demo.webm',
+        source: 'markdown-link',
+      },
+    ])
+  })
+
+  it('rejects a video path outside the active workspace (sandbox)', () => {
+    const targets = extractAssistantOutputTargets('[bad](/etc/x.mp4)', { workDir })
+
+    expect(targets).toEqual([])
+  })
+
   it('normalizes markdown destinations with angle brackets, spaces, and line suffixes', () => {
     const content = [
       '[html](</Users/nanmi/project/demo/My Page/index.html>)',

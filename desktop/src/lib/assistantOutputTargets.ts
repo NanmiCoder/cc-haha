@@ -2,6 +2,7 @@ export type AssistantOutputTargetKind =
   | 'local-html'
   | 'localhost-url'
   | 'image'
+  | 'video'
   | 'markdown'
 
 export type AssistantOutputTargetSource =
@@ -64,7 +65,7 @@ type DirectoryTreeFileMatch = {
 const localhostUrlPattern =
   /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s`"'<>，。；、）\])}]*)?/gi
 const previewablePathPattern =
-  /(^|[\s("'`[])((?:\.{1,2}\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:html?|md|markdown|png|jpe?g|gif|webp|svg))(?![\w/-])/gi
+  /(^|[\s("'`[])((?:\.{1,2}\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:html?|md|markdown|png|jpe?g|gif|webp|svg|mp4|webm|mov|m4v))(?![\w/-])/gi
 
 export function extractAssistantOutputTargets(
   content: string,
@@ -283,6 +284,10 @@ function classifyFileTarget(candidate: string): FileTargetMatch['kind'] | null {
     return 'image'
   }
 
+  if (['.mp4', '.webm', '.mov', '.m4v'].includes(extension)) {
+    return 'video'
+  }
+
   return null
 }
 
@@ -388,7 +393,7 @@ function normalizeMarkdownDestination(destination: string): string {
     normalized = normalized.slice(1, -1).trim()
   }
 
-  const lineSuffixMatch = normalized.match(/^(.*\.(?:html?|md|markdown|png|jpe?g|gif|webp|svg)):\d+$/i)
+  const lineSuffixMatch = normalized.match(/^(.*\.(?:html?|md|markdown|png|jpe?g|gif|webp|svg|mp4|webm|mov|m4v)):\d+$/i)
   const lineSuffixedPath = lineSuffixMatch?.[1]
 
   if (lineSuffixedPath && !isExternalUrl(lineSuffixedPath)) {

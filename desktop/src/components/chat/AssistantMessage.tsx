@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { MessageActionBar, type MessageBranchAction } from './MessageActionBar'
 import { InlineImageGallery } from './InlineImageGallery'
+import { InlineVideoGallery } from './InlineVideoGallery'
 import { AssistantOutputTargetCard } from './AssistantOutputTargetCard'
 import { handlePreviewLink } from '../../lib/handlePreviewLink'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
@@ -50,8 +51,10 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
     () =>
       isStreaming || !sessionId
         ? []
-        : // Image targets render inline via <InlineImageGallery>; never also as a card.
-          extractAssistantOutputTargets(content, { workDir }).filter((target) => target.kind !== 'image'),
+        : // Image/video targets render inline (InlineImageGallery/InlineVideoGallery); never also as a card.
+          extractAssistantOutputTargets(content, { workDir }).filter(
+            (target) => target.kind !== 'image' && target.kind !== 'video',
+          ),
     [content, isStreaming, sessionId, workDir],
   )
 
@@ -80,6 +83,7 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
             onLinkClick={sessionId ? handleLinkClick : undefined}
           />
           {!isStreaming && <InlineImageGallery text={content} sessionId={sessionId} workDir={workDir} />}
+          {!isStreaming && <InlineVideoGallery text={content} sessionId={sessionId} workDir={workDir} />}
           {isStreaming && (
             <span className="ml-0.5 inline-block h-4 w-0.5 animate-shimmer bg-[var(--color-brand)] align-text-bottom" />
           )}
