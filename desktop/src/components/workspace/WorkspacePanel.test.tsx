@@ -603,7 +603,7 @@ describe('WorkspacePanel', () => {
     const childTreeRequest = deferred<{
       state: 'ok'
       path: 'src'
-      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+      entries: Array<{ name: string; path: string; isDirectory: boolean; isSymlink: boolean }>
     }>()
     const fileRequest = deferred<{
       state: 'ok'
