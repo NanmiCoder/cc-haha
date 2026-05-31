@@ -195,7 +195,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
   panelBySession: {},
   modeBySession: {},
   width: WORKSPACE_PANEL_DEFAULT_WIDTH,
-  showHiddenFiles: false,
+  showHiddenFiles: true,
   statusBySession: {},
   expandedPathsBySession: {},
   treeBySessionPath: {},
