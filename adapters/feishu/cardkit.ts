@@ -189,6 +189,7 @@ export async function sendCardAsMessage(
   chatId: string,
   cardId: string,
   replyToMessageId?: string,
+  uuid?: string,
 ): Promise<string> {
   const content = JSON.stringify({
     type: 'card',
@@ -199,7 +200,7 @@ export async function sendCardAsMessage(
     const resp = await withImCardRequestTimeout('im.message.reply', () =>
       client.im.message.reply({
         path: { message_id: replyToMessageId },
-        data: { content, msg_type: 'interactive' },
+        data: { content, msg_type: 'interactive', uuid },
       }),
     )
     const messageId = resp.data?.message_id
@@ -221,6 +222,7 @@ export async function sendCardAsMessage(
         receive_id: chatId,
         msg_type: 'interactive',
         content,
+        uuid,
       },
     }),
   )
