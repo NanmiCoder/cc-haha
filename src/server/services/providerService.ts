@@ -41,6 +41,7 @@ import {
   loadNetworkSettings,
   type NetworkSettings,
 } from './networkSettings.js'
+import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -445,11 +446,12 @@ export class ProviderService {
     const format: ApiFormat = input.apiFormat ?? 'anthropic'
     const authStrategy = input.authStrategy ?? 'api_key'
     const base = input.baseUrl.replace(/\/+$/, '')
+    const modelId = normalizeModelStringForAPI(input.modelId)
     const networkSettings = await loadNetworkSettings()
 
     // ── Step 1: Basic connectivity ───────────────────────────
     // Directly call the upstream API to verify URL, key, and model.
-    const step1 = await this.testConnectivity(base, input.apiKey, input.modelId, format, authStrategy, networkSettings)
+    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings)
 
     // If connectivity failed, no point running step 2
     if (!step1.success) {
@@ -463,7 +465,7 @@ export class ProviderService {
 
     // ── Step 2: Full proxy pipeline ──────────────────────────
     // Anthropic request → transform → upstream → transform back → validate
-    const step2 = await this.testProxyPipeline(base, input.apiKey, input.modelId, format, networkSettings)
+    const step2 = await this.testProxyPipeline(base, input.apiKey, modelId, format, networkSettings)
 
     return { connectivity: step1, proxy: step2 }
   }
