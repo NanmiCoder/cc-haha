@@ -361,7 +361,8 @@ describe('Settings > General tab', () => {
     expect(screen.getByText('Enter an HTTP or HTTPS proxy URL.')).toBeInTheDocument()
     expect(saveButton).toBeDisabled()
 
-    fireEvent.change(proxyInput, { target: { value: '  http://127.0.0.1:7890  ' } })
+    fireEvent.change(proxyInput, { target: { value: '  http://user:p%40ss@127.0.0.1:7890  ' } })
+    expect(screen.getByText('HTTP and HTTPS proxy URLs are supported. For authenticated proxies, use http://user:password@127.0.0.1:7890; the URL is saved with network settings.')).toBeInTheDocument()
     const timeoutInput = screen.getByLabelText('AI request timeout')
     expect(timeoutInput).toHaveAttribute('type', 'number')
     expect(screen.queryByRole('slider', { name: 'AI request timeout' })).not.toBeInTheDocument()
@@ -376,7 +377,7 @@ describe('Settings > General tab', () => {
       aiRequestTimeoutMs: 180_000,
       proxy: {
         mode: 'manual',
-        url: 'http://127.0.0.1:7890',
+        url: 'http://user:p%40ss@127.0.0.1:7890',
       },
     })
     expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({

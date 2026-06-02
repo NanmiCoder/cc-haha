@@ -4,6 +4,8 @@ import {
   createServerPlan,
   formatStartupError,
   killSidecar,
+  mergeProxyEnv,
+  proxyUrlFromElectronProxyRules,
   pushStartupLog,
   reserveLocalPort,
   SERVER_BIND_HOST,
@@ -17,12 +19,15 @@ type ServerRuntimeOptions = {
   desktopRoot: string
   appRoot?: string
   h5DistDir?: string
+  resolveSystemProxy?: (url: string) => Promise<string>
 }
 
 export class ElectronServerRuntime {
   private readonly desktopRoot: string
   private readonly appRoot: string
   private readonly h5DistDir: string
+  private readonly resolveSystemProxy?: (url: string) => Promise<string>
+  private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private server: { url: string, child: SidecarChild } | null = null
   private adapters: SidecarChild[] = []
   private startupError: string | null = null
@@ -32,6 +37,7 @@ export class ElectronServerRuntime {
     this.desktopRoot = options.desktopRoot
     this.appRoot = options.appRoot ?? options.desktopRoot
     this.h5DistDir = options.h5DistDir ?? path.join(options.desktopRoot, 'dist')
+    this.resolveSystemProxy = options.resolveSystemProxy
   }
 
   async startServer(): Promise<string> {
@@ -55,7 +61,7 @@ export class ElectronServerRuntime {
   async restartAdaptersSidecars(): Promise<void> {
     this.stopAdaptersSidecars()
     const serverUrl = await this.getServerUrl()
-    this.startAdaptersSidecars(serverUrl)
+    await this.startAdaptersSidecars(serverUrl)
   }
 
   stopAll() {
@@ -70,11 +76,13 @@ export class ElectronServerRuntime {
     const port = await reserveLocalPort(SERVER_BIND_HOST)
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
+    const env = await this.resolveSidecarBaseEnv()
     const plan = createServerPlan({
       desktopRoot: this.desktopRoot,
       appRoot: this.appRoot,
       port,
       h5DistDir: this.h5DistDir,
+      env,
     })
 
     try {
@@ -83,7 +91,7 @@ export class ElectronServerRuntime {
       await waitForServer(SERVER_CONTROL_HOST, port)
       this.server = { url, child }
       this.startupError = null
-      this.startAdaptersSidecars(url)
+      await this.startAdaptersSidecars(url)
       return url
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -92,7 +100,8 @@ export class ElectronServerRuntime {
     }
   }
 
-  private startAdaptersSidecars(serverUrl: string) {
+  private async startAdaptersSidecars(serverUrl: string): Promise<void> {
+    const env = await this.resolveSidecarBaseEnv()
     for (const [label, flag] of [
       ['feishu', '--feishu'],
       ['telegram', '--telegram'],
@@ -106,6 +115,7 @@ export class ElectronServerRuntime {
           h5DistDir: this.h5DistDir,
           serverUrl,
           flag,
+          env,
         }))
         this.captureLogs(child, `claude-adapters:${label}`)
         this.adapters.push(child)
@@ -139,5 +149,25 @@ export class ElectronServerRuntime {
       console.log(`[${label}] ${line}`)
       if (startupLogs) pushStartupLog(startupLogs, `[exit] ${line}`)
     })
+  }
+
+  private async resolveSidecarBaseEnv(): Promise<NodeJS.ProcessEnv> {
+    this.sidecarEnvPromise ??= this.resolveSidecarBaseEnvOnce()
+    return await this.sidecarEnvPromise
+  }
+
+  private async resolveSidecarBaseEnvOnce(): Promise<NodeJS.ProcessEnv> {
+    if (!this.resolveSystemProxy) return process.env
+
+    try {
+      const rules = await this.resolveSystemProxy('https://auth.openai.com/')
+      return mergeProxyEnv(
+        process.env,
+        proxyUrlFromElectronProxyRules(rules),
+      )
+    } catch (error) {
+      console.error('[desktop] failed to resolve system proxy for sidecars', error)
+      return process.env
+    }
   }
 }

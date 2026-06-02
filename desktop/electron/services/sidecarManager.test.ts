@@ -7,6 +7,8 @@ import {
   createAdapterPlan,
   createServerPlan,
   httpToWebSocketUrl,
+  mergeProxyEnv,
+  proxyUrlFromElectronProxyRules,
   pushStartupLog,
   resolveHostTriple,
 } from './sidecarManager'
@@ -73,6 +75,29 @@ describe('Electron sidecar manager', () => {
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }
+  })
+
+  it('converts Electron system proxy rules into sidecar proxy env', () => {
+    expect(proxyUrlFromElectronProxyRules('DIRECT')).toBeUndefined()
+    expect(proxyUrlFromElectronProxyRules('SOCKS5 127.0.0.1:7891; DIRECT')).toBeUndefined()
+    expect(proxyUrlFromElectronProxyRules('PROXY 127.0.0.1:7897; DIRECT')).toBe('http://127.0.0.1:7897')
+    expect(proxyUrlFromElectronProxyRules('HTTPS proxy.example:8443; DIRECT')).toBe('https://proxy.example:8443')
+
+    const env = mergeProxyEnv({}, 'http://127.0.0.1:7897')
+    expect(env.HTTP_PROXY).toBe('http://127.0.0.1:7897')
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7897')
+    expect(env.http_proxy).toBe('http://127.0.0.1:7897')
+    expect(env.https_proxy).toBe('http://127.0.0.1:7897')
+    expect(env.NO_PROXY).toContain('127.0.0.1')
+  })
+
+  it('does not override explicit sidecar proxy environment', () => {
+    const env = mergeProxyEnv(
+      { HTTPS_PROXY: 'http://manual.example:8080' },
+      'http://system.example:8080',
+    )
+
+    expect(env).toEqual({ HTTPS_PROXY: 'http://manual.example:8080' })
   })
 
   it('keeps startup logs bounded', () => {

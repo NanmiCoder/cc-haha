@@ -24,8 +24,13 @@ import {
   withRefreshedAccessToken,
   OPENAI_CODEX_REDIRECT_PATH,
   OPENAI_CODEX_OAUTH_PORT,
+  type OpenAITokenFetchOptions,
 } from '../../services/openaiAuth/client.js'
 import type { OpenAIOAuthTokenResponse } from '../../services/openaiAuth/types.js'
+import {
+  getManualNetworkProxyUrl,
+  loadNetworkSettings,
+} from './networkSettings.js'
 
 export type StoredOpenAIOAuthTokens = {
   accessToken: string
@@ -49,6 +54,7 @@ export type OpenAIOAuthSession = {
 
 type OpenAIRefreshFn = (
   refreshToken: string,
+  options?: OpenAITokenFetchOptions,
 ) => Promise<OpenAIOAuthTokenResponse>
 
 const SESSION_TTL_MS = 5 * 60 * 1000
@@ -289,6 +295,7 @@ export class HahaOpenAIOAuthService {
       code: authorizationCode,
       redirectUri: session.redirectUri,
       codeVerifier: session.codeVerifier,
+      ...(await this.getOpenAITokenFetchOptions()),
     })
 
     const normalized = normalizeOpenAITokens(response)
@@ -316,7 +323,10 @@ export class HahaOpenAIOAuthService {
     if (!tokens.refreshToken) return null
 
     try {
-      const refreshed = await this.refreshFn(tokens.refreshToken)
+      const refreshed = await this.refreshFn(
+        tokens.refreshToken,
+        await this.getOpenAITokenFetchOptions(),
+      )
       const normalized = withRefreshedAccessToken(
         {
           accessToken: tokens.accessToken,
@@ -352,6 +362,14 @@ export class HahaOpenAIOAuthService {
   async ensureFreshAccessToken(): Promise<string | null> {
     const tokens = await this.ensureFreshTokens()
     return tokens?.accessToken ?? null
+  }
+
+  private async getOpenAITokenFetchOptions(): Promise<OpenAITokenFetchOptions> {
+    const networkSettings = await loadNetworkSettings()
+    return {
+      proxyUrl: getManualNetworkProxyUrl(networkSettings),
+      timeoutMs: networkSettings.aiRequestTimeoutMs,
+    }
   }
 }
 

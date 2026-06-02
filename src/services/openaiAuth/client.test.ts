@@ -89,6 +89,40 @@ describe('OpenAI Codex OAuth client', () => {
     }
   })
 
+  test('exchanges authorization code through configured proxy fetch options', async () => {
+    const originalFetch = globalThis.fetch
+    let tokenRequestInit: RequestInit | undefined
+
+    globalThis.fetch = (async (_input, init) => {
+      tokenRequestInit = init
+      return new Response(
+        JSON.stringify({
+          access_token: 'access-token',
+          refresh_token: 'refresh-token',
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof fetch
+
+    try {
+      await exchangeOpenAICodeForTokens({
+        code: 'auth-code',
+        redirectUri: 'http://localhost:1455/auth/callback',
+        codeVerifier: 'verifier',
+        proxyUrl: 'http://127.0.0.1:7890',
+        timeoutMs: 30_000,
+      })
+
+      expect((tokenRequestInit as { proxy?: string } | undefined)?.proxy).toBe(
+        'http://127.0.0.1:7890',
+      )
+      expect(tokenRequestInit?.signal).toBeInstanceOf(AbortSignal)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('refreshes tokens with Codex-compatible token request headers', async () => {
     const originalFetch = globalThis.fetch
     let tokenRequestBody = ''
@@ -116,6 +150,36 @@ describe('OpenAI Codex OAuth client', () => {
       expect(tokenRequestBody).toContain('grant_type=refresh_token')
       expect(tokenRequestBody).toContain('refresh_token=refresh-token')
       expect(tokenRequestBody).toContain('scope=openid+profile+email')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('refreshes tokens through configured proxy fetch options', async () => {
+    const originalFetch = globalThis.fetch
+    let tokenRequestInit: RequestInit | undefined
+
+    globalThis.fetch = (async (_input, init) => {
+      tokenRequestInit = init
+      return new Response(
+        JSON.stringify({
+          access_token: 'access-token',
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof fetch
+
+    try {
+      await refreshOpenAITokens('refresh-token', {
+        proxyUrl: 'http://127.0.0.1:7890',
+        timeoutMs: 30_000,
+      })
+
+      expect((tokenRequestInit as { proxy?: string } | undefined)?.proxy).toBe(
+        'http://127.0.0.1:7890',
+      )
+      expect(tokenRequestInit?.signal).toBeInstanceOf(AbortSignal)
     } finally {
       globalThis.fetch = originalFetch
     }

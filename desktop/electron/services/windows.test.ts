@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
 import {
   captureWindowState,
+  hideWindowSafely,
   hasMeaningfulIntersection,
   installWindowLifecycle,
   isPersistableWindowState,
@@ -11,6 +12,7 @@ import {
   readWindowState,
   restoreWindowMaximized,
   showMainWindow,
+  toggleWindowFullScreen,
   windowOptionsFromState,
   windowStatePath,
   writeWindowState,
@@ -122,6 +124,8 @@ describe('Electron window service', () => {
           handlers.set(event, handler)
         }),
         hide: vi.fn(),
+        isSimpleFullScreen: () => false,
+        isFullScreen: () => false,
         isMinimized: () => false,
         isMaximized: () => false,
         getBounds: () => ({ x: 0, y: 0, width: 1280, height: 820 }),
@@ -139,6 +143,115 @@ describe('Electron window service', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
+  })
+
+  it('exits fullscreen before hiding on close to avoid a black macOS fullscreen Space', () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'electron-window-fullscreen-close-'))
+    try {
+      const handlers = new Map<string, (...args: never[]) => void>()
+      const onceHandlers = new Map<string, (...args: never[]) => void>()
+      const preventDefault = vi.fn()
+      const window = {
+        on: vi.fn((event: string, handler: (...args: never[]) => void) => {
+          handlers.set(event, handler)
+        }),
+        once: vi.fn((event: string, handler: (...args: never[]) => void) => {
+          onceHandlers.set(event, handler)
+        }),
+        hide: vi.fn(),
+        setFullScreen: vi.fn(),
+        isDestroyed: () => false,
+        isSimpleFullScreen: () => false,
+        isFullScreen: () => true,
+        isMinimized: () => false,
+        isMaximized: () => false,
+        getBounds: () => ({ x: 0, y: 0, width: 1280, height: 820 }),
+      }
+
+      installWindowLifecycle({
+        app: fakeApp(tmp) as never,
+        window: window as never,
+        shouldQuit: () => false,
+      })
+
+      handlers.get('close')?.({ preventDefault } as never)
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+      expect(window.setFullScreen).toHaveBeenCalledWith(false)
+      expect(window.hide).not.toHaveBeenCalled()
+
+      onceHandlers.get('leave-full-screen')?.()
+      expect(window.hide).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('runs follow-up hide actions only after fullscreen has been left', () => {
+    const onceHandlers = new Map<string, (...args: never[]) => void>()
+    const afterHide = vi.fn()
+    const window = {
+      once: vi.fn((event: string, handler: (...args: never[]) => void) => {
+        onceHandlers.set(event, handler)
+      }),
+      hide: vi.fn(),
+      setFullScreen: vi.fn(),
+      isDestroyed: () => false,
+      isSimpleFullScreen: () => false,
+      isFullScreen: () => true,
+    }
+
+    hideWindowSafely(window as never, afterHide)
+
+    expect(window.setFullScreen).toHaveBeenCalledWith(false)
+    expect(window.hide).not.toHaveBeenCalled()
+    expect(afterHide).not.toHaveBeenCalled()
+
+    onceHandlers.get('leave-full-screen')?.()
+    expect(window.hide).toHaveBeenCalledTimes(1)
+    expect(afterHide).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides immediately after leaving simple fullscreen because it does not create a macOS Space', () => {
+    const afterHide = vi.fn()
+    const window = {
+      isSimpleFullScreen: () => true,
+      setSimpleFullScreen: vi.fn(),
+      hide: vi.fn(),
+    }
+
+    hideWindowSafely(window as never, afterHide)
+
+    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(false)
+    expect(window.hide).toHaveBeenCalledTimes(1)
+    expect(afterHide).toHaveBeenCalledTimes(1)
+  })
+
+  it('toggles simple fullscreen on macOS instead of native fullscreen Spaces', () => {
+    const window = {
+      isSimpleFullScreen: () => false,
+      setSimpleFullScreen: vi.fn(),
+      isFullScreen: vi.fn(),
+      setFullScreen: vi.fn(),
+    }
+
+    toggleWindowFullScreen(window as never, 'darwin')
+
+    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(true)
+    expect(window.setFullScreen).not.toHaveBeenCalled()
+  })
+
+  it('toggles native fullscreen on non-macOS platforms', () => {
+    const window = {
+      isSimpleFullScreen: vi.fn(),
+      setSimpleFullScreen: vi.fn(),
+      isFullScreen: () => false,
+      setFullScreen: vi.fn(),
+    }
+
+    toggleWindowFullScreen(window as never, 'linux')
+
+    expect(window.setFullScreen).toHaveBeenCalledWith(true)
+    expect(window.setSimpleFullScreen).not.toHaveBeenCalled()
   })
 
   it('allows the window to close normally once the app is explicitly quitting', () => {

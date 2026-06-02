@@ -56,6 +56,57 @@ describe('Electron application menu service', () => {
     expect(onNavigate).toHaveBeenNthCalledWith(2, 'settings')
   })
 
+  it('routes macOS Hide through the provided safe hide action', () => {
+    const hide = vi.fn()
+    const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'darwin', { hide })
+    const appMenu = template[0]
+    const submenu = appMenu!.submenu as MenuItemConstructorOptions[]
+    const hideItem = submenu.find(item => item.label === 'Hide Claude Code Haha')
+
+    expect(hideItem).toBeDefined()
+    expect(hideItem?.accelerator).toBe('Command+H')
+    hideItem?.click?.({} as never, {} as never, {} as never)
+
+    expect(hide).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes the Window close accelerator through the provided close action', () => {
+    const close = vi.fn()
+    const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'darwin', { close })
+    const closeItem = template
+      .flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? [])
+      .find(item => item.label === 'Close Window')
+
+    expect(closeItem).toBeDefined()
+    expect(closeItem?.accelerator).toBe('CmdOrCtrl+W')
+    closeItem?.click?.({} as never, {} as never, {} as never)
+
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes the View fullscreen accelerator through the provided fullscreen action', () => {
+    const toggleFullScreen = vi.fn()
+    const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'darwin', { toggleFullScreen })
+    const fullScreenItem = template
+      .flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? [])
+      .find(item => item.label === 'Toggle Full Screen')
+
+    expect(fullScreenItem).toBeDefined()
+    expect(fullScreenItem?.accelerator).toBe('Ctrl+Command+F')
+    fullScreenItem?.click?.({} as never, {} as never, {} as never)
+
+    expect(toggleFullScreen).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses F11 for custom fullscreen on non-macOS platforms', () => {
+    const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'linux', {})
+    const fullScreenItem = template
+      .flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? [])
+      .find(item => item.label === 'Toggle Full Screen')
+
+    expect(fullScreenItem?.accelerator).toBe('F11')
+  })
+
   it('keeps a settings entry available on non-macOS platforms', () => {
     const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'win32')
     const fileMenu = template[0]
@@ -89,5 +140,66 @@ describe('Electron application menu service', () => {
     expect(settingsItem).toBeDefined()
     settingsItem?.click?.({} as never, {} as never, {} as never)
     expect(send).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.nativeMenuNavigate, 'settings')
+  })
+
+  it('installs hide as a safe fullscreen-aware window hide before app hide', async () => {
+    const appHide = vi.fn()
+    const onceHandlers = new Map<string, (...args: never[]) => void>()
+    const window = {
+      isFullScreen: () => true,
+      isSimpleFullScreen: () => false,
+      once: vi.fn((event: string, handler: (...args: never[]) => void) => {
+        onceHandlers.set(event, handler)
+      }),
+      setFullScreen: vi.fn(),
+      hide: vi.fn(),
+      isDestroyed: () => false,
+      webContents: { send: vi.fn() },
+    }
+    const menuMocks = getElectronMenuMocks()
+
+    await installApplicationMenu(
+      { name: 'Claude Code Haha', hide: appHide } as never,
+      () => window as never,
+    )
+
+    const template = menuMocks.buildFromTemplate.mock.calls[0]?.[0] as MenuItemConstructorOptions[]
+    const hideItem = template
+      .flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? [])
+      .find(item => item.label === 'Hide Claude Code Haha')
+
+    hideItem?.click?.({} as never, {} as never, {} as never)
+    expect(window.setFullScreen).toHaveBeenCalledWith(false)
+    expect(window.hide).not.toHaveBeenCalled()
+    expect(appHide).not.toHaveBeenCalled()
+
+    onceHandlers.get('leave-full-screen')?.()
+    expect(window.hide).toHaveBeenCalledTimes(1)
+    expect(appHide).toHaveBeenCalledTimes(1)
+  })
+
+  it('installs fullscreen as simple fullscreen on macOS instead of native Spaces', async () => {
+    const window = {
+      isSimpleFullScreen: () => false,
+      setSimpleFullScreen: vi.fn(),
+      isFullScreen: vi.fn(),
+      setFullScreen: vi.fn(),
+      webContents: { send: vi.fn() },
+    }
+    const menuMocks = getElectronMenuMocks()
+
+    await installApplicationMenu(
+      { name: 'Claude Code Haha' } as never,
+      () => window as never,
+    )
+
+    const template = menuMocks.buildFromTemplate.mock.calls[0]?.[0] as MenuItemConstructorOptions[]
+    const fullScreenItem = template
+      .flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? [])
+      .find(item => item.label === 'Toggle Full Screen')
+
+    fullScreenItem?.click?.({} as never, {} as never, {} as never)
+    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(true)
+    expect(window.setFullScreen).not.toHaveBeenCalled()
   })
 })

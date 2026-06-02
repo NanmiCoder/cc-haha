@@ -98,4 +98,21 @@ describe('network settings', () => {
       https_proxy: 'http://127.0.0.1:7890',
     })
   })
+
+  it('preserves authenticated manual proxy URLs for provider requests', () => {
+    const settings = normalizeNetworkSettings({
+      network: {
+        proxy: {
+          mode: 'manual',
+          url: ' https://user:p%40ss@proxy.example.com:8443 ',
+        },
+      },
+    })
+
+    expect(getManualNetworkProxyUrl(settings)).toBe('https://user:p%40ss@proxy.example.com:8443')
+    expect(buildNetworkEnvironment(settings)).toMatchObject({
+      HTTP_PROXY: 'https://user:p%40ss@proxy.example.com:8443',
+      HTTPS_PROXY: 'https://user:p%40ss@proxy.example.com:8443',
+    })
+  })
 })

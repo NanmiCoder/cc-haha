@@ -16,6 +16,13 @@ export type SidecarPlan = {
   env: NodeJS.ProcessEnv
 }
 
+const PROXY_ENV_KEYS = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'http_proxy',
+  'https_proxy',
+] as const
+
 export function resolveHostTriple(platform = process.platform, arch = process.arch): string {
   if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin'
   if (platform === 'darwin' && arch === 'x64') return 'x86_64-apple-darwin'
@@ -94,6 +101,43 @@ export function formatStartupError(message: string, logs: string[]): string {
     ? logs.join('\n')
     : 'No server stdout/stderr was captured before the timeout.'
   return `${message}\n\nRecent server logs:\n${logText}`
+}
+
+export function proxyUrlFromElectronProxyRules(rules: string | undefined): string | undefined {
+  if (!rules) return undefined
+
+  for (const rawRule of rules.split(';')) {
+    const rule = rawRule.trim()
+    if (!rule || /^DIRECT$/i.test(rule)) continue
+
+    const match = rule.match(/^(PROXY|HTTPS)\s+(.+)$/i)
+    if (!match) continue
+
+    const scheme = match[1]!.toUpperCase() === 'HTTPS' ? 'https' : 'http'
+    const hostPort = match[2]!.trim()
+    if (!hostPort) continue
+
+    return `${scheme}://${hostPort}`
+  }
+
+  return undefined
+}
+
+export function mergeProxyEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  proxyUrl: string | undefined,
+): NodeJS.ProcessEnv {
+  if (!proxyUrl) return baseEnv
+  if (PROXY_ENV_KEYS.some(key => baseEnv[key])) return baseEnv
+
+  return {
+    ...baseEnv,
+    HTTP_PROXY: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    http_proxy: proxyUrl,
+    https_proxy: proxyUrl,
+    NO_PROXY: baseEnv.NO_PROXY || baseEnv.no_proxy || 'localhost,127.0.0.1,::1',
+  }
 }
 
 export function buildSidecarEnv(baseEnv: NodeJS.ProcessEnv, h5DistDir: string): NodeJS.ProcessEnv {

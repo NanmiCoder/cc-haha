@@ -12,6 +12,7 @@ import {
   getHahaOpenAIOAuthFilePath,
   type StoredOpenAIOAuthTokens,
 } from '../services/hahaOpenAIOAuthService.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -75,6 +76,7 @@ async function setup() {
   )
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = tmpDir
+  resetSettingsCache()
   callbackPort = await getFreePort()
   service = new HahaOpenAIOAuthService({ callbackPort })
 }
@@ -86,6 +88,7 @@ async function teardown() {
   } else {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   }
+  resetSettingsCache()
   await fs.rm(tmpDir, { recursive: true, force: true })
 }
 
@@ -245,6 +248,53 @@ describe('HahaOpenAIOAuthService — session management', () => {
       expect(tokens?.refreshToken).toBe('openai-refresh-token')
       expect(tokens?.email).toBe('test@example.com')
       expect(tokens?.accountId).toBe('acct_123')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('callback listener uses saved manual network proxy for token exchange', async () => {
+    const originalFetch = globalThis.fetch
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        network: {
+          aiRequestTimeoutMs: 45_000,
+          proxy: {
+            mode: 'manual',
+            url: ' http://127.0.0.1:7890 ',
+          },
+        },
+      }),
+      'utf-8',
+    )
+    resetSettingsCache()
+
+    const session = await service.startSession({ serverPort: 54321 })
+    let tokenRequestInit: RequestInit | undefined
+
+    globalThis.fetch = (async (_url, init) => {
+      tokenRequestInit = init
+      return new Response(
+        JSON.stringify({
+          access_token: 'openai-access-token',
+          refresh_token: 'openai-refresh-token',
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof fetch
+
+    try {
+      const res = await getLocalCallback(
+        `/auth/callback?code=auth-code&state=${session.state}`,
+      )
+
+      expect(res.status).toBe(200)
+      expect((tokenRequestInit as { proxy?: string } | undefined)?.proxy).toBe(
+        'http://127.0.0.1:7890',
+      )
+      expect(tokenRequestInit?.signal).toBeInstanceOf(AbortSignal)
     } finally {
       globalThis.fetch = originalFetch
     }

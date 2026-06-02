@@ -985,7 +985,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.general.networkProxyModeManual': '手动代理',
   'settings.general.networkProxyModeManualDescription': '使用下方填写的 HTTP 或 HTTPS 代理地址。',
   'settings.general.networkProxyUrl': '代理地址',
-  'settings.general.networkProxyUrlHint': '支持 HTTP 和 HTTPS 代理，例如 http://127.0.0.1:7890。',
+  'settings.general.networkProxyUrlHint': '支持 HTTP 和 HTTPS 代理。需要认证时可填写 http://user:password@127.0.0.1:7890；该 URL 会随网络设置保存。',
   'settings.general.networkProxyUrlInvalid': '请输入 HTTP 或 HTTPS 代理地址。',
   'settings.general.networkProxyUrlRequired': '请输入代理地址。',
   'settings.general.networkTimeout': 'AI 请求超时',

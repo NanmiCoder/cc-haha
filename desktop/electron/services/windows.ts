@@ -116,6 +116,37 @@ export function saveWindowState(app: App, window: BrowserWindow) {
   if (state) writeWindowState(app, state)
 }
 
+export function hideWindowSafely(window: BrowserWindow, afterHide?: () => void) {
+  if (window.isSimpleFullScreen()) {
+    window.setSimpleFullScreen(false)
+    window.hide()
+    afterHide?.()
+    return
+  }
+
+  if (!window.isFullScreen()) {
+    window.hide()
+    afterHide?.()
+    return
+  }
+
+  window.once('leave-full-screen', () => {
+    if (!window.isDestroyed()) {
+      window.hide()
+      afterHide?.()
+    }
+  })
+  window.setFullScreen(false)
+}
+
+export function toggleWindowFullScreen(window: BrowserWindow, platform = process.platform) {
+  if (platform === 'darwin') {
+    window.setSimpleFullScreen(!window.isSimpleFullScreen())
+    return
+  }
+  window.setFullScreen(!window.isFullScreen())
+}
+
 export function showMainWindow(window: BrowserWindow | null) {
   if (!window) return
   if (!window.isVisible()) window.show()
@@ -136,7 +167,7 @@ export function installWindowLifecycle({
     saveWindowState(app, window)
     if (shouldQuit()) return
     event.preventDefault()
-    window.hide()
+    hideWindowSafely(window)
   })
 
   window.on('move', () => saveWindowState(app, window))

@@ -1,12 +1,19 @@
 import type { App, BrowserWindow, MenuItemConstructorOptions } from 'electron'
 import { ELECTRON_EVENT_CHANNELS } from '../ipc/channels'
+import { hideWindowSafely, toggleWindowFullScreen } from './windows'
 
 export type NativeMenuDestination = 'about' | 'settings'
+type ApplicationMenuActions = {
+  hide?: () => void
+  close?: () => void
+  toggleFullScreen?: () => void
+}
 
 export function buildApplicationMenuTemplate(
   appName: string,
   onNavigate: (destination: NativeMenuDestination) => void,
   platform = process.platform,
+  actions: ApplicationMenuActions = {},
 ): MenuItemConstructorOptions[] {
   const appMenu: MenuItemConstructorOptions[] = platform === 'darwin'
     ? [{
@@ -18,7 +25,7 @@ export function buildApplicationMenuTemplate(
           { type: 'separator' },
           { role: 'services' },
           { type: 'separator' },
-          { role: 'hide' },
+          { label: `Hide ${appName}`, accelerator: 'Command+H', click: () => actions.hide?.() },
           { role: 'hideOthers' },
           { role: 'unhide' },
           { type: 'separator' },
@@ -51,7 +58,11 @@ export function buildApplicationMenuTemplate(
     {
       label: 'View',
       submenu: [
-        { role: 'togglefullscreen' },
+        {
+          label: 'Toggle Full Screen',
+          accelerator: platform === 'darwin' ? 'Ctrl+Command+F' : 'F11',
+          click: () => actions.toggleFullScreen?.(),
+        },
       ],
     },
     {
@@ -59,7 +70,7 @@ export function buildApplicationMenuTemplate(
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
-        { role: 'close' },
+        { label: 'Close Window', accelerator: 'CmdOrCtrl+W', click: () => actions.close?.() },
       ],
     },
   ]
@@ -69,6 +80,22 @@ export async function installApplicationMenu(app: App, getMainWindow: () => Brow
   const { Menu } = await import('electron')
   const template = buildApplicationMenuTemplate(app.name || 'Claude Code Haha', destination => {
     getMainWindow()?.webContents.send(ELECTRON_EVENT_CHANNELS.nativeMenuNavigate, destination)
+  }, process.platform, {
+    hide: () => {
+      const window = getMainWindow()
+      if (!window) {
+        app.hide?.()
+        return
+      }
+      hideWindowSafely(window, () => app.hide?.())
+    },
+    close: () => {
+      getMainWindow()?.close()
+    },
+    toggleFullScreen: () => {
+      const window = getMainWindow()
+      if (window) toggleWindowFullScreen(window)
+    },
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

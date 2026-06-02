@@ -85,6 +85,7 @@ function getServerRuntime() {
     desktopRoot: unpackedRoot(),
     appRoot: appRoot(),
     h5DistDir: path.join(unpackedRoot(), 'dist'),
+    resolveSystemProxy: (url) => session.defaultSession.resolveProxy(url),
   })
   return serverRuntime
 }
@@ -287,6 +288,7 @@ async function createMainWindow() {
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    fullscreenable: process.platform !== 'darwin',
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,

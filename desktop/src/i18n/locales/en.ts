@@ -983,7 +983,7 @@ export const en = {
   'settings.general.networkProxyModeManual': 'Manual proxy',
   'settings.general.networkProxyModeManualDescription': 'Use the HTTP or HTTPS proxy URL entered below.',
   'settings.general.networkProxyUrl': 'Proxy URL',
-  'settings.general.networkProxyUrlHint': 'HTTP and HTTPS proxy URLs are supported, for example http://127.0.0.1:7890.',
+  'settings.general.networkProxyUrlHint': 'HTTP and HTTPS proxy URLs are supported. For authenticated proxies, use http://user:password@127.0.0.1:7890; the URL is saved with network settings.',
   'settings.general.networkProxyUrlInvalid': 'Enter an HTTP or HTTPS proxy URL.',
   'settings.general.networkProxyUrlRequired': 'Enter a proxy URL.',
   'settings.general.networkTimeout': 'AI request timeout',
