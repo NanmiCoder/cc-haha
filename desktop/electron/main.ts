@@ -26,6 +26,8 @@ import {
   type PortableDetection,
 } from './services/appMode'
 import { installMacOsChromiumKeychainPromptGuard } from './services/keychain'
+import { applyWindowsAppUserModelId } from './services/appIdentity'
+import { installMainWindowNavigationGuards, installPreviewNavigationGuards } from './services/navigationGuards'
 import { logNotificationSmokeRendererAck, scheduleNotificationSmoke } from './services/notificationSmoke'
 import { normalizeZoomFactor } from './services/zoom'
 import { resolveRendererEntry } from './services/rendererEntry'
@@ -126,14 +128,18 @@ function getTerminalService() {
 function getPreviewService() {
   previewService ??= new ElectronPreviewService({
     previewScriptPath: previewAgentPath(),
-    createView: () => new WebContentsView({
-      webPreferences: {
-        preload: previewPreloadPath(),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    }),
+    createView: () => {
+      const view = new WebContentsView({
+        webPreferences: {
+          preload: previewPreloadPath(),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      })
+      installPreviewNavigationGuards(view.webContents, { openExternal: openExternalUrl })
+      return view
+    },
   })
   return previewService
 }
@@ -297,6 +303,8 @@ async function createMainWindow() {
     },
   })
 
+  installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
+
   installWindowLifecycle({
     app,
     window: mainWindow,
@@ -334,6 +342,7 @@ if (!acquireSingleInstanceLock(app, () => mainWindow)) {
 registerIpcHandlers()
 
 app.whenReady().then(async () => {
+  applyWindowsAppUserModelId(app)
   applyStartupPortableMode(app)
   await getServerRuntime().startServer().catch(error => {
     console.error('[desktop] failed to start Electron server sidecar', error)
