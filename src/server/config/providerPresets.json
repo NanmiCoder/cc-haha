@@ -108,7 +108,7 @@
     "apiKeyUrl": "https://platform.minimaxi.com/subscribe/token-plan?code=1TG2Cseab2&source=link",
     "authStrategy": "auth_token",
     "modelContextWindows": {
-      "MiniMax-M3": 204800,
+      "MiniMax-M3": 1000000,
       "MiniMax-M2.7": 204800,
       "MiniMax-M2.7-highspeed": 204800
     }
