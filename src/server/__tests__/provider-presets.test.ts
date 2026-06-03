@@ -98,7 +98,7 @@ describe('provider presets API', () => {
     expect(kimi?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBe('1')
     expect(minimax?.authStrategy).toBe('auth_token')
     expect(minimax?.defaultModels.main).toBe('MiniMax-M3')
-    expect(minimax?.modelContextWindows?.['MiniMax-M3']).toBe(204800)
+    expect(minimax?.modelContextWindows?.['MiniMax-M3']).toBe(1000000)
     expect(jiekouai?.baseUrl).toBe('https://api.jiekou.ai/anthropic')
     expect(jiekouai?.authStrategy).toBe('auth_token')
     expect(jiekouai?.defaultModels.main).toBe('claude-sonnet-4-6')
