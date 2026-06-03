@@ -16,7 +16,7 @@ const DIRECT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'kimi-k2-turbo-preview': 262_144,
   'kimi-k2-thinking': 262_144,
   'kimi-k2-thinking-turbo': 262_144,
-  'minimax-m3': 204_800,
+  'minimax-m3': 1_000_000,
   'minimax-m2.7': 204_800,
   'minimax-m2.7-highspeed': 204_800,
   'glm-5.1': 200_000,
