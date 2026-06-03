@@ -70,7 +70,7 @@ describe('Real Provider Configs', () => {
     expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('')
     expect((settings.env as Record<string, string>).ANTHROPIC_MODEL).toBe('MiniMax-M3')
     expect(JSON.parse((settings.env as Record<string, string>).CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
-      'MiniMax-M3': 204800,
+      'MiniMax-M3': 1000000,
       'MiniMax-M2.7': 204800,
       'MiniMax-M2.7-highspeed': 204800,
     })
@@ -108,7 +108,7 @@ describe('Real Provider Configs', () => {
     let settings = await readCcHahaSettings()
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic')
     expect(JSON.parse((settings.env as Record<string, string>).CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
-      'MiniMax-M3': 204800,
+      'MiniMax-M3': 1000000,
       'MiniMax-M2.7': 204800,
       'MiniMax-M2.7-highspeed': 204800,
     })
