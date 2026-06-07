@@ -102,6 +102,9 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const [launchBranch, setLaunchBranch] = useState<string | null>(null)
   const [launchUseWorktree, setLaunchUseWorktree] = useState(false)
   const [launchReady, setLaunchReady] = useState(true)
+  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null)
+  const [editingQueuedText, setEditingQueuedText] = useState('')
+  const [queueCollapsed, setQueueCollapsed] = useState(false)
   const [launchTransitioning, setLaunchTransitioning] = useState(false)
   const composingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -125,10 +128,11 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       return next
     })
   }, [])
-  const { sendMessage, stopGeneration, clearComposerPrefill, clearComposerInsertion } = useChatStore()
+  const { sendMessage, stopGeneration, clearComposerPrefill, clearComposerInsertion, enqueueMessage, removeQueuedMessage, clearMessageQueue, updateQueuedMessage, moveQueuedMessageToTop } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const chatState = sessionState?.chatState ?? 'idle'
+  const messageQueue = sessionState?.messageQueue ?? []
   const slashCommands = sessionState?.slashCommands ?? []
   const composerPrefill = sessionState?.composerPrefill ?? null
   const composerInsertion = sessionState?.composerInsertion ?? null
@@ -677,10 +681,19 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       }
     }
 
-    sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
+    const outgoingAttachments = [...uploadAttachmentPayload, ...workspaceAttachmentPayload]
+    const outgoingOptions = {
       displayContent,
       displayAttachments: visibleAttachmentPayload,
-    })
+    }
+    // While the agent is busy on this same session, queue the message instead of
+    // sending it; chatStore drains the queue (FIFO) when the turn returns to idle.
+    const shouldQueue = isActive && !isMemberSession && targetSessionId === activeTabId
+    if (shouldQueue) {
+      enqueueMessage(targetSessionId, contentForModel, outgoingAttachments, outgoingOptions)
+    } else {
+      sendMessage(targetSessionId, contentForModel, outgoingAttachments, outgoingOptions)
+    }
     setComposerInput('')
     setComposerAttachments([])
     useChatStore.getState().clearComposerDraft(activeTabId!)
@@ -912,6 +925,111 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               : `${isMobileComposer ? 'mx-0 max-w-none' : 'mx-auto max-w-[860px]'}`
         }
       >
+        {!isMemberSession && messageQueue.length > 0 && (
+          <div className="mb-2 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+            <button
+              type="button"
+              onClick={() => setQueueCollapsed((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
+                {isActive && (
+                  <span className="material-symbols-outlined animate-spin text-[14px] text-[var(--color-brand)]">progress_activity</span>
+                )}
+                {t('chat.queueTitle')}
+                <span className="rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {messageQueue.length}
+                </span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); activeTabId && clearMessageQueue(activeTabId) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); activeTabId && clearMessageQueue(activeTabId) } }}
+                  className="mr-1 text-[11px] font-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-secondary)] hover:underline"
+                >
+                  {t('chat.clearQueue')}
+                </span>
+                <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
+                  {queueCollapsed ? 'expand_less' : 'expand_more'}
+                </span>
+              </span>
+            </button>
+            {!queueCollapsed && (
+              <div className="flex max-h-[168px] flex-col gap-1 overflow-y-auto px-2 pb-2">
+                {messageQueue.map((queued, index) => {
+                  const isEditing = editingQueuedId === queued.id
+                  const commitEdit = () => {
+                    const trimmed = editingQueuedText.trim()
+                    if (activeTabId && trimmed) {
+                      updateQueuedMessage(activeTabId, queued.id, trimmed)
+                    }
+                    setEditingQueuedId(null)
+                    setEditingQueuedText('')
+                  }
+                  return (
+                    <div
+                      key={queued.id}
+                      className="flex items-center gap-2 rounded-md bg-[var(--color-surface)] px-2 py-1.5"
+                    >
+                      <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-tertiary)]">{index + 1}.</span>
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={editingQueuedText}
+                          onChange={(e) => setEditingQueuedText(e.target.value)}
+                          onBlur={commitEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+                            else if (e.key === 'Escape') { e.preventDefault(); setEditingQueuedId(null); setEditingQueuedText('') }
+                          }}
+                          className="min-w-0 flex-1 rounded border border-[var(--color-border-focus)] bg-[var(--color-surface)] px-1.5 py-0.5 text-xs text-[var(--color-text-primary)] outline-none"
+                        />
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">
+                          {queued.displayContent || queued.content}
+                        </span>
+                      )}
+                      {!isEditing && index > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => activeTabId && moveQueuedMessageToTop(activeTabId, queued.id)}
+                          aria-label={t('chat.moveToTop')}
+                          title={t('chat.moveToTop')}
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">vertical_align_top</span>
+                        </button>
+                      )}
+                      {!isEditing && (
+                        <button
+                          type="button"
+                          onClick={() => { setEditingQueuedId(queued.id); setEditingQueuedText(queued.displayContent || queued.content) }}
+                          aria-label={t('chat.editQueued')}
+                          title={t('chat.editQueued')}
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">edit</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => activeTabId && removeQueuedMessage(activeTabId, queued.id)}
+                        aria-label={t('chat.removeFromQueue')}
+                        title={t('chat.removeFromQueue')}
+                        className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-error)]"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div
           ref={panelRef}
           data-testid="chat-input-panel"

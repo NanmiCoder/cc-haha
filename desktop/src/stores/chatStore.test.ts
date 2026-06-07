@@ -158,6 +158,7 @@ function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState 
     agentTaskNotifications: {},
     backgroundAgentTasks: {},
     elapsedTimer: null,
+    messageQueue: [],
     ...overrides,
   }
 }
@@ -3810,5 +3811,133 @@ describe('chatStore history mapping', () => {
       content: '开始优化UI',
       attachments: undefined,
     })
+  })
+})
+
+describe('chatStore message queue', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    getMemberBySessionIdMock.mockReset()
+    getMemberBySessionIdMock.mockReturnValue(null)
+    useSessionRuntimeStore.setState({ selections: {} })
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  function findUserMessageSends() {
+    return sendMock.mock.calls.filter(
+      ([, payload]) => payload && (payload as { type?: string }).type === 'user_message',
+    )
+  }
+
+  it('enqueues a message while the agent is busy without sending it over the websocket', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'queued one')
+
+    const queue = useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []
+    expect(queue).toHaveLength(1)
+    expect(queue[0]).toMatchObject({ content: 'queued one' })
+    expect(findUserMessageSends()).toHaveLength(0)
+  })
+
+  it('drains the next queued message when the session transitions to idle (status)', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'first')
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'second')
+    expect(findUserMessageSends()).toHaveLength(0)
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'idle' })
+
+    const sends = findUserMessageSends()
+    expect(sends).toHaveLength(1)
+    expect((sends[0]![1] as { content: string }).content).toBe('first')
+    // Only the first item drains; the second stays queued until the next idle.
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue).toHaveLength(1)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue?.[0]?.content).toBe('second')
+  })
+
+  it('drains the next queued message on turn completion (message_complete)', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'streaming' }) },
+    })
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'follow up')
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 2 },
+    })
+
+    expect(findUserMessageSends()).toHaveLength(1)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue).toHaveLength(0)
+  })
+
+  it('does not drain while a permission prompt is pending', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          pendingPermission: { requestId: 'p1', toolName: 'Bash', input: {} },
+        }),
+      },
+    })
+
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'should wait')
+
+    expect(findUserMessageSends()).toHaveLength(0)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue).toHaveLength(1)
+  })
+
+  it('immediately drains an enqueue when the session is already idle and connected', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }) },
+    })
+
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'go now')
+
+    expect(findUserMessageSends()).toHaveLength(1)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue).toHaveLength(0)
+  })
+
+  it('supports remove, move-to-top, update and clear on the queue', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+    const store = useChatStore.getState()
+    store.enqueueMessage(TEST_SESSION_ID, 'a')
+    store.enqueueMessage(TEST_SESSION_ID, 'b')
+    store.enqueueMessage(TEST_SESSION_ID, 'c')
+
+    const ids = () => (useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []).map((m) => m.content)
+    const queue0 = useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []
+    const idB = queue0[1]!.id
+    const idC = queue0[2]!.id
+
+    store.moveQueuedMessageToTop(TEST_SESSION_ID, idC)
+    expect(ids()).toEqual(['c', 'a', 'b'])
+
+    store.updateQueuedMessage(TEST_SESSION_ID, idB, 'b-edited')
+    expect(ids()).toEqual(['c', 'a', 'b-edited'])
+
+    store.removeQueuedMessage(TEST_SESSION_ID, idC)
+    expect(ids()).toEqual(['a', 'b-edited'])
+
+    store.clearMessageQueue(TEST_SESSION_ID)
+    expect(ids()).toEqual([])
+  })
+
+  it('keeps the queue intact when the current generation is stopped', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'streaming' }) },
+    })
+    useChatStore.getState().enqueueMessage(TEST_SESSION_ID, 'still queued')
+
+    useChatStore.getState().stopGeneration(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue).toHaveLength(1)
+    expect(findUserMessageSends()).toHaveLength(0)
   })
 })

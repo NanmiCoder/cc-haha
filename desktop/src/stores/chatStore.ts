@@ -55,6 +55,15 @@ export type ComposerReferenceInsertion = {
 
 export type ComposerPrefillMode = 'replace' | 'append'
 
+export type QueuedMessage = {
+  id: string
+  content: string
+  attachments?: AttachmentRef[]
+  displayContent?: string
+  displayAttachments?: AttachmentRef[]
+  createdAt: number
+}
+
 export type PerSessionState = {
   messages: UIMessage[]
   chatState: ChatState
@@ -94,6 +103,8 @@ export type PerSessionState = {
   } | null
   composerInsertion?: ComposerReferenceInsertion | null
   composerDraft?: ComposerDraftState | null
+  /** Per-session FIFO of messages queued while the agent is busy; drained on idle. */
+  messageQueue?: QueuedMessage[]
 }
 
 const DEFAULT_SESSION_STATE: PerSessionState = {
@@ -121,10 +132,11 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   composerPrefill: null,
   composerInsertion: null,
   composerDraft: null,
+  messageQueue: [],
 }
 
 function createDefaultSessionState(): PerSessionState {
-  return { ...DEFAULT_SESSION_STATE, messages: [], tokenUsage: { input_tokens: 0, output_tokens: 0 } }
+  return { ...DEFAULT_SESSION_STATE, messages: [], tokenUsage: { input_tokens: 0, output_tokens: 0 }, messageQueue: [] }
 }
 
 type ChatStore = {
@@ -170,6 +182,17 @@ type ChatStore = {
   clearComposerInsertion: (sessionId: string, nonce?: number) => void
   setComposerDraft: (sessionId: string, draft: ComposerDraftState) => void
   clearComposerDraft: (sessionId: string) => void
+  enqueueMessage: (
+    sessionId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+    options?: { displayContent?: string; displayAttachments?: AttachmentRef[] },
+  ) => void
+  removeQueuedMessage: (sessionId: string, queuedId: string) => void
+  updateQueuedMessage: (sessionId: string, queuedId: string, content: string) => void
+  moveQueuedMessageToTop: (sessionId: string, queuedId: string) => void
+  clearMessageQueue: (sessionId: string) => void
+  drainMessageQueue: (sessionId: string) => void
   clearMessages: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
@@ -829,6 +852,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           messages: existing?.messages ?? [],
           activeGoal: existing?.activeGoal ?? null,
           composerDraft: existing?.composerDraft ?? null,
+          messageQueue: existing?.messageQueue ?? [],
         },
       },
     }))
@@ -995,6 +1019,87 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     wsManager.send(sessionId, { type: 'user_message', content, attachments })
+  },
+
+  enqueueMessage: (sessionId, content, attachments, options) => {
+    if (!content.trim() && !(attachments && attachments.length > 0)) return
+    const queued: QueuedMessage = {
+      id: nextId(),
+      content,
+      attachments,
+      displayContent: options?.displayContent,
+      displayAttachments: options?.displayAttachments,
+      createdAt: Date.now(),
+    }
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: [...(session.messageQueue ?? []), queued],
+      })),
+    }))
+    // In case the agent already went idle between the busy-check and enqueue,
+    // attempt an immediate drain (no-op if still busy).
+    get().drainMessageQueue(sessionId)
+  },
+
+  removeQueuedMessage: (sessionId, queuedId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: (session.messageQueue ?? []).filter((m) => m.id !== queuedId),
+      })),
+    }))
+  },
+
+  updateQueuedMessage: (sessionId, queuedId, content) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: (session.messageQueue ?? []).map((m) =>
+          m.id === queuedId
+            ? { ...m, content, displayContent: content }
+            : m,
+        ),
+      })),
+    }))
+  },
+
+  moveQueuedMessageToTop: (sessionId, queuedId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => {
+        const queue = session.messageQueue ?? []
+        const target = queue.find((m) => m.id === queuedId)
+        if (!target) return {}
+        return {
+          messageQueue: [target, ...queue.filter((m) => m.id !== queuedId)],
+        }
+      }),
+    }))
+  },
+
+  clearMessageQueue: (sessionId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, () => ({ messageQueue: [] })),
+    }))
+  },
+
+  drainMessageQueue: (sessionId) => {
+    const session = get().sessions[sessionId]
+    if (!session) return
+    // Only drain on a true idle turn boundary — never mid-stream, while a tool
+    // is running, or while a permission prompt is pending.
+    if (session.chatState !== 'idle') return
+    if (session.pendingPermission || session.pendingComputerUsePermission) return
+    if (session.connectionState !== 'connected') return
+    const queue = session.messageQueue ?? []
+    const next = queue[0]
+    if (!next) return
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+        messageQueue: (sess.messageQueue ?? []).slice(1),
+      })),
+    }))
+    get().sendMessage(sessionId, next.content, next.attachments, {
+      displayContent: next.displayContent,
+      displayAttachments: next.displayAttachments,
+    })
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
@@ -1337,6 +1442,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             clearInterval(session.elapsedTimer)
             update(() => ({ elapsedTimer: null }))
           }
+          get().drainMessageQueue(sessionId)
         }
         // Sync tab status
         useTabStore.getState().updateTabStatus(sessionId, msg.state === 'idle' ? 'idle' : 'running')
@@ -1667,6 +1773,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
         }
         refreshCompletedTranscriptHistory(get, sessionId)
+        get().drainMessageQueue(sessionId)
         break
       }
 

@@ -488,9 +488,52 @@ const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
 
 // Pull `id` strings out of common /v1/models response shapes (OpenAI: { data: [{ id }] };
 // Anthropic: { data: [{ id }] }; some proxies wrap in { models: [...] } or return a bare array).
-function extractModelIds(payload: unknown): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
+// Also tries to lift a context-window number when the upstream advertises one — field names
+// vary by vendor (context_length, context_window, max_context_window_tokens, etc.).
+export type FetchedModelEntry = {
+  id: string
+  contextWindow?: number
+}
+
+const CONTEXT_WINDOW_KEYS = [
+  'context_length',
+  'context_window',
+  'max_context_window_tokens',
+  'max_input_tokens',
+  'max_tokens',
+  'max_model_len',
+  'context_size',
+  'token_limit',
+] as const
+
+function readContextWindow(obj: Record<string, unknown>): number | undefined {
+  // Some providers nest limits under top_provider / pricing / spec / etc.
+  const candidateContainers: Array<Record<string, unknown>> = [obj]
+  for (const nestedKey of ['top_provider', 'spec', 'limits']) {
+    const nested = obj[nestedKey]
+    if (nested && typeof nested === 'object') {
+      candidateContainers.push(nested as Record<string, unknown>)
+    }
+  }
+  for (const container of candidateContainers) {
+    for (const key of CONTEXT_WINDOW_KEYS) {
+      const raw = container[key]
+      const value = typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() && Number.isFinite(Number(raw))
+          ? Number(raw)
+          : undefined
+      if (value !== undefined && value > 0 && Number.isFinite(value)) {
+        return Math.floor(value)
+      }
+    }
+  }
+  return undefined
+}
+
+export function extractModelEntries(payload: unknown): FetchedModelEntry[] {
+  const out: FetchedModelEntry[] = []
+  const seen = new Map<string, FetchedModelEntry>()
   const visit = (item: unknown) => {
     if (!item || typeof item !== 'object') return
     const obj = item as Record<string, unknown>
@@ -501,10 +544,18 @@ function extractModelIds(payload: unknown): string[] {
         : typeof obj.model === 'string'
           ? obj.model
           : null
-    if (id && !seen.has(id)) {
-      seen.add(id)
-      out.push(id)
+    if (!id) return
+    const contextWindow = readContextWindow(obj)
+    const existing = seen.get(id)
+    if (existing) {
+      if (existing.contextWindow === undefined && contextWindow !== undefined) {
+        existing.contextWindow = contextWindow
+      }
+      return
     }
+    const entry: FetchedModelEntry = { id, ...(contextWindow !== undefined ? { contextWindow } : {}) }
+    seen.set(id, entry)
+    out.push(entry)
   }
   if (Array.isArray(payload)) {
     payload.forEach(visit)
@@ -527,6 +578,23 @@ type ModelContextInputs = Record<ModelSlot, string>
 
 function formatContextWindow(value: number): string {
   return value.toLocaleString('en-US')
+}
+
+// Compact unit-suffixed window size for dropdown labels: 1,000,000 → "1M", 200,000 → "200K".
+// Strips trailing ".0" and keeps at most one decimal so common sizes render clean (1M / 1.5M / 128K).
+function formatContextWindowCompact(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (value >= 1_000_000) {
+    const m = value / 1_000_000
+    const rounded = Math.round(m * 10) / 10
+    return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}M`
+  }
+  if (value >= 1_000) {
+    const k = value / 1_000
+    const rounded = Math.round(k * 10) / 10
+    return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}K`
+  }
+  return String(value)
 }
 
 function getPresetAutoCompactWindow(preset: ProviderPreset): string {
@@ -772,47 +840,128 @@ function openExternalUrl(url: string) {
     .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
 }
 
-// Combobox-style input for provider model IDs: free-text plus a native datalist dropdown
-// fed by the "Fetch Models" button. Keeps the same visual language as the Input component.
+// Combobox-style input for provider model IDs: free-text plus a custom dropdown fed
+// by the "Fetch Models" button. Uses cchaha CSS variables so it matches the active theme,
+// and—unlike the native <datalist>—does NOT prefix-filter against the current value, so
+// users can pick a different fetched model without first clearing the input.
 function ModelComboInput({
   label,
   required,
   value,
   onChange,
   placeholder,
-  listId,
+  options,
 }: {
   label: string
   required?: boolean
   value: string
   onChange: (value: string) => void
   placeholder?: string
-  listId: string
+  options: FetchedModelEntry[]
 }) {
-  const inputId = `${listId}-${label.toLowerCase().replace(/\s+/g, '-')}`
+  const inputId = useMemo(
+    () => `model-combo-${label.toLowerCase().replace(/\s+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`,
+    [label],
+  )
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [open])
+
+  const hasOptions = options.length > 0
+
   return (
-    <div className="flex flex-col gap-1">
+    <div ref={containerRef} className="relative flex flex-col gap-1">
       <label htmlFor={inputId} className="text-sm font-medium text-[var(--color-text-primary)]">
         {label}
         {required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </label>
-      <input
-        id={inputId}
-        list={listId}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete="off"
-        spellCheck={false}
-        className="
-          h-10 px-3 rounded-[var(--radius-md)] border text-sm
-          bg-[var(--color-surface)] text-[var(--color-text-primary)]
-          placeholder:text-[var(--color-text-tertiary)]
-          transition-colors duration-150
-          border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]
-          outline-none
-        "
-      />
+      <div className="relative">
+        <input
+          id={inputId}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => hasOptions && setOpen(true)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="
+            h-10 w-full pl-3 pr-9 rounded-[var(--radius-md)] border text-sm
+            bg-[var(--color-surface)] text-[var(--color-text-primary)]
+            placeholder:text-[var(--color-text-tertiary)]
+            transition-colors duration-150
+            border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]
+            outline-none
+          "
+        />
+        {hasOptions && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-label="Toggle model list"
+            tabIndex={-1}
+            className="absolute right-1 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          >
+            <span className="material-symbols-outlined text-[18px]">expand_more</span>
+          </button>
+        )}
+      </div>
+      {open && hasOptions && (
+        <div
+          className="
+            absolute left-0 right-0 top-full z-30 mt-1 max-h-[260px] overflow-y-auto
+            rounded-[var(--radius-md)] border border-[var(--color-border)]
+            bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]
+          "
+          role="listbox"
+        >
+          {options.map((opt) => {
+            const isSelected = opt.id === value
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(opt.id)
+                  setOpen(false)
+                }}
+                className={`
+                  flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors
+                  ${isSelected
+                    ? 'bg-[var(--color-model-option-selected-bg)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]'
+                  }
+                `}
+              >
+                <span className="min-w-0 flex-1 truncate">{opt.id}</span>
+                {opt.contextWindow !== undefined && (
+                  <span className="flex-shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
+                    {formatContextWindowCompact(opt.contextWindow)}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -859,7 +1008,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
   const [isTesting, setIsTesting] = useState(false)
-  const [fetchedModels, setFetchedModels] = useState<string[]>([])
+  const [fetchedModels, setFetchedModels] = useState<FetchedModelEntry[]>([])
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [fetchModelsResult, setFetchModelsResult] = useState<{ kind: 'ok' | 'error'; message: string } | null>(null)
   const [settingsJson, setSettingsJson] = useState('')
@@ -1167,14 +1316,31 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         throw new Error(`HTTP ${res.status}`)
       }
       const json: unknown = await res.json()
-      const ids = extractModelIds(json)
-      if (ids.length === 0) {
+      const entries = extractModelEntries(json)
+      if (entries.length === 0) {
         throw new Error('empty')
       }
-      setFetchedModels(ids)
+      setFetchedModels(entries)
+      // Auto-fill the context-window inputs for any slot whose model id is in the fetched
+      // list AND whose current input is empty (i.e. user hasn't manually overridden).
+      // Only fills if the upstream actually advertised a context window.
+      const byId = new Map(entries.map((e) => [e.id, e]))
+      setModelContextInputs((prev) => {
+        let next = prev
+        for (const slot of MODEL_SLOTS) {
+          const id = models[slot]?.trim()
+          if (!id) continue
+          const advertised = byId.get(id)?.contextWindow
+          if (!advertised) continue
+          if (prev[slot]?.trim()) continue
+          if (next === prev) next = { ...prev }
+          next[slot] = String(advertised)
+        }
+        return next
+      })
       setFetchModelsResult({
         kind: 'ok',
-        message: t('settings.providers.fetchModelsOk', { count: String(ids.length) }),
+        message: t('settings.providers.fetchModelsOk', { count: String(entries.length) }),
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1358,11 +1524,6 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               {fetchModelsResult.message}
             </p>
           )}
-          <datalist id="provider-fetched-models">
-            {fetchedModels.map((id) => (
-              <option key={id} value={id} />
-            ))}
-          </datalist>
           <div className="grid grid-cols-2 gap-2">
             <ModelComboInput
               label={t('settings.providers.mainModel')}
@@ -1370,28 +1531,28 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               value={models.main}
               onChange={(value) => handleModelChange('main', value)}
               placeholder="Model ID"
-              listId="provider-fetched-models"
+              options={fetchedModels}
             />
             <ModelComboInput
               label={t('settings.providers.haikuModel')}
               value={models.haiku}
               onChange={(value) => handleModelChange('haiku', value)}
               placeholder={t('settings.providers.sameAsMain')}
-              listId="provider-fetched-models"
+              options={fetchedModels}
             />
             <ModelComboInput
               label={t('settings.providers.sonnetModel')}
               value={models.sonnet}
               onChange={(value) => handleModelChange('sonnet', value)}
               placeholder={t('settings.providers.sameAsMain')}
-              listId="provider-fetched-models"
+              options={fetchedModels}
             />
             <ModelComboInput
               label={t('settings.providers.opusModel')}
               value={models.opus}
               onChange={(value) => handleModelChange('opus', value)}
               placeholder={t('settings.providers.sameAsMain')}
-              listId="provider-fetched-models"
+              options={fetchedModels}
             />
           </div>
         </div>
