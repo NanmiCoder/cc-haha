@@ -185,7 +185,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         settingsApi.getUser(),
         loadH5AccessSettings(previousH5Access),
       ])
-      const theme = isThemeMode(userSettings.theme) ? userSettings.theme : 'white'
+      const serverTheme = isThemeMode(userSettings.theme) ? userSettings.theme : 'white'
+      // 'system' is a desktop-only logical mode that never gets persisted to the
+      // server (the server rejects it). If the user previously chose 'system' and
+      // it was stored locally, honour the local value instead of overwriting it
+      // with whatever concrete theme the server last saw.
+      const localTheme = useUIStore.getState().theme
+      const theme = localTheme === 'system' ? 'system' : serverTheme
       useUIStore.getState().setTheme(theme)
       set({
         permissionMode: mode,

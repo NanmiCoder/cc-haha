@@ -28,17 +28,25 @@ describe('uiStore theme handling', () => {
     expect(document.documentElement.style.colorScheme).toBe('light')
   })
 
-  it('cycles through pure white, warm classic, and dark themes', async () => {
+  it('cycles through all theme modes in order', async () => {
     const { useUIStore } = await import('./uiStore')
 
+    // white (default) → light
     useUIStore.getState().toggleTheme()
     expect(useUIStore.getState().theme).toBe('light')
     expect(document.documentElement.style.colorScheme).toBe('light')
 
+    // light → dark
     useUIStore.getState().toggleTheme()
     expect(useUIStore.getState().theme).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
 
+    // dark → system (resolves to light or dark based on OS; jsdom has no matchMedia → light)
+    useUIStore.getState().toggleTheme()
+    expect(useUIStore.getState().theme).toBe('system')
+    expect(document.documentElement.style.colorScheme).toBe('light')
+
+    // system → white (wraps around)
     useUIStore.getState().toggleTheme()
     expect(useUIStore.getState().theme).toBe('white')
     expect(document.documentElement.style.colorScheme).toBe('light')

@@ -3929,6 +3929,62 @@ describe('chatStore message queue', () => {
     expect(ids()).toEqual([])
   })
 
+  it('sends a queued message immediately while busy without stopping the running turn', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+    const store = useChatStore.getState()
+    store.enqueueMessage(TEST_SESSION_ID, 'a')
+    store.enqueueMessage(TEST_SESSION_ID, 'b')
+    expect(findUserMessageSends()).toHaveLength(0)
+
+    const queue0 = useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []
+    const idB = queue0[1]!.id
+
+    useChatStore.getState().sendQueuedMessageNow(TEST_SESSION_ID, idB)
+
+    // Plain send: no stop_generation is issued, the message is sent immediately,
+    // and only the picked item is removed from the queue.
+    const stopSends = sendMock.mock.calls.filter(
+      ([, payload]) => payload && (payload as { type?: string }).type === 'stop_generation',
+    )
+    expect(stopSends).toHaveLength(0)
+    const sends = findUserMessageSends()
+    expect(sends).toHaveLength(1)
+    expect((sends[0]![1] as { content: string }).content).toBe('b')
+    const remaining = (useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []).map((m) => m.content)
+    expect(remaining).toEqual(['a'])
+  })
+
+  it('sends a queued message immediately when already idle, without issuing a stop', () => {
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+    const store = useChatStore.getState()
+    store.enqueueMessage(TEST_SESSION_ID, 'a')
+    store.enqueueMessage(TEST_SESSION_ID, 'b')
+    // Stop leaves the session idle with the queue intact (drain paused).
+    store.stopGeneration(TEST_SESSION_ID)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.chatState).toBe('idle')
+    sendMock.mockClear()
+
+    const queue = useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []
+    const idB = queue[1]!.id
+    expect(queue.map((m) => m.content)).toEqual(['a', 'b'])
+
+    useChatStore.getState().sendQueuedMessageNow(TEST_SESSION_ID, idB)
+
+    const stopSends = sendMock.mock.calls.filter(
+      ([, payload]) => payload && (payload as { type?: string }).type === 'stop_generation',
+    )
+    expect(stopSends).toHaveLength(0)
+    const sends = findUserMessageSends()
+    expect(sends).toHaveLength(1)
+    expect((sends[0]![1] as { content: string }).content).toBe('b')
+    const remaining = (useChatStore.getState().sessions[TEST_SESSION_ID]?.messageQueue ?? []).map((m) => m.content)
+    expect(remaining).toEqual(['a'])
+  })
+
   it('keeps the queue intact when the current generation is stopped', () => {
     useChatStore.setState({
       sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'streaming' }) },

@@ -191,6 +191,7 @@ type ChatStore = {
   removeQueuedMessage: (sessionId: string, queuedId: string) => void
   updateQueuedMessage: (sessionId: string, queuedId: string, content: string) => void
   moveQueuedMessageToTop: (sessionId: string, queuedId: string) => void
+  sendQueuedMessageNow: (sessionId: string, queuedId: string) => void
   clearMessageQueue: (sessionId: string) => void
   drainMessageQueue: (sessionId: string) => void
   clearMessages: (sessionId: string) => void
@@ -1083,6 +1084,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       }),
     }))
+  },
+
+  sendQueuedMessageNow: (sessionId, queuedId) => {
+    const session = get().sessions[sessionId]
+    const target = (session?.messageQueue ?? []).find((m) => m.id === queuedId)
+    if (!target) return
+    // Plain "send now": drop it from the queue and send it immediately. We do
+    // NOT stop the running turn, do NOT promote-and-wait, and do NOT inspect
+    // chatState — the caller decided to send, so we just send.
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+        messageQueue: (sess.messageQueue ?? []).filter((m) => m.id !== queuedId),
+      })),
+    }))
+    get().sendMessage(sessionId, target.content, target.attachments, {
+      displayContent: target.displayContent,
+      displayAttachments: target.displayAttachments,
+    })
   },
 
   clearMessageQueue: (sessionId) => {

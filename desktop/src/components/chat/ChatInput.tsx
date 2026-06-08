@@ -23,6 +23,7 @@ import { ProjectContextChip } from '../shared/ProjectContextChip'
 import { RepositoryLaunchControls } from '../shared/RepositoryLaunchControls'
 import { FileSearchMenu, type FileSearchMenuHandle } from './FileSearchMenu'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
+import { SkillPickerMenu, type SkillPickerHandle } from './SkillPickerMenu'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import {
   appendAgentSlashCommands,
@@ -90,6 +91,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false)
+  const [pluginPickerOpen, setPluginPickerOpen] = useState(false)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [fileSearchOpen, setFileSearchOpen] = useState(false)
   const [localSlashPanel, setLocalSlashPanel] = useState<LocalSlashCommandName | null>(null)
@@ -113,6 +116,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<FileSearchMenuHandle>(null)
+  const skillPickerRef = useRef<SkillPickerHandle>(null)
   const slashItemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const previousActiveTabIdRef = useRef<string | null>(null)
   const inputRef = useRef(input)
@@ -128,7 +132,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       return next
     })
   }, [])
-  const { sendMessage, stopGeneration, clearComposerPrefill, clearComposerInsertion, enqueueMessage, removeQueuedMessage, clearMessageQueue, updateQueuedMessage, moveQueuedMessageToTop } = useChatStore()
+  const { sendMessage, stopGeneration, clearComposerPrefill, clearComposerInsertion, enqueueMessage, removeQueuedMessage, clearMessageQueue, updateQueuedMessage, sendQueuedMessageNow } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const chatState = sessionState?.chatState ?? 'idle'
@@ -393,6 +397,22 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [plusMenuOpen])
+
+  // Close the skill / plugin picker on outside click. We treat the textarea as
+  // "inside" so typing into it (which is what the picker filter is for in the
+  // future) does not dismiss the popover.
+  useEffect(() => {
+    if (!skillPickerOpen && !pluginPickerOpen) return
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (panelRef.current && panelRef.current.contains(target)) return
+      setSkillPickerOpen(false)
+      setPluginPickerOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [skillPickerOpen, pluginPickerOpen])
 
   useEffect(() => {
     if (!slashMenuOpen) return
@@ -738,6 +758,23 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       }
     }
 
+    // Route navigation keys to the skill / plugin picker when it is open.
+    if (skillPickerOpen || pluginPickerOpen) {
+      const key = event.key
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape') {
+        event.preventDefault()
+        if (key === 'Escape') {
+          setSkillPickerOpen(false)
+          setPluginPickerOpen(false)
+          return
+        }
+        skillPickerRef.current?.handleKeyDown(event.nativeEvent)
+        return
+      }
+      // Other keys (typing) keep flowing to the textarea.
+      return
+    }
+
     if (slashMenuOpen && filteredCommands.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -893,6 +930,57 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     })
   }
 
+  // Open the inline skill picker menu from the + menu. The user picks a skill
+  // and we insert a "@skill:<name> " token into the composer at the cursor — a
+  // visible reference the agent can read as "use this skill, then …".
+  const openSkillPicker = () => {
+    if (isMemberSession) return
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setLocalSlashPanel(null)
+    setPluginPickerOpen(false)
+    setSkillPickerOpen(true)
+  }
+
+  // Same idea for plugins; "@plugin:<name> " tells the agent which plugin to use.
+  const openPluginPicker = () => {
+    if (isMemberSession) return
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setLocalSlashPanel(null)
+    setSkillPickerOpen(false)
+    setPluginPickerOpen(true)
+  }
+
+  const insertReferenceToken = (token: string) => {
+    const el = textareaRef.current
+    const cursorPos = el?.selectionStart ?? input.length
+    const before = input.slice(0, cursorPos)
+    const after = input.slice(cursorPos)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after)
+    const insertion = `${needsLeadingSpace ? ' ' : ''}${token}${needsTrailingSpace ? ' ' : ' '}`
+    const next = `${before}${insertion}${after}`
+    const nextCursor = before.length + insertion.length
+    setComposerInput(next)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  const handlePickSkill = (skillName: string) => {
+    insertReferenceToken(`@skill:${skillName}`)
+    setSkillPickerOpen(false)
+  }
+
+  const handlePickPlugin = (pluginName: string) => {
+    insertReferenceToken(`@plugin:${pluginName}`)
+    setPluginPickerOpen(false)
+  }
+
   const composerPlaceholder =
     isHeroComposer
       ? t('empty.placeholder')
@@ -904,6 +992,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
   const addFilesLabel = isHeroComposer ? t('empty.addFiles') : t('chat.addFiles')
   const slashCommandsLabel = isHeroComposer ? t('empty.slashCommands') : t('chat.slashCommands')
+  const skillsLabel = t('chat.openSkills')
+  const pluginsLabel = t('chat.openPlugins')
 
   return (
     <div
@@ -971,7 +1061,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                   return (
                     <div
                       key={queued.id}
-                      className="flex items-center gap-2 rounded-md bg-[var(--color-surface)] px-2 py-1.5"
+                      className="group flex items-center gap-2 rounded-md bg-[var(--color-surface)] px-2 py-1.5"
                     >
                       <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-tertiary)]">{index + 1}.</span>
                       {isEditing ? (
@@ -991,15 +1081,15 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                           {queued.displayContent || queued.content}
                         </span>
                       )}
-                      {!isEditing && index > 0 && (
+                      {!isEditing && (
                         <button
                           type="button"
-                          onClick={() => activeTabId && moveQueuedMessageToTop(activeTabId, queued.id)}
-                          aria-label={t('chat.moveToTop')}
-                          title={t('chat.moveToTop')}
-                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                          onClick={() => activeTabId && sendQueuedMessageNow(activeTabId, queued.id)}
+                          aria-label={t('chat.sendNow')}
+                          title={t('chat.sendNow')}
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
                         >
-                          <span className="material-symbols-outlined text-[16px]">vertical_align_top</span>
+                          <span className="material-symbols-outlined text-[16px]">send</span>
                         </button>
                       )}
                       {!isEditing && (
@@ -1008,7 +1098,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                           onClick={() => { setEditingQueuedId(queued.id); setEditingQueuedText(queued.displayContent || queued.content) }}
                           aria-label={t('chat.editQueued')}
                           title={t('chat.editQueued')}
-                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
                         >
                           <span className="material-symbols-outlined text-[16px]">edit</span>
                         </button>
@@ -1018,7 +1108,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                         onClick={() => activeTabId && removeQueuedMessage(activeTabId, queued.id)}
                         aria-label={t('chat.removeFromQueue')}
                         title={t('chat.removeFromQueue')}
-                        className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-error)]"
+                        className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-error)] focus-visible:opacity-100 group-hover:opacity-100"
                       >
                         <span className="material-symbols-outlined text-[16px]">close</span>
                       </button>
@@ -1094,6 +1184,25 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                     textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos)
                   })
                 }
+              }}
+            />
+          )}
+
+          {!isMemberSession && (skillPickerOpen || pluginPickerOpen) && (
+            <SkillPickerMenu
+              ref={skillPickerRef}
+              mode={skillPickerOpen ? 'skill' : 'plugin'}
+              cwd={activeLaunchWorkDir || resolvedWorkDir || undefined}
+              onPick={(name) => {
+                if (skillPickerOpen) {
+                  handlePickSkill(name)
+                } else {
+                  handlePickPlugin(name)
+                }
+              }}
+              onClose={() => {
+                setSkillPickerOpen(false)
+                setPluginPickerOpen(false)
               }}
             />
           )}
@@ -1233,6 +1342,20 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                         >
                           <span className="w-[24px] text-center text-[18px] font-bold text-[var(--color-text-secondary)]">/</span>
                           <span className="text-sm text-[var(--color-text-primary)]">{slashCommandsLabel}</span>
+                        </button>
+                        <button
+                          onClick={openSkillPicker}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">auto_awesome</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{skillsLabel}</span>
+                        </button>
+                        <button
+                          onClick={openPluginPicker}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">extension</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{pluginsLabel}</span>
                         </button>
                       </div>
                     )}

@@ -418,7 +418,7 @@ export const FileReadTool = buildTool({
   renderToolUseErrorMessage,
   async validateInput({ file_path, pages }, toolUseContext: ToolUseContext) {
     // Validate pages parameter (pure string parsing, no I/O)
-    if (pages !== undefined) {
+    if (pages !== undefined && pages !== '') {
       const parsed = parsePDFPageRange(pages)
       if (!parsed) {
         return {
