@@ -40,7 +40,11 @@ desktop/package-lock.json
 desktop/brand-assets/
 
 # Claude local config & auto-generated
-.claude/
+.claude/*
+# …but project-level agents under .claude/agents/ are part of the repo and
+# should be shared with other contributors. Whitelist them explicitly.
+!.claude/agents/
+!.claude/agents/**
 
 # Superpowers plans & specs (local only)
 docs/superpowers/

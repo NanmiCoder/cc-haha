@@ -39,6 +39,21 @@ describe('built-in agents', () => {
     expect(agentTypes).toContain('Explore')
     expect(agentTypes).toContain('Plan')
     expect(agentTypes).toContain('verification')
+    expect(agentTypes).toContain('test-author')
+    expect(agentTypes).toContain('code-reviewer')
+    // game-developer is a project-level agent (.claude/agents), not a built-in.
+    expect(agentTypes).not.toContain('game-developer')
+  })
+
+  test('always includes the new specialized agents regardless of Explore/Plan gating', () => {
+    setIsInteractive(true)
+
+    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
+
+    // test-author / code-reviewer live in the base array, so they ship even
+    // when other optional built-ins are toggled off.
+    expect(agentTypes).toContain('test-author')
+    expect(agentTypes).toContain('code-reviewer')
   })
 
   test('preserves SDK opt-out in noninteractive sessions', () => {
