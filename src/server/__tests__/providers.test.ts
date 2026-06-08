@@ -9,6 +9,7 @@ import * as os from 'os'
 import { ProviderService } from '../services/providerService.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
+import { clearRedteamWorkflowSession } from '../services/redteamWorkflowGuard.js'
 import type { CreateProviderInput } from '../types/provider.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -944,6 +945,119 @@ describe('ProviderService', () => {
   })
 
   describe('handleProxyRequest', () => {
+    test('returns a redteam confirmation gate without calling upstream while pending', async () => {
+      const originalFetch = globalThis.fetch
+      const sessionHeader = 'redteam-handler-pending'
+      const sessionId = `proxy:${sessionHeader}`
+      let fetchCalls = 0
+      globalThis.fetch = mock(async () => {
+        fetchCalls += 1
+        return new Response('{}', { status: 500 })
+      }) as typeof fetch
+
+      try {
+        clearRedteamWorkflowSession(sessionId)
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat' }))
+        await svc.activateProvider(provider.id)
+
+        const req = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-cc-haha-session-id': sessionHeader,
+            'x-cc-haha-work-dir': tmpDir,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'red team test https://example.com/' }],
+          }),
+        })
+
+        const res = await handleProxyRequest(req, new URL(req.url))
+        expect(res.status).toBe(200)
+        expect(fetchCalls).toBe(0)
+        const data = await res.json() as { content: Array<{ text: string }> }
+        expect(data.content[0].text).toContain('请确认执行选项')
+        expect(data.content[0].text).toContain('https://example.com/')
+      } finally {
+        clearRedteamWorkflowSession(sessionId)
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('injects the redteam workflow contract after explicit gate confirmation', async () => {
+      const originalFetch = globalThis.fetch
+      const sessionHeader = 'redteam-handler-confirmed'
+      const sessionId = `proxy:${sessionHeader}`
+      const calls: Array<{ body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({
+          id: 'chatcmpl-redteam',
+          object: 'chat.completion',
+          created: 0,
+          model: 'gpt-4',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        clearRedteamWorkflowSession(sessionId)
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat' }))
+        await svc.activateProvider(provider.id)
+
+        const startReq = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-cc-haha-session-id': sessionHeader,
+            'x-cc-haha-work-dir': tmpDir,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'red team test https://example.com/' }],
+          }),
+        })
+        const gate = await handleProxyRequest(startReq, new URL(startReq.url))
+        expect(gate.status).toBe(200)
+        expect(calls).toHaveLength(0)
+
+        const confirmReq = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-cc-haha-session-id': sessionHeader,
+            'x-cc-haha-work-dir': tmpDir,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'OK' }],
+          }),
+        })
+        const res = await handleProxyRequest(confirmReq, new URL(confirmReq.url))
+        expect(res.status).toBe(200)
+        expect(calls).toHaveLength(1)
+
+        const serialized = JSON.stringify(calls[0].body)
+        expect(serialized).toContain('CC_HAHA_REDTEAM_WORKFLOW_CONTRACT')
+        expect(serialized).toContain('Gate state: confirmed')
+        expect(serialized).toContain('redteam-commander')
+        expect(serialized).toContain('Coverage oracle bridge')
+      } finally {
+        clearRedteamWorkflowSession(sessionId)
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('injects Claude Code billing attribution with compat version and signed CCH', async () => {
       const originalFetch = globalThis.fetch
       const originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT

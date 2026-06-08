@@ -969,9 +969,14 @@ export async function runInProcessTeammate(
     teammateSystemPrompt = systemPromptParts.join('\n')
   }
 
-  // Resolve agent definition - use full system prompt with teammate addendum
-  // IMPORTANT: Set permissionMode to 'default' so teammates always get full tool
-  // access regardless of the leader's permission mode.
+  // Resolve agent definition - use full system prompt with teammate addendum.
+  // The per-turn permission mode comes from task state below, seeded from the
+  // leader at spawn time so bypass/accept-edits carry into in-process teammates.
+  const initialTask = toolUseContext.getAppState().tasks[taskId]
+  const initialPermissionMode =
+    initialTask && initialTask.type === 'in_process_teammate'
+      ? initialTask.permissionMode
+      : 'default'
   const resolvedAgentDefinition: CustomAgentDefinition = {
     agentType: identity.agentName,
     whenToUse: `In-process teammate: ${identity.agentName}`,
@@ -994,7 +999,7 @@ export async function runInProcessTeammate(
         ]
       : ['*'],
     source: 'projectSettings',
-    permissionMode: 'default',
+    permissionMode: initialPermissionMode,
     // Propagate model from custom agent definition so getAgentModel()
     // can use it as a fallback when no tool-level model is specified
     ...(agentDefinition?.model ? { model: agentDefinition.model } : {}),

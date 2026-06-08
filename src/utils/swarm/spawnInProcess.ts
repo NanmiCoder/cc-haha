@@ -35,6 +35,7 @@ import {
   STOPPED_DISPLAY_MS,
 } from '../task/framework.js'
 import { createTeammateContext } from '../teammateContext.js'
+import type { PermissionMode } from '../permissions/PermissionMode.js'
 import {
   isPerfettoTracingEnabled,
   registerAgent as registerPerfettoAgent,
@@ -50,6 +51,7 @@ type SetAppStateFn = (updater: (prev: AppState) => AppState) => void
  */
 export type SpawnContext = {
   setAppState: SetAppStateFn
+  getAppState?: () => AppState
   toolUseId?: string
 }
 
@@ -107,6 +109,9 @@ export async function spawnInProcessTeammate(
 ): Promise<InProcessSpawnOutput> {
   const { name, teamName, prompt, color, planModeRequired, model } = config
   const { setAppState } = context
+  const inheritedPermissionMode: PermissionMode = planModeRequired
+    ? 'plan'
+    : context.getAppState?.().toolPermissionContext.mode ?? 'default'
 
   // Generate deterministic agent ID
   const agentId = formatAgentId(name, teamName)
@@ -170,7 +175,7 @@ export async function spawnInProcessTeammate(
       awaitingPlanApproval: false,
       spinnerVerb: sample(getSpinnerVerbs()),
       pastTenseVerb: sample(TURN_COMPLETION_VERBS),
-      permissionMode: planModeRequired ? 'plan' : 'default',
+      permissionMode: inheritedPermissionMode,
       isIdle: false,
       shutdownRequested: false,
       lastReportedToolCount: 0,
