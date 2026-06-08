@@ -9,6 +9,7 @@
  * Original work by Jason Young, MIT License
  */
 
+import { createHash } from 'node:crypto'
 import { signClaudeCodeCCHInTransformedString } from '../../utils/claudeCodeCch.js'
 import { ProviderService } from '../services/providerService.js'
 import { ensureClaudeCodeAttribution } from './claudeCodeAttribution.js'
@@ -18,10 +19,15 @@ import { openaiChatToAnthropic } from './transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from './transform/openaiResponsesToAnthropic.js'
 import { openaiChatStreamToAnthropic } from './streaming/openaiChatStreamToAnthropic.js'
 import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStreamToAnthropic.js'
-import type { AnthropicRequest } from './transform/types.js'
+import type { AnthropicContentBlock, AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import { getManualNetworkProxyUrl, loadNetworkSettings } from '../services/networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import {
+  formatRedteamConfirmationGate,
+  prepareRedteamWorkflowPrompt,
+  recordRedteamWorkflowCliMessage,
+} from '../services/redteamWorkflowGuard.js'
 
 const providerService = new ProviderService()
 
@@ -185,6 +191,12 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
     model: normalizeModelStringForAPI(body.model),
   })
 
+  const redteamGuard = applyRedteamWorkflowGuard(req, body)
+  if (redteamGuard.response) {
+    return redteamGuard.response
+  }
+  body = redteamGuard.body
+
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
   const networkSettings = await loadNetworkSettings()
@@ -209,6 +221,205 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
       { status: 502 },
     )
   }
+}
+
+function applyRedteamWorkflowGuard(
+  req: Request,
+  body: AnthropicRequest,
+): { body: AnthropicRequest; response?: undefined } | { response: Response } {
+  const latestUserText = getLatestUserText(body)
+  if (!latestUserText) return { body }
+
+  const sessionId = getRedteamSessionId(req, body)
+  for (const message of body.messages) {
+    recordRedteamWorkflowCliMessage(sessionId, { message })
+  }
+
+  const result = prepareRedteamWorkflowPrompt(
+    sessionId,
+    latestUserText,
+    getRedteamWorkDir(req),
+  )
+  if (!result.injected) return { body }
+
+  if (result.run?.awaitingGate) {
+    return {
+      response: createAnthropicTextResponse(
+        body,
+        formatRedteamConfirmationGate(result.run),
+      ),
+    }
+  }
+
+  return {
+    body: replaceLatestUserText(body, result.content),
+  }
+}
+
+function getLatestUserText(body: AnthropicRequest): string {
+  for (let i = body.messages.length - 1; i >= 0; i -= 1) {
+    const message = body.messages[i]
+    if (message?.role !== 'user') continue
+    return textFromAnthropicContent(message.content).trim()
+  }
+  return ''
+}
+
+function getRedteamSessionId(req: Request, body: AnthropicRequest): string {
+  const explicit =
+    req.headers.get('x-cc-haha-session-id') ||
+    req.headers.get('x-cchaha-session-id') ||
+    req.headers.get('x-session-id') ||
+    req.headers.get('x-codex-session-id')
+  if (explicit?.trim()) return `proxy:${explicit.trim()}`
+
+  const conversationText = body.messages
+    .map((message) => textFromAnthropicContent(message.content))
+    .join('\n')
+  const target = extractTargetHint(conversationText)
+  if (target) return `proxy-target:${target}`
+
+  const seed = conversationText || body.model || 'redteam-proxy'
+  return `proxy:${createHash('sha256').update(seed).digest('hex').slice(0, 16)}`
+}
+
+function getRedteamWorkDir(req: Request): string {
+  return (
+    req.headers.get('x-cc-haha-work-dir') ||
+    req.headers.get('x-cchaha-work-dir') ||
+    req.headers.get('x-codex-cwd') ||
+    process.cwd()
+  )
+}
+
+function textFromAnthropicContent(content: AnthropicRequest['messages'][number]['content']): string {
+  if (typeof content === 'string') return content
+  return content.map(textFromAnthropicBlock).filter(Boolean).join('\n')
+}
+
+function textFromAnthropicBlock(block: AnthropicContentBlock): string {
+  if (block.type === 'text') return block.text
+  if (block.type === 'tool_result') {
+    if (typeof block.content === 'string') return block.content
+    return block.content.map(textFromAnthropicBlock).filter(Boolean).join('\n')
+  }
+  if (block.type === 'thinking') return block.thinking
+  return ''
+}
+
+function replaceLatestUserText(body: AnthropicRequest, text: string): AnthropicRequest {
+  const messages = body.messages.slice()
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (message?.role !== 'user') continue
+    messages[i] = {
+      ...message,
+      content: replaceTextContent(message.content, text),
+    }
+    return { ...body, messages }
+  }
+  return body
+}
+
+function replaceTextContent(
+  content: AnthropicRequest['messages'][number]['content'],
+  text: string,
+): AnthropicRequest['messages'][number]['content'] {
+  if (typeof content === 'string') return text
+
+  let replaced = false
+  const blocks = content.map((block) => {
+    if (block.type !== 'text' || replaced) return block
+    replaced = true
+    return { ...block, text }
+  })
+  if (replaced) return blocks
+  return [{ type: 'text', text }, ...blocks]
+}
+
+function extractTargetHint(content: string): string | null {
+  const url = content.match(/https?:\/\/[^\s"'<>，。；、？！)）】》\]\u4e00-\u9fff]+/iu)?.[0]
+  if (url) return url.replace(/[.,，。]+$/, '')
+
+  const ip = content.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0]
+  if (ip) return ip
+
+  const domain = content.match(/\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b/i)?.[0]
+  return domain ?? null
+}
+
+function createAnthropicTextResponse(body: AnthropicRequest, text: string): Response {
+  if (body.stream === true) {
+    return new Response(createAnthropicTextStream(body, text), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  }
+
+  return Response.json({
+    id: `msg_redteam_guard_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model: body.model,
+    content: [{ type: 'text', text }],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: 0,
+      output_tokens: estimateTokenCount(text),
+    },
+  })
+}
+
+function createAnthropicTextStream(body: AnthropicRequest, text: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  const messageId = `msg_redteam_guard_${Date.now()}`
+  return new ReadableStream({
+    start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      }
+      send('message_start', {
+        type: 'message_start',
+        message: {
+          id: messageId,
+          type: 'message',
+          role: 'assistant',
+          model: body.model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      })
+      send('content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      })
+      send('content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text },
+      })
+      send('content_block_stop', { type: 'content_block_stop', index: 0 })
+      send('message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: estimateTokenCount(text) },
+      })
+      send('message_stop', { type: 'message_stop' })
+      controller.close()
+    },
+  })
+}
+
+function estimateTokenCount(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4))
 }
 
 async function handleOpenaiChat(
