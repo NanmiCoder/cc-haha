@@ -78,6 +78,26 @@ export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
 }
 
 /**
+ * Detect context-window-overflow rejections from Anthropic-compatible relays
+ * and proxies that do NOT use Anthropic's exact "prompt is too long" wording.
+ * Observed third-party gateway shape:
+ *   {"error":{"type":"context_too_large","message":"Your input exceeds the
+ *    context window of this model. Please adjust your input and try again."}}
+ * Semantically identical to prompt-too-long: deterministic (same transcript →
+ * same error) and only fixable by shrinking the input (/compact, /clear, or a
+ * larger-context model). We map it onto the same handling so the user gets the
+ * actionable "Context limit reached" guidance instead of a raw 400.
+ */
+export function isContextWindowExceededMessage(message: string): boolean {
+  const raw = message.toLowerCase()
+  return (
+    raw.includes('context_too_large') ||
+    raw.includes('exceeds the context window') ||
+    raw.includes('exceed the context window')
+  )
+}
+
+/**
  * Parse actual/limit token counts from a raw prompt-too-long API error
  * message like "prompt is too long: 137500 tokens > 135000 maximum".
  * The raw string may be wrapped in SDK prefixes or JSON envelopes, or
@@ -624,10 +644,13 @@ export function getAssistantMessageFromError(
   }
 
   // Handle prompt too long errors (Vertex returns 413, direct API returns 400)
-  // Use case-insensitive check since Vertex returns "Prompt is too long" (capitalized)
+  // Use case-insensitive check since Vertex returns "Prompt is too long" (capitalized).
+  // Also catch context-window-overflow wording from third-party relays/proxies
+  // (e.g. type "context_too_large") which is the same class of error.
   if (
     error instanceof Error &&
-    error.message.toLowerCase().includes('prompt is too long')
+    (error.message.toLowerCase().includes('prompt is too long') ||
+      isContextWindowExceededMessage(error.message))
   ) {
     // Content stays generic (UI matches on exact string). The raw error with
     // token counts goes into errorDetails — reactive compact's retry loop
@@ -1084,9 +1107,10 @@ export function classifyAPIError(error: unknown): string {
   // Prompt/content size errors
   if (
     error instanceof Error &&
-    error.message
+    (error.message
       .toLowerCase()
-      .includes(PROMPT_TOO_LONG_ERROR_MESSAGE.toLowerCase())
+      .includes(PROMPT_TOO_LONG_ERROR_MESSAGE.toLowerCase()) ||
+      isContextWindowExceededMessage(error.message))
   ) {
     return 'prompt_too_long'
   }
