@@ -79,6 +79,10 @@ type MaterializedAttachments = {
 }
 
 type SessionProcess = {
+  // Identifies this specific spawned process. A `sessionId` is reused across
+  // restarts (e.g. provider/model switches), so callers that captured a stop
+  // intent for one process must not act on a later restart's process.
+  instanceId: string
   proc: ReturnType<typeof Bun.spawn>
   outputCallbacks: Array<(msg: any) => void>
   workDir: string
@@ -144,6 +148,7 @@ export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
+  private instanceCounter = 0
 
   private buildSessionCliArgs(
     sessionId: string,
@@ -313,6 +318,7 @@ export class ConversationService {
     }
 
     const session: SessionProcess = {
+      instanceId: `${sessionId}#${++this.instanceCounter}`,
       proc,
       outputCallbacks: [],
       workDir: launchWorkDir,
@@ -763,6 +769,31 @@ export class ConversationService {
 
     this.sessions.delete(sessionId)
     this.killProcess(sessionId, session)
+  }
+
+  /**
+   * Identifies the live process backing `sessionId`, or null if none is running.
+   * Capture this before scheduling a deferred kill so the kill can be skipped
+   * when a restart (provider/model switch) has since replaced the process.
+   */
+  getActiveInstanceId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.instanceId ?? null
+  }
+
+  /**
+   * Force-kill a session only if it is still the same process instance that
+   * `instanceId` refers to. Returns true if it killed that instance. Used by
+   * the stop-generation force-kill fallback so a stale timer never kills a
+   * freshly restarted process (which would surface as a "CLI exited during
+   * startup with code 143" error).
+   */
+  stopSessionInstance(sessionId: string, instanceId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.instanceId !== instanceId) return false
+
+    this.sessions.delete(sessionId)
+    this.killProcess(sessionId, session)
+    return true
   }
 
   async stopSessionAndWait(

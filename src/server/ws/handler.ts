@@ -806,13 +806,19 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
     // First try graceful interrupt via SDK control message
     conversationService.sendInterrupt(sessionId)
 
-    // Force-kill if still running after 3 seconds
-    setTimeout(() => {
-      if (conversationService.hasSession(sessionId)) {
-        console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
-        conversationService.stopSession(sessionId)
-      }
-    }, 3_000)
+    // Force-kill if still running after 3 seconds. Capture the exact process
+    // instance now: if the user switches provider/model in the meantime, the
+    // restart replaces this process with a new one, and we must not kill that
+    // new process during its startup (which would surface as "CLI exited
+    // during startup with code 143").
+    const instanceId = conversationService.getActiveInstanceId(sessionId)
+    if (instanceId) {
+      setTimeout(() => {
+        if (conversationService.stopSessionInstance(sessionId, instanceId)) {
+          console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
+        }
+      }, 3_000)
+    }
   }
 
   sendMessage(ws, { type: 'status', state: 'idle' })

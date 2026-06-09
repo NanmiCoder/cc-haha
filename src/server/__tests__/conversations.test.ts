@@ -296,6 +296,35 @@ describe('ConversationService', () => {
     expect(() => svc.stopSession('no-such-session')).not.toThrow()
   })
 
+  it('getActiveInstanceId returns null for a session with no live process', () => {
+    const svc = new ConversationService()
+    expect(svc.getActiveInstanceId('no-such-session')).toBeNull()
+  })
+
+  it('stopSessionInstance only kills the matching process instance', () => {
+    const svc = new ConversationService()
+    const sessionId = 'instance-guard-session'
+    let killed = 0
+    // Inject a minimal fake live process; killProcess only needs proc.kill().
+    ;(svc as unknown as { sessions: Map<string, unknown> }).sessions.set(sessionId, {
+      instanceId: `${sessionId}#1`,
+      proc: { kill: () => { killed += 1 } },
+    })
+
+    // A stale instanceId (e.g. from a process replaced by a restart) is ignored.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#0`)).toBe(false)
+    expect(killed).toBe(0)
+    expect(svc.hasSession(sessionId)).toBe(true)
+
+    // The matching instanceId kills exactly that process and clears the session.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#1`)).toBe(true)
+    expect(killed).toBe(1)
+    expect(svc.hasSession(sessionId)).toBe(false)
+
+    // No live process left, so a repeat call is a no-op.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#1`)).toBe(false)
+  })
+
   it('should not throw when registering callback for non-existent session', () => {
     const svc = new ConversationService()
     expect(() => svc.onOutput('no-such-session', () => {})).not.toThrow()
