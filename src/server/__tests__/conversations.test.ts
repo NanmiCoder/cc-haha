@@ -12,6 +12,7 @@ import * as os from 'os'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ConversationService, ConversationStartupError, conversationService } from '../services/conversationService.js'
+import { ORCHESTRATION_PROMPT_MARKER } from '../orchestrationPrompt.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 
@@ -240,6 +241,20 @@ describe('ConversationService', () => {
       '--thinking',
       'disabled',
     ])
+  })
+
+  it('should append the orchestration system prompt when coordinator mode is on', () => {
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({ coordinatorMode: true }) as string[]
+    const idx = args.indexOf('--append-system-prompt')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(args[idx + 1]).toContain(ORCHESTRATION_PROMPT_MARKER)
+  })
+
+  it('should not append the orchestration system prompt when coordinator mode is off', () => {
+    const svc = new ConversationService()
+    expect((svc as any).getRuntimeArgs({ coordinatorMode: false })).not.toContain('--append-system-prompt')
+    expect((svc as any).getRuntimeArgs({})).not.toContain('--append-system-prompt')
   })
 
   it('should send thinking token controls to active CLI sessions', () => {
@@ -684,11 +699,87 @@ describe('ConversationService', () => {
       await fs.rm(workDir, { recursive: true, force: true })
     }
   })
-})
 
-// ============================================================================
-// WebSocket integration tests (with mock CLI using the SDK websocket protocol)
-// ============================================================================
+  it('scopes the transcript context estimate to messages after the latest compact boundary', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousUseBedrock = process.env.CLAUDE_CODE_USE_BEDROCK
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-compact-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-compact-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1'
+
+    try {
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+
+      // Pre-compact turn: a near-full request (would read as ~100%).
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'pre-compact answer' }],
+          usage: { input_tokens: 190_000, output_tokens: 50 },
+        },
+      }) + '\n')
+
+      // Compaction boundary — everything above is no longer in live context.
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:01.000Z',
+        cwd: workDir,
+      }) + '\n')
+
+      // Post-compact: just the small summary, no new real turn yet.
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'user',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:02.000Z',
+        cwd: workDir,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Summary of the prior conversation: we did a few things.' }],
+        },
+      }) + '\n')
+
+      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+
+      expect(contextEstimate?.rawMaxTokens).toBe(200_000)
+      // The pre-compact 190k request must NOT anchor the estimate post-compaction.
+      expect(contextEstimate?.percentage).toBeLessThan(50)
+      expect(contextEstimate?.totalTokens).toBeLessThan(50_000)
+      expect(contextEstimate?.model).toBe('claude-sonnet-4-6')
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      if (previousUseBedrock === undefined) {
+        delete process.env.CLAUDE_CODE_USE_BEDROCK
+      } else {
+        process.env.CLAUDE_CODE_USE_BEDROCK = previousUseBedrock
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('WebSocket Chat Integration', () => {
   let server: ReturnType<typeof Bun.serve>

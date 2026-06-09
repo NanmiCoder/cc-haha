@@ -1382,6 +1382,24 @@ export class SessionService {
     if (!found) return null
 
     const entries = await this.readJsonlFile(found.filePath)
+
+    // After a compaction the transcript still holds the full pre-compact
+    // history, but the live context only contains messages after the latest
+    // compact boundary. Scope the estimate to post-boundary entries so the
+    // indicator doesn't report a stale ~100% — both the whole-transcript token
+    // estimate AND the summarization call's huge input_tokens would otherwise
+    // keep it pinned near full until the next real turn lands.
+    let boundaryIndex = -1
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]!
+      if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+        boundaryIndex = i
+        break
+      }
+    }
+    const scopedEntries =
+      boundaryIndex >= 0 ? entries.slice(boundaryIndex + 1) : entries
+
     let latest: {
       model: string
       inputTokens: number
@@ -1390,7 +1408,7 @@ export class SessionService {
       cacheCreationInputTokens: number
     } | null = null
 
-    for (const entry of entries) {
+    for (const entry of scopedEntries) {
       const usage = entry.message?.usage
       const model = entry.message?.model
       if (!usage || typeof model !== 'string') continue
@@ -1411,11 +1429,31 @@ export class SessionService {
       }
     }
 
-    if (!latest) return null
+    // Resolve the model even when the post-compact segment has no usage yet
+    // (compaction just happened, no real turn since): we still want a valid
+    // post-compact estimate rather than null.
+    let model = latest?.model
+    if (!model) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const candidate = entries[i]?.message?.model
+        if (typeof candidate === 'string') {
+          model = candidate
+          break
+        }
+      }
+    }
+    if (!model) return null
 
-    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, latest.model)
-    const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
-    const transcriptMessages = entries.filter(entry =>
+    const usage = latest ?? {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    }
+
+    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, model)
+    const promptTokens = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
+    const transcriptMessages = scopedEntries.filter(entry =>
       entry.type === 'user' || entry.type === 'assistant' || entry.type === 'attachment',
     ) as Parameters<typeof roughTokenCountEstimationForMessages>[0]
     const estimatedTokens =
@@ -1423,12 +1461,16 @@ export class SessionService {
     const contextBudget = calculateContextBudget({
       estimatedTokens,
       contextWindow: rawMaxTokens,
-      currentUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-      },
+      // Without a post-compact API turn yet, there's no trustworthy provider
+      // usage to anchor to — fall back to the pure message-token estimate.
+      currentUsage: latest
+        ? {
+            input_tokens: latest.inputTokens,
+            output_tokens: latest.outputTokens,
+            cache_read_input_tokens: latest.cacheReadInputTokens,
+            cache_creation_input_tokens: latest.cacheCreationInputTokens,
+          }
+        : undefined,
       usageTrust: getProviderUsageTrust({
         isFirstPartyAnthropic: isFirstPartyAnthropicBaseUrl(),
       }),
@@ -1437,10 +1479,10 @@ export class SessionService {
     const totalTokens = contextBudget.usedTokens
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
     const usageCategories: TranscriptContextEstimate['categories'] = [
-      { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
-      { name: 'Cache read', tokens: latest.cacheReadInputTokens, color: '#0f5c8f' },
-      { name: 'Cache write', tokens: latest.cacheCreationInputTokens, color: '#7c3aed' },
-      { name: 'Output tokens', tokens: latest.outputTokens, color: '#2f7d32' },
+      { name: 'Input tokens', tokens: usage.inputTokens, color: '#8f3217' },
+      { name: 'Cache read', tokens: usage.cacheReadInputTokens, color: '#0f5c8f' },
+      { name: 'Cache write', tokens: usage.cacheCreationInputTokens, color: '#7c3aed' },
+      { name: 'Output tokens', tokens: usage.outputTokens, color: '#2f7d32' },
     ]
     const contextCategories: TranscriptContextEstimate['categories'] =
       contextBudget.ignoredUsageReason === 'low_trust_media_usage'
@@ -1474,15 +1516,15 @@ export class SessionService {
       rawMaxTokens,
       percentage,
       gridRows,
-      model: latest.model,
+      model,
       memoryFiles: [],
       mcpTools: [],
       agents: [],
       apiUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        cache_creation_input_tokens: usage.cacheCreationInputTokens,
+        cache_read_input_tokens: usage.cacheReadInputTokens,
       },
     }
   }

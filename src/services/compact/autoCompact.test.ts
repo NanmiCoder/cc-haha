@@ -1,6 +1,13 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 
-import { getAutoCompactThreshold, getEffectiveContextWindowSize } from './autoCompact.js'
+import {
+  getAutoCompactThreshold,
+  getEffectiveContextWindowSize,
+  isIneffectiveCompaction,
+  shouldThrottleAutoCompact,
+  type AutoCompactTrackingState,
+} from './autoCompact.js'
+import type { CompactionResult } from './compact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
@@ -65,5 +72,67 @@ describe('model context window resolution', () => {
     expect(getAutoCompactThreshold('glm-4.5-air')).toBe(95_000)
     expect(getAutoCompactThreshold('kimi-k2.6')).toBe(229_144)
     expect(getAutoCompactThreshold('MiniMax-M2.7')).toBe(171_800)
+  })
+})
+
+function makeTracking(
+  overrides: Partial<AutoCompactTrackingState> = {},
+): AutoCompactTrackingState {
+  return {
+    compacted: true,
+    turnId: 'turn-1',
+    turnCounter: 0,
+    ...overrides,
+  }
+}
+
+function makeCompactionResult(
+  truePostCompactTokenCount: number | undefined,
+): CompactionResult {
+  // Only the field the predicate reads matters for these tests.
+  return { truePostCompactTokenCount } as unknown as CompactionResult
+}
+
+describe('方案2: shouldThrottleAutoCompact (turn throttle)', () => {
+  test('throttles for the first few turns after a compaction', () => {
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 0 }), false)).toBe(true)
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 1 }), false)).toBe(true)
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 2 }), false)).toBe(true)
+  })
+
+  test('stops throttling once enough turns have elapsed', () => {
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 3 }), false)).toBe(false)
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 9 }), false)).toBe(false)
+  })
+
+  test('never throttles at the hard blocking limit, even right after a compaction', () => {
+    expect(shouldThrottleAutoCompact(makeTracking({ turnCounter: 0 }), true)).toBe(false)
+  })
+
+  test('does not throttle when no compaction has happened yet', () => {
+    expect(shouldThrottleAutoCompact(undefined, false)).toBe(false)
+    expect(
+      shouldThrottleAutoCompact(makeTracking({ compacted: false, turnCounter: 0 }), false),
+    ).toBe(false)
+  })
+})
+
+describe('方案1: isIneffectiveCompaction (recompaction-loop guard)', () => {
+  // deepseek-v4-pro: autocompact threshold is 967_000 (see math tests above).
+  const model = 'deepseek-v4-pro'
+  const threshold = getAutoCompactThreshold(model)
+
+  test('flags a compaction whose result is still at/above the threshold', () => {
+    expect(isIneffectiveCompaction(makeCompactionResult(threshold), model)).toBe(true)
+    expect(isIneffectiveCompaction(makeCompactionResult(threshold + 50_000), model)).toBe(true)
+  })
+
+  test('treats a compaction that got under the threshold as effective', () => {
+    expect(isIneffectiveCompaction(makeCompactionResult(threshold - 1), model)).toBe(false)
+    expect(isIneffectiveCompaction(makeCompactionResult(10_000), model)).toBe(false)
+  })
+
+  test('treats an unknown post-compact size as effective (no false circuit-break)', () => {
+    expect(isIneffectiveCompaction(makeCompactionResult(undefined), model)).toBe(false)
   })
 })
