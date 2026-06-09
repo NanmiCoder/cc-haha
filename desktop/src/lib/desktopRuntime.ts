@@ -183,6 +183,12 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     : null
   const queryUrl = query?.get('serverUrl') ?? null
   const queryToken = normalizeToken(query?.get('h5Token') ?? query?.get('token'))
+  // Dev-only escape hatch: `?forceH5=1` keeps the H5 token attached even when
+  // the resolved server URL is loopback. Lets the pure-browser dev workflow
+  // (vite + Chrome DevTools MCP) round-trip the WebSocket. Without it,
+  // loopback URLs trigger `setAuthToken(null)` below and the session WS
+  // handshake 401s. Documented in docs/desktop/10-local-mcp-testing.md.
+  const forceH5 = query?.get('forceH5') === '1'
   const stored = readStoredH5Connection()
   const configuredUrl = getConfiguredBrowserServerUrl(fallbackUrl)
   const requestedUrl =
@@ -191,7 +197,7 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     stored.serverUrl ??
     fallbackUrl
   const token = queryToken ?? stored.token
-  const browserH5Runtime = requiresH5AuthForServerUrl(requestedUrl)
+  const browserH5Runtime = requiresH5AuthForServerUrl(requestedUrl) || forceH5
 
   setBaseUrl(requestedUrl)
   setAuthToken(browserH5Runtime ? token : null)

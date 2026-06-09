@@ -575,6 +575,13 @@ export type GlobalConfig = {
   // CURRENT_MIGRATION_VERSION, runMigrations() skips all sync migrations
   // (avoiding 11× saveGlobalConfig lock+re-read on every startup).
   migrationVersion?: number
+
+  // Per-server tool override list. Keyed by MCP server name; each value is
+  // the set of tool names that should be hidden from the agent loop. Lives
+  // at the user/global scope (not per-project) so a "never use this tool"
+  // preference persists across all projects. Servers themselves are still
+  // disabled via the per-project `disabledMcpServers` (see MCPProjectConfig).
+  disabledMcpTools?: Record<string, string[]>
 }
 
 /**

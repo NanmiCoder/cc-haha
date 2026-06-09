@@ -59,6 +59,7 @@ import { getTokenCountFromUsage } from '../../utils/tokens.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import { applySentinelCorrection } from './sentinelCheck.js'
 export type ResolvedAgentTools = {
   hasWildcard: boolean
   validTools: string[]
@@ -313,6 +314,34 @@ export function finalizeAgentTool(
         content = textBlocks
         break
       }
+    }
+  }
+
+  // Sentinel consistency check: review-style subagents may slip and emit
+  // a positive verdict (e.g. REVIEW: APPROVE) while listing CRITICAL or
+  // HIGH findings, contradicting their own contract. Rewrite to the
+  // negative verdict in place so the parent agent doesn't merge based on
+  // a self-contradicting report. Operates only on the last text block
+  // because the verdict must be at the end of the output.
+  if (content.length > 0) {
+    const lastIdx = content.length - 1
+    const lastBlock = content[lastIdx]!
+    const sentinelResult = applySentinelCorrection(lastBlock.text)
+    if (sentinelResult.mismatch) {
+      content = [
+        ...content.slice(0, lastIdx),
+        { type: 'text' as const, text: sentinelResult.correctedText },
+      ]
+      logEvent('tengu_agent_sentinel_mismatch', {
+        agent_type:
+          agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        sentinel_kind:
+          sentinelResult.mismatch as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        original_verdict:
+          sentinelResult.originalVerdict as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        corrected_verdict:
+          sentinelResult.correctedVerdict as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      })
     }
   }
 

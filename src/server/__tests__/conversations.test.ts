@@ -12,7 +12,7 @@ import * as os from 'os'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ConversationService, ConversationStartupError, conversationService } from '../services/conversationService.js'
-import { ORCHESTRATION_PROMPT_MARKER } from '../orchestrationPrompt.js'
+import { ORCHESTRATION_PROMPT_MARKER, ORCHESTRATION_SYSTEM_PROMPT, ORCHESTRATION_PROPAGATE_RULES_MARKER } from '../orchestrationPrompt.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 
@@ -255,6 +255,22 @@ describe('ConversationService', () => {
     const svc = new ConversationService()
     expect((svc as any).getRuntimeArgs({ coordinatorMode: false })).not.toContain('--append-system-prompt')
     expect((svc as any).getRuntimeArgs({})).not.toContain('--append-system-prompt')
+  })
+
+  // Locks the orchestrator's "propagate project tool rules into every dispatched
+  // sub-agent prompt" rule. The bug this guards against was observed live: when the
+  // rule was a soft "for example, restate codegraph rules" bullet, the orchestrator
+  // wrote three sub-agent prompts and forwarded zero project tool conventions, so
+  // the sub-agents ignored the project's mandated codegraph MCP tool and fell back
+  // to plain Bash grep. If this assertion fails because someone softened the
+  // wording, restore the imperative phrasing rather than relaxing the test.
+  it('orchestration prompt mandates propagating project tool rules to sub-agents', () => {
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toContain(ORCHESTRATION_PROPAGATE_RULES_MARKER)
+    // Concrete example must survive — sub-agents look at codegraph-style MCP tools
+    // by name when they're explicitly mentioned in the dispatched prompt.
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toMatch(/codegraph/i)
+    // The rule is mandatory, not a "for example" suggestion.
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toMatch(/REQUIRED, not optional/)
   })
 
   it('should send thinking token controls to active CLI sessions', () => {

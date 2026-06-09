@@ -38,7 +38,7 @@ Delegation has some cost (spawn + run + summarize round-trips), but in this mode
 1. **Plan first.** Break the request into independent units of work. Decide which sub-agent type fits each (general-purpose for research/multi-step, explore for locating code, plan for design, debugger for root-causing a bug, test-author for tests, code-reviewer / security-reviewer for review, refactor / migration / performance / docs-writer / commit-pr for those specialties).
 2. **Fan out.** Launch independent sub-agents in parallel (multiple Task tool calls in one turn) for work that can run simultaneously — especially read-only research. Serialize only writes that touch the same files.
 3. **Write self-contained prompts.** Sub-agents cannot see this conversation. Each task prompt must include the specific files, paths, intended behavior, and what "done" looks like. Never write "based on our discussion" or "fix the bug we found" — restate the concrete details yourself.
-   - **Propagate project conventions.** Sub-agents may not load project memory (CLAUDE.md / rules) — read-only research agents like Explore and Plan deliberately run without it. So when a relevant project rule applies to a delegated task, restate it inside that sub-agent's prompt. For example, if the project mandates a specific tool or workflow for code exploration (such as preferring a codegraph/MCP tool over plain grep), say so explicitly in the prompt you give the sub-agent. Do not assume the sub-agent already knows the project's conventions.
+   - **Propagate project tool/workflow rules into every sub-agent prompt.** Before you write the prompt, scan the project memory you have (CLAUDE.md, AGENTS.md, .claude/rules, similar) for any rule that names a specific tool or workflow the sub-agent's task would touch — code search/exploration tools (e.g. a project codegraph/MCP tool the project tells you to prefer over plain grep), build/test commands, formatter/linter, commit conventions, repo-specific safety rules. Copy those rules verbatim into the sub-agent's prompt. This is REQUIRED, not optional: the sub-agent's own system prompt usually names generic tools (Bash, grep, git diff) and will not discover project-specific tooling on its own. Read-only research agents like Explore and Plan deliberately run without project memory and absolutely depend on you to forward these rules. When no relevant rule applies, you can skip — but check first, do not assume.
 4. **Synthesize, don't relay.** When a sub-agent reports back, read and understand the result before the next step. Turn findings into a precise follow-up spec yourself; do not hand undigested findings to another agent.
 5. **Keep the user informed.** Briefly say what you dispatched and report results as they arrive. Don't fabricate or predict sub-agent results.
 
@@ -49,3 +49,15 @@ Delegation has some cost (spawn + run + summarize round-trips), but in this mode
 
 /** Marker substring used by tests to assert the flag carries the directive. */
 export const ORCHESTRATION_PROMPT_MARKER = '# Orchestration Mode'
+
+/**
+ * Marker for the rule that requires the orchestrator to copy project tool/workflow
+ * conventions (e.g. a project's preferred codegraph/MCP tool) into every dispatched
+ * sub-agent's prompt. Sub-agents' own system prompts name generic tools (Bash, grep,
+ * git diff) and the orchestrator is the only place this propagation can happen.
+ *
+ * Locked by a regression test so the rule's strength can't be quietly downgraded
+ * back to a soft "for example" bullet.
+ */
+export const ORCHESTRATION_PROPAGATE_RULES_MARKER =
+  'Propagate project tool/workflow rules into every sub-agent prompt'

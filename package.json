@@ -35,7 +35,9 @@
     "test:package-smoke:current": "bun run scripts/quality-gate/package-smoke/current.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "mcp:test": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-mcp-test.ps1",
+    "mcp:test:open": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-mcp-test.ps1 -Open"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.44",

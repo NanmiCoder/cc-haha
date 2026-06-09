@@ -866,3 +866,133 @@ describe('EmptySession', () => {
     })
   })
 })
+
+describe('EmptySession welcome-screen task cards', () => {
+  const initialSessionState = useSessionStore.getInitialState()
+  const initialChatState = useChatStore.getInitialState()
+  const initialTabState = useTabStore.getInitialState()
+  const initialRuntimeState = useSessionRuntimeStore.getInitialState()
+  const initialUiState = useUIStore.getInitialState()
+  const initialPluginState = usePluginStore.getInitialState()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.webviewDragHandlers.length = 0
+    mocks.isMobile = false
+    mocks.isTauriRuntime = false
+    useSettingsStore.setState({ locale: 'en', activeProviderName: null, permissionMode: 'default' })
+    useSessionStore.setState(initialSessionState, true)
+    useChatStore.setState(initialChatState, true)
+    useTabStore.setState(initialTabState, true)
+    useSessionRuntimeStore.setState(initialRuntimeState, true)
+    useUIStore.setState(initialUiState, true)
+    usePluginStore.setState(initialPluginState, true)
+
+    mocks.createSession.mockResolvedValue({ sessionId: 'draft-session' })
+    mocks.getRepositoryContext.mockResolvedValue(okRepositoryContext())
+    mocks.listSessions.mockResolvedValue({
+      sessions: [{
+        id: 'draft-session',
+        title: 'New Session',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        modifiedAt: '2026-05-01T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      total: 1,
+    })
+    mocks.getMessages.mockResolvedValue({ messages: [] })
+    mocks.getSlashCommands.mockResolvedValue({ commands: [] })
+    mocks.listSkills.mockResolvedValue({ skills: [] })
+    mocks.listAgents.mockResolvedValue({ activeAgents: [], allAgents: [] })
+    mocks.search.mockResolvedValue({
+      currentPath: '/workspace/project',
+      parentPath: null,
+      query: '',
+      entries: [],
+    })
+    mocks.getTasksForList.mockResolvedValue({ tasks: [] })
+    mocks.resetTaskList.mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    cleanup()
+    Reflect.deleteProperty(window, 'desktopHost')
+    useSessionStore.setState(initialSessionState, true)
+    useChatStore.setState(initialChatState, true)
+    useTabStore.setState(initialTabState, true)
+    useSessionRuntimeStore.setState(initialRuntimeState, true)
+    useUIStore.setState(initialUiState, true)
+    usePluginStore.setState(initialPluginState, true)
+  })
+
+  it('renders all four task cards on desktop', async () => {
+    render(<EmptySession />)
+
+    expect(await screen.findByTestId('welcome-task-cards')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-task-card-preMergeReview')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-task-card-investigateTest')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-task-card-writeTests')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-task-card-explainCode')).toBeInTheDocument()
+  })
+
+  it('hides the task cards on phone-sized H5 browsers (composer is dense enough already)', async () => {
+    mocks.isMobile = true
+    render(<EmptySession />)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('welcome-task-cards')).not.toBeInTheDocument()
+  })
+
+  it('clicking a card pre-fills the composer with the starter prompt', async () => {
+    render(<EmptySession />)
+
+    fireEvent.click(await screen.findByTestId('welcome-task-card-preMergeReview'))
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(input.value).toContain('main')
+    expect(input.value.toLowerCase()).toContain('pr description')
+  })
+
+  it('orchestration cards persist coordinator mode for the new session before connect', async () => {
+    render(<EmptySession />)
+
+    fireEvent.click(await screen.findByTestId('welcome-task-card-preMergeReview'))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick project' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Select branch: main' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(useSessionRuntimeStore.getState().coordinatorModes['draft-session']).toBe(true)
+    })
+  })
+
+  it('non-orchestration cards do NOT enable coordinator mode', async () => {
+    render(<EmptySession />)
+
+    fireEvent.click(await screen.findByTestId('welcome-task-card-writeTests'))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick project' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Select branch: main' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalled()
+    })
+    // We never called setSessionCoordinatorMode for this card, so the key is
+    // absent in the runtime store.
+    expect(useSessionRuntimeStore.getState().coordinatorModes['draft-session']).toBeUndefined()
+  })
+})

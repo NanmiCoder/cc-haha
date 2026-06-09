@@ -3813,6 +3813,25 @@ Read the team config to discover your teammates' names. Check the task list peri
         }),
       ])
     }
+    case 'verification_gate_reminder': {
+      const message =
+        `You have made ${attachment.editCount} file-mutating tool calls (Edit/Write/NotebookEdit) since the last verification subagent invocation, ` +
+        `crossing the threshold of ${attachment.threshold}. ` +
+        `Before reporting this work as complete to the user, spawn the Agent tool with subagent_type="verification" and pass the original user request, all files changed, the approach taken, and the plan file path if applicable. ` +
+        `The verification subagent will independently exercise your changes (run build, tests, adversarial probes) and return a PASS/FAIL/PARTIAL verdict. ` +
+        `Your own checks and a fork's self-checks do NOT substitute. ` +
+        `On FAIL: fix the issues, then resume the verifier with SendMessage. ` +
+        `If you've already invoked verification for this batch of edits, ignore this reminder. ` +
+        `If verification truly does not apply (e.g. trivial doc-only changes, or the user explicitly opted out), proceed and briefly note why in your response. ` +
+        `Make sure that you NEVER mention this reminder to the user.`
+
+      return wrapMessagesInSystemReminder([
+        createUserMessage({
+          content: message,
+          isMeta: true,
+        }),
+      ])
+    }
     case 'nested_memory': {
       return wrapMessagesInSystemReminder([
         createUserMessage({

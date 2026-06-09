@@ -574,4 +574,262 @@ describe('MCP API', () => {
       },
     })
   })
+
+  describe('GET /api/mcp/:name/tools', () => {
+    it('returns the raw tool catalog from a connected server', async () => {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot,
+        name: 'tools-server',
+        scope: 'local',
+        config: {
+          type: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+        },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+
+      const listRawSpy = spyOn(mcpClient, 'listRawToolsForServer').mockResolvedValue([
+        {
+          name: 'navigate_page',
+          qualifiedName: 'mcp__tools-server__navigate_page',
+          description: 'Open a URL in the browser.',
+          inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            openWorldHint: true,
+            idempotentHint: false,
+          },
+          enabled: true,
+        },
+        {
+          name: 'list_pages',
+          qualifiedName: 'mcp__tools-server__list_pages',
+          description: 'List currently open pages.',
+          inputSchema: { type: 'object', properties: {} },
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            openWorldHint: false,
+            idempotentHint: true,
+          },
+          enabled: true,
+        },
+      ])
+
+      try {
+        const list = makeRequest(
+          'GET',
+          `/api/mcp/tools-server/tools?cwd=${encodeURIComponent(projectRoot)}`,
+        )
+        const res = await handleMcpApi(list.req, list.url, list.segments)
+        expect(res.status).toBe(200)
+
+        const body = await res.json()
+        expect(body.serverName).toBe('tools-server')
+        expect(body.status).toBe('connected')
+        expect(body.tools).toHaveLength(2)
+        expect(body.tools[0]).toMatchObject({
+          name: 'navigate_page',
+          qualifiedName: 'mcp__tools-server__navigate_page',
+          annotations: { readOnlyHint: false, openWorldHint: true },
+        })
+        expect(listRawSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        listRawSpy.mockRestore()
+      }
+    })
+
+    it('returns disabled status with no tools when the server is toggled off', async () => {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot,
+        name: 'off-server',
+        scope: 'local',
+        config: { type: 'stdio', command: 'node', args: [] },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+
+      const toggle = makeRequest('POST', '/api/mcp/off-server/toggle', {
+        cwd: projectRoot,
+      })
+      await handleMcpApi(toggle.req, toggle.url, toggle.segments)
+
+      const listRawSpy = spyOn(mcpClient, 'listRawToolsForServer').mockResolvedValue([])
+      try {
+        const list = makeRequest(
+          'GET',
+          `/api/mcp/off-server/tools?cwd=${encodeURIComponent(projectRoot)}`,
+        )
+        const res = await handleMcpApi(list.req, list.url, list.segments)
+        expect(res.status).toBe(200)
+
+        const body = await res.json()
+        expect(body).toMatchObject({
+          serverName: 'off-server',
+          status: 'disabled',
+          tools: [],
+        })
+        expect(listRawSpy).not.toHaveBeenCalled()
+      } finally {
+        listRawSpy.mockRestore()
+      }
+    })
+
+    it('surfaces host preflight failures as a failed status with the reason', async () => {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot,
+        name: 'broken-server',
+        scope: 'local',
+        config: { type: 'stdio', command: 'definitely-not-installed', args: [] },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+
+      hostPreflightSpy?.mockResolvedValueOnce({
+        ok: false,
+        message: 'Host command "definitely-not-installed" is not available in PATH.',
+      })
+
+      const list = makeRequest(
+        'GET',
+        `/api/mcp/broken-server/tools?cwd=${encodeURIComponent(projectRoot)}`,
+      )
+      const res = await handleMcpApi(list.req, list.url, list.segments)
+      expect(res.status).toBe(200)
+
+      const body = await res.json()
+      expect(body).toMatchObject({
+        serverName: 'broken-server',
+        status: 'failed',
+        tools: [],
+        error: 'Host command "definitely-not-installed" is not available in PATH.',
+      })
+      expect(connectSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /api/mcp/:name/tools/:tool/toggle', () => {
+    it('flips a tool from enabled to disabled and back, and invalidates the agent-loop tool cache', async () => {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot,
+        name: 'toggle-server',
+        scope: 'local',
+        config: { type: 'stdio', command: 'node', args: [] },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+
+      // Track LRU invalidations so we can assert the toggle path drops the
+      // agent-loop's cached Tool[] for this server.
+      const cacheDeleteSpy = spyOn(mcpClient.fetchToolsForClient.cache, 'delete')
+      try {
+        const disable = makeRequest(
+          'POST',
+          `/api/mcp/toggle-server/tools/take_screenshot/toggle?cwd=${encodeURIComponent(projectRoot)}`,
+          { enabled: false },
+        )
+        const disableRes = await handleMcpApi(disable.req, disable.url, disable.segments)
+        expect(disableRes.status).toBe(200)
+        await expect(disableRes.json()).resolves.toMatchObject({
+          serverName: 'toggle-server',
+          toolName: 'take_screenshot',
+          enabled: false,
+        })
+        expect(cacheDeleteSpy).toHaveBeenCalledWith('toggle-server')
+
+        // listServerTools should reflect the disabled flag without re-toggling.
+        const listRawSpy = spyOn(mcpClient, 'listRawToolsForServer').mockImplementation(async (client) => {
+          // Simulate the real listRawToolsForServer projection by reading the
+          // override store the same way client.ts does.
+          const { isMcpToolDisabled } = await import('../../services/mcp/toolOverrides.js')
+          return [
+            {
+              name: 'take_screenshot',
+              qualifiedName: `mcp__${client.name}__take_screenshot`,
+              description: '',
+              inputSchema: {},
+              annotations: {
+                readOnlyHint: false,
+                destructiveHint: false,
+                openWorldHint: false,
+                idempotentHint: false,
+              },
+              enabled: !isMcpToolDisabled(client.name, 'take_screenshot'),
+            },
+          ]
+        })
+        try {
+          const list = makeRequest(
+            'GET',
+            `/api/mcp/toggle-server/tools?cwd=${encodeURIComponent(projectRoot)}`,
+          )
+          const listRes = await handleMcpApi(list.req, list.url, list.segments)
+          const listBody = await listRes.json()
+          expect(listBody.tools[0]).toMatchObject({
+            name: 'take_screenshot',
+            enabled: false,
+          })
+        } finally {
+          listRawSpy.mockRestore()
+        }
+
+        // Toggling back to enabled drops the override entirely.
+        const enable = makeRequest(
+          'POST',
+          `/api/mcp/toggle-server/tools/take_screenshot/toggle?cwd=${encodeURIComponent(projectRoot)}`,
+          { enabled: true },
+        )
+        const enableRes = await handleMcpApi(enable.req, enable.url, enable.segments)
+        expect(enableRes.status).toBe(200)
+        await expect(enableRes.json()).resolves.toMatchObject({
+          enabled: true,
+        })
+      } finally {
+        cacheDeleteSpy.mockRestore()
+      }
+    })
+
+    it('returns 404 when the server does not exist', async () => {
+      const toggle = makeRequest(
+        'POST',
+        `/api/mcp/missing-server/tools/foo/toggle?cwd=${encodeURIComponent(projectRoot)}`,
+        { enabled: false },
+      )
+      const res = await handleMcpApi(toggle.req, toggle.url, toggle.segments)
+      expect(res.status).toBe(404)
+    })
+  })
+
+  describe('GET /api/mcp/marketplace', () => {
+    it('returns the builtin catalog grouped through the source field', async () => {
+      const list = makeRequest('GET', '/api/mcp/marketplace')
+      const res = await handleMcpApi(list.req, list.url, list.segments)
+      expect(res.status).toBe(200)
+
+      const body = await res.json()
+      expect(Array.isArray(body.entries)).toBe(true)
+      expect(body.entries.length).toBeGreaterThan(0)
+      expect(body.entries.every((entry: { source: string }) => entry.source === 'builtin')).toBe(true)
+      expect(body.remoteSources).toEqual([])
+
+      // Every entry has the fields the desktop UI relies on.
+      for (const entry of body.entries) {
+        expect(entry).toMatchObject({
+          id: expect.any(String),
+          name: expect.any(String),
+          description: expect.any(String),
+          category: expect.any(String),
+          transport: expect.any(Object),
+          source: 'builtin',
+        })
+      }
+    })
+
+    it('rejects http URLs without a scheme when adding a remote source', async () => {
+      const create = makeRequest('POST', '/api/mcp/marketplace/sources', {
+        url: 'example.com/catalog.json',
+      })
+      const res = await handleMcpApi(create.req, create.url, create.segments)
+      expect(res.status).toBe(400)
+    })
+  })
 })

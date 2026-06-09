@@ -44,6 +44,10 @@
 
 本地浏览器可直接打开的验收 checklist，支持勾选进度、记录问题、导出 Markdown。
 
+### [本地 MCP 端到端测试（浏览器路径）](./10-local-mcp-testing.md)
+
+绕开 Electron 容器，用 Chrome DevTools MCP 直接驱动桌面 UI 做端到端烟雾的工作流：Vite proxy 同源化、可测/不可测清单、`feat/agent-routing-hardening` 改动的对应复现配方、故障字典。
+
 ---
 
 ## 快速开始

@@ -3,19 +3,24 @@ import { Button } from '../components/shared/Button'
 import { DirectoryPicker } from '../components/shared/DirectoryPicker'
 import { Input } from '../components/shared/Input'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
+import { ToggleSwitch } from '../components/shared/ToggleSwitch'
 import { useTranslation } from '../i18n'
 import { useUIStore } from '../stores/uiStore'
 import { useMcpStore } from '../stores/mcpStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { sessionsApi } from '../api/sessions'
 import { mcpApi } from '../api/mcp'
-import type { McpServerRecord, McpUpsertPayload, McpWritableScope } from '../types/mcp'
+import { MarketplacePage } from './McpMarketplace'
+import type { McpServerRecord, McpToolInfo, McpToolsResult, McpUpsertPayload, McpWritableScope } from '../types/mcp'
 
 type EditorMode =
   | { type: 'list' }
   | { type: 'create' }
   | { type: 'edit'; server: McpServerRecord }
   | { type: 'details'; server: McpServerRecord }
+  | { type: 'marketplace' }
+
+type DetailsTab = 'overview' | 'tools'
 
 type TransportKind = 'stdio' | 'http' | 'sse'
 
@@ -269,35 +274,6 @@ function getServerIdentityKey(server: Pick<McpServerRecord, 'name' | 'scope' | '
   return `${server.scope}:${server.name}`
 }
 
-function ToggleSwitch({
-  checked,
-  disabled,
-  onChange,
-}: {
-  checked: boolean
-  disabled?: boolean
-  onChange: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onChange}
-      className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
-        checked ? 'bg-[var(--color-switch-checked-bg)]' : 'bg-[var(--color-border)]'
-      } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <span
-        className={`inline-block h-6 w-6 transform rounded-full bg-[var(--color-switch-thumb)] shadow-sm transition-transform ${
-          checked ? 'translate-x-7' : 'translate-x-1'
-        }`}
-      />
-    </button>
-  )
-}
-
 function ArraySection({
   title,
   rows,
@@ -441,6 +417,327 @@ function ServerRow({
   )
 }
 
+type ToolsLoadState =
+  | { status: 'loading' }
+  | { status: 'ready'; result: McpToolsResult }
+  | { status: 'error'; error: string }
+
+function ToolAnnotationBadges({
+  tool,
+  t,
+}: {
+  tool: McpToolInfo
+  t: ReturnType<typeof useTranslation>
+}) {
+  const flags: { key: string; label: string; tone: string }[] = []
+  if (tool.annotations.readOnlyHint) {
+    flags.push({
+      key: 'readOnly',
+      label: t('settings.mcp.tools.annotation.readOnly'),
+      tone: 'bg-[var(--color-inspector-success-bg)] text-[var(--color-inspector-success)]',
+    })
+  }
+  if (tool.annotations.destructiveHint) {
+    flags.push({
+      key: 'destructive',
+      label: t('settings.mcp.tools.annotation.destructive'),
+      tone: 'bg-[var(--color-inspector-danger-bg)] text-[var(--color-inspector-danger)]',
+    })
+  }
+  if (tool.annotations.openWorldHint) {
+    flags.push({
+      key: 'openWorld',
+      label: t('settings.mcp.tools.annotation.openWorld'),
+      tone: 'bg-[var(--color-surface-container-low)] text-[var(--color-warning)]',
+    })
+  }
+  if (tool.annotations.idempotentHint) {
+    flags.push({
+      key: 'idempotent',
+      label: t('settings.mcp.tools.annotation.idempotent'),
+      tone: 'bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)]',
+    })
+  }
+
+  if (flags.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {flags.map((flag) => (
+        <span
+          key={flag.key}
+          className={`inline-flex items-center rounded-full border border-[var(--color-border)] px-2 py-[2px] text-[10px] font-medium ${flag.tone}`}
+        >
+          {flag.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function McpToolRow({
+  tool,
+  onToggle,
+  isToggling,
+  t,
+}: {
+  tool: McpToolInfo
+  onToggle: () => void
+  isToggling: boolean
+  t: ReturnType<typeof useTranslation>
+}) {
+  const [open, setOpen] = useState(false)
+
+  const inputSchemaPreview = useMemo(() => {
+    try {
+      return JSON.stringify(tool.inputSchema ?? {}, null, 2)
+    } catch {
+      return ''
+    }
+  }, [tool.inputSchema])
+
+  return (
+    <li
+      className={`rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4 transition-colors ${
+        tool.enabled
+          ? 'bg-[var(--color-surface)]'
+          : 'bg-[var(--color-surface-hover)] opacity-75'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex flex-1 min-w-0 items-start justify-between gap-3 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="rounded bg-[var(--color-surface-hover)] px-2 py-[2px] font-mono text-xs text-[var(--color-text-primary)]">
+                {tool.name}
+              </code>
+              {tool.title && (
+                <span className="text-sm text-[var(--color-text-secondary)]">{tool.title}</span>
+              )}
+              {!tool.enabled && (
+                <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-hover)] px-2 py-[2px] text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                  {t('settings.mcp.tools.disabledHint')}
+                </span>
+              )}
+            </div>
+            {tool.description && (
+              <p className="mt-2 line-clamp-2 text-sm text-[var(--color-text-secondary)]">
+                {tool.description}
+              </p>
+            )}
+            <div className="mt-2">
+              <ToolAnnotationBadges tool={tool} t={t} />
+            </div>
+          </div>
+          <span
+            className="material-symbols-outlined mt-1 text-[20px] text-[var(--color-text-tertiary)] transition-transform"
+            style={{ transform: open ? 'rotate(180deg)' : 'none' }}
+          >
+            expand_more
+          </span>
+        </button>
+
+        <div onClick={(e) => e.stopPropagation()} className="ml-2 mt-[2px]">
+          <ToggleSwitch
+            checked={tool.enabled}
+            disabled={isToggling}
+            onChange={onToggle}
+          />
+        </div>
+      </div>
+
+      {open && (
+        <div className="mt-4 space-y-3 border-t border-[var(--color-border)] pt-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
+              {t('settings.mcp.tools.qualifiedName')}
+            </div>
+            <code className="mt-1 block break-all font-mono text-xs text-[var(--color-text-primary)]">
+              {tool.qualifiedName}
+            </code>
+          </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
+              {t('settings.mcp.tools.inputSchema')}
+            </div>
+            <pre className="mt-1 max-h-72 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-hover)] p-3 text-xs text-[var(--color-text-secondary)]">
+              {inputSchemaPreview}
+            </pre>
+          </div>
+        </div>
+      )}
+    </li>
+  )
+}
+
+function McpToolsTab({
+  serverName,
+  cwd,
+  serverEnabled,
+  t,
+}: {
+  serverName: string
+  cwd?: string
+  serverEnabled: boolean
+  t: ReturnType<typeof useTranslation>
+}) {
+  const [state, setState] = useState<ToolsLoadState>({ status: 'loading' })
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [togglingTool, setTogglingTool] = useState<string | null>(null)
+  const addToast = useUIStore((s) => s.addToast)
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!serverEnabled) {
+      setState({
+        status: 'ready',
+        result: { serverName, status: 'disabled', tools: [] },
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setState({ status: 'loading' })
+    mcpApi
+      .tools(serverName, cwd)
+      .then((result) => {
+        if (cancelled) return
+        setState({ status: 'ready', result })
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setState({
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [serverName, cwd, serverEnabled, refreshKey])
+
+  const handleToggleTool = async (tool: McpToolInfo) => {
+    if (togglingTool) return
+    const nextEnabled = !tool.enabled
+    setTogglingTool(tool.name)
+    try {
+      await mcpApi.toggleTool(serverName, tool.name, nextEnabled, cwd)
+      // Optimistically patch the local state so the UI doesn't have to wait
+      // for a full refetch — the toggle endpoint is the source of truth and
+      // returns the post-toggle enabled flag.
+      setState((current) => {
+        if (current.status !== 'ready') return current
+        if (current.result.status !== 'connected') return current
+        return {
+          status: 'ready',
+          result: {
+            ...current.result,
+            tools: current.result.tools.map((existing) =>
+              existing.name === tool.name
+                ? { ...existing, enabled: nextEnabled }
+                : existing,
+            ),
+          },
+        }
+      })
+      addToast({
+        type: 'success',
+        message: t('settings.mcp.tools.toggleSuccess'),
+      })
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('settings.mcp.tools.toggleFailed'),
+      })
+    } finally {
+      setTogglingTool(null)
+    }
+  }
+
+  const isLoading = state.status === 'loading'
+  const result = state.status === 'ready' ? state.result : null
+
+  const headerLabel = result?.status === 'connected'
+    ? t('settings.mcp.tools.count', { count: result.tools.length })
+    : null
+
+  return (
+    <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-[var(--color-text-primary)]">
+          {headerLabel ?? t('settings.mcp.tabs.tools')}
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => setRefreshKey((value) => value + 1)}
+          loading={isLoading && serverEnabled}
+          disabled={!serverEnabled}
+        >
+          <span className="material-symbols-outlined text-[16px]">refresh</span>
+          {t('settings.mcp.tools.refresh')}
+        </Button>
+      </div>
+
+      {state.status === 'loading' && (
+        <div className="py-8 text-center text-sm text-[var(--color-text-secondary)]">
+          {t('settings.mcp.tools.loading')}
+        </div>
+      )}
+
+      {state.status === 'error' && (
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-inspector-danger-bg)] p-4 text-sm text-[var(--color-inspector-danger)]">
+          {t('settings.mcp.tools.error')}: {state.error}
+        </div>
+      )}
+
+      {result?.status === 'disabled' && (
+        <div className="py-6 text-center text-sm text-[var(--color-text-secondary)]">
+          {t('settings.mcp.tools.disabled')}
+        </div>
+      )}
+
+      {result?.status === 'needs-auth' && (
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-4 text-sm text-[var(--color-warning)]">
+          {t('settings.mcp.tools.needsAuth')}
+        </div>
+      )}
+
+      {result?.status === 'failed' && (
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-inspector-danger-bg)] p-4 text-sm text-[var(--color-inspector-danger)]">
+          {t('settings.mcp.tools.failed', { error: result.error ?? '' })}
+        </div>
+      )}
+
+      {result?.status === 'connected' && result.tools.length === 0 && (
+        <div className="py-6 text-center text-sm text-[var(--color-text-secondary)]">
+          {t('settings.mcp.tools.empty')}
+        </div>
+      )}
+
+      {result?.status === 'connected' && result.tools.length > 0 && (
+        <ul className="flex flex-col gap-3">
+          {result.tools.map((tool) => (
+            <McpToolRow
+              key={tool.qualifiedName}
+              tool={tool}
+              onToggle={() => void handleToggleTool(tool)}
+              isToggling={togglingTool === tool.name}
+              t={t}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export function McpSettings() {
   const { servers, selectedServer, isLoading, error, fetchServers, createServer, updateServer, deleteServer, toggleServer, reconnectServer, refreshServerStatus, selectServer } = useMcpStore()
   const addToast = useUIStore((s) => s.addToast)
@@ -448,6 +745,7 @@ export function McpSettings() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const t = useTranslation()
   const [view, setView] = useState<EditorMode>({ type: 'list' })
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
   const [draft, setDraft] = useState<McpDraft>(createEmptyDraft)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -536,6 +834,25 @@ export function McpSettings() {
       setView({ type: 'details', server: selectedServer })
     }
   }, [selectedServer])
+
+  // Reset the inspector tab whenever the inspected server identity changes,
+  // covering both edit-form entry (canEdit servers) and read-only details
+  // entry (plugin / claudeai / managed servers). Reconnects/refreshes preserve
+  // identity, so the user-selected tab survives those updates.
+  useEffect(() => {
+    const inspectedKey =
+      view.type === 'details' || view.type === 'edit'
+        ? getServerIdentityKey(view.server)
+        : null
+    if (!inspectedKey) return
+    setDetailsTab('overview')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    view.type,
+    view.type === 'details' || view.type === 'edit'
+      ? getServerIdentityKey(view.server)
+      : '',
+  ])
 
   useEffect(() => {
     const pendingServers = servers.filter((server) => (
@@ -748,6 +1065,7 @@ export function McpSettings() {
 
   if (view.type === 'details') {
     const server = view.server
+    const operationCwd = resolveOperationCwd(server)
     return (
       <>
         <div className="max-w-5xl min-w-0">
@@ -763,7 +1081,7 @@ export function McpSettings() {
             {t('settings.mcp.form.back')}
           </button>
 
-          <div className="flex items-start justify-between gap-4 mb-8">
+          <div className="flex items-start justify-between gap-4 mb-6">
             <div>
               <h2 className="text-[2.2rem] font-semibold tracking-[-0.03em] text-[var(--color-text-primary)]">{server.name}</h2>
               <p className="mt-3 text-base text-[var(--color-text-secondary)]">{server.summary}</p>
@@ -782,23 +1100,77 @@ export function McpSettings() {
             )}
           </div>
 
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <InfoPair label={t('settings.mcp.form.transport')} value={transportLabel(server.transport, t)} />
-              <InfoPair label={t('settings.mcp.form.scope')} value={scopeLabel(server, t)} />
-              <InfoPair label={t('settings.mcp.form.status')} value={server.statusLabel} />
-              <InfoPair label={t('settings.mcp.form.location')} value={server.configLocation} />
-            </div>
-            <div className="mt-5">
-              <div className="text-sm font-semibold text-[var(--color-text-primary)] mb-2">{t('settings.mcp.form.rawConfig')}</div>
-              <pre className="overflow-x-auto rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)] p-4 text-xs text-[var(--color-text-secondary)]">
-                {JSON.stringify(server.config, null, 2)}
-              </pre>
-            </div>
-          </section>
+          <div
+            className="mb-5 flex gap-1 border-b border-[var(--color-border)]"
+            role="tablist"
+            aria-label={t('settings.mcp.tabs.tools')}
+          >
+            {(['overview', 'tools'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={detailsTab === tab}
+                onClick={() => setDetailsTab(tab)}
+                className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                  detailsTab === tab
+                    ? 'text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                {tab === 'overview'
+                  ? t('settings.mcp.tabs.overview')
+                  : t('settings.mcp.tabs.tools')}
+                {detailsTab === tab && (
+                  <span className="absolute inset-x-2 -bottom-px h-[2px] bg-[var(--color-text-primary)]" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          {detailsTab === 'overview' && (
+            <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <InfoPair label={t('settings.mcp.form.transport')} value={transportLabel(server.transport, t)} />
+                <InfoPair label={t('settings.mcp.form.scope')} value={scopeLabel(server, t)} />
+                <InfoPair label={t('settings.mcp.form.status')} value={server.statusLabel} />
+                <InfoPair label={t('settings.mcp.form.location')} value={server.configLocation} />
+              </div>
+              <div className="mt-5">
+                <div className="text-sm font-semibold text-[var(--color-text-primary)] mb-2">{t('settings.mcp.form.rawConfig')}</div>
+                <pre className="overflow-x-auto rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)] p-4 text-xs text-[var(--color-text-secondary)]">
+                  {JSON.stringify(server.config, null, 2)}
+                </pre>
+              </div>
+            </section>
+          )}
+
+          {detailsTab === 'tools' && (
+            <McpToolsTab
+              serverName={server.name}
+              cwd={operationCwd}
+              serverEnabled={server.enabled}
+              t={t}
+            />
+          )}
         </div>
         {deleteModal}
       </>
+    )
+  }
+
+  if (view.type === 'marketplace') {
+    return (
+      <MarketplacePage
+        cwd={currentWorkDir}
+        onBack={() => setView({ type: 'list' })}
+        onInstalled={() => {
+          // Refresh the server list so the freshly-installed entry is visible
+          // when the user navigates back. Errors are swallowed because the
+          // marketplace toast already covers user-facing failure messaging.
+          void fetchServers(projectPathsForFetchRef.current, currentWorkDir)
+        }}
+      />
     )
   }
 
@@ -877,6 +1249,49 @@ export function McpSettings() {
             </div>
           </div>
 
+          {/*
+            Tab strip — only meaningful when an existing server is being inspected.
+            Creation flow (no server yet) skips it: there are no tools to list
+            until the server is saved and connected.
+          */}
+          {editing && targetServer && (
+            <div
+              className="mb-5 flex gap-1 border-b border-[var(--color-border)]"
+              role="tablist"
+              aria-label={t('settings.mcp.tabs.tools')}
+            >
+              {(['overview', 'tools'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={detailsTab === tab}
+                  onClick={() => setDetailsTab(tab)}
+                  className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                    detailsTab === tab
+                      ? 'text-[var(--color-text-primary)]'
+                      : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                  }`}
+                >
+                  {tab === 'overview'
+                    ? t('settings.mcp.tabs.overview')
+                    : t('settings.mcp.tabs.tools')}
+                  {detailsTab === tab && (
+                    <span className="absolute inset-x-2 -bottom-px h-[2px] bg-[var(--color-text-primary)]" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {editing && targetServer && detailsTab === 'tools' ? (
+            <McpToolsTab
+              serverName={targetServer.name}
+              cwd={resolveOperationCwd(targetServer)}
+              serverEnabled={targetServer.enabled}
+              t={t}
+            />
+          ) : (
           <div className="space-y-4">
           <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
             <Input
@@ -1058,6 +1473,7 @@ export function McpSettings() {
             </Button>
           </div>
         </div>
+        )}
         </div>
         {deleteModal}
       </>
@@ -1075,10 +1491,20 @@ export function McpSettings() {
             {t('settings.mcp.description')}
           </p>
         </div>
-        <Button variant="secondary" size="lg" onClick={beginCreate}>
-          <span className="material-symbols-outlined text-[18px]">add</span>
-          {t('settings.mcp.addServer')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => setView({ type: 'marketplace' })}
+          >
+            <span className="material-symbols-outlined text-[18px]">storefront</span>
+            {t('settings.mcp.marketplace.browse')}
+          </Button>
+          <Button variant="secondary" size="lg" onClick={beginCreate}>
+            <span className="material-symbols-outlined text-[18px]">add</span>
+            {t('settings.mcp.addServer')}
+          </Button>
+        </div>
       </div>
 
       {showListLoading ? (

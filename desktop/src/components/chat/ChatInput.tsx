@@ -44,6 +44,10 @@ import {
 } from '../../lib/composerAttachments'
 import { useComposerFileDrop } from './useComposerFileDrop'
 import { shouldSubmitOnEnter } from './sendShortcut'
+import {
+  COMPOSER_PREFILL_EVENT,
+  type ComposerPrefillDetail,
+} from '../welcome/WelcomeTaskCards'
 
 type GitInfo = SessionGitInfo
 
@@ -239,6 +243,29 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       if (currentActiveTabId) saveComposerDraft(currentActiveTabId)
     }
   }, [saveComposerDraft])
+
+  // Listen for welcome-screen task-card clicks dispatched from ActiveSession's
+  // empty welcome state. The card click can't directly mutate this component's
+  // useState, so it dispatches a window CustomEvent that we apply here when
+  // the sessionId matches the active tab. EmptySession doesn't need this — it
+  // owns its own composer textarea and updates state in-place.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ComposerPrefillDetail>).detail
+      if (!detail || typeof detail.text !== 'string') return
+      if (!activeTabId || detail.sessionId !== activeTabId) return
+      setComposerInput(detail.text)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        const len = el.value.length
+        el.setSelectionRange(len, len)
+      })
+    }
+    window.addEventListener(COMPOSER_PREFILL_EVENT, handler as EventListener)
+    return () => window.removeEventListener(COMPOSER_PREFILL_EVENT, handler as EventListener)
+  }, [activeTabId, setComposerInput])
 
   useEffect(() => {
     textareaRef.current?.focus()

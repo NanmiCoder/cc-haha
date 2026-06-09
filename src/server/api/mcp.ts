@@ -5,7 +5,10 @@ import {
 import {
   clearServerCache,
   connectToServer,
+  fetchToolsForClient,
+  listRawToolsForServer,
   reconnectMcpServerImpl,
+  type RawMcpToolInfo,
 } from '../../services/mcp/client.js'
 import {
   addMcpConfig,
@@ -16,6 +19,16 @@ import {
   removeMcpConfig,
   setMcpServerEnabled,
 } from '../../services/mcp/config.js'
+import {
+  isMcpToolDisabled,
+  setMcpToolEnabled,
+} from '../../services/mcp/toolOverrides.js'
+import {
+  addMarketplaceSource,
+  getMarketplaceCatalog,
+  refreshMarketplaceSources,
+  removeMarketplaceSource,
+} from '../services/mcpMarketplace.js'
 import { inspectMcpHostCommand } from '../services/mcpHostPreflight.js'
 import type {
   ConfigScope,
@@ -456,6 +469,137 @@ async function getServerStatus(name: string): Promise<Response> {
   })
 }
 
+type McpToolsResponseDto = {
+  serverName: string
+  status: 'connected' | 'needs-auth' | 'failed' | 'disabled'
+  tools: RawMcpToolInfo[]
+  error?: string
+}
+
+async function listServerTools(name: string): Promise<Response> {
+  const existing = await resolveServerForRuntimeAction(name)
+  if (!existing) {
+    throw ApiError.notFound(`MCP server not found: ${name}`)
+  }
+
+  if (isMcpServerDisabled(name)) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'disabled',
+      tools: [],
+    }
+    return Response.json(body)
+  }
+
+  // Stdio servers fail loudly on PATH issues — surface that the same way
+  // status/reconnect do, instead of letting connectToServer hang on spawn.
+  const hostPreflight = await getHostPreflightStatus(existing, true)
+  if (hostPreflight) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'failed',
+      tools: [],
+      ...(hostPreflight.statusDetail ? { error: hostPreflight.statusDetail } : {}),
+    }
+    return Response.json(body)
+  }
+
+  try {
+    const client = await connectToServer(name, existing)
+
+    if (client.type !== 'connected') {
+      const body: McpToolsResponseDto = {
+        serverName: name,
+        status: client.type === 'needs-auth' ? 'needs-auth' : 'failed',
+        tools: [],
+        ...('error' in client && client.error ? { error: client.error } : {}),
+      }
+      return Response.json(body)
+    }
+
+    const tools = await listRawToolsForServer(client)
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'connected',
+      tools,
+    }
+    return Response.json(body)
+  } catch (error) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'failed',
+      tools: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+    return Response.json(body)
+  }
+}
+
+async function toggleServerTool(
+  serverName: string,
+  toolName: string,
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  if (!toolName) {
+    throw ApiError.badRequest('Tool name is required')
+  }
+
+  const existing = await resolveServerForRuntimeAction(serverName)
+  if (!existing) {
+    throw ApiError.notFound(`MCP server not found: ${serverName}`)
+  }
+
+  // Default to flipping the current state when the body omits `enabled`. This
+  // matches the server-level toggle endpoint's behavior and lets the UI fire a
+  // single click without having to read state first.
+  const requestedEnabled =
+    typeof body?.enabled === 'boolean'
+      ? body.enabled
+      : isMcpToolDisabled(serverName, toolName)
+
+  setMcpToolEnabled(serverName, toolName, requestedEnabled)
+
+  // Drop the cached `Tool[]` for this server so the agent loop picks up the
+  // override on next call. `connectToServer` is left alone — the underlying
+  // transport is still healthy, only the visible-tool projection changed.
+  fetchToolsForClient.cache.delete(serverName)
+
+  return Response.json({
+    serverName,
+    toolName,
+    enabled: requestedEnabled,
+  })
+}
+
+async function listMarketplace(): Promise<Response> {
+  return Response.json(await getMarketplaceCatalog())
+}
+
+async function refreshMarketplace(
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  const requested = body?.sourceIds
+  const sourceIds = Array.isArray(requested)
+    ? requested.filter((id): id is string => typeof id === 'string')
+    : undefined
+  return Response.json(await refreshMarketplaceSources(sourceIds))
+}
+
+async function createMarketplaceSource(
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  const url = typeof body?.url === 'string' ? body.url : ''
+  const label = typeof body?.label === 'string' ? body.label : undefined
+  const enabled = typeof body?.enabled === 'boolean' ? body.enabled : undefined
+  const source = await addMarketplaceSource({ url, label, enabled })
+  return Response.json({ source }, { status: 201 })
+}
+
+async function deleteMarketplaceSource(id: string): Promise<Response> {
+  await removeMarketplaceSource(id)
+  return Response.json({ ok: true })
+}
+
 async function assertHostPrerequisites(config: McpServerConfig) {
   const hostPreflightStatus = await getHostPreflightStatus(config, true)
   if (hostPreflightStatus?.statusDetail) {
@@ -637,6 +781,29 @@ export async function handleMcpApi(
         : undefined
 
     return await runWithCwdOverride(resolveRequestCwd(url, body), async () => {
+      // Marketplace routes share the /api/mcp prefix. Short-circuit before
+      // serverName-shaped lookups so a server literally named "marketplace"
+      // (extremely unlikely, but possible) cannot collide.
+      if (serverName === 'marketplace') {
+        if (req.method === 'GET' && !action) {
+          return listMarketplace()
+        }
+        if (req.method === 'POST' && action === 'refresh') {
+          return refreshMarketplace(body)
+        }
+        if (req.method === 'POST' && action === 'sources' && !segments[4]) {
+          return createMarketplaceSource(body)
+        }
+        if (req.method === 'DELETE' && action === 'sources' && segments[4]) {
+          return deleteMarketplaceSource(decodeURIComponent(segments[4]))
+        }
+        throw new ApiError(
+          405,
+          `Method ${req.method} not allowed on /api/mcp/marketplace`,
+          'METHOD_NOT_ALLOWED',
+        )
+      }
+
       if (req.method === 'GET' && serverName === 'project-paths' && !action) {
         return listProjectPathsWithPrivateMcp()
       }
@@ -647,6 +814,23 @@ export async function handleMcpApi(
 
       if (req.method === 'GET' && serverName && action === 'status') {
         return getServerStatus(serverName)
+      }
+
+      if (req.method === 'GET' && serverName && action === 'tools') {
+        return listServerTools(serverName)
+      }
+
+      // POST /api/mcp/:server/tools/:tool/toggle
+      // Per-tool enable/disable. Storage lives at the user/global scope, so
+      // the toggle is shared across all projects for the same MCP server.
+      if (
+        req.method === 'POST' &&
+        serverName &&
+        action === 'tools' &&
+        segments[5] === 'toggle' &&
+        segments[4]
+      ) {
+        return toggleServerTool(serverName, decodeURIComponent(segments[4]), body)
       }
 
       if (req.method === 'POST' && !serverName) {

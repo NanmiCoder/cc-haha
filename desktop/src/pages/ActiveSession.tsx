@@ -31,6 +31,13 @@ import type { ActiveGoalState } from '../types/chat'
 import { useMobileViewport } from '../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { publicAssetPath } from '../lib/publicAsset'
+import {
+  COMPOSER_PREFILL_EVENT,
+  WelcomeTaskCards,
+  type ComposerPrefillDetail,
+  type WelcomeTaskCard,
+} from '../components/welcome/WelcomeTaskCards'
+import { RecentActivityCard } from '../components/welcome/RecentActivityCard'
 
 const TASK_POLL_INTERVAL_MS = 1000
 const WORKSPACE_RESIZE_STEP = 32
@@ -415,7 +422,7 @@ export function ActiveSession() {
           )}
 
           {isEmpty ? (
-            <div className="flex flex-1 flex-col items-center justify-center p-8 pb-32">
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 overflow-y-auto p-8 pb-32">
               <div className="flex max-w-md flex-col items-center text-center">
                 {isMemberSession ? (
                   <>
@@ -438,6 +445,47 @@ export function ActiveSession() {
                   </>
                 )}
               </div>
+              {!isMemberSession && !isMobileLayout && activeTabId && session?.workDir && (
+                <RecentActivityCard
+                  workDir={session.workDir}
+                  excludeSessionId={activeTabId}
+                  hideContinueSessionButton
+                  onContinueSession={(sessionId) => {
+                    useTabStore.getState().openTab(sessionId, 'New Session')
+                    connectToSession(sessionId)
+                  }}
+                  onApplyHandoff={(text) => {
+                    const detail: ComposerPrefillDetail = {
+                      sessionId: activeTabId,
+                      text,
+                    }
+                    window.dispatchEvent(
+                      new CustomEvent(COMPOSER_PREFILL_EVENT, { detail }),
+                    )
+                  }}
+                />
+              )}
+              {!isMemberSession && !isMobileLayout && activeTabId && (
+                <WelcomeTaskCards
+                  onApplyTask={(card: WelcomeTaskCard, promptText: string) => {
+                    // Push the starter prompt into ChatInput's draft via a
+                    // window event — ChatInput listens for this and sets its
+                    // textarea state when the sessionId matches the active tab.
+                    const detail: ComposerPrefillDetail = {
+                      sessionId: activeTabId,
+                      text: promptText,
+                    }
+                    window.dispatchEvent(new CustomEvent(COMPOSER_PREFILL_EVENT, { detail }))
+                    if (card.orchestrate) {
+                      // Session already exists here (we're in ActiveSession),
+                      // so this immediately persists the preference and
+                      // pushes the WS message if connected. Won't disable an
+                      // existing toggle — non-orchestration cards leave it.
+                      useChatStore.getState().setSessionCoordinatorMode(activeTabId, true)
+                    }
+                  }}
+                />
+              )}
             </div>
           ) : (
             <>

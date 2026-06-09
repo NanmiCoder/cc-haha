@@ -1396,6 +1396,57 @@ describe('MessageList nested tool calls', () => {
     expect(screen.getByText('Explore agent unavailable in this session')).toBeTruthy()
   })
 
+  it('renders subagent_type as → Explore badge next to Agent header', () => {
+    // Item 5 (routing observability) — desktop surface mirrors the CLI/Ink
+    // change in src/tools/AgentTool/UI.tsx so that operators can see which
+    // specialist was routed to without expanding the call.
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: 'agent-1',
+              input: { description: '查找路由模块', subagent_type: 'Explore' },
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText('→ Explore')).toBeTruthy()
+    expect(screen.getByText('查找路由模块')).toBeTruthy()
+  })
+
+  it('omits subagent_type badge when input has no subagent_type', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: 'agent-1',
+              input: { description: '随便看看' },
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.queryByText(/→\s+\S+/)).toBeNull()
+    expect(screen.getByText('随便看看')).toBeTruthy()
+  })
+
   it('shows completed agent output when no nested tool activity is available', () => {
     const longResult = '探索完成。让我将结果整合写入计划文件。第二段补充内容用于验证 dialog 展示的是完整结果而不是截断摘要。'
 

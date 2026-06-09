@@ -5,6 +5,8 @@ import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
 import { Button } from '../shared/Button'
+import { ConfirmDialog } from '../shared/ConfirmDialog'
+import { ToggleSwitch } from '../shared/ToggleSwitch'
 import type { CatalogPlugin, PluginSummary } from '../../types/plugin'
 
 type PluginBucket = 'attention' | 'enabled' | 'disabled'
@@ -51,6 +53,9 @@ export function PluginList() {
     fetchPlugins,
     fetchPluginDetail,
     reloadPlugins,
+    enablePlugin,
+    disablePlugin,
+    uninstallPlugin,
     catalog,
     installingCatalogId,
     isAddingMarketplace,
@@ -65,6 +70,10 @@ export function PluginList() {
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = activeSession?.workDir || undefined
   const [marketplaceInput, setMarketplaceInput] = useState('')
+  // Per-plugin action tracking — keyed by `${pluginId}:${action}` so a row can
+  // show its own spinner without blocking sibling rows.
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null)
+  const [pendingUninstall, setPendingUninstall] = useState<PluginSummary | null>(null)
 
   useEffect(() => {
     void fetchPlugins(currentWorkDir)
@@ -159,6 +168,52 @@ export function PluginList() {
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
       })
+    }
+  }
+
+  const handleInlineToggle = async (plugin: PluginSummary) => {
+    const key = `${plugin.id}:toggle`
+    if (pendingActionKey) return
+    setPendingActionKey(key)
+    try {
+      const message = plugin.enabled
+        ? await disablePlugin(plugin.id, plugin.scope, currentWorkDir, activeSessionId || undefined)
+        : await enablePlugin(plugin.id, plugin.scope, currentWorkDir, activeSessionId || undefined)
+      addToast({
+        type: 'success',
+        message,
+      })
+    } catch (err) {
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setPendingActionKey(null)
+    }
+  }
+
+  const handleInlineUninstall = async () => {
+    if (!pendingUninstall) return
+    const key = `${pendingUninstall.id}:uninstall`
+    setPendingActionKey(key)
+    try {
+      const message = await uninstallPlugin(
+        pendingUninstall.id,
+        pendingUninstall.scope,
+        false,
+        currentWorkDir,
+        activeSessionId || undefined,
+      )
+      addToast({ type: 'success', message })
+    } catch (err) {
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setPendingUninstall(null)
+      setPendingActionKey(null)
     }
   }
 
@@ -318,9 +373,21 @@ export function PluginList() {
         </section>
       )}
 
-      {renderGroup('attention', grouped.attention, fetchPluginDetail, currentWorkDir, t)}
-      {renderGroup('enabled', grouped.enabled, fetchPluginDetail, currentWorkDir, t)}
-      {renderGroup('disabled', grouped.disabled, fetchPluginDetail, currentWorkDir, t)}
+      {renderGroup('attention', grouped.attention, fetchPluginDetail, currentWorkDir, t, {
+        onToggle: handleInlineToggle,
+        onAskUninstall: setPendingUninstall,
+        pendingActionKey,
+      })}
+      {renderGroup('enabled', grouped.enabled, fetchPluginDetail, currentWorkDir, t, {
+        onToggle: handleInlineToggle,
+        onAskUninstall: setPendingUninstall,
+        pendingActionKey,
+      })}
+      {renderGroup('disabled', grouped.disabled, fetchPluginDetail, currentWorkDir, t, {
+        onToggle: handleInlineToggle,
+        onAskUninstall: setPendingUninstall,
+        pendingActionKey,
+      })}
 
       {showInstalledEmptyState && (
         <div className="text-center py-8 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-6">
@@ -335,8 +402,34 @@ export function PluginList() {
           </p>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingUninstall !== null}
+        onClose={() => {
+          if (isApplying && pendingActionKey?.endsWith(':uninstall')) return
+          setPendingUninstall(null)
+        }}
+        onConfirm={handleInlineUninstall}
+        title={t('settings.plugins.uninstall')}
+        body={
+          pendingUninstall
+            ? t('settings.plugins.confirmUninstall', { name: pendingUninstall.name })
+            : ''
+        }
+        confirmLabel={t('settings.plugins.uninstall')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={isApplying && pendingActionKey?.endsWith(':uninstall') === true}
+      />
     </div>
   )
+}
+
+type RowActions = {
+  onToggle: (plugin: PluginSummary) => void
+  onAskUninstall: (plugin: PluginSummary) => void
+  /** `${pluginId}:${action}` of the action currently in flight, or null. */
+  pendingActionKey: string | null
 }
 
 function renderGroup(
@@ -345,6 +438,7 @@ function renderGroup(
   fetchPluginDetail: (id: string, cwd?: string) => Promise<void>,
   cwd: string | undefined,
   t: ReturnType<typeof useTranslation>,
+  actions: RowActions,
 ) {
   if (items.length === 0) return null
 
@@ -372,56 +466,87 @@ function renderGroup(
         <span className="text-xs text-[var(--color-text-tertiary)]">{items.length}</span>
       </div>
       <div className="flex flex-col p-2">
-        {items.map((plugin) => (
-          <button
-            key={plugin.id}
-            onClick={() => void fetchPluginDetail(plugin.id, cwd)}
-            className="group rounded-xl border border-transparent px-3 py-3 text-left transition-all hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
-          >
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
-                {plugin.hasErrors ? 'warning' : plugin.enabled ? 'extension' : 'extension_off'}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">
-                    {plugin.name}
-                  </span>
-                  <StatusPill plugin={plugin} />
-                  <ScopePill scope={plugin.scope} />
-                  {plugin.version && (
-                    <span className="rounded-full bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
-                      v{plugin.version}
+        {items.map((plugin) => {
+          const canMutate = plugin.scope !== 'managed' && plugin.scope !== 'builtin'
+          const isToggling = actions.pendingActionKey === `${plugin.id}:toggle`
+          const isUninstalling = actions.pendingActionKey === `${plugin.id}:uninstall`
+          return (
+            <div
+              key={plugin.id}
+              className="group flex items-start gap-3 rounded-xl border border-transparent px-3 py-3 transition-all hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)]"
+            >
+              <button
+                type="button"
+                onClick={() => void fetchPluginDetail(plugin.id, cwd)}
+                className="flex flex-1 min-w-0 items-start gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] rounded-lg"
+              >
+                <span className="mt-0.5 material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
+                  {plugin.hasErrors ? 'warning' : plugin.enabled ? 'extension' : 'extension_off'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">
+                      {plugin.name}
                     </span>
-                  )}
+                    <StatusPill plugin={plugin} />
+                    <ScopePill scope={plugin.scope} />
+                    {plugin.version && (
+                      <span className="rounded-full bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                        v{plugin.version}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)] break-words">
+                    {plugin.description || t('settings.plugins.noDescription')}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
+                    <span>{plugin.marketplace}</span>
+                    {plugin.componentCounts.skills > 0 && (
+                      <span>{t('settings.plugins.capability.skills', { count: String(plugin.componentCounts.skills) })}</span>
+                    )}
+                    {plugin.componentCounts.agents > 0 && (
+                      <span>{t('settings.plugins.capability.agents', { count: String(plugin.componentCounts.agents) })}</span>
+                    )}
+                    {plugin.componentCounts.mcpServers > 0 && (
+                      <span>{t('settings.plugins.capability.mcpServers', { count: String(plugin.componentCounts.mcpServers) })}</span>
+                    )}
+                    {plugin.errors.length > 0 && (
+                      <span className="text-[var(--color-error)]">
+                        {t('settings.plugins.errorCount', { count: String(plugin.errors.length) })}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)] break-words">
-                  {plugin.description || t('settings.plugins.noDescription')}
-                </p>
-                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
-                  <span>{plugin.marketplace}</span>
-                  {plugin.componentCounts.skills > 0 && (
-                    <span>{t('settings.plugins.capability.skills', { count: String(plugin.componentCounts.skills) })}</span>
-                  )}
-                  {plugin.componentCounts.agents > 0 && (
-                    <span>{t('settings.plugins.capability.agents', { count: String(plugin.componentCounts.agents) })}</span>
-                  )}
-                  {plugin.componentCounts.mcpServers > 0 && (
-                    <span>{t('settings.plugins.capability.mcpServers', { count: String(plugin.componentCounts.mcpServers) })}</span>
-                  )}
-                  {plugin.errors.length > 0 && (
-                    <span className="text-[var(--color-error)]">
-                      {t('settings.plugins.errorCount', { count: String(plugin.errors.length) })}
-                    </span>
-                  )}
-                </div>
+              </button>
+
+              <div className="flex flex-shrink-0 items-center gap-2 pt-0.5">
+                {canMutate ? (
+                  <ToggleSwitch
+                    checked={plugin.enabled}
+                    disabled={isToggling || isUninstalling}
+                    onChange={() => actions.onToggle(plugin)}
+                    ariaLabel={`${plugin.enabled ? t('settings.plugins.disable') : t('settings.plugins.enable')} ${plugin.name}`}
+                  />
+                ) : null}
+                {canMutate && (
+                  <button
+                    type="button"
+                    onClick={() => actions.onAskUninstall(plugin)}
+                    disabled={isToggling || isUninstalling}
+                    aria-label={`${t('settings.plugins.uninstall')} ${plugin.name}`}
+                    title={t('settings.plugins.uninstall')}
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-error)]/12 hover:text-[var(--color-error)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                  </button>
+                )}
+                <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100">
+                  chevron_right
+                </span>
               </div>
-              <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100">
-                chevron_right
-              </span>
             </div>
-          </button>
-        ))}
+          )
+        })}
       </div>
     </section>
   )

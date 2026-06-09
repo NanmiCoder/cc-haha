@@ -49,10 +49,12 @@ import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extra
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
+import { formatLimitExceededMessage, isLimiterDisabled, noteInvocation } from './invocationLimiter.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
 import { runAgent } from './runAgent.js';
+import { suggestSpecialist, formatSpecialistRedirectMessage } from './specialistRouter.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -319,6 +321,26 @@ export const AgentTool = buildTool({
     // - subagent_type set: use it (explicit wins)
     // - subagent_type omitted, gate on: fork path (undefined)
     // - subagent_type omitted, gate off: default general-purpose
+
+    // General-purpose default-strict gate: when subagent_type is omitted
+    // and the prompt contains a strong specialist signal (e.g. "code
+    // review", "security audit", "root cause"), refuse to fall back to
+    // general-purpose so the model picks the right specialist explicitly.
+    // Disabled with CLAUDE_CODE_GP_DEFAULT_STRICT=0.
+    if (
+      !subagent_type &&
+      !isForkSubagentEnabled() &&
+      !isCoordinatorMode() &&
+      process.env.CLAUDE_CODE_GP_DEFAULT_STRICT !== '0'
+    ) {
+      const allAgents = toolUseContext.options.agentDefinitions.activeAgents;
+      const availableTypes = new Set(allAgents.map(a => a.agentType));
+      const suggested = suggestSpecialist(prompt, availableTypes);
+      if (suggested) {
+        throw new Error(formatSpecialistRedirectMessage(suggested, AGENT_TOOL_NAME));
+      }
+    }
+
     const effectiveType = subagent_type ?? (isForkSubagentEnabled() ? undefined : GENERAL_PURPOSE_AGENT.agentType);
     const isForkPath = effectiveType === undefined;
     let selectedAgent: AgentDefinition;
@@ -350,6 +372,20 @@ export const AgentTool = buildTool({
           const denyRule = getDenyRuleForAgent(appState.toolPermissionContext, AGENT_TOOL_NAME, effectiveType);
           throw new Error(`Agent type '${effectiveType}' has been denied by permission rule '${AGENT_TOOL_NAME}(${effectiveType})' from ${denyRule?.source ?? 'settings'}.`);
         }
+        // Coordinator-mode-specific guidance: subagent_type was omitted and
+        // got defaulted to 'general-purpose', but coordinator mode doesn't
+        // expose that agent. Give a clearer error than "agent not found".
+        if (
+          isCoordinatorMode() &&
+          !subagent_type &&
+          effectiveType === GENERAL_PURPOSE_AGENT.agentType
+        ) {
+          throw new Error(
+            `Coordinator mode requires an explicit subagent_type. ` +
+            `Choose 'worker' for a generic delegation, or a specialist by name (${agents.map(a => a.agentType).filter(t => t !== 'worker').join(', ')}). ` +
+            `Available types: ${agents.map(a => a.agentType).join(', ')}.`
+          );
+        }
         throw new Error(`Agent type '${effectiveType}' not found. Available agents: ${agents.map(a => a.agentType).join(', ')}`);
       }
       selectedAgent = found;
@@ -360,6 +396,23 @@ export const AgentTool = buildTool({
     // here because selectedAgent is only now resolved.
     if (isInProcessTeammate() && teamName && selectedAgent.background === true) {
       throw new Error(`In-process teammates cannot spawn background agents. Agent '${selectedAgent.agentType}' has background: true in its definition.`);
+    }
+
+    // Invocation limiter: prevent runaway loops where the main agent
+    // calls the same specialist over and over without making progress.
+    // Only counts main-thread invocations of built-in agents so subagent
+    // chains (e.g. an in-process teammate spawning a helper) don't pile
+    // up against the same cap. The user can raise the cap per type or
+    // disable the gate entirely via env.
+    if (
+      !toolUseContext.agentId &&
+      isBuiltInAgent(selectedAgent) &&
+      !isLimiterDisabled()
+    ) {
+      const limit = noteInvocation(selectedAgent.agentType);
+      if (limit.capped) {
+        throw new Error(formatLimitExceededMessage(selectedAgent.agentType, limit));
+      }
     }
 
     // Capture for type narrowing — `let selectedAgent` prevents TS from
