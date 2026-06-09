@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/706412584/cc-haha",
   "author": {
