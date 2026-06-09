@@ -143,6 +143,9 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
+  const coordinatorMode = useSessionRuntimeStore((state) =>
+    activeTabId ? state.coordinatorModes[activeTabId] ?? false : false,
+  )
   const currentModel = useSettingsStore((state) => state.currentModel)
   const chatSendBehavior = useSettingsStore((state) => state.chatSendBehavior)
   const runtimeSelectionKey = runtimeSelection
@@ -994,6 +997,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const slashCommandsLabel = isHeroComposer ? t('empty.slashCommands') : t('chat.slashCommands')
   const skillsLabel = t('chat.openSkills')
   const pluginsLabel = t('chat.openPlugins')
+  const coordinatorModeLabel = t('chat.coordinatorMode')
 
   return (
     <div
@@ -1357,6 +1361,21 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                           <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">extension</span>
                           <span className="text-sm text-[var(--color-text-primary)]">{pluginsLabel}</span>
                         </button>
+                        {activeTabId && (
+                          <button
+                            onClick={() => {
+                              useChatStore.getState().setSessionCoordinatorMode(activeTabId, !coordinatorMode)
+                              setPlusMenuOpen(false)
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                          >
+                            <span className={`material-symbols-outlined text-[18px] ${coordinatorMode ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-secondary)]'}`}>hub</span>
+                            <span className="flex-1 text-sm text-[var(--color-text-primary)]">{coordinatorModeLabel}</span>
+                            {coordinatorMode && (
+                              <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)]">check</span>
+                            )}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

@@ -83,6 +83,11 @@ const runtimeOverrides = new Map<string, {
   thinkingEnabled?: boolean
 }>()
 
+// Per-session orchestration ("协调") mode. In-memory only: a transient session
+// preference, not persisted across app restart / resume (v1). Read by
+// getRuntimeSettings and threaded into the CLI as --append-system-prompt.
+const coordinatorModeSessions = new Set<string>()
+
 const runtimeTransitionPromises = new Map<string, Promise<void>>()
 const sessionStartupPromises = new Map<string, Promise<void>>()
 const runtimeOverrideVersions = new Map<string, number>()
@@ -220,6 +225,10 @@ export const handleWebSocket = {
 
         case 'set_permission_mode':
           void handleSetPermissionMode(ws, message)
+          break
+
+        case 'set_coordinator_mode':
+          void handleSetCoordinatorMode(ws, message)
           break
 
         case 'set_runtime_config':
@@ -587,6 +596,42 @@ async function applyPermissionModeToActiveSession(
     return
   }
   await persistSessionPermissionMode(sessionId, mode)
+}
+
+async function handleSetCoordinatorMode(
+  ws: ServerWebSocket<WebSocketData>,
+  message: Extract<ClientMessage, { type: 'set_coordinator_mode' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  const enabled = message.enabled === true
+  const was = coordinatorModeSessions.has(sessionId)
+  if (was === enabled) return
+
+  if (enabled) coordinatorModeSessions.add(sessionId)
+  else coordinatorModeSessions.delete(sessionId)
+
+  // Orchestration mode is applied via --append-system-prompt at CLI launch, so
+  // an active session must restart to pick up (or drop) the directive. Defer
+  // until idle so we never interrupt an in-progress turn; reuses the same
+  // restart path as runtime-config changes (which re-reads getRuntimeSettings).
+  const pendingStartup = sessionStartupPromises.get(sessionId)
+  if (pendingStartup) {
+    await enqueueRuntimeTransition(sessionId, async () => {
+      await pendingStartup.catch(() => undefined)
+      if (!conversationService.hasSession(sessionId)) return
+      await scheduleRestartSessionWithRuntimeConfig(ws, sessionId)
+    })
+    return
+  }
+
+  if (!conversationService.hasSession(sessionId)) {
+    // No live process yet — the flag is recorded and applied on next start.
+    return
+  }
+
+  await enqueueRuntimeTransition(sessionId, () =>
+    scheduleRestartSessionWithRuntimeConfig(ws, sessionId),
+  )
 }
 
 async function handleSetRuntimeConfig(
@@ -1110,6 +1155,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
   sessionSlashCommands.delete(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
+  coordinatorModeSessions.delete(sessionId)
   runtimeTransitionPromises.delete(sessionId)
   sessionStartupPromises.delete(sessionId)
   lastResolvedStartupWorkDirs.delete(sessionId)
@@ -2178,6 +2224,7 @@ type RuntimeSettings = {
   effort?: string
   thinking?: 'enabled' | 'disabled'
   providerId?: string | null
+  coordinatorMode?: boolean
 }
 
 function isKnownRuntimeProviderId(
@@ -2191,6 +2238,7 @@ function isKnownRuntimeProviderId(
 }
 
 async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> {
+  const coordinatorMode = sessionId ? coordinatorModeSessions.has(sessionId) : false
   const launchInfo = sessionId
     ? await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
     : null
@@ -2224,6 +2272,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
         return {
           ...defaults,
           permissionMode: sessionPermissionMode ?? defaults.permissionMode,
+          coordinatorMode,
         }
       }
     }
@@ -2237,6 +2286,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
       effort: runtimeOverride.effort,
       thinking,
       providerId: runtimeOverride.providerId,
+      coordinatorMode,
     }
   }
 
@@ -2245,6 +2295,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
     ...defaults,
     permissionMode: sessionPermissionMode ?? defaults.permissionMode,
     effort: launchInfo?.effortLevel ?? defaults.effort,
+    coordinatorMode,
   }
 }
 

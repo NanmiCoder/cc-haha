@@ -2102,6 +2102,46 @@ describe('chatStore history mapping', () => {
     expect(updateSessionPermissionModeMock).toHaveBeenCalledWith('session-1', 'acceptEdits')
   })
 
+  it('persists coordinator mode and only sends it to a live session', () => {
+    useSessionRuntimeStore.setState({ coordinatorModes: {} })
+
+    // No live session yet: the preference is persisted (replayed on connect) but
+    // nothing is pushed over the wire.
+    useChatStore.getState().setSessionCoordinatorMode('coord-session', true)
+    expect(useSessionRuntimeStore.getState().coordinatorModes['coord-session']).toBe(true)
+    expect(sendMock).not.toHaveBeenCalled()
+
+    useChatStore.setState({
+      sessions: {
+        'coord-session': {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+    useChatStore.getState().setSessionCoordinatorMode('coord-session', false)
+
+    expect(useSessionRuntimeStore.getState().coordinatorModes['coord-session']).toBe(false)
+    expect(sendMock).toHaveBeenCalledWith('coord-session', {
+      type: 'set_coordinator_mode',
+      enabled: false,
+    })
+  })
+
   it('mirrors CLI permission-mode broadcasts locally without echoing back to the server', () => {
     sendMock.mockReset()
     updateSessionPermissionModeMock.mockReset()
@@ -3890,6 +3930,69 @@ describe('chatStore history mapping', () => {
       content: '开始优化UI',
       attachments: undefined,
     })
+  })
+})
+
+describe('chatStore context-exhausted suggestion (方案3)', () => {
+  const SID = 'thrash-session'
+
+  beforeEach(() => {
+    sendMock.mockReset()
+    getMemberBySessionIdMock.mockReset()
+    getMemberBySessionIdMock.mockReturnValue(null)
+    useSessionRuntimeStore.setState({ selections: {} })
+    useChatStore.setState({ ...initialState, sessions: {} })
+    // Reset the module-level compaction-thrash tracking for this session id.
+    useChatStore.getState().clearMessages(SID)
+  })
+
+  function systemNoticeCount(sessionId: string): number {
+    const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+    return messages.filter((m) => m.type === 'system').length
+  }
+
+  function emitCompactBoundary(sessionId: string) {
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'system_notification',
+      subtype: 'compact_boundary',
+      message: 'Context compacted',
+      data: {},
+    })
+  }
+
+  it('suggests starting a new session after repeated rapid compactions', () => {
+    useChatStore.setState({ sessions: { [SID]: makeSession({ chatState: 'thinking' }) } })
+
+    emitCompactBoundary(SID) // 1st compaction — not rapid (no prior turn baseline)
+    expect(systemNoticeCount(SID)).toBe(0)
+
+    useChatStore.getState().sendMessage(SID, 'turn a')
+    emitCompactBoundary(SID) // 2nd, 1 turn apart → rapid
+    expect(systemNoticeCount(SID)).toBe(0)
+
+    useChatStore.getState().sendMessage(SID, 'turn b')
+    emitCompactBoundary(SID) // 3rd, 1 turn apart → threshold reached → suggest once
+    expect(systemNoticeCount(SID)).toBe(1)
+
+    // Continued thrash must not spam additional suggestions.
+    useChatStore.getState().sendMessage(SID, 'turn c')
+    emitCompactBoundary(SID)
+    expect(systemNoticeCount(SID)).toBe(1)
+  })
+
+  it('does not suggest when compactions are spread across real work', () => {
+    useChatStore.setState({ sessions: { [SID]: makeSession({ chatState: 'thinking' }) } })
+
+    emitCompactBoundary(SID)
+    for (let round = 0; round < 4; round += 1) {
+      // 3 user turns between compactions > the rapid window, so this is normal use.
+      useChatStore.getState().sendMessage(SID, `r${round}-a`)
+      useChatStore.getState().sendMessage(SID, `r${round}-b`)
+      useChatStore.getState().sendMessage(SID, `r${round}-c`)
+      emitCompactBoundary(SID)
+    }
+
+    expect(systemNoticeCount(SID)).toBe(0)
   })
 })
 

@@ -168,6 +168,7 @@ type ChatStore = {
   ) => void
   setSessionRuntime: (sessionId: string, selection: RuntimeSelection) => void
   setSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void
+  setSessionCoordinatorMode: (sessionId: string, enabled: boolean) => void
   stopGeneration: (sessionId: string) => void
   loadHistory: (sessionId: string) => Promise<void>
   reloadHistory: (sessionId: string) => Promise<void>
@@ -270,6 +271,73 @@ function makeDroppedQuestionMessage(): UIMessage {
     id: nextId(),
     type: 'system',
     content: t('chat.questionDropped'),
+    timestamp: Date.now(),
+  }
+}
+
+// 方案3: detect context-compaction thrash on the desktop side. When compactions
+// keep firing only a turn or two apart, the context is effectively full and
+// compaction can no longer help — the same condition the CLI circuit breaker
+// trips on. We mirror it client-side and, once, append a visible suggestion to
+// start a fresh session. Kept as module-level state so PerSessionState (which
+// has concurrent in-progress edits) is not widened.
+const RAPID_COMPACTION_TURN_WINDOW = 2
+const RAPID_COMPACTION_SUGGEST_AFTER = 3
+type CompactionThrashState = {
+  userTurnsSinceCompact: number
+  rapidCount: number
+  suggested: boolean
+}
+const compactionThrashBySession = new Map<string, CompactionThrashState>()
+
+function getCompactionThrash(sessionId: string): CompactionThrashState {
+  let state = compactionThrashBySession.get(sessionId)
+  if (!state) {
+    // Start "infinitely far" from the last compaction so the first one is
+    // never counted as rapid.
+    state = { userTurnsSinceCompact: Number.POSITIVE_INFINITY, rapidCount: 0, suggested: false }
+    compactionThrashBySession.set(sessionId, state)
+  }
+  return state
+}
+
+// Call on each user turn so the boundary handler can tell rapid re-compaction
+// (thrash) from compactions spread across real work.
+function noteUserTurnForCompactionThrash(sessionId: string): void {
+  const state = getCompactionThrash(sessionId)
+  if (state.userTurnsSinceCompact === Number.POSITIVE_INFINITY) {
+    state.userTurnsSinceCompact = 1
+  } else {
+    state.userTurnsSinceCompact += 1
+  }
+}
+
+// Record a completed compaction; returns true exactly once, when rapid
+// re-compaction has crossed the threshold and we should suggest a new session.
+function registerCompactionAndShouldSuggest(sessionId: string): boolean {
+  const state = getCompactionThrash(sessionId)
+  if (state.userTurnsSinceCompact <= RAPID_COMPACTION_TURN_WINDOW) {
+    state.rapidCount += 1
+  } else {
+    state.rapidCount = 1
+  }
+  state.userTurnsSinceCompact = 0
+  if (state.rapidCount >= RAPID_COMPACTION_SUGGEST_AFTER && !state.suggested) {
+    state.suggested = true
+    return true
+  }
+  return false
+}
+
+function resetCompactionThrash(sessionId: string): void {
+  compactionThrashBySession.delete(sessionId)
+}
+
+function makeContextExhaustedMessage(): UIMessage {
+  return {
+    id: nextId(),
+    type: 'system',
+    content: t('chat.contextExhausted'),
     timestamp: Date.now(),
   }
 }
@@ -892,6 +960,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (runtimeSelection) {
       wsManager.send(sessionId, { type: 'set_runtime_config', ...runtimeSelection })
     }
+    // Replay the per-session orchestration toggle on (re)connect, before the
+    // first message, so the CLI launches with the right --append-system-prompt.
+    if (useSessionRuntimeStore.getState().coordinatorModes[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: true })
+    }
     if (!sessionId.startsWith('__') && !useTeamStore.getState().getMemberBySessionId(sessionId)) {
       wsManager.send(sessionId, { type: 'prewarm_session' })
     }
@@ -1044,6 +1117,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return
     }
 
+    // 方案3: count this as a real user turn so rapid re-compaction (thrash)
+    // can be told apart from compactions spread across genuine work.
+    noteUserTurnForCompactionThrash(sessionId)
     wsManager.send(sessionId, { type: 'user_message', content, attachments })
   },
 
@@ -1186,6 +1262,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!get().sessions[sessionId]) return
     useSessionStore.getState().updateSessionPermissionMode(sessionId, mode)
     wsManager.send(sessionId, { type: 'set_permission_mode', mode })
+  },
+
+  setSessionCoordinatorMode: (sessionId, enabled) => {
+    // Persist the per-session preference (survives reconnect / app restart and
+    // is replayed on connect). Only push to a live session; otherwise the
+    // replay on next connect carries it.
+    useSessionRuntimeStore.getState().setCoordinatorMode(sessionId, enabled)
+    if (get().sessions[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled })
+    }
   },
 
   stopGeneration: (sessionId) => {
@@ -1430,6 +1516,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     clearPendingToolInputDelta(sessionId)
+    resetCompactionThrash(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
       activeGoal: null,
@@ -1948,10 +2035,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         if (msg.subtype === 'compact_boundary') {
           const metadata = compactMetadataFromUnknown(msg.data)
-          update((session) => ({
-            chatState: session.chatState === 'compacting' ? 'thinking' : session.chatState,
-            statusVerb: session.chatState === 'compacting' ? '' : session.statusVerb,
-            messages: appendOrUpdateTailCompactSummary(
+
+          const shouldSuggestNewSession = registerCompactionAndShouldSuggest(sessionId)
+          update((session) => {
+            const compacted = appendOrUpdateTailCompactSummary(
               session.messages,
               {
                 title: typeof msg.message === 'string' && msg.message.trim()
@@ -1961,8 +2048,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 ...metadata,
               },
               Date.now(),
-            ),
-          }))
+            )
+            return {
+              chatState: session.chatState === 'compacting' ? 'thinking' : session.chatState,
+              statusVerb: session.chatState === 'compacting' ? '' : session.statusVerb,
+              messages: shouldSuggestNewSession
+                ? [...compacted, makeContextExhaustedMessage()]
+                : compacted,
+            }
+          })
         }
         if (msg.subtype === 'compact_summary') {
           const summary = extractCompactSummaryContent(msg.message)

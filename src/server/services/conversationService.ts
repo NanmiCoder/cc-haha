@@ -28,6 +28,7 @@ import {
 } from '../../utils/desktopBundledCli.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
+import { ORCHESTRATION_SYSTEM_PROMPT } from '../orchestrationPrompt.js'
 import { sanitizePath } from '../../utils/path.js'
 import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
 import { attributionHeaderEnvForModel } from './attributionHeaderPolicy.js'
@@ -125,6 +126,7 @@ type SessionStartOptions = {
   effort?: string
   thinking?: 'enabled' | 'adaptive' | 'disabled'
   providerId?: string | null
+  coordinatorMode?: boolean
 }
 
 export class ConversationStartupError extends Error {
@@ -1035,6 +1037,10 @@ export class ConversationService {
 
     if (options?.thinking) {
       args.push('--thinking', options.thinking)
+    }
+
+    if (options?.coordinatorMode) {
+      args.push('--append-system-prompt', ORCHESTRATION_SYSTEM_PROMPT)
     }
 
     return args
