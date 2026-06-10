@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { PermissionMode, UserSettings } from '../types/settings'
+import type { OutputStylesResponse, PermissionMode, UserSettings } from '../types/settings'
 
 export type CliLauncherStatus = {
   supported: boolean
@@ -22,6 +22,23 @@ export const settingsApi = {
 
   updateUser(settings: Partial<UserSettings>) {
     return api.put<{ ok: true }>('/api/settings/user', settings)
+  },
+
+  getOutputStyles(workDir?: string | null) {
+    const query = workDir ? `?workDir=${encodeURIComponent(workDir)}` : ''
+    return api.get<OutputStylesResponse>(`/api/settings/output-styles${query}`)
+  },
+
+  setOutputStyle(outputStyle: string, workDir?: string | null) {
+    return api.put<{
+      ok: true
+      outputStyle: string
+      scope: OutputStylesResponse['scope']
+      workDir: string | null
+    }>('/api/settings/output-style', {
+      outputStyle,
+      ...(workDir ? { workDir } : {}),
+    })
   },
 
   getPermissionMode() {

@@ -5,6 +5,8 @@ import { ActiveSession } from '../../pages/ActiveSession'
 import { ScheduledTasks } from '../../pages/ScheduledTasks'
 import { Settings } from '../../pages/Settings'
 import { TerminalSettings } from '../../pages/TerminalSettings'
+import { TraceList } from '../../pages/TraceList'
+import { TraceSession } from '../../pages/TraceSession'
 
 export function ContentRouter() {
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -19,6 +21,11 @@ export function ContentRouter() {
     page = <Settings />
   } else if (activeTabType === 'scheduled') {
     page = <ScheduledTasks />
+  } else if (activeTabType === 'trace') {
+    const traceSessionId = tabs.find((t) => t.sessionId === activeTabId)?.traceSessionId
+    page = traceSessionId ? <TraceSession sessionId={traceSessionId} /> : <EmptySession />
+  } else if (activeTabType === 'traces') {
+    page = <TraceList />
   } else if (activeTabType !== 'terminal') {
     page = <ActiveSession />
   }

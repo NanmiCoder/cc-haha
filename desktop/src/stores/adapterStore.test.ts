@@ -7,8 +7,11 @@ describe('adapterStore IM pairing behavior', () => {
     updateConfig: vi.fn(),
     startWechatLogin: vi.fn(),
     pollWechatLogin: vi.fn(),
+    startWhatsAppLogin: vi.fn(),
+    pollWhatsAppLogin: vi.fn(),
     unbindWechat: vi.fn(),
     unbindDingtalk: vi.fn(),
+    unbindWhatsApp: vi.fn(),
     beginDingtalkRegistration: vi.fn(),
     pollDingtalkRegistration: vi.fn(),
   }
@@ -126,6 +129,18 @@ describe('adapterStore IM pairing behavior', () => {
 
     expect(adaptersApi.updateConfig).not.toHaveBeenCalled()
     expect(adaptersApi.unbindDingtalk).toHaveBeenCalledTimes(1)
+    expect(useAdapterStore.getState().config).toBe(nextConfig)
+  })
+
+  it('unbinds the WhatsApp account only through the explicit account action', async () => {
+    const nextConfig = { whatsapp: { pairedUsers: [], allowedUsers: [] } }
+    adaptersApi.unbindWhatsApp.mockResolvedValue(nextConfig)
+
+    const { useAdapterStore } = await import('./adapterStore')
+
+    await useAdapterStore.getState().unbindWhatsAppAccount()
+
+    expect(adaptersApi.unbindWhatsApp).toHaveBeenCalledTimes(1)
     expect(useAdapterStore.getState().config).toBe(nextConfig)
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { BookOpenText, ChevronDown, ChevronRight, Database, FileText, Folder, FolderGit2, RefreshCw, RotateCcw, Save, Search, X } from 'lucide-react'
+import { BookOpenText, ChevronDown, ChevronRight, Database, FileText, Folder, FolderGit2, PencilLine, RefreshCw, RotateCcw, Save, Search, X } from 'lucide-react'
 import { Button } from '../components/shared/Button'
 import { MarkdownRenderer } from '../components/markdown/MarkdownRenderer'
 import { useTranslation } from '../i18n'
@@ -40,6 +40,7 @@ export function MemorySettings() {
   const [resourceQuery, setResourceQuery] = useState('')
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null)
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
+  const [isEditing, setIsEditing] = useState(false)
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId),
@@ -61,6 +62,7 @@ export function MemorySettings() {
     [filteredFiles],
   )
   const previewContent = stripMarkdownFrontmatter(draftContent)
+  const selectedFilePath = selectedFile?.path ?? null
 
   useEffect(() => {
     void fetchProjects(activeCwd)
@@ -75,6 +77,10 @@ export function MemorySettings() {
     if (!selectedProjectId) return
     setExpandedProjectId(selectedProjectId)
   }, [selectedProjectId])
+
+  useEffect(() => {
+    setIsEditing(false)
+  }, [selectedFilePath])
 
   useEffect(() => {
     if (!selectedProjectId || selectedFile || isLoadingFiles || isLoadingFile) return
@@ -115,7 +121,13 @@ export function MemorySettings() {
     setPendingMemoryPath,
   ])
 
+  const canLeaveDirtyEdit = () => {
+    if (!isEditing || !isDirty) return true
+    return window.confirm(t('settings.memory.discardUnsavedConfirm'))
+  }
+
   const handleRefresh = () => {
+    if (!canLeaveDirtyEdit()) return
     void fetchProjects(activeCwd)
     if (selectedProjectId) {
       void fetchFiles(selectedProjectId)
@@ -127,6 +139,7 @@ export function MemorySettings() {
       setExpandedProjectId(null)
       return
     }
+    if (projectId !== selectedProjectId && !canLeaveDirtyEdit()) return
     setExpandedProjectId(projectId)
     if (projectId !== selectedProjectId) {
       selectProject(projectId)
@@ -135,8 +148,32 @@ export function MemorySettings() {
 
   const handleFileOpen = (file: MemoryFile) => {
     if (!selectedProjectId || file.path === selectedFile?.path) return
+    if (!canLeaveDirtyEdit()) return
     void openFile(selectedProjectId, file.path)
   }
+
+  const handleSave = async () => {
+    if (!selectedFile) return
+    if (!isDirty) {
+      setIsEditing(false)
+      return
+    }
+    const saved = await saveFile()
+    if (saved) {
+      setIsEditing(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!isEditing || !selectedFile) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      void handleSave()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  })
 
   const handlePreviewLinkClick = (href: string): boolean => {
     if (!selectedProjectId || !selectedFile) return false
@@ -147,6 +184,7 @@ export function MemorySettings() {
       files,
     )
     if (!targetPath || targetPath === selectedFile.path) return false
+    if (!canLeaveDirtyEdit()) return true
     void openFile(selectedProjectId, targetPath)
     return true
   }
@@ -164,6 +202,13 @@ export function MemorySettings() {
   }
 
   const forceExpandFiles = Boolean(resourceQuery.trim())
+
+  const handleCancelEdit = () => {
+    if (selectedFile) {
+      updateDraft(selectedFile.content)
+    }
+    setIsEditing(false)
+  }
 
   return (
     <div className="flex h-full min-h-[640px] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
@@ -198,26 +243,6 @@ export function MemorySettings() {
               icon={<RefreshCw size={15} aria-hidden="true" />}
             >
               {t('settings.memory.refresh')}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={!selectedFile || !isDirty || isSaving}
-              onClick={() => selectedFile && updateDraft(selectedFile.content)}
-              icon={<RotateCcw size={14} aria-hidden="true" />}
-            >
-              {t('settings.memory.revert')}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={!selectedFile || !isDirty}
-              loading={isSaving}
-              onClick={() => void saveFile()}
-              icon={<Save size={14} aria-hidden="true" />}
-            >
-              {t('common.save')}
             </Button>
           </div>
         </div>
@@ -281,7 +306,7 @@ export function MemorySettings() {
           </section>
         </aside>
 
-        <section className="min-h-0 overflow-hidden bg-[var(--color-surface-container-lowest)]">
+        <section className="flex min-h-0 flex-col overflow-hidden bg-[var(--color-surface-container-lowest)]">
           <div className="grid gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -306,26 +331,71 @@ export function MemorySettings() {
           </div>
 
           {selectedFile ? (
-            <div className="grid min-h-[560px] grid-rows-[minmax(300px,1fr)_minmax(260px,0.95fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] 2xl:grid-rows-1">
-              <div className="min-h-0 border-b border-[var(--color-border)] 2xl:border-b-0 2xl:border-r">
-                <div className="flex h-10 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
-                  <span>{t('settings.memory.editor')}</span>
-                  <span>MARKDOWN</span>
+            isEditing ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span>{t('settings.memory.editor')}</span>
+                    <span>MARKDOWN</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 normal-case">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isSaving}
+                      onClick={handleCancelEdit}
+                    >
+                      {t('common.cancel')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={!isDirty || isSaving}
+                      onClick={() => selectedFile && updateDraft(selectedFile.content)}
+                      icon={<RotateCcw size={14} aria-hidden="true" />}
+                    >
+                      {t('settings.memory.revert')}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isSaving}
+                      loading={isSaving}
+                      onClick={() => void handleSave()}
+                      icon={<Save size={14} aria-hidden="true" />}
+                    >
+                      {t('common.save')}
+                    </Button>
+                  </div>
                 </div>
                 <textarea
                   aria-label={t('settings.memory.editor')}
                   value={draftContent}
                   onChange={(event) => updateDraft(event.target.value)}
                   spellCheck={false}
-                  className="h-[calc(100%-40px)] w-full resize-none overflow-auto bg-transparent p-5 font-mono text-[13px] leading-6 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+                  className="min-h-0 flex-1 w-full resize-none overflow-auto bg-transparent p-5 font-mono text-[13px] leading-6 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
                 />
               </div>
-              <div className="min-h-0 overflow-y-auto">
-                <div className="flex h-10 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
-                  <span>{t('settings.memory.preview')}</span>
-                  <span>{t('settings.memory.rendered')}</span>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span>{t('settings.memory.preview')}</span>
+                    <span>{t('settings.memory.rendered')}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('settings.memory.edit')}
+                    title={t('settings.memory.edit')}
+                    onClick={() => setIsEditing(true)}
+                    icon={<PencilLine size={14} aria-hidden="true" />}
+                  />
                 </div>
-                <div className="p-6">
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
                   <MarkdownRenderer
                     content={previewContent || ' '}
                     variant="document"
@@ -333,9 +403,9 @@ export function MemorySettings() {
                   />
                 </div>
               </div>
-            </div>
+            )
           ) : (
-            <div className="flex min-h-[520px] items-center justify-center p-8">
+            <div className="flex min-h-0 flex-1 items-center justify-center p-8">
               <EmptyState icon={<FileText size={20} />} text={isLoadingFile ? t('common.loading') : t('settings.memory.selectFile')} />
             </div>
           )}

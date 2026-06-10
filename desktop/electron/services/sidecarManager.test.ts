@@ -79,6 +79,15 @@ describe('Electron sidecar manager', () => {
       })
       expect(adapter.env.ADAPTER_SERVER_URL).toBe('ws://127.0.0.1:4567')
       expect(adapter.args).toEqual(['adapters', '--app-root', '/app', '--telegram'])
+
+      const whatsappAdapter = createAdapterPlan({
+        desktopRoot: '/app/desktop',
+        appRoot: '/app',
+        serverUrl: 'http://127.0.0.1:4567',
+        flag: '--whatsapp',
+        env: { CLAUDE_CONFIG_DIR: configDir },
+      })
+      expect(whatsappAdapter.args).toEqual(['adapters', '--app-root', '/app', '--whatsapp'])
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }

@@ -165,9 +165,13 @@ describe('composerUtils', () => {
     expect(resolveSlashUiAction('plugins')).toEqual({ type: 'settings', tab: 'plugins' })
     expect(resolveSlashUiAction('memory')).toEqual({ type: 'settings', tab: 'memory' })
     expect(resolveSlashUiAction('doctor')).toEqual({ type: 'settings', tab: 'diagnostics' })
+    expect(resolveSlashUiAction('config')).toEqual({ type: 'settings', tab: 'general' })
+    expect(resolveSlashUiAction('settings')).toEqual({ type: 'settings', tab: 'general' })
     expect(mergeSlashCommands([]).map((command) => command.name)).toContain('plugin')
     expect(mergeSlashCommands([]).map((command) => command.name)).toContain('memory')
+    expect(mergeSlashCommands([]).map((command) => command.name)).toContain('config')
     expect(mergeSlashCommands([]).map((command) => command.name)).not.toContain('plugins')
+    expect(mergeSlashCommands([]).map((command) => command.name)).not.toContain('settings')
   })
 
   it('routes session inspection commands to the desktop panel', () => {

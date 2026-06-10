@@ -94,6 +94,7 @@ import { executePostSamplingHooks } from './utils/hooks/postSamplingHooks.js'
 import { executeStopFailureHooks } from './utils/hooks.js'
 import type { QuerySource } from './constants/querySource.js'
 import { createDumpPromptsFetch } from './services/api/dumpPrompts.js'
+import { shouldCaptureApiTrace } from './services/api/traceCapture.js'
 import { StreamingToolExecutor } from './services/tools/StreamingToolExecutor.js'
 import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
@@ -590,8 +591,11 @@ async function* queryLoop(
     // instead of all request bodies from the session (~500MB for long sessions).
     // Note: agentId is effectively constant during a query() call - it only changes
     // between queries (e.g., /clear command or session resume).
-    const dumpPromptsFetch = config.gates.isAnt
-      ? createDumpPromptsFetch(toolUseContext.agentId ?? config.sessionId)
+    const dumpPromptsFetch = config.gates.isAnt || shouldCaptureApiTrace()
+      ? createDumpPromptsFetch(toolUseContext.agentId ?? config.sessionId, {
+          traceSessionId: config.sessionId,
+          querySource,
+        })
       : undefined
 
     // Block if we've hit the hard blocking limit (only applies when auto-compact is OFF)

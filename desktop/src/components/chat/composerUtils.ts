@@ -43,6 +43,7 @@ export const PANEL_SLASH_COMMANDS = [
 ] as const
 
 export const SETTINGS_SLASH_COMMANDS = [
+  { name: 'config', tab: 'general' as const },
   { name: 'plugin', tab: 'plugins' as const },
   { name: 'memory', tab: 'memory' as const },
   { name: 'doctor', tab: 'diagnostics' as const },
@@ -50,6 +51,7 @@ export const SETTINGS_SLASH_COMMANDS = [
 
 export const SLASH_COMMAND_ALIASES = [
   { name: 'plugins', target: 'plugin' },
+  { name: 'settings', target: 'config' },
 ] as const
 
 /** Static fallback with English descriptions (for non-React contexts) */

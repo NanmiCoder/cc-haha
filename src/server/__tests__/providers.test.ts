@@ -9,6 +9,7 @@ import * as os from 'os'
 import { ProviderService } from '../services/providerService.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
+import { clearTraceCaptureStateForTests, traceCaptureService } from '../services/traceCaptureService.js'
 import type { CreateProviderInput } from '../types/provider.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -20,9 +21,11 @@ async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = tmpDir
+  clearTraceCaptureStateForTests()
 }
 
 async function teardown() {
+  clearTraceCaptureStateForTests()
   if (originalConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
@@ -1018,6 +1021,61 @@ describe('ProviderService', () => {
   })
 
   describe('handleProxyRequest', () => {
+    test('records a session trace for proxied OpenAI Chat calls', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(async () => {
+        return new Response(JSON.stringify({
+          id: 'chatcmpl-trace',
+          object: 'chat.completion',
+          created: 0,
+          model: 'gpt-4',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'trace ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', 'x-request-id': 'req-trace' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat', name: 'Trace Provider' }))
+        await svc.activateProvider(provider.id)
+
+        const req = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Claude-Code-Session-Id': 'session-proxy-trace',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'capture this call' }],
+          }),
+        })
+
+        const res = await handleProxyRequest(req, new URL(req.url))
+        const trace = await traceCaptureService.getSessionTrace('session-proxy-trace')
+
+        expect(res.status).toBe(200)
+        expect(trace.summary.apiCalls).toBe(1)
+        expect(trace.calls[0]).toMatchObject({
+          source: 'proxy',
+          provider: {
+            id: provider.id,
+            name: 'Trace Provider',
+            format: 'openai_chat',
+          },
+          model: 'gpt-4',
+        })
+        expect(trace.calls[0].request.body.preview).toContain('capture this call')
+        expect(trace.calls[0].response.body.preview).toContain('chatcmpl-trace')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('injects Claude Code billing attribution with compat version and signed CCH', async () => {
       const originalFetch = globalThis.fetch
       const originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
@@ -1332,6 +1390,42 @@ describe('ProviderService', () => {
         expect(result.connectivity.modelUsed).toBe('mimo-v2.5-pro')
         expect(result.proxy?.modelUsed).toBe('mimo-v2.5-pro')
         expect(calls.map((call) => call.body.model)).toEqual(['mimo-v2.5-pro', 'mimo-v2.5-pro'])
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('requests non-stream OpenAI Chat responses during provider tests', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({
+          id: 'chatcmpl-1',
+          object: 'chat.completion',
+          created: 0,
+          model: 'deepseek-v4-flash',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const result = await svc.testProviderConfig({
+          baseUrl: 'https://api.example.com',
+          apiKey: 'sk-api',
+          modelId: 'deepseek-v4-flash',
+          authStrategy: 'api_key',
+          apiFormat: 'openai_chat',
+        })
+
+        expect(result.connectivity.success).toBe(true)
+        expect(result.proxy?.success).toBe(true)
+        expect(calls.map((call) => call.body.stream)).toEqual([false, false])
       } finally {
         globalThis.fetch = originalFetch
       }

@@ -48,4 +48,11 @@ export type AdapterFileConfig = {
     endpoint?: string
     permissionCardTemplateId?: string
   }
+  whatsapp?: {
+    accountJid?: string
+    authDir?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+  }
 }

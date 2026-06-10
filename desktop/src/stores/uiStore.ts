@@ -76,6 +76,7 @@ export type SettingsTab =
   | 'memory'
   | 'plugins'
   | 'computerUse'
+  | 'trace'
   | 'diagnostics'
   | 'about'
 

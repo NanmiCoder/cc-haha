@@ -5,6 +5,16 @@ import { dirname, join } from 'path'
 import { getSessionId } from 'src/bootstrap/state.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
+import {
+  createTraceCallId,
+  createTraceBodySnapshot,
+  readResponseTraceSnapshot,
+  shouldCaptureApiTrace,
+  traceCaptureService,
+} from './traceCapture.js'
+import type { TraceBodySnapshot, TraceProviderInfo } from './traceCapture.js'
+
+const TRACE_SESSION_HEADER = 'x-claude-code-session-id'
 
 function hashString(str: string): string {
   return createHash('sha256').update(str).digest('hex')
@@ -43,6 +53,35 @@ export function clearDumpState(agentIdOrSessionId: string): void {
 
 export function clearAllDumpState(): void {
   dumpState.clear()
+}
+
+function getRequestUrl(input: RequestInfo | URL): string {
+  return input instanceof Request ? input.url : String(input)
+}
+
+function isLocalProviderProxyUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1') &&
+      url.pathname.startsWith('/proxy/')
+    )
+  } catch {
+    return false
+  }
+}
+
+function getTraceProviderFromEnv(): TraceProviderInfo | undefined {
+  const id = process.env.CC_HAHA_TRACE_PROVIDER_ID?.trim()
+  const name = process.env.CC_HAHA_TRACE_PROVIDER_NAME?.trim()
+  const format = process.env.CC_HAHA_TRACE_PROVIDER_FORMAT?.trim()
+  if (!id && !name && !format) return undefined
+
+  return {
+    id: id || null,
+    name: name || id || 'Provider',
+    format: format || 'anthropic',
+  }
 }
 
 export function addApiRequestToCache(requestData: unknown): void {
@@ -143,10 +182,28 @@ function dumpRequest(
   }
 }
 
+function createRequestPendingSnapshot(body: unknown): TraceBodySnapshot {
+  if (typeof body === 'string') {
+    return createTraceBodySnapshot(body.slice(0, 4096), {
+      alreadyTruncated: body.length > 4096,
+    })
+  }
+  return createTraceBodySnapshot({
+    pending: true,
+    note: 'request body captured on call completion',
+  })
+}
+
 export function createDumpPromptsFetch(
   agentIdOrSessionId: string,
+  options?: {
+    traceSessionId?: string
+    querySource?: string
+  },
 ): ClientOptions['fetch'] {
   const filePath = getDumpPromptsPath(agentIdOrSessionId)
+  const traceEnabled = shouldCaptureApiTrace()
+  const traceSessionId = options?.traceSessionId ?? agentIdOrSessionId
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const state = dumpState.get(agentIdOrSessionId) ?? {
@@ -158,17 +215,212 @@ export function createDumpPromptsFetch(
     dumpState.set(agentIdOrSessionId, state)
 
     let timestamp: string | undefined
+    let traceStartedAtMs = 0
+    let traceRequestBody: unknown
 
     if (init?.method === 'POST' && init.body) {
       timestamp = new Date().toISOString()
+      traceStartedAtMs = Date.now()
+      traceRequestBody = init.body
       // Parsing + stringifying the request (system prompt + tool schemas = MBs)
       // takes hundreds of ms. Defer so it doesn't block the actual API call —
       // this is debug tooling for /issue, not on the critical path.
       setImmediate(dumpRequest, init.body as string, timestamp, state, filePath)
     }
 
+    const requestUrl = getRequestUrl(input)
+    const isProviderProxyTrace = traceEnabled && isLocalProviderProxyUrl(requestUrl)
+    const traceProvider = getTraceProviderFromEnv()
+    const requestInit = isProviderProxyTrace
+      ? {
+          ...init,
+          headers: (() => {
+            const headers = new Headers(init?.headers)
+            if (!headers.has(TRACE_SESSION_HEADER)) {
+              headers.set(TRACE_SESSION_HEADER, traceSessionId)
+            }
+            return headers
+          })(),
+        }
+      : init
+
+    const traceModel = extractModelFromRequestBody(traceRequestBody)
+    const traceCallId = timestamp && traceEnabled && !isProviderProxyTrace
+      ? createTraceCallId()
+      : undefined
+
+    if (timestamp && traceCallId) {
+      void traceCaptureService.recordCall({
+        id: traceCallId,
+        sessionId: traceSessionId,
+        source: 'anthropic',
+        querySource: options?.querySource,
+        provider: traceProvider,
+        model: traceModel,
+        status: 'pending',
+        startedAt: timestamp,
+        request: {
+          method: init?.method ?? 'POST',
+          url: requestUrl,
+          headers: requestInit?.headers as Headers | Record<string, string> | undefined,
+          bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
+        },
+        metadata: {
+          phase: 'api_call_started',
+        },
+      })
+      void traceCaptureService.recordEvent({
+        sessionId: traceSessionId,
+        callId: traceCallId,
+        source: 'anthropic',
+        provider: traceProvider,
+        model: traceModel,
+        timestamp,
+        phase: 'api_call_started',
+        severity: 'info',
+        title: 'API call started',
+        metadata: {
+          url: requestUrl,
+        },
+      })
+    }
+
     // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
-    const response = await globalThis.fetch(input, init)
+    let response: Response
+    try {
+      response = await globalThis.fetch(input, requestInit)
+    } catch (err) {
+      if (timestamp && traceCallId) {
+        const completedAt = new Date().toISOString()
+        void traceCaptureService.recordCall({
+          id: traceCallId,
+          sessionId: traceSessionId,
+          source: 'anthropic',
+          querySource: options?.querySource,
+          provider: traceProvider,
+          model: traceModel,
+          status: 'error',
+          startedAt: timestamp,
+          completedAt,
+          durationMs: Date.now() - traceStartedAtMs,
+          request: {
+            method: init?.method ?? 'POST',
+            url: requestUrl,
+            headers: requestInit?.headers as Headers | Record<string, string> | undefined,
+            bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
+          },
+          error: err,
+          metadata: {
+            phase: 'api_call_failed',
+          },
+        })
+        void traceCaptureService.recordEvent({
+          sessionId: traceSessionId,
+          callId: traceCallId,
+          source: 'anthropic',
+          provider: traceProvider,
+          model: traceModel,
+          timestamp: completedAt,
+          phase: 'api_call_failed',
+          severity: 'error',
+          title: 'API call failed',
+          message: err instanceof Error ? err.message : String(err),
+          metadata: {
+            url: requestUrl,
+          },
+        })
+      }
+      throw err
+    }
+
+    if (timestamp && traceCallId) {
+      const cloned = response.clone()
+      void (async () => {
+        try {
+          const bodySnapshot = await readResponseTraceSnapshot(cloned)
+          await traceCaptureService.recordCall({
+            id: traceCallId,
+            sessionId: traceSessionId,
+            source: 'anthropic',
+            querySource: options?.querySource,
+            provider: traceProvider,
+            model: traceModel,
+            startedAt: timestamp,
+            completedAt: new Date().toISOString(),
+            durationMs: Date.now() - traceStartedAtMs,
+            request: {
+              method: init?.method ?? 'POST',
+              url: requestUrl,
+              headers: requestInit?.headers as Headers | Record<string, string> | undefined,
+              body: traceRequestBody,
+            },
+            response: {
+              status: response.status,
+              headers: response.headers,
+              bodySnapshot,
+            },
+            metadata: {
+              phase: 'api_call_completed',
+            },
+          })
+          await traceCaptureService.recordEvent({
+            sessionId: traceSessionId,
+            callId: traceCallId,
+            source: 'anthropic',
+            provider: traceProvider,
+            model: traceModel,
+            phase: 'api_call_completed',
+            severity: response.ok ? 'info' : 'warning',
+            title: 'API call completed',
+            metadata: {
+              status: response.status,
+              url: requestUrl,
+            },
+          })
+        } catch (err) {
+          await traceCaptureService.recordEvent({
+            sessionId: traceSessionId,
+            callId: traceCallId,
+            source: 'anthropic',
+            provider: traceProvider,
+            model: traceModel,
+            phase: 'response_capture_failed',
+            severity: 'warning',
+            title: 'Response capture failed',
+            message: err instanceof Error ? err.message : String(err),
+            metadata: {
+              status: response.status,
+              url: requestUrl,
+            },
+          })
+          await traceCaptureService.recordCall({
+            id: traceCallId,
+            sessionId: traceSessionId,
+            source: 'anthropic',
+            querySource: options?.querySource,
+            provider: traceProvider,
+            model: traceModel,
+            startedAt: timestamp,
+            completedAt: new Date().toISOString(),
+            durationMs: Date.now() - traceStartedAtMs,
+            request: {
+              method: init?.method ?? 'POST',
+              url: requestUrl,
+              headers: requestInit?.headers as Headers | Record<string, string> | undefined,
+              body: traceRequestBody,
+            },
+            response: {
+              status: response.status,
+              headers: response.headers,
+            },
+            metadata: {
+              phase: 'api_call_completed',
+              responseCaptureFailed: true,
+            },
+          })
+        }
+      })()
+    }
 
     // Save response async
     if (timestamp && response.ok && process.env.USER_TYPE === 'ant') {
@@ -223,4 +475,16 @@ export function createDumpPromptsFetch(
 
     return response
   }
+}
+
+function extractModelFromRequestBody(body: unknown): string | undefined {
+  try {
+    const parsed = typeof body === 'string' ? jsonParse(body) : body
+    if (parsed && typeof parsed === 'object' && 'model' in parsed && typeof parsed.model === 'string') {
+      return parsed.model
+    }
+  } catch {
+    // Best effort only.
+  }
+  return undefined
 }

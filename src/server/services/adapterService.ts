@@ -60,6 +60,13 @@ export type AdapterFileConfig = {
     endpoint?: string
     permissionCardTemplateId?: string
   }
+  whatsapp?: {
+    accountJid?: string
+    authDir?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+  }
 }
 
 function getConfigPath(): string {
@@ -144,6 +151,7 @@ class AdapterService {
       feishu: patch.feishu ? { ...current.feishu, ...patch.feishu } : current.feishu,
       wechat: patch.wechat ? { ...current.wechat, ...patch.wechat } : current.wechat,
       dingtalk: patch.dingtalk ? { ...current.dingtalk, ...patch.dingtalk } : current.dingtalk,
+      whatsapp: patch.whatsapp ? { ...current.whatsapp, ...patch.whatsapp } : current.whatsapp,
       pairing: patch.pairing !== undefined ? { ...current.pairing, ...patch.pairing } : current.pairing,
     }
 

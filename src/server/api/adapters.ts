@@ -12,8 +12,14 @@ import {
   startWechatLoginWithQr,
   WECHAT_DEFAULT_BASE_URL,
 } from '../../../adapters/wechat/protocol.js'
+import {
+  logoutWhatsAppAuth,
+  pollWhatsAppLoginWithQr,
+  startWhatsAppLoginWithQr,
+} from '../../../adapters/whatsapp/protocol.js'
+import { loadConfig } from '../../../adapters/common/config.js'
 
-const ALLOWED_TOP_KEYS = new Set(['serverUrl', 'defaultProjectDir', 'telegram', 'feishu', 'wechat', 'dingtalk', 'pairing'])
+const ALLOWED_TOP_KEYS = new Set(['serverUrl', 'defaultProjectDir', 'telegram', 'feishu', 'wechat', 'dingtalk', 'whatsapp', 'pairing'])
 
 type RegistrationApiResponse<T extends Record<string, unknown>> = T & {
   errcode: number
@@ -143,6 +149,9 @@ export async function handleAdaptersApi(
     if (tail[0] === 'wechat') {
       return handleWechatAdaptersApi(req, tail.slice(1))
     }
+    if (tail[0] === 'whatsapp') {
+      return handleWhatsAppAdaptersApi(req, tail.slice(1))
+    }
     if (tail[0] === 'dingtalk' && req.method === 'POST' && tail[1] === 'unbind') {
       await adapterService.updateConfig({
         dingtalk: {
@@ -228,4 +237,53 @@ async function handleWechatAdaptersApi(req: Request, tail: string[]): Promise<Re
   }
 
   throw new ApiError(404, 'Unknown WeChat adapter endpoint', 'NOT_FOUND')
+}
+
+async function handleWhatsAppAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'start') {
+    const config = loadConfig()
+    const result = await startWhatsAppLoginWithQr({
+      authDir: config.whatsapp.authDir,
+      force: true,
+    })
+    return Response.json({
+      ...result,
+      qrDataUrl: result.qr ? await createQrDataUrl(result.qr) : undefined,
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'poll') {
+    const body = (await req.json()) as { sessionKey?: string }
+    if (!body.sessionKey) throw ApiError.badRequest('Missing sessionKey')
+    const result = await pollWhatsAppLoginWithQr({ sessionKey: body.sessionKey })
+    if (result.connected) {
+      await adapterService.updateConfig({
+        whatsapp: {
+          accountJid: result.accountJid,
+          authDir: result.authDir,
+          pairedUsers: [],
+        },
+      })
+      return Response.json(await adapterService.getConfig())
+    }
+    return Response.json({
+      ...result,
+      qrDataUrl: result.qr ? await createQrDataUrl(result.qr) : undefined,
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'unbind') {
+    const config = loadConfig()
+    await logoutWhatsAppAuth(config.whatsapp.authDir)
+    await adapterService.updateConfig({
+      whatsapp: {
+        accountJid: undefined,
+        pairedUsers: [],
+        allowedUsers: [],
+      },
+    })
+    return Response.json(await adapterService.getConfig())
+  }
+
+  throw new ApiError(404, 'Unknown WhatsApp adapter endpoint', 'NOT_FOUND')
 }

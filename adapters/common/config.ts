@@ -58,6 +58,14 @@ export type DingtalkConfig = {
   permissionCardTemplateId: string
 }
 
+export type WhatsAppConfig = {
+  accountJid: string
+  authDir: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+}
+
 export type AdapterConfig = {
   serverUrl: string
   defaultProjectDir: string
@@ -66,6 +74,7 @@ export type AdapterConfig = {
   feishu: FeishuConfig
   wechat: WechatConfig
   dingtalk: DingtalkConfig
+  whatsapp: WhatsAppConfig
 }
 
 export type AdapterPlatformConfig =
@@ -73,6 +82,7 @@ export type AdapterPlatformConfig =
   | FeishuConfig
   | WechatConfig
   | DingtalkConfig
+  | WhatsAppConfig
 
 function getConfigPath(): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -96,8 +106,12 @@ export function loadConfig(): AdapterConfig {
   const fs_ = file.feishu ?? {}
   const wc = file.wechat ?? {}
   const dt = file.dingtalk ?? {}
+  const wa = file.whatsapp ?? {}
   const pairing = file.pairing ?? {}
   const fallbackWorkDir = resolveUserDefaultWorkDir()
+  const whatsappAuthDir = resolveConfiguredPath(
+    process.env.WHATSAPP_AUTH_DIR || wa.authDir || defaultWhatsAppAuthDir(),
+  )
 
   return {
     serverUrl: process.env.ADAPTER_SERVER_URL || file.serverUrl || 'ws://127.0.0.1:3456',
@@ -141,6 +155,13 @@ export function loadConfig(): AdapterConfig {
       endpoint: process.env.DINGTALK_STREAM_ENDPOINT || dt.endpoint || 'https://api.dingtalk.com',
       permissionCardTemplateId: process.env.DINGTALK_PERMISSION_CARD_TEMPLATE_ID || dt.permissionCardTemplateId || '',
     },
+    whatsapp: {
+      accountJid: process.env.WHATSAPP_ACCOUNT_JID || wa.accountJid || '',
+      authDir: whatsappAuthDir,
+      allowedUsers: wa.allowedUsers ?? [],
+      pairedUsers: wa.pairedUsers ?? [],
+      defaultWorkDir: wa.defaultWorkDir || fallbackWorkDir,
+    },
   }
 }
 
@@ -181,4 +202,20 @@ function resolveExistingDirectory(value: string | undefined): string | null {
   } catch {
     return null
   }
+}
+
+function defaultWhatsAppAuthDir(): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+  return path.join(configDir, 'whatsapp-auth', 'default')
+}
+
+function resolveConfiguredPath(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return defaultWhatsAppAuthDir()
+  const expanded = trimmed === '~'
+    ? os.homedir()
+    : trimmed.startsWith('~/')
+      ? path.join(os.homedir(), trimmed.slice(2))
+      : trimmed
+  return path.resolve(expanded)
 }

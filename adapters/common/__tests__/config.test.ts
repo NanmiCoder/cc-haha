@@ -33,8 +33,10 @@ describe('adapter config defaults', () => {
       expect(config.feishu.defaultWorkDir).toBe(fs.realpathSync(workDir))
       expect(config.wechat.defaultWorkDir).toBe(fs.realpathSync(workDir))
       expect(config.dingtalk.defaultWorkDir).toBe(fs.realpathSync(workDir))
+      expect(config.whatsapp.defaultWorkDir).toBe(fs.realpathSync(workDir))
       expect(getConfiguredWorkDir(config, config.wechat)).toBe(fs.realpathSync(workDir))
       expect(getConfiguredWorkDir(config, config.dingtalk)).toBe(fs.realpathSync(workDir))
+      expect(getConfiguredWorkDir(config, config.whatsapp)).toBe(fs.realpathSync(workDir))
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })
@@ -57,8 +59,10 @@ describe('adapter config defaults', () => {
 
       expect(getConfiguredWorkDir(config, config.wechat)).toBe(defaultProjectDir)
       expect(getConfiguredWorkDir(config, config.dingtalk)).toBe(defaultProjectDir)
+      expect(getConfiguredWorkDir(config, config.whatsapp)).toBe(defaultProjectDir)
       expect(config.wechat.defaultWorkDir).toBe(fs.realpathSync(workDir))
       expect(config.dingtalk.defaultWorkDir).toBe(fs.realpathSync(workDir))
+      expect(config.whatsapp.defaultWorkDir).toBe(fs.realpathSync(workDir))
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true })
       fs.rmSync(defaultProjectDir, { recursive: true, force: true })
@@ -79,6 +83,7 @@ describe('adapter config defaults', () => {
 
       expect(getConfiguredWorkDir(config, config.wechat)).toBe(fs.realpathSync(defaultProjectDir))
       expect(getConfiguredWorkDir(config, config.dingtalk)).toBe(fs.realpathSync(defaultProjectDir))
+      expect(getConfiguredWorkDir(config, config.whatsapp)).toBe(fs.realpathSync(defaultProjectDir))
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true })
       fs.rmSync(defaultProjectDir, { recursive: true, force: true })
@@ -99,6 +104,27 @@ describe('adapter config defaults', () => {
       process.env.DINGTALK_PERMISSION_CARD_TEMPLATE_ID = 'env-template'
       expect(loadConfig().dingtalk.permissionCardTemplateId).toBe('env-template')
     } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  it('loads WhatsApp auth dir from file or env', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-config-'))
+    const originalWhatsAppAuthDir = process.env.WHATSAPP_AUTH_DIR
+    try {
+      fs.writeFileSync(
+        path.join(configDir, 'adapters.json'),
+        JSON.stringify({ whatsapp: { authDir: '~/custom-whatsapp-auth', accountJid: '15551234567@s.whatsapp.net' } }),
+      )
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      delete process.env.WHATSAPP_AUTH_DIR
+      expect(loadConfig().whatsapp.authDir).toBe(path.join(os.homedir(), 'custom-whatsapp-auth'))
+      expect(loadConfig().whatsapp.accountJid).toBe('15551234567@s.whatsapp.net')
+
+      process.env.WHATSAPP_AUTH_DIR = path.join(configDir, 'wa-auth')
+      expect(loadConfig().whatsapp.authDir).toBe(path.join(configDir, 'wa-auth'))
+    } finally {
+      restoreEnv('WHATSAPP_AUTH_DIR', originalWhatsAppAuthDir)
       fs.rmSync(configDir, { recursive: true, force: true })
     }
   })

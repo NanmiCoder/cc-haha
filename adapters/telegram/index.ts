@@ -13,7 +13,6 @@ import { MessageDedup } from '../common/message-dedup.js'
 import { enqueue } from '../common/chat-queue.js'
 import { getConfiguredWorkDir, loadConfig } from '../common/config.js'
 import {
-  formatImHelp,
   formatImStatus,
   formatPermissionRequest,
   splitMessage,
@@ -42,6 +41,8 @@ import type { AttachmentRef } from '../common/ws-bridge.js'
 import { ImageBlockWatcher } from '../common/attachment/image-block-watcher.js'
 import type { PendingUpload } from '../common/attachment/attachment-types.js'
 import * as fs from 'node:fs/promises'
+import { syncTelegramBotCommands } from './menu.js'
+import { createTelegramRuntimeCommandController, registerTelegramExtendedCommands, tryHandleTelegramSelectionCallback } from './commands.js'
 
 const TELEGRAM_TEXT_LIMIT = 4000 // leave margin below 4096
 const TELEGRAM_STREAMING_TEXT_LIMIT = TELEGRAM_TEXT_LIMIT - 2 // reserve room for cursor
@@ -95,6 +96,8 @@ type ChatRuntimeState = {
   model?: string
   pendingPermissionCount: number
 }
+
+const commandController = createTelegramRuntimeCommandController({ botApi: bot.api, httpClient, defaultWorkDir, bridge, sessionStore, ensureExistingSession, clearTransientChatState, isAllowedUser: (userId) => isAllowedUser('telegram', userId), handleServerMessage: (chatId, msg) => handleServerMessage(chatId, msg as ServerMessage), setRuntimeModel: (chatId, modelId) => { getRuntimeState(chatId).model = modelId } })
 
 // ---------- helpers ----------
 
@@ -556,12 +559,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
 
 // ---------- bot handlers ----------
 
-async function sendHelp(ctx: Context): Promise<void> {
-  await ctx.reply(`👋 Claude Code Bot 已就绪。\n\n${formatImHelp()}`)
-}
-
-bot.command('start', (ctx) => void sendHelp(ctx))
-bot.command('help', (ctx) => void sendHelp(ctx))
+registerTelegramExtendedCommands(bot, commandController)
 
 /** Reset session state and start a new session for chatId.
  *  If `query` is provided, match a project by index or name;
@@ -576,6 +574,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   buffers.get(chatId)?.reset()
   buffers.delete(chatId)
   pendingProjectSelection.delete(chatId)
+  commandController.clearPendingSelections(chatId)
   pendingPermissions.delete(chatId)
   runtimeStates.delete(chatId)
   tgImageWatchers.delete(chatId)
@@ -805,6 +804,8 @@ bot.on(
 
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data
+  if (await tryHandleTelegramSelectionCallback(data, ctx, commandController)) return
+
   if (!data.startsWith('permit:')) return
 
   const decision = parsePermitCallbackData(data)
@@ -831,6 +832,8 @@ bot.on('callback_query:data', async (ctx) => {
 console.log('[Telegram] Starting bot...')
 console.log(`[Telegram] Server: ${config.serverUrl}`)
 console.log(`[Telegram] Allowed users: ${config.telegram.allowedUsers.length === 0 ? 'all' : config.telegram.allowedUsers.join(', ')}`)
+
+void syncTelegramBotCommands(bot.api).then(() => console.log('[Telegram] Command menu synced')).catch((err) => console.warn('[Telegram] Command menu sync failed:', err instanceof Error ? err.message : err))
 
 bot.start({
   onStart: () => console.log('[Telegram] Bot is running!'),

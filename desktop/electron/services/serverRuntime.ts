@@ -110,6 +110,7 @@ export class ElectronServerRuntime {
       ['telegram', '--telegram'],
       ['wechat', '--wechat'],
       ['dingtalk', '--dingtalk'],
+      ['whatsapp', '--whatsapp'],
     ] as const) {
       try {
         const child = spawnSidecar(createAdapterPlan({

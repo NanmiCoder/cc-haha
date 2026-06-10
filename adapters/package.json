@@ -8,15 +8,18 @@
     "feishu": "bun run feishu/index.ts",
     "wechat": "bun run wechat/index.ts",
     "dingtalk": "bun run dingtalk/index.ts",
+    "whatsapp": "bun run whatsapp/index.ts",
     "test": "bun test",
     "test:common": "bun test common/",
     "test:telegram": "bun test telegram/",
     "test:feishu": "bun test feishu/",
     "test:wechat": "bun test wechat/",
-    "test:dingtalk": "bun test dingtalk/"
+    "test:dingtalk": "bun test dingtalk/",
+    "test:whatsapp": "bun test whatsapp/"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "dingtalk-stream": "2.1.4",
     "grammy": "^1.42.0",
     "ws": "^8.18.0"

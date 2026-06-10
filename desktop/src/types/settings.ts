@@ -14,6 +14,28 @@ export type WebSearchMode = 'auto' | 'anthropic' | 'tavily' | 'brave' | 'disable
 
 export type ChatSendBehavior = 'enter' | 'modifierEnter'
 
+export type OutputStyleSource =
+  | 'built-in'
+  | 'userSettings'
+  | 'projectSettings'
+  | 'localSettings'
+  | 'policySettings'
+  | 'plugin'
+
+export type OutputStyleOption = {
+  value: string
+  label: string
+  description: string
+  source: OutputStyleSource
+}
+
+export type OutputStylesResponse = {
+  outputStyle: string
+  styles: OutputStyleOption[]
+  scope: 'userSettings' | 'localSettings'
+  workDir: string | null
+}
+
 export type WebSearchSettings = {
   mode?: WebSearchMode
   tavilyApiKey?: string
@@ -83,6 +105,7 @@ export type UserSettings = {
   permissionMode?: PermissionMode
   theme?: ThemeMode
   chatSendBehavior?: ChatSendBehavior
+  outputStyle?: string
   skipWebFetchPreflight?: boolean
   desktopNotificationsEnabled?: boolean
   webSearch?: WebSearchSettings

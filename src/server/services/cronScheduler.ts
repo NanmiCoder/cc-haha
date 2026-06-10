@@ -368,6 +368,9 @@ export class CronScheduler {
 
   /** Stop the scheduler and kill any running task processes. */
   stop(): void {
+    const wasRunning = this.intervalId !== null || this.runningTasks.size > 0
+    if (!wasRunning) return
+
     if (this.intervalId) {
       clearInterval(this.intervalId)
       this.intervalId = null

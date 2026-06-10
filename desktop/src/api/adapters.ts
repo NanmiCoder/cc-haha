@@ -17,6 +17,21 @@ export type DingtalkRegistrationPoll = {
   config?: AdapterFileConfig
 }
 
+export type WhatsAppLoginStart = {
+  sessionKey: string
+  qrDataUrl?: string
+  message: string
+}
+
+export type WhatsAppLoginPoll =
+  | AdapterFileConfig
+  | {
+      connected: false
+      status: 'waiting' | 'expired' | 'error'
+      qrDataUrl?: string
+      message: string
+    }
+
 export const adaptersApi = {
   getConfig() {
     return api.get<AdapterFileConfig>('/api/adapters')
@@ -51,5 +66,17 @@ export const adaptersApi = {
 
   pollDingtalkRegistration(deviceCode: string) {
     return api.post<DingtalkRegistrationPoll>('/api/adapters/dingtalk/registration/poll', { deviceCode })
+  },
+
+  startWhatsAppLogin() {
+    return api.post<WhatsAppLoginStart>('/api/adapters/whatsapp/login/start', {})
+  },
+
+  pollWhatsAppLogin(sessionKey: string) {
+    return api.post<WhatsAppLoginPoll>('/api/adapters/whatsapp/login/poll', { sessionKey }, { timeout: 45_000 })
+  },
+
+  unbindWhatsApp() {
+    return api.post<AdapterFileConfig>('/api/adapters/whatsapp/unbind', {})
   },
 }

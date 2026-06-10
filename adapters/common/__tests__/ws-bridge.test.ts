@@ -203,9 +203,43 @@ describe('WsBridge: handler serialization', () => {
     bridge.onServerMessage('chat-reset', () => {})
     bridge.connectSession('chat-reset', 'sess-reset')
     await bridge.waitForOpen('chat-reset')
+    const staleSession = (bridge as any).sessions.get('chat-reset')
+    expect(staleSession.ws.listenerCount('message')).toBeGreaterThan(0)
 
     bridge.resetSession('chat-reset')
     expect(bridge.hasSession('chat-reset')).toBe(false)
+    expect(staleSession.ws.listenerCount('message')).toBe(0)
+    expect(staleSession.ws.listenerCount('close')).toBe(0)
+    expect(staleSession.ws.listenerCount('error')).toBe(0)
+
+    bridge.destroy()
+  })
+
+  it('does not dispatch stale messages from a socket reset before reconnect', async () => {
+    const bridge = new WsBridge(serverUrl, 'test')
+    const events: string[] = []
+
+    bridge.onServerMessage('chat-resume', (msg: any) => {
+      events.push(String(msg.tag))
+    })
+    bridge.connectSession('chat-resume', 'sess-old')
+    expect(await bridge.waitForOpen('chat-resume')).toBe(true)
+    const oldServerWs = await waitForServerConnection()
+
+    bridge.resetSession('chat-resume')
+    bridge.onServerMessage('chat-resume', (msg: any) => {
+      events.push(String(msg.tag))
+    })
+    bridge.connectSession('chat-resume', 'sess-new')
+    expect(await bridge.waitForOpen('chat-resume')).toBe(true)
+    const newServerWs = connections[1]!
+
+    oldServerWs.send(JSON.stringify({ tag: 'stale-old' }))
+    newServerWs.send(JSON.stringify({ tag: 'fresh-new' }))
+
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    expect(events).toEqual(['fresh-new'])
 
     bridge.destroy()
   })

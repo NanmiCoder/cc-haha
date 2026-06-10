@@ -463,20 +463,29 @@ export function startServer(port = PORT, host = HOST) {
 
 let shutdownInProgress: Promise<void> | null = null
 
-function cleanupAllSessions() {
+export async function stopServerRuntimeForShutdown(
+  options: { waitForCli?: boolean } = {},
+): Promise<void> {
+  teamWatcher.stop()
+  cronScheduler.stop()
+
   const active = conversationService.getActiveSessions()
   if (active.length > 0) {
     console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
-    conversationService.stopAllSessions()
+    if (options.waitForCli === false) {
+      conversationService.stopAllSessions()
+    } else {
+      await conversationService.stopAllSessionsAndWait()
+    }
   }
 }
 
+function cleanupAllSessions() {
+  void stopServerRuntimeForShutdown({ waitForCli: false })
+}
+
 async function cleanupAllSessionsAndWait() {
-  const active = conversationService.getActiveSessions()
-  if (active.length > 0) {
-    console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
-    await conversationService.stopAllSessionsAndWait()
-  }
+  await stopServerRuntimeForShutdown({ waitForCli: true })
 }
 
 function shutdownAndExit(signal: 'SIGTERM' | 'SIGINT', exitCode: number) {

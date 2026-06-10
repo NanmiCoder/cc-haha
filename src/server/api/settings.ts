@@ -14,8 +14,29 @@ import { SettingsService } from '../services/settingsService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureDesktopCliLauncherInstalled } from '../services/desktopCliLauncherService.js'
 import { conversationService } from '../services/conversationService.js'
+import {
+  DEFAULT_OUTPUT_STYLE_NAME,
+  getAllOutputStyles,
+  type OutputStyleConfig,
+} from '../../constants/outputStyles.js'
+import { getCwd } from '../../utils/cwd.js'
 
 const settingsService = new SettingsService()
+
+type OutputStyleSource =
+  | OutputStyleConfig['source']
+  | 'built-in'
+
+type OutputStyleListItem = {
+  value: string
+  label: string
+  description: string
+  source: OutputStyleSource
+}
+
+const DEFAULT_OUTPUT_STYLE_LABEL = 'Default'
+const DEFAULT_OUTPUT_STYLE_DESCRIPTION =
+  'Claude completes coding tasks efficiently and provides concise responses'
 
 export async function handleSettingsApi(
   req: Request,
@@ -48,6 +69,12 @@ export async function handleSettingsApi(
 
       case 'project':
         return await handleProjectSettings(req, url)
+
+      case 'output-styles':
+        return await handleOutputStyles(req, url)
+
+      case 'output-style':
+        return await handleOutputStyle(req)
 
       case 'cli-launcher':
         if (method !== 'GET') throw methodNotAllowed(method)
@@ -94,6 +121,73 @@ async function handleProjectSettings(req: Request, url: URL): Promise<Response> 
   throw methodNotAllowed(req.method)
 }
 
+async function handleOutputStyles(req: Request, url: URL): Promise<Response> {
+  if (req.method !== 'GET') {
+    throw methodNotAllowed(req.method)
+  }
+
+  const workDir = getWorkDirFromUrl(url)
+  const styles = await listOutputStyles(workDir)
+  const settings = workDir
+    ? Object.assign(
+        {},
+        await settingsService.getUserSettings(),
+        await settingsService.getProjectSettings(workDir).catch(() => ({})),
+        await settingsService.getLocalSettings(workDir).catch(() => ({})),
+      )
+    : await settingsService.getUserSettings()
+  const outputStyle =
+    typeof settings.outputStyle === 'string'
+      ? settings.outputStyle
+      : DEFAULT_OUTPUT_STYLE_NAME
+
+  return Response.json({
+    outputStyle,
+    styles,
+    scope: workDir ? 'localSettings' : 'userSettings',
+    workDir: workDir ?? null,
+  })
+}
+
+async function handleOutputStyle(req: Request): Promise<Response> {
+  if (req.method !== 'PUT') {
+    throw methodNotAllowed(req.method)
+  }
+
+  const body = await parseJsonBody(req)
+  const outputStyle = body.outputStyle
+  if (typeof outputStyle !== 'string' || outputStyle.trim().length === 0) {
+    throw ApiError.badRequest('Missing or invalid "outputStyle" in request body')
+  }
+
+  const workDir =
+    typeof body.workDir === 'string' && body.workDir.trim().length > 0
+      ? body.workDir
+      : undefined
+  const styles = await listOutputStyles(workDir)
+  if (!styles.some(style => style.value === outputStyle)) {
+    throw ApiError.badRequest(`Unknown output style: "${outputStyle}"`)
+  }
+
+  if (workDir) {
+    await settingsService.updateLocalSettings({ outputStyle }, workDir)
+    return Response.json({
+      ok: true,
+      outputStyle,
+      scope: 'localSettings',
+      workDir,
+    })
+  }
+
+  await settingsService.updateUserSettings({ outputStyle })
+  return Response.json({
+    ok: true,
+    outputStyle,
+    scope: 'userSettings',
+    workDir: null,
+  })
+}
+
 async function handlePermissionMode(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const mode = await settingsService.getPermissionMode()
@@ -125,6 +219,25 @@ async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
 
 function methodNotAllowed(method: string): ApiError {
   return new ApiError(405, `Method ${method} not allowed`, 'METHOD_NOT_ALLOWED')
+}
+
+function getWorkDirFromUrl(url: URL): string | undefined {
+  const raw = url.searchParams.get('workDir')
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return raw
+  }
+  return undefined
+}
+
+async function listOutputStyles(workDir?: string): Promise<OutputStyleListItem[]> {
+  const cwd = workDir ?? getCwd()
+  const styles = await getAllOutputStyles(cwd)
+  return Object.entries(styles).map(([value, config]) => ({
+    value,
+    label: config?.name ?? DEFAULT_OUTPUT_STYLE_LABEL,
+    description: config?.description ?? DEFAULT_OUTPUT_STYLE_DESCRIPTION,
+    source: config?.source ?? 'built-in',
+  }))
 }
 
 function syncThinkingSettingToActiveSessions(settings: Record<string, unknown>): void {

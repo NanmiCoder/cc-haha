@@ -1,5 +1,5 @@
 import { createBridge } from './bridge'
-import { captureToDataUrl, captureAnnotatedRegion } from './screenshot'
+import { captureToDataUrl, createAnnotationOverlay } from './screenshot'
 import { createPicker } from './picker'
 import { buildElementMetadata } from './metadata'
 import { createEditBubble } from './editBubble'
@@ -7,15 +7,33 @@ import { createEditBubble } from './editBubble'
 ;(() => {
   ;(window as unknown as { __PREVIEW_AGENT__?: boolean }).__PREVIEW_AGENT__ = true
 
+  const previewWindow = window as unknown as {
+    __DESKTOP_PREVIEW_POST__?: (raw: string) => void
+    __PREVIEW_BRIDGE__?: unknown
+    __PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__?: () => void
+  } & Record<string, unknown>
+
   const postToHost = (raw: string) => {
-    const post = (window as unknown as { __DESKTOP_PREVIEW_POST__?: (raw: string) => void }).__DESKTOP_PREVIEW_POST__
+    const post = previewWindow.__DESKTOP_PREVIEW_POST__
     if (post) post(raw)
     // 回退（M1 证伪 IPC 时启用）：new WebSocket('ws://127.0.0.1:'+PORT+'/preview-agent') ...
   }
 
   const bridge = createBridge({ postToHost, location: window.location, title: document.title })
-  ;(window as unknown as { __PREVIEW_BRIDGE__?: unknown }).__PREVIEW_BRIDGE__ = bridge
-  ;(window as unknown as Record<string, unknown>).__PREVIEW_AGENT_CAPTURE__ = captureToDataUrl
+  previewWindow.__PREVIEW_BRIDGE__ = bridge
+  previewWindow.__PREVIEW_AGENT_CAPTURE__ = captureToDataUrl
+
+  let selectionOverlayCleanup: (() => void) | null = null
+  let selectionOverlayTimer: number | null = null
+  const clearSelectionOverlay = () => {
+    if (selectionOverlayTimer !== null) {
+      window.clearTimeout(selectionOverlayTimer)
+      selectionOverlayTimer = null
+    }
+    selectionOverlayCleanup?.()
+    selectionOverlayCleanup = null
+  }
+  previewWindow.__PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__ = clearSelectionOverlay
 
   bridge.on('capture', async (m) => {
     try { bridge.send({ type: 'screenshot', dataUrl: await captureToDataUrl(m.kind), kind: m.kind }) }
@@ -36,7 +54,10 @@ import { createEditBubble } from './editBubble'
 
   const emitSelection = async (el: Element, change?: unknown) => {
     try {
-      const dataUrl = await captureAnnotatedRegion(el)
+      clearSelectionOverlay()
+      const overlay = createAnnotationOverlay(el, 1)
+      selectionOverlayCleanup = () => { overlay.remove() }
+      selectionOverlayTimer = window.setTimeout(clearSelectionOverlay, 5000)
       bridge.send({
         type: 'selection',
         payload: {
@@ -44,7 +65,7 @@ import { createEditBubble } from './editBubble'
           sourceHint: document.title || undefined,
           element: buildElementMetadata(el),
           change,
-          screenshot: { dataUrl, kind: 'region' },
+          screenshot: { kind: 'region' },
         },
       })
     } catch (e) { bridge.reportError(String(e)) }

@@ -19,4 +19,13 @@ describe('pairing platform support', () => {
       },
     })).toBe(false)
   })
+
+  it('checks WhatsApp paired users with the same shared access rule', () => {
+    expect(isPaired('whatsapp', '15551234567@s.whatsapp.net', {
+      whatsapp: {
+        pairedUsers: [{ userId: '15551234567@s.whatsapp.net', displayName: 'WhatsApp User', pairedAt: Date.now() }],
+        allowedUsers: [],
+      },
+    })).toBe(true)
+  })
 })

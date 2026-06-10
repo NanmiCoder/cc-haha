@@ -26,6 +26,14 @@ vi.mock('../../pages/TerminalSettings', () => ({
   ),
 }))
 
+vi.mock('../../pages/TraceSession', () => ({
+  TraceSession: ({ sessionId }: { sessionId: string }) => <div data-testid="trace-session">trace:{sessionId}</div>,
+}))
+
+vi.mock('../../pages/TraceList', () => ({
+  TraceList: () => <div data-testid="trace-list" />,
+}))
+
 import { ContentRouter } from './ContentRouter'
 import { useTabStore } from '../../stores/tabStore'
 
@@ -94,5 +102,40 @@ describe('ContentRouter terminal tabs', () => {
     expect(useTabStore.getState().tabs.filter((tab) => tab.type === 'terminal')).toHaveLength(2)
     expect(useTabStore.getState().activeTabId).not.toBe('__terminal__1')
     expect(useTabStore.getState().tabs.find((tab) => tab.sessionId === useTabStore.getState().activeTabId)?.terminalCwd).toBe('/tmp/project')
+  })
+
+  it('renders trace tabs without mounting the chat session surface', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: '__trace__session-1',
+        title: 'Trace',
+        type: 'trace',
+        status: 'idle',
+        traceSessionId: 'session-1',
+      }],
+      activeTabId: '__trace__session-1',
+    })
+
+    render(<ContentRouter />)
+
+    expect(screen.getByTestId('trace-session')).toHaveTextContent('trace:session-1')
+    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
+  })
+
+  it('renders the trace list tab without mounting the chat session surface', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: '__traces__',
+        title: 'Trace',
+        type: 'traces',
+        status: 'idle',
+      }],
+      activeTabId: '__traces__',
+    })
+
+    render(<ContentRouter />)
+
+    expect(screen.getByTestId('trace-list')).toBeInTheDocument()
+    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
   })
 })

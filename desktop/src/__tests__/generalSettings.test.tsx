@@ -94,6 +94,10 @@ vi.mock('../pages/ActivitySettings', () => ({
   ActivitySettings: () => <div>Activity Settings Mock</div>,
 }))
 
+vi.mock('../pages/TraceList', () => ({
+  TraceList: () => <div>Trace List Mock</div>,
+}))
+
 vi.mock('../stores/agentStore', () => ({
   useAgentStore: () => ({
     activeAgents: [],
@@ -218,6 +222,23 @@ describe('Settings > General tab', () => {
       },
       h5AccessDiagnostics: null,
       h5AccessError: null,
+      outputStyle: 'default',
+      outputStyles: [
+        {
+          value: 'default',
+          label: 'Default',
+          description: 'Default response style',
+          source: 'built-in',
+        },
+      ],
+      outputStyleScope: 'userSettings',
+      outputStyleWorkDir: null,
+      outputStylesLoading: false,
+      outputStyleError: null,
+      fetchOutputStyles: vi.fn().mockResolvedValue(undefined),
+      setOutputStyle: vi.fn().mockImplementation(async (outputStyle: string) => {
+        useSettingsStore.setState({ outputStyle })
+      }),
       setThinkingEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ thinkingEnabled: enabled })
       }),
@@ -658,6 +679,20 @@ describe('Settings > General tab', () => {
     fireEvent.click(usageTab)
 
     expect(screen.getByText('Activity Settings Mock')).toBeInTheDocument()
+  })
+
+  it('opens the Trace tab from Settings navigation between Token usage and Diagnostics', () => {
+    render(<Settings />)
+
+    const usageTab = screen.getByText('Token usage')
+    const traceTab = screen.getByText('Trace')
+    const diagnosticsTab = screen.getByText('Diagnostics')
+    expect((usageTab.compareDocumentPosition(traceTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    expect((traceTab.compareDocumentPosition(diagnosticsTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+
+    fireEvent.click(traceTab)
+
+    expect(screen.getByText('Trace List Mock')).toBeInTheDocument()
   })
 
   it('lets the user disable WebFetch preflight skipping', () => {

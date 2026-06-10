@@ -434,6 +434,8 @@ export class ProviderService {
   // --- Proxy support ---
 
   async getProviderForProxy(providerId?: string): Promise<{
+    id: string
+    name: string
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
@@ -444,6 +446,8 @@ export class ProviderService {
       }
       const provider = await this.getProvider(providerId)
       return {
+        id: provider.id,
+        name: provider.name,
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiFormat: provider.apiFormat ?? 'anthropic',
@@ -458,6 +462,8 @@ export class ProviderService {
     const provider = await this.getProvider(index.activeId).catch(() => null)
     if (!provider) return null
     return {
+      id: provider.id,
+      name: provider.name,
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       apiFormat: provider.apiFormat ?? 'anthropic',
@@ -662,7 +668,7 @@ function buildDirectTestRequest(
     return {
       url: `${base}/v1/chat/completions`,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: { model: modelId, max_tokens: 16, messages: [{ role: 'user', content: prompt }] },
+      body: { model: modelId, max_tokens: 16, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {

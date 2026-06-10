@@ -357,8 +357,10 @@ async function getOrCreateWorktree(
     addArgs.push('--no-checkout')
   }
   // -B (not -b): reset any orphan branch left behind by a removed worktree dir.
-  // Saves a `git branch -D` subprocess (~15ms spawn overhead) on every create.
-  addArgs.push('-B', worktreeBranch, worktreePath, baseBranch)
+  // Use the resolved SHA rather than origin/<branch>; a remote-tracking start
+  // point makes git write branch.<name>.remote/merge into shared .git/config,
+  // which races when multiple agent worktrees start together.
+  addArgs.push('-B', worktreeBranch, worktreePath, baseSha)
 
   const { code: createCode, stderr: createStderr } =
     await execFileNoThrowWithCwd(gitExe(), addArgs, { cwd: repoRoot })

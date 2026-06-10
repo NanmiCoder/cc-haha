@@ -129,6 +129,7 @@ export class WsBridge {
     const session = this.sessions.get(chatId)
     if (session) {
       if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
+      session.ws.removeAllListeners()
       session.ws.close(1000, 'session reset')
       this.sessions.delete(chatId)
     }
@@ -150,6 +151,7 @@ export class WsBridge {
     }
     for (const [, session] of this.sessions) {
       if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
+      session.ws.removeAllListeners()
       session.ws.close(1000, 'bridge destroyed')
     }
     this.sessions.clear()
@@ -192,6 +194,7 @@ export class WsBridge {
         return
       }
       if (msg.type === 'pong') return
+      if (this.sessions.get(chatId) !== session) return
       const handler = this.handlers.get(chatId)
       if (!handler) return
 

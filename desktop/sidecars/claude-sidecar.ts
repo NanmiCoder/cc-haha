@@ -8,7 +8,7 @@
  *
  *   claude-sidecar server   --app-root <path> --host 127.0.0.1 --port 12345
  *   claude-sidecar cli      --app-root <path> [其它 CLI 参数...]
- *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat] [--dingtalk]
+ *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat] [--dingtalk] [--whatsapp]
  *
  * 任何模式都必须先做 process.env / process.argv 设置，再 await 进入相应的
  * 子模块树。原因：src/server/index.ts、src/entrypoints/cli.tsx、以及
@@ -52,13 +52,14 @@ if (mode === 'adapters') {
 
 async function runAdapters(rawArgs: string[]): Promise<void> {
   // adapters 模式的参数解析独立于 server/cli —— 这里只接受 --feishu /
-  // --telegram / --wechat / --dingtalk 选择启用哪个适配器，再加可选的 --app-root（透传给
+  // --telegram / --wechat / --dingtalk / --whatsapp 选择启用哪个适配器，再加可选的 --app-root（透传给
   // adapters/common/config.ts 内的 process.env 读取）。
   let appRoot: string | null = process.env.CLAUDE_APP_ROOT ?? null
   let enableFeishu = false
   let enableTelegram = false
   let enableWechat = false
   let enableDingtalk = false
+  let enableWhatsApp = false
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i]
@@ -83,12 +84,16 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
       enableDingtalk = true
       continue
     }
+    if (arg === '--whatsapp') {
+      enableWhatsApp = true
+      continue
+    }
     console.warn(`claude-sidecar adapters: ignoring unknown arg "${arg}"`)
   }
 
-  if (!enableFeishu && !enableTelegram && !enableWechat && !enableDingtalk) {
+  if (!enableFeishu && !enableTelegram && !enableWechat && !enableDingtalk && !enableWhatsApp) {
     console.error(
-      'claude-sidecar adapters: must enable at least one of --feishu / --telegram / --wechat / --dingtalk',
+      'claude-sidecar adapters: must enable at least one of --feishu / --telegram / --wechat / --dingtalk / --whatsapp',
     )
     process.exit(2)
   }
@@ -155,6 +160,19 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
     } else {
       console.log('[claude-sidecar] starting DingTalk adapter')
       await import('../../adapters/dingtalk/index.ts')
+      started += 1
+    }
+  }
+
+  if (enableWhatsApp) {
+    const { hasWhatsAppAuth } = await import('../../adapters/whatsapp/session.ts')
+    if (!hasWhatsAppAuth(config.whatsapp.authDir)) {
+      console.warn(
+        '[claude-sidecar] --whatsapp requested but no QR-linked WhatsApp account found in env or ~/.claude/adapters.json — skipping',
+      )
+    } else {
+      console.log('[claude-sidecar] starting WhatsApp adapter')
+      await import('../../adapters/whatsapp/index.ts')
       started += 1
     }
   }
