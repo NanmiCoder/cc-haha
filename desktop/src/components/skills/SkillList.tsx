@@ -107,8 +107,14 @@ export function SkillList() {
   }, [filteredSkills])
 
   const filteredCatalog = useMemo(() => {
-    if (!normalizedSearchQuery) return catalog
-    return catalog.filter((entry) =>
+    // Defensive: zustand store always seeds `catalog: []`, but a partial
+    // store mock or an unexpected initialization race (e.g. SSR/hydration
+    // timing) could surface `undefined`. Guarding here keeps the entire
+    // Skills page from white-screening with `Cannot read properties of
+    // undefined (reading 'length')` at the .length check below.
+    const list = catalog ?? []
+    if (!normalizedSearchQuery) return list
+    return list.filter((entry) =>
       [entry.name, entry.displayName, entry.description, entry.category].some(
         (field) => field?.toLocaleLowerCase().includes(normalizedSearchQuery),
       ),
