@@ -1275,6 +1275,60 @@ export const jp: Record<TranslationKey, string> = {
   'empty.recentActivity.handoff.continuePrompt': 'ここから続けてください: (次のステップを記述)。',
   'empty.recentActivity.continueTriggerMessage': '前回のセッションの続きから進めてください。上の引き継ぎコンテキストを事実として扱い、まず 1-2 文で現在の状態を要約してから次のステップを述べ、それから着手してください。',
 
+  // ─── Solo パイプラインモード — 提案エンジン（ウェルカム挨拶） ─────────────────
+  'solo.suggest.finishWip.title': '{count} 件の未コミット変更を仕上げる',
+  'solo.suggest.finishWip.detail': '未コミット: {sample}',
+  'solo.suggest.finishWip.detailForeign': '未コミット（他のエージェントの作業を含む可能性）: {sample}',
+  'solo.suggest.finishWip.taskPrompt': '現在の worktree にある {count} 件の未コミット変更（{files}）を仕上げてください。plan → implement → test → review → land を一通り通します。',
+
+  'solo.suggest.shipAhead.title': '{branch} をリリース（{count} 件先行）',
+  'solo.suggest.shipAhead.detail': 'ローカルが上流より {count} 件先行しており、作業はすでに完了しています — レビュー + リリース。',
+  'solo.suggest.shipAhead.taskPrompt': 'ブランチ {branch} は上流より {count} 件先行しています。上流に対する diff をレビューし、必要に応じて PR / push / リリースノート作成を行ってください。',
+
+  'solo.suggest.testGap.title': '{file} のテストを追加',
+  'solo.suggest.testGap.detail': '{count} 件の dirty ソースファイルにテストの兄弟ファイルがありません',
+  'solo.suggest.testGap.taskPrompt': '{file}（および他 {count} 件の dirty ソースファイル）にディスク上の兄弟テストがありません。不足しているテストを計画して追加し、検証してリリースしてください。',
+
+  'solo.suggest.todoMarker.title': '{file} の TODO を解消',
+  'solo.suggest.todoMarker.detail': '{excerpt}（dirty ファイル内に合計 {count} 件のマーカー）',
+  'solo.suggest.todoMarker.taskPrompt': 'dirty ファイル内に {count} 件の TODO/FIXME マーカーがあります。{file} から開始: 「{excerpt}」。解決策を計画、実装、検証、リリースしてください。',
+
+  'solo.suggest.releaseMismatch.notes-missing.title': 'v{desktopVersion} のリリースノートを追加',
+  'solo.suggest.releaseMismatch.notes-missing.detail': 'desktop/package.json は {desktopVersion} ですが最新のリリースノートは v{latestNotes} です',
+  'solo.suggest.releaseMismatch.notes-missing.taskPrompt': 'desktop/package.json は v{desktopVersion} ですが release-notes/v{desktopVersion}.md がありません。v{latestNotes} 以降の変更内容を記述したノートを書き、リリース（commit + tag + 単一 tag push）してください。',
+
+  'solo.suggest.releaseMismatch.version-not-bumped.title': 'desktop バージョンを v{latestNotes} に bump',
+  'solo.suggest.releaseMismatch.version-not-bumped.detail': 'release-notes/v{latestNotes}.md は存在しますが desktop/package.json はまだ {desktopVersion} です',
+  'solo.suggest.releaseMismatch.version-not-bumped.taskPrompt': 'release-notes/v{latestNotes}.md はありますが desktop/package.json はまだ v{desktopVersion} です。scripts/release.ts {latestNotes} で bump + commit + tag を実行し、単一 tag を push してください（--tags ではなく）。',
+
+  'solo.suggest.releaseMismatch.tag-not-pushed.title': 'v{desktopVersion} tag を push',
+  'solo.suggest.releaseMismatch.tag-not-pushed.detail': 'v{desktopVersion} はノートと整合していますが tag が origin にありません',
+  'solo.suggest.releaseMismatch.tag-not-pushed.taskPrompt': 'バージョンは整合（v{desktopVersion}）していますが v{desktopVersion} tag が origin にありません。単一 tag（git push origin v{desktopVersion}、--tags ではなく）を push して release-desktop workflow をトリガーしてください。',
+
+  'solo.suggest.stashRecover.title': '{count} 件の stash を復元',
+  'solo.suggest.stashRecover.detail': '待機中の stash された作業があります',
+  'solo.suggest.stashRecover.taskPrompt': '{count} 件の stash が待機中です。復元方針（pop するもの、drop するもの）を計画し、実装して検証してください。',
+
+  'solo.suggest.syncUpstream.title': '上流の {count} 件のコミットを同期',
+  'solo.suggest.syncUpstream.detail': 'ローカルが origin より遅れています',
+  'solo.suggest.syncUpstream.taskPrompt': 'ローカルは上流より {count} 件遅れています。pull / rebase 戦略を計画、実行、結果を検証してください。',
+
+  'solo.suggest.resolveConflict.merge.title': '進行中の merge を解決',
+  'solo.suggest.resolveConflict.merge.detail': 'merge が進行中です（.git/MERGE_HEAD あり）',
+  'solo.suggest.resolveConflict.merge.taskPrompt': 'merge が進行中です（.git/MERGE_HEAD あり）。コンフリクトファイルを確認、解決方針を決定、解決後にビルドを検証してから merge を commit してください。',
+
+  'solo.suggest.resolveConflict.rebase.title': '進行中の rebase を解決',
+  'solo.suggest.resolveConflict.rebase.detail': 'rebase が進行中です（.git/rebase-{merge,apply} あり）',
+  'solo.suggest.resolveConflict.rebase.taskPrompt': 'rebase が進行中です（.git/rebase-{merge,apply} あり）。各コンフリクトコミットを解決、git rebase --continue、最終ツリーを検証してから続行してください。',
+
+  'solo.suggest.resolveConflict.cherry-pick.title': '進行中の cherry-pick を解決',
+  'solo.suggest.resolveConflict.cherry-pick.detail': 'cherry-pick が進行中です（.git/CHERRY_PICK_HEAD あり）',
+  'solo.suggest.resolveConflict.cherry-pick.taskPrompt': 'cherry-pick が進行中です（.git/CHERRY_PICK_HEAD あり）。コンフリクトファイルを解決、git cherry-pick --continue、検証してください。',
+
+  'solo.suggest.generic.title': '機能または修正を記述',
+  'solo.suggest.generic.detail': '具体的なタスクを伝えてください、フルパイプラインを実行します',
+  'solo.suggest.generic.taskPrompt': '',
+
   // ─── Provider 互換性（偽 tool_use の検出） ─────────────────
   'providerCompat.notice.title': 'ツール呼び出しは無視されました',
   'providerCompat.notice.body': 'モデルは XML スタイルのテキストブロックで `{tool}` を呼び出そうとしましたが、現在の provider はネイティブの tool_use を転送していないため、実行されませんでした。',

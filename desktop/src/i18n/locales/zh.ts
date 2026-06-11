@@ -1275,6 +1275,60 @@ export const zh: Record<TranslationKey, string> = {
   'empty.recentActivity.handoff.continuePrompt': '请接着往下:(此处描述要做的下一步)。',
   'empty.recentActivity.continueTriggerMessage': '请接着上次会话的进度继续。把上面的接续上下文当作事实依据,先用 1-2 句话说明你理解的当前状态,然后说明下一步要做什么,再开始动手。',
 
+  // ─── Solo 流水线模式 — 建议引擎(欢迎页招呼) ─────────────────
+  'solo.suggest.finishWip.title': '收尾 {count} 个未提交改动',
+  'solo.suggest.finishWip.detail': '未提交:{sample}',
+  'solo.suggest.finishWip.detailForeign': '未提交(可能含其他 agent 的改动):{sample}',
+  'solo.suggest.finishWip.taskPrompt': '把当前 worktree 里 {count} 个未提交改动({files})收尾。走完一轮 plan → implement → test → review → land。',
+
+  'solo.suggest.shipAhead.title': '把 {branch} 落地({count} 个领先提交)',
+  'solo.suggest.shipAhead.detail': '本地领先上游 {count} 个提交,工作已经做完——评审 + 落地。',
+  'solo.suggest.shipAhead.taskPrompt': '分支 {branch} 领先上游 {count} 个提交。对照上游评审 diff,然后落地(开 PR / push / 写 release notes 看情况)。',
+
+  'solo.suggest.testGap.title': '给 {file} 补测试',
+  'solo.suggest.testGap.detail': '{count} 个 dirty 源文件没有同名 test',
+  'solo.suggest.testGap.taskPrompt': '{file}(以及其他 {count} 个 dirty 源文件)在磁盘上没有同名 test。规划并补上缺失的测试,然后验证 + 落地。',
+
+  'solo.suggest.todoMarker.title': '处理 {file} 里的 TODO',
+  'solo.suggest.todoMarker.detail': '{excerpt}(dirty 文件里共 {count} 处标记)',
+  'solo.suggest.todoMarker.taskPrompt': 'dirty 文件集里有 {count} 处 TODO/FIXME 标记。先从 {file} 开始:"{excerpt}"。规划解决方案、实现、验证、落地。',
+
+  'solo.suggest.releaseMismatch.notes-missing.title': '补 v{desktopVersion} 的 release-notes',
+  'solo.suggest.releaseMismatch.notes-missing.detail': 'desktop/package.json 已是 {desktopVersion},但 release-notes 最新只有 v{latestNotes}',
+  'solo.suggest.releaseMismatch.notes-missing.taskPrompt': 'desktop/package.json 已经是 v{desktopVersion},但 release-notes/v{desktopVersion}.md 不存在。写 notes 描述自 v{latestNotes} 以来发的内容,然后落地(commit + tag + push 单 tag)。',
+
+  'solo.suggest.releaseMismatch.version-not-bumped.title': 'desktop 版本 bump 到 v{latestNotes}',
+  'solo.suggest.releaseMismatch.version-not-bumped.detail': 'release-notes/v{latestNotes}.md 已存在,但 desktop/package.json 还是 {desktopVersion}',
+  'solo.suggest.releaseMismatch.version-not-bumped.taskPrompt': 'release-notes/v{latestNotes}.md 已经写了,但 desktop/package.json 还是 v{desktopVersion}。跑 scripts/release.ts {latestNotes} 完成 bump + commit + tag,然后单 tag push(不是 --tags)。',
+
+  'solo.suggest.releaseMismatch.tag-not-pushed.title': 'push v{desktopVersion} tag',
+  'solo.suggest.releaseMismatch.tag-not-pushed.detail': 'v{desktopVersion} 已对齐 notes,但 tag 还没在 origin 上',
+  'solo.suggest.releaseMismatch.tag-not-pushed.taskPrompt': '版本对齐了(v{desktopVersion}),但 v{desktopVersion} tag 没在 origin 上。push 单个 tag(git push origin v{desktopVersion},不是 --tags)触发 release-desktop workflow。',
+
+  'solo.suggest.stashRecover.title': '恢复 {count} 个 stash',
+  'solo.suggest.stashRecover.detail': '你还有 stash 着的工作没处理',
+  'solo.suggest.stashRecover.taskPrompt': '你有 {count} 个 stash 在等。规划怎么恢复(哪些 pop、哪些 drop),然后实现并验证。',
+
+  'solo.suggest.syncUpstream.title': '同步上游 {count} 个提交',
+  'solo.suggest.syncUpstream.detail': '本地落后于 origin',
+  'solo.suggest.syncUpstream.taskPrompt': '本地落后上游 {count} 个提交。规划 pull / rebase 策略,执行,然后验证结果。',
+
+  'solo.suggest.resolveConflict.merge.title': '处理进行中的 merge',
+  'solo.suggest.resolveConflict.merge.detail': '有一个 merge 在中途(.git/MERGE_HEAD 存在)',
+  'solo.suggest.resolveConflict.merge.taskPrompt': '有 merge 在进行(.git/MERGE_HEAD 存在)。检查冲突文件,定解决策略,处理完跑构建验证,然后 commit 这个 merge。',
+
+  'solo.suggest.resolveConflict.rebase.title': '处理进行中的 rebase',
+  'solo.suggest.resolveConflict.rebase.detail': '有一个 rebase 在中途(.git/rebase-{merge,apply} 存在)',
+  'solo.suggest.resolveConflict.rebase.taskPrompt': '有 rebase 在进行(.git/rebase-{merge,apply} 存在)。逐个解决冲突 commit,git rebase --continue,验证最终树,然后继续。',
+
+  'solo.suggest.resolveConflict.cherry-pick.title': '处理进行中的 cherry-pick',
+  'solo.suggest.resolveConflict.cherry-pick.detail': '有一个 cherry-pick 在中途(.git/CHERRY_PICK_HEAD 存在)',
+  'solo.suggest.resolveConflict.cherry-pick.taskPrompt': '有 cherry-pick 在进行(.git/CHERRY_PICK_HEAD 存在)。处理冲突文件,git cherry-pick --continue,然后验证。',
+
+  'solo.suggest.generic.title': '描述一个功能或修复',
+  'solo.suggest.generic.detail': '说一个具体任务,我跑完整条流水线',
+  'solo.suggest.generic.taskPrompt': '',
+
   // ─── Provider 兼容性(伪 tool_use 检测) ─────────────────
   'providerCompat.notice.title': '工具调用被忽略',
   'providerCompat.notice.body': '模型尝试用 XML 文本块调用 `{tool}`,但当前 provider 似乎不转发原生 tool_use,所以并没有执行。',

@@ -1275,6 +1275,60 @@ export const kr: Record<TranslationKey, string> = {
   'empty.recentActivity.handoff.continuePrompt': '여기서부터 계속해 주세요: (다음 단계 설명).',
   'empty.recentActivity.continueTriggerMessage': '이전 세션의 진행 상황에서 이어서 작업해 주세요. 위의 인계 컨텍스트를 사실로 받아들이고, 먼저 1-2문장으로 현재 상태를 요약한 뒤 다음 단계를 설명하고 작업을 시작해 주세요.',
 
+  // ─── Solo 파이프라인 모드 — 제안 엔진 (환영 인사) ─────────────────
+  'solo.suggest.finishWip.title': '{count}개의 미커밋 변경 마무리',
+  'solo.suggest.finishWip.detail': '미커밋: {sample}',
+  'solo.suggest.finishWip.detailForeign': '미커밋 (다른 에이전트의 작업 포함 가능): {sample}',
+  'solo.suggest.finishWip.taskPrompt': '현재 worktree의 {count}개 미커밋 변경({files})을 마무리해 주세요. plan → implement → test → review → land 한 사이클을 진행합니다.',
+
+  'solo.suggest.shipAhead.title': '{branch} 출시 ({count}개 커밋 앞섬)',
+  'solo.suggest.shipAhead.detail': '로컬이 업스트림보다 {count}개 앞서 있고 작업은 이미 완료됨 — 리뷰 + 출시.',
+  'solo.suggest.shipAhead.taskPrompt': '브랜치 {branch}이(가) 업스트림보다 {count}개 커밋 앞서 있습니다. 업스트림 대비 diff를 리뷰하고 PR / push / 릴리스 노트 작성으로 출시해 주세요.',
+
+  'solo.suggest.testGap.title': '{file}에 테스트 추가',
+  'solo.suggest.testGap.detail': '{count}개의 dirty 소스 파일에 형제 테스트가 없음',
+  'solo.suggest.testGap.taskPrompt': '{file}(및 다른 {count}개의 dirty 소스 파일)에 디스크상 형제 테스트가 없습니다. 누락된 테스트를 계획하여 추가하고, 검증 후 출시해 주세요.',
+
+  'solo.suggest.todoMarker.title': '{file}의 TODO 처리',
+  'solo.suggest.todoMarker.detail': '{excerpt} (dirty 파일 내 총 {count}개의 마커)',
+  'solo.suggest.todoMarker.taskPrompt': 'dirty 파일 세트에 {count}개의 TODO/FIXME 마커가 있습니다. {file}부터 시작: "{excerpt}". 해결 방안을 계획, 구현, 검증, 출시해 주세요.',
+
+  'solo.suggest.releaseMismatch.notes-missing.title': 'v{desktopVersion} 릴리스 노트 추가',
+  'solo.suggest.releaseMismatch.notes-missing.detail': 'desktop/package.json은 {desktopVersion}이지만 최신 릴리스 노트는 v{latestNotes}',
+  'solo.suggest.releaseMismatch.notes-missing.taskPrompt': 'desktop/package.json은 v{desktopVersion}이지만 release-notes/v{desktopVersion}.md가 존재하지 않습니다. v{latestNotes} 이후 변경사항을 기술한 노트를 작성하고 출시(commit + tag + 단일 tag push)해 주세요.',
+
+  'solo.suggest.releaseMismatch.version-not-bumped.title': 'desktop 버전을 v{latestNotes}로 bump',
+  'solo.suggest.releaseMismatch.version-not-bumped.detail': 'release-notes/v{latestNotes}.md는 있지만 desktop/package.json은 여전히 {desktopVersion}',
+  'solo.suggest.releaseMismatch.version-not-bumped.taskPrompt': 'release-notes/v{latestNotes}.md는 작성되어 있지만 desktop/package.json은 여전히 v{desktopVersion}입니다. scripts/release.ts {latestNotes}로 bump + commit + tag을 실행하고 단일 tag을 push해 주세요(--tags가 아님).',
+
+  'solo.suggest.releaseMismatch.tag-not-pushed.title': 'v{desktopVersion} tag push',
+  'solo.suggest.releaseMismatch.tag-not-pushed.detail': 'v{desktopVersion}은 노트와 일치하지만 tag가 origin에 없음',
+  'solo.suggest.releaseMismatch.tag-not-pushed.taskPrompt': '버전은 일치(v{desktopVersion})하지만 v{desktopVersion} tag이 origin에 없습니다. 단일 tag(git push origin v{desktopVersion}, --tags 아님)을 push하여 release-desktop workflow를 트리거해 주세요.',
+
+  'solo.suggest.stashRecover.title': '{count}개의 stash 복구',
+  'solo.suggest.stashRecover.detail': '대기 중인 stash 작업이 있습니다',
+  'solo.suggest.stashRecover.taskPrompt': '{count}개의 stash이 대기 중입니다. 복구 방법(어느 것을 pop하고 어느 것을 drop할지)을 계획하고 구현하여 검증해 주세요.',
+
+  'solo.suggest.syncUpstream.title': '업스트림 {count}개 커밋 동기화',
+  'solo.suggest.syncUpstream.detail': '로컬이 origin보다 뒤처져 있음',
+  'solo.suggest.syncUpstream.taskPrompt': '로컬이 업스트림보다 {count}개 커밋 뒤처져 있습니다. pull / rebase 전략을 계획, 실행, 결과를 검증해 주세요.',
+
+  'solo.suggest.resolveConflict.merge.title': '진행 중인 merge 해결',
+  'solo.suggest.resolveConflict.merge.detail': 'merge가 진행 중입니다 (.git/MERGE_HEAD 존재)',
+  'solo.suggest.resolveConflict.merge.taskPrompt': 'merge가 진행 중입니다 (.git/MERGE_HEAD 존재). 충돌 파일을 확인하고 해결 전략을 정한 뒤 빌드를 검증하고 merge를 commit해 주세요.',
+
+  'solo.suggest.resolveConflict.rebase.title': '진행 중인 rebase 해결',
+  'solo.suggest.resolveConflict.rebase.detail': 'rebase가 진행 중입니다 (.git/rebase-{merge,apply} 존재)',
+  'solo.suggest.resolveConflict.rebase.taskPrompt': 'rebase가 진행 중입니다 (.git/rebase-{merge,apply} 존재). 각 충돌 커밋을 해결하고 git rebase --continue, 최종 트리를 검증한 뒤 진행해 주세요.',
+
+  'solo.suggest.resolveConflict.cherry-pick.title': '진행 중인 cherry-pick 해결',
+  'solo.suggest.resolveConflict.cherry-pick.detail': 'cherry-pick이 진행 중입니다 (.git/CHERRY_PICK_HEAD 존재)',
+  'solo.suggest.resolveConflict.cherry-pick.taskPrompt': 'cherry-pick이 진행 중입니다 (.git/CHERRY_PICK_HEAD 존재). 충돌 파일을 해결하고 git cherry-pick --continue 후 검증해 주세요.',
+
+  'solo.suggest.generic.title': '기능 또는 수정 사항을 설명',
+  'solo.suggest.generic.detail': '구체적인 작업을 알려주시면 전체 파이프라인을 실행합니다',
+  'solo.suggest.generic.taskPrompt': '',
+
   // ─── Provider 호환성 (가짜 tool_use 감지) ─────────────────
   'providerCompat.notice.title': '도구 호출이 무시되었습니다',
   'providerCompat.notice.body': '모델이 XML 스타일 텍스트 블록으로 `{tool}` 도구를 호출하려 했지만, 현재 provider가 네이티브 tool_use를 전달하지 않는 것으로 보여 실행되지 않았습니다.',

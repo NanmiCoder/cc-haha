@@ -1285,6 +1285,64 @@ export const en = {
    *  reads the system prompt and resumes. */
   'empty.recentActivity.continueTriggerMessage': "Please pick up where the previous session left off. Use the hand-off context above as ground truth, and start by stating in 1-2 sentences what you understand the current state to be and what you'll do next.",
 
+  // ─── Solo Pipeline mode — suggestion engine (welcome greeting) ───────
+  // Each suggestion has a title, optional detail, and a taskPrompt the
+  // AI receives as the seed for Stage 1 (or a later stage when entryStage
+  // is 'review' / 'land'). Keep titles SHORT (chip-sized); details and
+  // task prompts can be longer.
+  'solo.suggest.finishWip.title': 'Finish {count} pending change(s)',
+  'solo.suggest.finishWip.detail': 'Uncommitted: {sample}',
+  'solo.suggest.finishWip.detailForeign': 'Uncommitted (some may be from another agent): {sample}',
+  'solo.suggest.finishWip.taskPrompt': 'Wrap up the {count} uncommitted change(s) in this worktree ({files}). Walk them through plan → implement → test → review → land.',
+
+  'solo.suggest.shipAhead.title': 'Ship {branch} ({count} commit(s) ahead)',
+  'solo.suggest.shipAhead.detail': 'Local is {count} commit(s) ahead of upstream. The work is done — review and land.',
+  'solo.suggest.shipAhead.taskPrompt': 'Branch {branch} has {count} commit(s) ahead of upstream. Review the diff against upstream, then land it (PR / push / release notes as appropriate).',
+
+  'solo.suggest.testGap.title': 'Add tests for {file}',
+  'solo.suggest.testGap.detail': '{count} dirty source file(s) have no sibling test',
+  'solo.suggest.testGap.taskPrompt': '{file} (and {count} other dirty source file(s)) lack a sibling test on disk. Plan and add the missing tests; then verify and land.',
+
+  'solo.suggest.todoMarker.title': 'Resolve TODO in {file}',
+  'solo.suggest.todoMarker.detail': '{excerpt} ({count} marker(s) total in dirty files)',
+  'solo.suggest.todoMarker.taskPrompt': 'There are {count} TODO/FIXME marker(s) in the dirty file set. Start with {file}: "{excerpt}". Plan the resolution, implement, verify, and land.',
+
+  'solo.suggest.releaseMismatch.notes-missing.title': 'Add release-notes for v{desktopVersion}',
+  'solo.suggest.releaseMismatch.notes-missing.detail': 'desktop/package.json is at {desktopVersion} but the latest release-notes file is v{latestNotes}',
+  'solo.suggest.releaseMismatch.notes-missing.taskPrompt': 'desktop/package.json is at v{desktopVersion} but release-notes/v{desktopVersion}.md does not exist. Write the notes describing what shipped since v{latestNotes}, then land (commit, tag, push tag).',
+
+  'solo.suggest.releaseMismatch.version-not-bumped.title': 'Bump desktop to v{latestNotes}',
+  'solo.suggest.releaseMismatch.version-not-bumped.detail': 'release-notes/v{latestNotes}.md exists but desktop/package.json is still at {desktopVersion}',
+  'solo.suggest.releaseMismatch.version-not-bumped.taskPrompt': 'release-notes/v{latestNotes}.md exists but desktop/package.json is still at v{desktopVersion}. Run scripts/release.ts {latestNotes} to bump the version + commit + tag, then push the single tag (not --tags).',
+
+  'solo.suggest.releaseMismatch.tag-not-pushed.title': 'Push v{desktopVersion} tag',
+  'solo.suggest.releaseMismatch.tag-not-pushed.detail': 'v{desktopVersion} matches release-notes but the tag is not on origin',
+  'solo.suggest.releaseMismatch.tag-not-pushed.taskPrompt': 'Versions are aligned (v{desktopVersion}) but the v{desktopVersion} tag is not on origin. Push the single tag (git push origin v{desktopVersion}, NOT --tags) to trigger the release-desktop workflow.',
+
+  'solo.suggest.stashRecover.title': 'Recover {count} stash(es)',
+  'solo.suggest.stashRecover.detail': 'You have stashed work waiting',
+  'solo.suggest.stashRecover.taskPrompt': 'You have {count} stash(es) waiting. Plan how to recover them (which to pop, which to drop), then implement and verify.',
+
+  'solo.suggest.syncUpstream.title': 'Sync {count} upstream commit(s)',
+  'solo.suggest.syncUpstream.detail': 'Local is behind origin',
+  'solo.suggest.syncUpstream.taskPrompt': 'Local is {count} commit(s) behind upstream. Plan a pull / rebase strategy, run it, and verify the result.',
+
+  'solo.suggest.resolveConflict.merge.title': 'Resolve in-progress merge',
+  'solo.suggest.resolveConflict.merge.detail': 'A merge is mid-flight (.git/MERGE_HEAD exists)',
+  'solo.suggest.resolveConflict.merge.taskPrompt': 'A merge is in progress (.git/MERGE_HEAD exists). Inspect the conflicted files, decide on the resolution strategy, resolve, verify the build, then commit the merge.',
+
+  'solo.suggest.resolveConflict.rebase.title': 'Resolve in-progress rebase',
+  'solo.suggest.resolveConflict.rebase.detail': 'A rebase is mid-flight (.git/rebase-{merge,apply} exists)',
+  'solo.suggest.resolveConflict.rebase.taskPrompt': 'A rebase is in progress (.git/rebase-{merge,apply} exists). Inspect each conflicted commit, resolve, git rebase --continue, verify the final tree, then proceed.',
+
+  'solo.suggest.resolveConflict.cherry-pick.title': 'Resolve in-progress cherry-pick',
+  'solo.suggest.resolveConflict.cherry-pick.detail': 'A cherry-pick is mid-flight (.git/CHERRY_PICK_HEAD exists)',
+  'solo.suggest.resolveConflict.cherry-pick.taskPrompt': 'A cherry-pick is in progress (.git/CHERRY_PICK_HEAD exists). Resolve the conflicted files, git cherry-pick --continue, then verify.',
+
+  'solo.suggest.generic.title': 'Describe a feature or fix',
+  'solo.suggest.generic.detail': 'Tell me a concrete task and I will run the full pipeline',
+  'solo.suggest.generic.taskPrompt': '',
+
   // ─── Provider Compatibility (fake tool_use detection) ─────────────────
   /** Inline notice shown above the assistant message when the model emitted
    *  an XML-style <tool_use> in plain text instead of a real structured
