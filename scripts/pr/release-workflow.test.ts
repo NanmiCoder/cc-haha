@@ -81,7 +81,11 @@ describe('release desktop workflow', () => {
     }
 
     expect(desktopPackage.description).toBeTruthy()
-    expect(desktopPackage.homepage).toBe('https://github.com/NanmiCoder/cc-haha')
+    // This fork (706412584/cc-haha) republishes desktop builds under its own
+    // GitHub homepage while keeping NanmiCoder's author attribution. Upstream
+    // (NanmiCoder/cc-haha) uses its own homepage; both are valid release-time
+    // shapes, so accept either.
+    expect(desktopPackage.homepage).toMatch(/^https:\/\/github\.com\/[^/]+\/cc-haha$/)
     expect(desktopPackage.author?.name).toBe('NanmiCoder')
     expect(desktopPackage.author?.email).toBe('relakkes@gmail.com')
     expect(desktopPackage.build?.linux?.maintainer).toBe('NanmiCoder <relakkes@gmail.com>')
@@ -305,13 +309,18 @@ describe('release desktop workflow', () => {
       }
     }
 
-    expect(desktopPackage.build.publish).toEqual([
-      {
+    // The fork (706412584/cc-haha) republishes desktop builds under its own
+    // GitHub owner; upstream (NanmiCoder/cc-haha) uses its own. Both are
+    // valid release-time shapes — we only require that publish is pinned to
+    // GitHub with explicit owner/repo (no autodetect from git remote).
+    expect(desktopPackage.build.publish).toHaveLength(1)
+    expect(desktopPackage.build.publish?.[0]).toEqual(
+      expect.objectContaining({
         provider: 'github',
-        owner: 'NanmiCoder',
+        owner: expect.stringMatching(/^[\w-]+$/),
         repo: 'cc-haha',
-      },
-    ])
+      }),
+    )
     expect(desktopPackage.build.mac?.publish).toBeUndefined()
     expect(desktopPackage.build.win?.publish).toBeUndefined()
     expect(desktopPackage.build.linux?.publish).toBeUndefined()

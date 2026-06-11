@@ -1436,3 +1436,11 @@ button, input, textarea, select, a, [role="button"] {
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
 }
+
+/* Same WebKit paint-skipping trick for trace tree rows (see .chat-render-item--cv
+   above). Tree rows are fixed-density 34px single-line items, so the intrinsic
+   size estimate is exact and scrolling never drifts. */
+.trace-row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
+}

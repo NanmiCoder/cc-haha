@@ -6,7 +6,7 @@ import { getDesktopHost } from '../lib/desktopHost'
 
 /**
  * Desktop host trigger: let the app process kill + respawn adapter sidecar,
- * 让 ~/.claude/adapters.json 里的最新凭据被新进程读到，建立飞书 / Telegram / 微信 / 钉钉
+ * 让 ~/.claude/adapters.json 里的最新凭据被新进程读到，建立飞书 / Telegram / 微信 / 钉钉 / WhatsApp
  * 的 WebSocket 连接。
  *
  * 在非桌面环境（纯浏览器调试 / 单元测试）这会安静跳过 —— 那种场景下
@@ -53,11 +53,14 @@ type AdapterStore = {
   generatePairingCode: () => Promise<string>
   startWechatLogin: () => Promise<{ qrcodeUrl?: string; message: string; sessionKey: string }>
   pollWechatLogin: (sessionKey: string) => Promise<{ connected: boolean; status?: string; message?: string }>
-  removePairedUser: (platform: 'telegram' | 'feishu' | 'wechat' | 'dingtalk', userId: string | number) => Promise<void>
+  startWhatsAppLogin: () => Promise<{ qrDataUrl?: string; message: string; sessionKey: string }>
+  pollWhatsAppLogin: (sessionKey: string) => Promise<{ connected: boolean; status?: string; message?: string; qrDataUrl?: string }>
+  removePairedUser: (platform: 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp', userId: string | number) => Promise<void>
   beginDingtalkRegistration: () => Promise<DingtalkRegistrationBegin>
   pollDingtalkRegistration: (deviceCode: string) => Promise<DingtalkRegistrationPoll>
   unbindWechatAccount: () => Promise<void>
   unbindDingtalkBot: () => Promise<void>
+  unbindWhatsAppAccount: () => Promise<void>
 }
 
 export const useAdapterStore = create<AdapterStore>((set, get) => ({
@@ -80,7 +83,7 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
     const config = await adaptersApi.updateConfig(patch)
     set({ config })
     // 配置文件已写入磁盘，让 Tauri 主进程 kill + respawn adapter sidecar，
-    // 触发飞书 / Telegram WebSocket 用新凭据重连。pairing code / paired users
+    // 触发各 IM adapter 用新凭据重连。pairing code / paired users
     // 这种轻量更新也会触发重启 —— 这是个有意为之的简化：保证"任何配置变更
     // 都立刻生效"，比起精细判断哪些字段值得重启更可靠。
     void notifyDesktopRestartAdapters()
@@ -116,6 +119,28 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
     return { connected: false }
   },
 
+  startWhatsAppLogin: async () => {
+    return adaptersApi.startWhatsAppLogin()
+  },
+
+  pollWhatsAppLogin: async (sessionKey) => {
+    const result = await adaptersApi.pollWhatsAppLogin(sessionKey)
+    if ('connected' in result && result.connected === false) {
+      return {
+        connected: false,
+        status: result.status,
+        message: result.message,
+        qrDataUrl: result.qrDataUrl,
+      }
+    }
+    if ('whatsapp' in result || 'wechat' in result || 'telegram' in result || 'feishu' in result || 'dingtalk' in result) {
+      set({ config: result })
+      void notifyDesktopRestartAdapters()
+      return { connected: true }
+    }
+    return { connected: false }
+  },
+
   beginDingtalkRegistration: () => adaptersApi.beginDingtalkRegistration(),
 
   pollDingtalkRegistration: async (deviceCode) => {
@@ -135,6 +160,12 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
 
   unbindDingtalkBot: async () => {
     const config = await adaptersApi.unbindDingtalk()
+    set({ config })
+    void notifyDesktopRestartAdapters()
+  },
+
+  unbindWhatsAppAccount: async () => {
+    const config = await adaptersApi.unbindWhatsApp()
     set({ config })
     void notifyDesktopRestartAdapters()
   },

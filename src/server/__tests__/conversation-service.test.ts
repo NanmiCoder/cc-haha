@@ -7,6 +7,7 @@ import {
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
 import { ProviderService } from '../services/providerService.js'
+import { updateTraceCaptureSettings } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 
 describe('ConversationService', () => {
@@ -21,14 +22,28 @@ describe('ConversationService', () => {
   let originalProviderManagedByHost: string | undefined
   let originalDiagnosticsFile: string | undefined
   let originalAttributionHeader: string | undefined
+  let originalResumeInterruptedTurn: string | undefined
+  let originalTraceApiCalls: string | undefined
+  let originalTraceProviderId: string | undefined
+  let originalTraceProviderName: string | undefined
+  let originalTraceProviderFormat: string | undefined
   let originalHome: string | undefined
   let originalPath: string | undefined
   let originalShell: string | undefined
   let originalZdotdir: string | undefined
+  let originalNvmDir: string | undefined
   let originalDisableTerminalShellEnv: string | undefined
+  let originalServerPort: number | undefined
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-conversation-service-'))
+    // ProviderService.serverPort is a process-wide static; other server tests
+    // (e.g. conversations.test.ts starting a server on an OS-assigned port) can
+    // leave it set to a random value. Pin it to the default so the managed
+    // ANTHROPIC_BASE_URL assertions below are deterministic, and restore it
+    // afterwards.
+    originalServerPort = ProviderService.getServerPort()
+    ProviderService.setServerPort(3456)
     originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     originalApiKey = process.env.ANTHROPIC_API_KEY
     originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
@@ -39,10 +54,16 @@ describe('ConversationService', () => {
     originalProviderManagedByHost = process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     originalDiagnosticsFile = process.env.CLAUDE_CODE_DIAGNOSTICS_FILE
     originalAttributionHeader = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
+    originalResumeInterruptedTurn = process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+    originalTraceApiCalls = process.env.CC_HAHA_TRACE_API_CALLS
+    originalTraceProviderId = process.env.CC_HAHA_TRACE_PROVIDER_ID
+    originalTraceProviderName = process.env.CC_HAHA_TRACE_PROVIDER_NAME
+    originalTraceProviderFormat = process.env.CC_HAHA_TRACE_PROVIDER_FORMAT
     originalHome = process.env.HOME
     originalPath = process.env.PATH
     originalShell = process.env.SHELL
     originalZdotdir = process.env.ZDOTDIR
+    originalNvmDir = process.env.NVM_DIR
     originalDisableTerminalShellEnv = process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
 
     process.env.CLAUDE_CONFIG_DIR = tmpDir
@@ -57,7 +78,17 @@ describe('ConversationService', () => {
     delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     delete process.env.CLAUDE_CODE_DIAGNOSTICS_FILE
     delete process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
+    delete process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+    delete process.env.CC_HAHA_TRACE_API_CALLS
+    delete process.env.CC_HAHA_TRACE_PROVIDER_ID
+    delete process.env.CC_HAHA_TRACE_PROVIDER_NAME
+    delete process.env.CC_HAHA_TRACE_PROVIDER_FORMAT
     process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
+    // The CI runner exports a real NVM_DIR (/home/runner/.nvm). buildChildEnv's
+    // shell-env merge lets inherited process env win over shell-captured values,
+    // so a leaked NVM_DIR would shadow the fake .zshrc value the shell-capture
+    // tests assert. Clear it; the per-test fake shell is the only intended source.
+    delete process.env.NVM_DIR
     resetTerminalShellEnvironmentCacheForTests()
   })
 
@@ -92,6 +123,21 @@ describe('ConversationService', () => {
     if (originalAttributionHeader === undefined) delete process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
     else process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = originalAttributionHeader
 
+    if (originalResumeInterruptedTurn === undefined) delete process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+    else process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN = originalResumeInterruptedTurn
+
+    if (originalTraceApiCalls === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS
+    else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceApiCalls
+
+    if (originalTraceProviderId === undefined) delete process.env.CC_HAHA_TRACE_PROVIDER_ID
+    else process.env.CC_HAHA_TRACE_PROVIDER_ID = originalTraceProviderId
+
+    if (originalTraceProviderName === undefined) delete process.env.CC_HAHA_TRACE_PROVIDER_NAME
+    else process.env.CC_HAHA_TRACE_PROVIDER_NAME = originalTraceProviderName
+
+    if (originalTraceProviderFormat === undefined) delete process.env.CC_HAHA_TRACE_PROVIDER_FORMAT
+    else process.env.CC_HAHA_TRACE_PROVIDER_FORMAT = originalTraceProviderFormat
+
     if (originalHome === undefined) delete process.env.HOME
     else process.env.HOME = originalHome
 
@@ -104,10 +150,14 @@ describe('ConversationService', () => {
     if (originalZdotdir === undefined) delete process.env.ZDOTDIR
     else process.env.ZDOTDIR = originalZdotdir
 
+    if (originalNvmDir === undefined) delete process.env.NVM_DIR
+    else process.env.NVM_DIR = originalNvmDir
+
     if (originalDisableTerminalShellEnv === undefined) delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
     else process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = originalDisableTerminalShellEnv
 
     resetTerminalShellEnvironmentCacheForTests()
+    if (originalServerPort !== undefined) ProviderService.setServerPort(originalServerPort)
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -360,6 +410,68 @@ describe('ConversationService', () => {
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0')
     expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_ID).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_NAME).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_FORMAT).toBeUndefined()
+  })
+
+  test('buildChildEnv injects trace provider metadata for desktop sdk session-scoped providers', async () => {
+    const providerService = new ProviderService()
+    const provider = await providerService.addProvider({
+      presetId: 'custom',
+      name: 'Traceable Provider',
+      apiKey: 'provider-key',
+      baseUrl: 'https://traceable.example',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'gpt-5.5',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+    })
+
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+      { providerId: provider.id },
+    )) as Record<string, string>
+
+    expect(env.CC_HAHA_TRACE_API_CALLS).toBe('1')
+    expect(env.CC_HAHA_TRACE_PROVIDER_ID).toBe(provider.id)
+    expect(env.CC_HAHA_TRACE_PROVIDER_NAME).toBe('Traceable Provider')
+    expect(env.CC_HAHA_TRACE_PROVIDER_FORMAT).toBe('anthropic')
+  })
+
+  test('buildChildEnv does not inject trace env when managed trace capture is disabled', async () => {
+    await updateTraceCaptureSettings({ enabled: false })
+    const providerService = new ProviderService()
+    const provider = await providerService.addProvider({
+      presetId: 'custom',
+      name: 'Trace disabled provider',
+      apiKey: 'provider-key',
+      baseUrl: 'https://traceable.example',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'gpt-5.5',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+    })
+
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+      { providerId: provider.id },
+    )) as Record<string, string>
+
+    expect(env.CC_HAHA_TRACE_API_CALLS).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_ID).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_NAME).toBeUndefined()
+    expect(env.CC_HAHA_TRACE_PROVIDER_FORMAT).toBeUndefined()
   })
 
   test('buildChildEnv uses the session-selected model for session-scoped providers', async () => {
@@ -555,6 +667,7 @@ describe('ConversationService', () => {
       'com.claude-code-haha.desktop',
     )
     expect(env.CC_HAHA_DESKTOP_SERVER_URL).toBe('http://127.0.0.1:3456')
+    expect(env.CC_HAHA_TRACE_API_CALLS).toBe('1')
     expect(env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING).toBe('1')
   })
 
@@ -595,6 +708,18 @@ describe('ConversationService', () => {
 
     expect(env.CC_HAHA_DESKTOP_AWAIT_MCP).toBe('1')
     expect(env.CC_HAHA_DESKTOP_AWAIT_MCP_TIMEOUT_MS).toBe('5000')
+  })
+
+  test('buildChildEnv disables inherited interrupted-turn resume for prewarm launches', async () => {
+    process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN = '1'
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+      { resumeInterruptedTurn: false },
+    )) as Record<string, string>
+
+    expect(env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBeUndefined()
   })
 
   test('buildChildEnv enables stream idle watchdog for desktop CLI sessions', async () => {

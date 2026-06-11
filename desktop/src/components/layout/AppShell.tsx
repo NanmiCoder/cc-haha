@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type HTMLAttributes } from 'react'
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
 import { ToastContainer } from '../shared/Toast'
@@ -23,6 +23,9 @@ import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import type { Tab } from '../../stores/tabStore'
+import { getTraceLaunchRequest } from '../../lib/traceLaunch'
+import { TraceList } from '../../pages/TraceList'
+import { TraceSession } from '../../pages/TraceSession'
 
 function isChatTab(tab: Tab | undefined) {
   return tab?.type === 'session'
@@ -39,6 +42,7 @@ export function AppShell() {
   const [bootstrapNonce, setBootstrapNonce] = useState(0)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const t = useTranslation()
+  const traceLaunch = useMemo(() => getTraceLaunchRequest(), [])
   const desktopRuntime = isDesktopRuntime()
   const isMobileShell = useMobileViewport() && !desktopRuntime
   const tabs = useTabStore((s) => s.tabs)
@@ -84,8 +88,17 @@ export function AppShell() {
         }
 
         void (async () => {
+          if (traceLaunch.windowMode) return
+
           await useTabStore.getState().restoreTabs()
           if (cancelled) return
+          if (traceLaunch.sessionId) {
+            useTabStore.getState().openTraceTab(
+              traceLaunch.sessionId,
+              `Trace: ${traceLaunch.sessionId.slice(0, 8)}`,
+            )
+            return
+          }
           const { activeTabId: activeId, tabs } = useTabStore.getState()
           const activeTab = tabs.find((tab) => tab.sessionId === activeId)
           if (activeId && activeTab?.type === 'session') {
@@ -111,7 +124,7 @@ export function AppShell() {
     return () => {
       cancelled = true
     }
-  }, [bootstrapNonce, fetchSettings, desktopRuntime])
+  }, [bootstrapNonce, fetchSettings, desktopRuntime, traceLaunch])
 
   // Listen for macOS native menu navigation events (About / Settings)
   useEffect(() => {
@@ -190,6 +203,19 @@ export function AppShell() {
     return (
       <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
         {t('app.launching')}
+      </div>
+    )
+  }
+
+  if (traceLaunch.windowMode) {
+    return (
+      <div className="app-shell-viewport flex overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]">
+        {traceLaunch.sessionId ? (
+          <TraceSession sessionId={traceLaunch.sessionId} standalone />
+        ) : (
+          <TraceList />
+        )}
+        <ToastContainer />
       </div>
     )
   }

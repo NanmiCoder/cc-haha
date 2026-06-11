@@ -26,6 +26,50 @@ export type SessionTask = {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+export type SessionListItem = {
+  id: string
+  title: string
+  createdAt: string
+  modifiedAt: string
+  messageCount: number
+  projectPath: string
+  projectRoot?: string | null
+  workDir: string | null
+  workDirExists: boolean
+  permissionMode?: string
+}
+
+export type ProviderSummary = {
+  id: string
+  name: string
+  presetId?: string
+  models?: {
+    main?: string
+    haiku?: string
+    sonnet?: string
+    opus?: string
+  }
+}
+
+export type ModelSummary = {
+  id: string
+  name: string
+  description: string
+  context: string
+}
+
+export type SkillSummary = {
+  name: string
+  displayName?: string
+  description: string
+  source: 'user' | 'project' | 'plugin'
+  userInvocable: boolean
+  version?: string
+  contentLength: number
+  hasDirectory: boolean
+  pluginName?: string
+}
+
 export class AdapterHttpClient {
   readonly httpBaseUrl: string
   private readonly allowedProjectRoots: string[]
@@ -184,6 +228,143 @@ export class AdapterHttpClient {
       }
       const data = (await res.json()) as { tasks?: SessionTask[] }
       return Array.isArray(data.tasks) ? data.tasks : []
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async listSessions(options?: {
+    project?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const params = new URLSearchParams()
+    if (options?.project) params.set('project', options.project)
+    if (options?.limit !== undefined) params.set('limit', String(options.limit))
+    if (options?.offset !== undefined) params.set('offset', String(options.offset))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}/api/sessions${suffix}`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Failed to list sessions: ${(err as any).message}`)
+      }
+      return (await res.json()) as { sessions: SessionListItem[]; total: number }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async listProviders(): Promise<{ providers: ProviderSummary[]; activeId: string | null }> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}/api/providers`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Failed to list providers: ${(err as any).message}`)
+      }
+      return (await res.json()) as { providers: ProviderSummary[]; activeId: string | null }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async activateProvider(providerId: string): Promise<void> {
+    await this.postJson(`/api/providers/${encodeURIComponent(providerId)}/activate`)
+  }
+
+  async activateOfficialProvider(): Promise<void> {
+    await this.postJson('/api/providers/official')
+  }
+
+  async listModels(): Promise<{ models: ModelSummary[]; provider: { id: string; name: string } | null }> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}/api/models`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Failed to list models: ${(err as any).message}`)
+      }
+      return (await res.json()) as { models: ModelSummary[]; provider: { id: string; name: string } | null }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async getCurrentModel(): Promise<{ model: ModelSummary }> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}/api/models/current`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Failed to get current model: ${(err as any).message}`)
+      }
+      return (await res.json()) as { model: ModelSummary }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async setCurrentModel(modelId: string): Promise<void> {
+    await this.putJson('/api/models/current', { modelId })
+  }
+
+  async listSkills(cwd: string): Promise<{ skills: SkillSummary[] }> {
+    const params = new URLSearchParams({ cwd })
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}/api/skills?${params.toString()}`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Failed to list skills: ${(err as any).message}`)
+      }
+      return (await res.json()) as { skills: SkillSummary[] }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async postJson(pathname: string): Promise<void> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}${pathname}`, {
+        method: 'POST',
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Request failed: ${(err as any).message}`)
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async putJson(pathname: string, body: Record<string, unknown>): Promise<void> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const res = await fetch(`${this.httpBaseUrl}${pathname}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error(`Request failed: ${(err as any).message}`)
+      }
     } finally {
       clearTimeout(timer)
     }

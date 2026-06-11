@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { ELECTRON_EVENT_CHANNELS } from '../ipc/channels'
-import { parsePreviewAgentMessage } from '../ipc/previewMessage'
+import { parsePreviewAgentMessage, type PreviewAgentMessage } from '../ipc/previewMessage'
 export { parsePreviewAgentMessage, shouldForwardPreviewMessage } from '../ipc/previewMessage'
 
 export type PreviewBounds = {
@@ -16,6 +16,7 @@ export type PreviewWebContentsLike = {
   on(event: 'did-finish-load', handler: () => void): unknown
   close?(): void
   isDestroyed?(): boolean
+  capturePage?(): Promise<{ toDataURL(): string }>
   send(channel: string, payload: unknown): void
 }
 
@@ -35,6 +36,23 @@ export type PreviewParentWindowLike = {
 export type ElectronPreviewServiceOptions = {
   createView: () => PreviewViewLike
   previewScriptPath: string
+}
+
+type PreviewHostCaptureMessage = {
+  v: 1
+  type: 'capture'
+  kind: 'full' | 'viewport' | 'element'
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isHostCaptureMessage(payload: unknown): payload is PreviewHostCaptureMessage {
+  return isPlainRecord(payload) &&
+    payload.v === 1 &&
+    payload.type === 'capture' &&
+    (payload.kind === 'full' || payload.kind === 'viewport' || payload.kind === 'element')
 }
 
 export function normalizePreviewUrl(input: string): string {
@@ -108,18 +126,26 @@ export class ElectronPreviewService {
     this.parent = null
   }
 
-  async message(payload: unknown): Promise<void> {
+  async message(payload: unknown, renderer?: PreviewWebContentsLike | null): Promise<void> {
+    if (isHostCaptureMessage(payload) && renderer) {
+      await this.captureScreenshotToRenderer(payload.kind, renderer)
+      return
+    }
+
     const raw = JSON.stringify(payload)
     const script = `globalThis.__PREVIEW_BRIDGE__?.handleHostRaw(${JSON.stringify(raw)})`
     await this.requireView().webContents.executeJavaScript(script)
   }
 
-  sendMessageToRenderer(sender: PreviewWebContentsLike, raw: unknown, renderer: PreviewWebContentsLike | null | undefined): void {
+  async sendMessageToRenderer(sender: PreviewWebContentsLike, raw: unknown, renderer: PreviewWebContentsLike | null | undefined): Promise<void> {
     if (sender !== this.view?.webContents) return
     if (typeof raw !== 'string') return
     const message = parsePreviewAgentMessage(raw)
     if (!message) return
-    renderer?.send(ELECTRON_EVENT_CHANNELS.previewEvent, message)
+    const event = message.type === 'selection'
+      ? await this.withNativeSelectionScreenshot(message)
+      : message
+    renderer?.send(ELECTRON_EVENT_CHANNELS.previewEvent, event)
   }
 
   private ensureView(parent: PreviewParentWindowLike): PreviewViewLike {
@@ -143,5 +169,61 @@ export class ElectronPreviewService {
     if (view.webContents.isDestroyed?.()) return
     const script = readFileSync(resolvePreviewScriptPath(this.previewScriptPath), 'utf8')
     await view.webContents.executeJavaScript(script)
+  }
+
+  private async captureNativeDataUrl(): Promise<string> {
+    const webContents = this.requireView().webContents
+    if (!webContents.capturePage) throw new Error('native preview capture unavailable')
+    const image = await webContents.capturePage()
+    return image.toDataURL()
+  }
+
+  private async captureScreenshotToRenderer(kind: PreviewHostCaptureMessage['kind'], renderer: PreviewWebContentsLike): Promise<void> {
+    try {
+      renderer.send(ELECTRON_EVENT_CHANNELS.previewEvent, {
+        v: 1,
+        type: 'screenshot',
+        dataUrl: await this.captureNativeDataUrl(),
+        kind,
+      })
+    } catch (error) {
+      renderer.send(ELECTRON_EVENT_CHANNELS.previewEvent, {
+        v: 1,
+        type: 'error',
+        message: String(error),
+      })
+    }
+  }
+
+  private async withNativeSelectionScreenshot(message: Extract<PreviewAgentMessage, { type: 'selection' }>): Promise<PreviewAgentMessage> {
+    try {
+      const payload = message.payload
+      const screenshot = isPlainRecord(payload.screenshot) ? payload.screenshot : {}
+      return {
+        ...message,
+        payload: {
+          ...payload,
+          screenshot: {
+            ...screenshot,
+            kind: screenshot.kind ?? 'region',
+            dataUrl: await this.captureNativeDataUrl(),
+          },
+        },
+      }
+    } catch {
+      return message
+    } finally {
+      await this.clearSelectionOverlay()
+    }
+  }
+
+  private async clearSelectionOverlay(): Promise<void> {
+    const webContents = this.view?.webContents
+    if (!webContents || webContents.isDestroyed?.()) return
+    try {
+      await webContents.executeJavaScript('globalThis.__PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__?.()')
+    } catch {
+      // The page may navigate while the native capture is in flight.
+    }
   }
 }

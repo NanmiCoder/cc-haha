@@ -16,6 +16,7 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
+import { addFileGlobRuleToGitignore } from '../../utils/git/gitignore.js'
 
 const VALID_PERMISSION_MODES = [
   'default',
@@ -54,6 +55,15 @@ export class SettingsService {
     return path.join(root, '.claude', 'settings.json')
   }
 
+  /** 项目本地设置文件路径（不建议提交到仓库） */
+  private getLocalSettingsPath(projectRoot?: string): string {
+    const root = projectRoot || this.projectRoot
+    if (!root) {
+      throw ApiError.badRequest('Project root is required for local settings')
+    }
+    return path.join(root, '.claude', 'settings.local.json')
+  }
+
   // ---------------------------------------------------------------------------
   // 读取
   // ---------------------------------------------------------------------------
@@ -89,6 +99,11 @@ export class SettingsService {
   /** 获取项目级设置 */
   async getProjectSettings(projectRoot?: string): Promise<Record<string, unknown>> {
     return this.readJsonFile(this.getProjectSettingsPath(projectRoot))
+  }
+
+  /** 获取项目本地设置 */
+  async getLocalSettings(projectRoot?: string): Promise<Record<string, unknown>> {
+    return this.readJsonFile(this.getLocalSettingsPath(projectRoot))
   }
 
   // ---------------------------------------------------------------------------
@@ -171,6 +186,23 @@ export class SettingsService {
       const merged = Object.assign({}, current, settings)
       await this.writeJsonFile(filePath, merged)
     })
+  }
+
+  /** 更新项目本地设置（浅合并） */
+  async updateLocalSettings(
+    settings: Record<string, unknown>,
+    projectRoot?: string,
+  ): Promise<void> {
+    const root = projectRoot || this.projectRoot
+    const filePath = this.getLocalSettingsPath(projectRoot)
+    await this.withWriteLock(filePath, async () => {
+      const current = await this.readJsonFile(filePath)
+      const merged = Object.assign({}, current, settings)
+      await this.writeJsonFile(filePath, merged)
+    })
+    if (root) {
+      void addFileGlobRuleToGitignore('.claude/settings.local.json', root)
+    }
   }
 
   // ---------------------------------------------------------------------------

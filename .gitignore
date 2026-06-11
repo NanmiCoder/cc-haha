@@ -23,9 +23,8 @@ extracted-natives/
 # E2E screenshots
 e2e-*.png
 
-# Quality gate reports
-artifacts/quality-runs/
-artifacts/coverage/
+# Local/generated artifacts
+artifacts/
 
 # Desktop build output
 desktop/dist/
@@ -91,5 +90,7 @@ runtime/__pycache__
 
 # Local AI assistant artifacts (graph, notes)
 CLAUDE.md
+.mavis/
+.opencode/
 graphify-out/
 .gitignore

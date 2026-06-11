@@ -3,47 +3,13 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installTray, resolveTrayIconPath, shouldInstallTray } from './tray'
+import { buildElectronModuleMock, getElectronServiceMocks, resetElectronServiceMocks } from './__electronMock'
 
-const trayMocksKey = '__electronTrayMocks'
-
-vi.mock('electron', () => {
-  const mocks = (globalThis as Record<string, unknown>)[trayMocksKey] as ReturnType<typeof createElectronTrayMocks> | undefined
-  if (!mocks) {
-    throw new Error('Electron tray mocks were not initialized for this test')
-  }
-
-  return {
-    Menu: {
-      buildFromTemplate: mocks.buildFromTemplate,
-    },
-    Tray: mocks.Tray.mockImplementation(() => mocks.tray),
-    nativeImage: {
-      createFromPath: mocks.createFromPath,
-    },
-  }
-})
-
-function createElectronTrayMocks() {
-  const handlers = new Map<string, () => void>()
-  return {
-    handlers,
-    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
-    createFromPath: vi.fn((iconPath: string) => ({ iconPath })),
-    tray: {
-      setToolTip: vi.fn(),
-      setContextMenu: vi.fn(),
-      on: vi.fn((event: string, handler: () => void) => {
-        handlers.set(event, handler)
-      }),
-      destroy: vi.fn(),
-    },
-    Tray: vi.fn(),
-  }
-}
+vi.mock('electron', () => buildElectronModuleMock())
 
 describe('Electron tray service', () => {
   afterEach(() => {
-    delete (globalThis as Record<string, unknown>)[trayMocksKey]
+    resetElectronServiceMocks()
   })
 
   it('uses the existing desktop icon assets for the tray icon', () => {
@@ -77,8 +43,7 @@ describe('Electron tray service', () => {
   it('installs tray handlers that show the app, quit explicitly, and dispose cleanly', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'electron-tray-install-'))
     try {
-      const trayMocks = createElectronTrayMocks()
-      ;(globalThis as Record<string, unknown>)[trayMocksKey] = trayMocks
+      const trayMocks = getElectronServiceMocks()
       const iconPath = path.join(root, 'src-tauri', 'icons', 'icon.png')
       mkdirSync(path.dirname(iconPath), { recursive: true })
       writeFileSync(iconPath, 'png')

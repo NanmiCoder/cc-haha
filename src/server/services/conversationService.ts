@@ -33,6 +33,7 @@ import { sanitizePath } from '../../utils/path.js'
 import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
 import { attributionHeaderEnvForModel } from './attributionHeaderPolicy.js'
 import { buildNetworkEnvironment, loadNetworkSettings } from './networkSettings.js'
+import { readTraceCaptureSettings } from './traceCaptureService.js'
 import { logError } from '../../utils/log.js'
 import {
   createImageMetadataText,
@@ -134,6 +135,7 @@ type SessionStartOptions = {
    * Stored separately from coordinatorMode so both can be active at once.
    */
   handoffSystemPrompt?: string
+  resumeInterruptedTurn?: boolean
 }
 
 export class ConversationStartupError extends Error {
@@ -1092,6 +1094,12 @@ export class ConversationService {
 
     const cleanEnv = await getProcessEnvWithTerminalShellEnvironment()
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
+    if (options?.resumeInterruptedTurn === false) {
+      delete cleanEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+    }
+    delete cleanEnv.CC_HAHA_TRACE_PROVIDER_ID
+    delete cleanEnv.CC_HAHA_TRACE_PROVIDER_NAME
+    delete cleanEnv.CC_HAHA_TRACE_PROVIDER_FORMAT
     if (this.shouldStripInheritedProviderEnv(options?.providerId)) {
       for (const key of PROVIDER_ENV_KEYS) {
         delete cleanEnv[key]
@@ -1108,11 +1116,15 @@ export class ConversationService {
       }
     }
 
-    const explicitProviderEnv =
+    const explicitProvider =
       typeof options?.providerId === 'string'
-        ? await this.providerService.getProviderRuntimeEnv(options.providerId)
+        ? await this.providerService.getProvider(options.providerId)
         : null
+    const explicitProviderEnv = explicitProvider
+      ? await this.providerService.getProviderRuntimeEnv(explicitProvider.id)
+      : null
     const networkEnv = buildNetworkEnvironment(await loadNetworkSettings())
+    const traceCaptureEnabled = (await readTraceCaptureSettings()).enabled
     if (explicitProviderEnv && options?.model?.trim()) {
       explicitProviderEnv.ANTHROPIC_MODEL = options.model.trim()
     }
@@ -1141,6 +1153,16 @@ export class ConversationService {
       PWD: workDir,
       ...(sdkUrl
         ? { CC_HAHA_COMPUTER_USE_HOST_BUNDLE_ID: 'com.claude-code-haha.desktop' }
+        : {}),
+      ...(sdkUrl && traceCaptureEnabled
+        ? { CC_HAHA_TRACE_API_CALLS: '1' }
+        : {}),
+      ...(sdkUrl && traceCaptureEnabled && explicitProvider
+        ? {
+            CC_HAHA_TRACE_PROVIDER_ID: explicitProvider.id,
+            CC_HAHA_TRACE_PROVIDER_NAME: explicitProvider.name,
+            CC_HAHA_TRACE_PROVIDER_FORMAT: explicitProvider.apiFormat ?? 'anthropic',
+          }
         : {}),
       ...(desktopServerUrl
         ? { CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl }

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   connectToSession: vi.fn(),
   setActiveTab: vi.fn(),
   openTab: vi.fn(),
+  openTraceTab: vi.fn(),
   tabState: {
     activeTabId: null as string | null,
     tabs: [] as Array<{ sessionId: string; title: string; type: string; status: string }>,
@@ -51,6 +52,7 @@ vi.mock('../../stores/tabStore', () => {
     activeTabId: mocks.tabState.activeTabId,
     tabs: mocks.tabState.tabs,
     openTab: mocks.openTab,
+    openTraceTab: mocks.openTraceTab,
     setActiveTab: mocks.setActiveTab,
   })
   useTabStore.setState = (next: { activeTabId?: string | null }) => {
@@ -100,6 +102,14 @@ vi.mock('./H5ConnectionView', () => ({
   ),
 }))
 
+vi.mock('../../pages/TraceSession', () => ({
+  TraceSession: ({ sessionId, standalone }: { sessionId: string; standalone?: boolean }) => (
+    <section data-standalone={standalone ? 'true' : 'false'} data-testid="trace-session">
+      trace:{sessionId}
+    </section>
+  ),
+}))
+
 vi.mock('../shared/Toast', () => ({
   ToastContainer: () => null,
 }))
@@ -119,6 +129,7 @@ describe('AppShell boot flow', () => {
     mocks.fetchAll.mockResolvedValue(undefined)
     mocks.restoreTabs.mockResolvedValue(undefined)
     mocks.openTab.mockReset()
+    mocks.openTraceTab.mockReset()
     mocks.setActiveTab.mockImplementation((sessionId: string) => {
       mocks.tabState.activeTabId = sessionId
     })
@@ -127,6 +138,7 @@ describe('AppShell boot flow', () => {
     useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
     useUIStore.setState({ sidebarOpen: true })
     Reflect.deleteProperty(window, 'desktopHost')
+    window.history.pushState({}, '', '/')
   })
 
   it('renders the desktop chrome after server and settings bootstrap', async () => {
@@ -179,6 +191,32 @@ describe('AppShell boot flow', () => {
     await waitFor(() => {
       expect(mocks.connectToSession).toHaveBeenCalledWith('session-1')
     })
+  })
+
+  it('opens a trace tab from a session-scoped trace deep link', async () => {
+    window.history.pushState({}, '', '/?traceSessionId=session-deep-link')
+
+    render(<AppShell />)
+
+    await screen.findByText('sidebar loaded')
+    await waitFor(() => {
+      expect(mocks.openTraceTab).toHaveBeenCalledWith(
+        'session-deep-link',
+        'Trace: session-',
+      )
+    })
+    expect(mocks.connectToSession).not.toHaveBeenCalled()
+  })
+
+  it('renders a dedicated trace window shell from traceWindow deep links', async () => {
+    window.history.pushState({}, '', '/?traceWindow=1&traceSessionId=session-window')
+
+    render(<AppShell />)
+
+    expect(await screen.findByTestId('trace-session')).toHaveTextContent('trace:session-window')
+    expect(screen.getByTestId('trace-session')).toHaveAttribute('data-standalone', 'true')
+    expect(screen.queryByText('sidebar loaded')).not.toBeInTheDocument()
+    expect(mocks.restoreTabs).not.toHaveBeenCalled()
   })
 
   it('routes native menu navigation through the desktop host', async () => {

@@ -4,13 +4,13 @@ import { Copy, Eye, EyeOff, PowerOff, QrCode, RotateCw } from 'lucide-react'
 import { useSettingsStore, UI_ZOOM_DEFAULT, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP } from '../stores/settingsStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useProviderCompatStore, PROVIDER_COMPAT_WARN_THRESHOLD } from '../stores/providerCompatStore'
-import { useTranslation } from '../i18n'
+import { useTranslation, type TranslationKey } from '../i18n'
 import { Modal } from '../components/shared/Modal'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { Input } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
 import { Dropdown } from '../components/shared/Dropdown'
-import type { ThemeMode, UpdateProxyMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior } from '../types/settings'
+import type { ThemeMode, UpdateProxyMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource } from '../types/settings'
 import type { Locale } from '../i18n'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ProviderAuthStrategy } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
@@ -29,6 +29,7 @@ import { ComputerUseSettings } from './ComputerUseSettings'
 import { McpSettings } from './McpSettings'
 import { TerminalSettings } from './TerminalSettings'
 import { DiagnosticsSettings } from './DiagnosticsSettings'
+import { TraceList } from './TraceList'
 import { ActivitySettings } from './ActivitySettings'
 import { MemorySettings } from './MemorySettings'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
@@ -167,6 +168,7 @@ export function Settings() {
             <TabButton icon="extension" label={t('settings.tab.plugins')} active={activeTab === 'plugins'} onClick={() => setActiveTab('plugins')} />
             <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
             <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
+            <TabButton icon="account_tree" label={t('settings.tab.trace')} active={activeTab === 'trace'} onClick={() => setActiveTab('trace')} />
             <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
           </div>
           <div className="border-t border-[var(--color-border)]/40 pt-1">
@@ -174,8 +176,8 @@ export function Settings() {
           </div>
         </div>
 
-        {/* Tab content */}
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        {/* Tab content; trace embeds a full-bleed page that manages its own scroll */}
+        <div className={activeTab === 'trace' ? 'flex-1 flex min-h-0 flex-col overflow-hidden' : 'flex-1 overflow-y-auto px-8 py-6'}>
           {activeTab === 'providers' && <ProviderSettings />}
           {activeTab === 'activity' && <ActivitySettings />}
           {activeTab === 'general' && <GeneralSettings />}
@@ -188,6 +190,7 @@ export function Settings() {
           {activeTab === 'memory' && <MemorySettings />}
           {activeTab === 'plugins' && <PluginSettings />}
           {activeTab === 'computerUse' && <ComputerUseSettings />}
+          {activeTab === 'trace' && <TraceList />}
           {activeTab === 'diagnostics' && <DiagnosticsSettings />}
           {activeTab === 'about' && <AboutSettings />}
         </div>
@@ -1807,7 +1810,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
 
 // ─── General Settings ──────────────────────────────────────
 
-function GeneralSettings() {
+export function GeneralSettings() {
   const {
     thinkingEnabled,
     setThinkingEnabled,
@@ -1817,6 +1820,13 @@ function GeneralSettings() {
     setTheme,
     chatSendBehavior,
     setChatSendBehavior,
+    outputStyle,
+    outputStyles,
+    outputStyleScope,
+    outputStylesLoading,
+    outputStyleError,
+    fetchOutputStyles,
+    setOutputStyle,
     skipWebFetchPreflight,
     setSkipWebFetchPreflight,
     desktopNotificationsEnabled,
@@ -1825,6 +1835,8 @@ function GeneralSettings() {
     setWebSearch,
     network,
     setNetwork,
+    traceCapture,
+    setTraceCaptureEnabled,
     responseLanguage,
     setResponseLanguage,
     appMode,
@@ -1834,6 +1846,8 @@ function GeneralSettings() {
     uiZoom,
     setUiZoom,
   } = useSettingsStore()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const sessions = useSessionStore((s) => s.sessions)
   const t = useTranslation()
   const [webSearchDraft, setWebSearchDraft] = useState(webSearch)
   const [networkDraft, setNetworkDraft] = useState(network)
@@ -1858,10 +1872,22 @@ function GeneralSettings() {
   const activeConfigDir = appMode.activeConfigDir ?? (appMode.mode === 'portable' ? appMode.portableDir : null)
   const configDirSource = appMode.configDirSource ?? (appMode.mode === 'portable' ? 'portable' : 'system')
   const isEnvironmentConfigDir = configDirSource === 'environment'
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId),
+    [activeSessionId, sessions],
+  )
+  const outputStyleWorkDir =
+    activeSession?.workDirExists === false
+      ? null
+      : activeSession?.workDir ?? activeSession?.projectRoot ?? null
 
   useEffect(() => {
     setWebSearchDraft(webSearch)
   }, [webSearch])
+
+  useEffect(() => {
+    void fetchOutputStyles(outputStyleWorkDir)
+  }, [fetchOutputStyles, outputStyleWorkDir])
 
   useEffect(() => {
     setNetworkDraft(network)
@@ -1929,6 +1955,19 @@ function GeneralSettings() {
   ]
   const selectedResponseLanguageLabel =
     RESPONSE_LANGUAGES.find(({ value }) => value === responseLanguage)?.label ?? RESPONSE_LANGUAGES[0]!.label
+  const outputStyleItems = outputStyles.map((style) => ({
+    value: style.value,
+    label: style.label,
+    description: `${style.description} · ${getOutputStyleSourceLabel(style.source, t)}`,
+  }))
+  const selectedOutputStyle =
+    outputStyles.find((style) => style.value === outputStyle) ?? outputStyles[0]
+  const outputStyleScopeLabel = outputStyleScope === 'localSettings'
+    ? t('settings.general.outputStyleScopeLocal')
+    : t('settings.general.outputStyleScopeUser')
+  const outputStyleScopeHint = outputStyleScope === 'localSettings'
+    ? t('settings.general.outputStyleScopeLocalHint')
+    : t('settings.general.outputStyleScopeUserHint')
 
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
     { value: 'white', label: t('settings.general.appearance.white') },
@@ -2093,6 +2132,18 @@ function GeneralSettings() {
       setNetworkSaveError(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSavingNetwork(false)
+    }
+  }
+
+  const handleOutputStyleChange = async (value: string) => {
+    try {
+      await setOutputStyle(value, outputStyleWorkDir)
+      addToast({
+        type: 'success',
+        message: t('settings.general.outputStyleSaved'),
+      })
+    } catch {
+      // The store exposes outputStyleError below; keep the interaction local.
     }
   }
 
@@ -2341,6 +2392,62 @@ function GeneralSettings() {
         }
       />
 
+      {/* Output style */}
+      <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.outputStyleTitle')}</h2>
+      <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.outputStyleDescription')}</p>
+      <div className="mb-8 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-4">
+        <Dropdown<string>
+          items={outputStyleItems}
+          value={outputStyle}
+          onChange={(value) => void handleOutputStyleChange(value)}
+          width="100%"
+          maxHeight={360}
+          className="block w-full"
+          trigger={
+            <button
+              type="button"
+              aria-label={t('settings.general.outputStyleSelectLabel')}
+              disabled={outputStylesLoading}
+              className="flex min-h-10 w-full items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left text-sm text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)] focus-visible:border-[var(--color-border-focus)] focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">format_paint</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">
+                  {outputStylesLoading
+                    ? t('settings.general.outputStyleLoading')
+                    : selectedOutputStyle?.label ?? outputStyle}
+                </span>
+                {selectedOutputStyle?.description && (
+                  <span className="mt-0.5 block truncate text-xs text-[var(--color-text-tertiary)]">
+                    {selectedOutputStyle.description}
+                  </span>
+                )}
+              </span>
+              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+            </button>
+          }
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+          <span className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-medium text-[var(--color-text-secondary)]">
+            {outputStyleScopeLabel}
+          </span>
+          {selectedOutputStyle && (
+            <span className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1">
+              {getOutputStyleSourceLabel(selectedOutputStyle.source, t)}
+            </span>
+          )}
+          <span className="min-w-0 flex-1 leading-5">{outputStyleScopeHint}</span>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {t('settings.general.outputStyleRestartHint')}
+        </p>
+        {outputStyleError && (
+          <p className="mt-2 text-xs leading-5 text-[var(--color-error)]">
+            {outputStyleError}
+          </p>
+        )}
+      </div>
+
       <div className="mt-8">
         <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.thinkingTitle')}</h2>
         <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.thinkingDescription')}</p>
@@ -2360,6 +2467,34 @@ function GeneralSettings() {
             <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
               {t('settings.general.thinkingHint')}
             </div>
+          </div>
+        </label>
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.traceTitle')}</h2>
+        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.traceDescription')}</p>
+        <label className="flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
+          <input
+            type="checkbox"
+            aria-label={t('settings.general.traceEnabled')}
+            checked={traceCapture.enabled}
+            onChange={(e) => void setTraceCaptureEnabled(e.target.checked)}
+            className="peer sr-only"
+          />
+          <SettingsCheckboxMark checked={traceCapture.enabled} />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.general.traceEnabled')}
+            </div>
+            <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
+              {traceCapture.enabled ? t('settings.general.traceHintOn') : t('settings.general.traceHintOff')}
+            </div>
+            {traceCapture.storageDir && (
+              <div className="mt-2 truncate rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[11px] text-[var(--color-text-secondary)]">
+                {traceCapture.storageDir}
+              </div>
+            )}
           </div>
         </label>
       </div>
@@ -2859,6 +2994,26 @@ function GeneralSettings() {
       />
     </div>
   )
+}
+
+function getOutputStyleSourceLabel(
+  source: OutputStyleSource,
+  t: (key: TranslationKey) => string,
+) {
+  switch (source) {
+    case 'built-in':
+      return t('settings.general.outputStyleSourceBuiltIn')
+    case 'userSettings':
+      return t('settings.general.outputStyleSourceUser')
+    case 'projectSettings':
+      return t('settings.general.outputStyleSourceProject')
+    case 'localSettings':
+      return t('settings.general.outputStyleSourceLocal')
+    case 'policySettings':
+      return t('settings.general.outputStyleSourcePolicy')
+    case 'plugin':
+      return t('settings.general.outputStyleSourcePlugin')
+  }
 }
 
 // ─── H5 Access Settings ──────────────────────────────────────

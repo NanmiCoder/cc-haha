@@ -7,6 +7,7 @@
 - `docs/im/index.md`
 - `docs/im/wechat.md`
 - `docs/im/dingtalk.md`
+- `docs/im/whatsapp.md`
 - `docs/im/telegram.md`
 - `docs/im/feishu.md`
 
@@ -40,6 +41,8 @@ bun run feishu
 bun run wechat
 # 或
 bun run dingtalk
+# 或
+bun run whatsapp
 ```
 
 ## 开发
@@ -54,6 +57,7 @@ bun test telegram/
 bun test feishu/
 bun test wechat/
 bun test dingtalk/
+bun test whatsapp/
 ```
 
 ### 目录结构
@@ -73,6 +77,10 @@ adapters/
 ├── dingtalk/
 │   ├── helpers.ts         # 钉钉 Stream 消息解析与会话键
 │   └── index.ts           # 钉钉扫码绑定 / Stream 文本聊天 Adapter
+├── whatsapp/
+│   ├── session.ts         # Baileys socket / auth state 封装
+│   ├── protocol.ts        # WhatsApp QR 登录 / 解绑协议封装
+│   └── index.ts           # WhatsApp Web 私聊 Adapter
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -86,6 +94,7 @@ adapters/
 
 - 飞书: 图片(jpg/png/gif/webp/heic)、文档(doc/xls/ppt/pdf 等)、post 富文本里的 img/file 元素
 - Telegram: photo、document、video、audio、voice
+- WhatsApp: image、document、video、audio、sticker
 
 下载落地到 `~/.claude/im-downloads/{platform}/{sessionId}/`,24 小时后自动 GC(`.part` 孤文件 10 分钟超时)。大小限制:单张图 ≤10 MB、单个文件 ≤30 MB,超限直接拒收并在 IM 里提示。
 
@@ -95,6 +104,7 @@ Agent 流式文本里的 markdown 图片引用 `![alt](path|url|data:)` 会被 `
 
 - 飞书: `im.message.create(msg_type='image')` 单发(card 内嵌是后续优化)
 - Telegram: `bot.api.sendPhoto(InputFile)` 单发
+- WhatsApp: Baileys `sendMessage({ image })` 单发
 
 非图片类出站(Agent 产的 pdf/zip 等)暂不支持。
 

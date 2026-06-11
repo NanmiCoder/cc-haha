@@ -131,55 +131,92 @@ function renderPreview(
   t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ) {
   const filePath = typeof obj.file_path === 'string' ? obj.file_path : 'file'
+  const resultText = getVisibleResultText(toolName, result)
+  const resultOutput = result && resultText ? renderResultOutput(result, resultText, t) : null
 
   if (toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
-    return <DiffViewer filePath={filePath} oldString={obj.old_string} newString={obj.new_string} />
+    return (
+      <>
+        <DiffViewer filePath={filePath} oldString={obj.old_string} newString={obj.new_string} />
+        {resultOutput}
+      </>
+    )
   }
 
   if (toolName === 'Write' && typeof obj.content === 'string') {
-    return <DiffViewer filePath={filePath} oldString="" newString={obj.content} />
+    return (
+      <>
+        <DiffViewer filePath={filePath} oldString="" newString={obj.content} />
+        {resultOutput}
+      </>
+    )
   }
 
   if (toolName === 'Bash' && typeof obj.command === 'string') {
     return (
-      <TerminalChrome title={typeof obj.description === 'string' ? obj.description : filePath}>
-        <div className="px-3 py-2.5 font-[var(--font-mono)] text-[11px] leading-[1.3] text-[var(--color-terminal-fg)]">
-          <span className="text-[var(--color-terminal-accent)]">$</span> {obj.command}
-        </div>
-      </TerminalChrome>
+      <>
+        <TerminalChrome title={typeof obj.description === 'string' ? obj.description : filePath}>
+          <div className="px-3 py-2.5 font-[var(--font-mono)] text-[11px] leading-[1.3] text-[var(--color-terminal-fg)]">
+            <span className="text-[var(--color-terminal-accent)]">$</span> {obj.command}
+          </div>
+        </TerminalChrome>
+        {resultOutput}
+      </>
     )
   }
 
   if (toolName === 'Read') {
-    return null
+    return resultOutput
   }
 
-  if (result) {
-    const text = extractTextContent(result.content)
-    if (text) {
-      return (
-        <>
-          <InlineImageGallery text={text} />
-          <div className={`overflow-hidden rounded-lg border ${
-            result.isError
-              ? 'border-[var(--color-error)]/20 bg-[var(--color-error-container)]/60'
-              : 'border-[var(--color-border)] bg-[var(--color-surface)]'
-          }`}>
-            <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
-              <span>{result.isError ? t?.('tool.errorOutput') ?? 'Error Output' : t?.('tool.toolOutput') ?? 'Tool Output'}</span>
-              <CopyButton
-                text={text}
-                className="rounded-md border border-[var(--color-border)] px-2 py-1 text-[10px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
-              />
-            </div>
-            <CodeViewer code={text} language="plaintext" maxLines={18} />
-          </div>
-        </>
-      )
-    }
-  }
+  if (resultOutput) return resultOutput
 
   return null
+}
+
+function getVisibleResultText(
+  toolName: string,
+  result?: { content: unknown; isError: boolean } | null,
+): string | null {
+  if (!result) return null
+  const text = extractTextContent(result.content)
+  if (!text) return null
+
+  if (result.isError) return text
+  if (toolName === 'Bash' || toolName === 'Read' || toolName === 'Edit' || toolName === 'Write') return null
+  return text
+}
+
+function renderResultOutput(
+  result: { content: unknown; isError: boolean },
+  text: string,
+  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
+) {
+  return (
+    <>
+      <InlineImageGallery text={text} />
+      <div className={`overflow-hidden rounded-lg border ${
+        result.isError
+          ? 'border-[var(--color-error)]/20 bg-[var(--color-error-container)]/60'
+          : 'border-[var(--color-border)] bg-[var(--color-surface)]'
+      }`}>
+        <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
+          <span>{result.isError ? t?.('tool.errorOutput') ?? 'Error Output' : t?.('tool.toolOutput') ?? 'Tool Output'}</span>
+          <CopyButton
+            text={text}
+            className="rounded-md border border-[var(--color-border)] px-2 py-1 text-[10px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
+          />
+        </div>
+        {result.isError ? (
+          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words bg-[var(--color-code-bg)] px-3 py-2 font-[var(--font-mono)] text-[12px] leading-[1.45] text-[var(--color-error)]">
+            {text}
+          </pre>
+        ) : (
+          <CodeViewer code={text} language="plaintext" maxLines={18} />
+        )}
+      </div>
+    </>
+  )
 }
 
 function renderDetails(

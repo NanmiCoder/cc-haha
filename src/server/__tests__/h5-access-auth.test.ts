@@ -191,8 +191,13 @@ function expectWebSocketUpgradeThenClose(url: string): Promise<void> {
 }
 
 const settingsSurfaceEndpoints = [
-  { path: '/api/mcp', expected: { servers: [] } },
-  { path: '/api/plugins', expected: { plugins: [] } },
+  // Assert the response *shape* (key present), not an exact empty array: the
+  // server reads MCP/plugin config from the current working directory, so when
+  // the suite runs at the repo root (which has a tracked .mcp.json) `servers`
+  // is non-empty. These cases exist to verify H5-token auth (401/401/200), not
+  // the discovered config contents.
+  { path: '/api/mcp', expectedKey: 'servers' },
+  { path: '/api/plugins', expectedKey: 'plugins' },
   { path: '/api/agents', expectedKey: 'activeAgents' },
 ] as const
 
@@ -713,11 +718,7 @@ describe('remote H5 auth and CORS integration', () => {
       expect(validTokenResponse.status).toBe(200)
       expect(validTokenResponse.headers.get('Access-Control-Allow-Origin')).toBe(PHONE_ORIGIN)
       const body = await validTokenResponse.json()
-      if ('expected' in endpoint) {
-        expect(body).toMatchObject(endpoint.expected)
-      } else {
-        expect(body).toHaveProperty(endpoint.expectedKey)
-      }
+      expect(body).toHaveProperty(endpoint.expectedKey)
     }
   })
 

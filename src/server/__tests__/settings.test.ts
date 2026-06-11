@@ -27,6 +27,8 @@ import {
   updateSettingsForSource,
 } from '../../utils/settings/settings.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
+import { clearAllOutputStylesCache } from '../../constants/outputStyles.js'
+import { clearOutputStyleCaches } from '../../outputStyles/loadOutputStylesDir.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -47,6 +49,8 @@ let originalAnthropicDefaultOpusModel: string | undefined
 async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-'))
   resetSettingsCache()
+  clearAllOutputStylesCache()
+  clearOutputStyleCaches()
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   originalHome = process.env.HOME
   originalUserProfile = process.env.USERPROFILE
@@ -80,6 +84,8 @@ async function teardown() {
   clearKeychainCache()
   clearOpenAIOAuthTokenCache()
   resetSettingsCache()
+  clearAllOutputStylesCache()
+  clearOutputStyleCaches()
 
   if (originalConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
@@ -272,6 +278,24 @@ describe('SettingsService', () => {
     expect(settings.outputStyle).toBe('verbose')
   })
 
+  it('should read and write project-local settings', async () => {
+    const projectRoot = path.join(tmpDir, 'myproject')
+    const svc = new SettingsService(projectRoot)
+
+    await svc.updateLocalSettings({
+      outputStyle: 'Learning',
+      preserved: true,
+    })
+    await svc.updateLocalSettings({
+      theme: 'dark',
+    })
+
+    const settings = await svc.getLocalSettings()
+    expect(settings.outputStyle).toBe('Learning')
+    expect(settings.preserved).toBe(true)
+    expect(settings.theme).toBe('dark')
+  })
+
   it('should merge user and project settings', async () => {
     const projectRoot = path.join(tmpDir, 'myproject')
     await fs.mkdir(path.join(projectRoot, '.claude'), { recursive: true })
@@ -415,6 +439,106 @@ describe('Settings API', () => {
     } finally {
       syncSpy.mockRestore()
     }
+  })
+
+  it('GET /api/settings/output-styles should include built-in, user, and project styles', async () => {
+    const projectRoot = path.join(tmpDir, 'myproject')
+    await fs.mkdir(path.join(tmpDir, 'output-styles'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, '.claude', 'output-styles'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'output-styles', 'user-style.md'),
+      [
+        '---',
+        'name: User Style',
+        'description: User custom voice',
+        'keep-coding-instructions: true',
+        '---',
+        'User prompt',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(projectRoot, '.claude', 'output-styles', 'project-style.md'),
+      [
+        '---',
+        'name: Project Style',
+        'description: Project custom voice',
+        '---',
+        'Project prompt',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(projectRoot, '.claude', 'settings.local.json'),
+      JSON.stringify({ outputStyle: 'Project Style' }),
+      'utf-8',
+    )
+
+    clearAllOutputStylesCache()
+    clearOutputStyleCaches()
+
+    const { req, url, segments } = makeRequest(
+      'GET',
+      `/api/settings/output-styles?workDir=${encodeURIComponent(projectRoot)}`,
+    )
+    const res = await handleSettingsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.outputStyle).toBe('Project Style')
+    expect(body.scope).toBe('localSettings')
+    expect(body.workDir).toBe(projectRoot)
+    expect(body.styles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'default', source: 'built-in' }),
+        expect.objectContaining({ value: 'Explanatory', source: 'built-in' }),
+        expect.objectContaining({ value: 'Learning', source: 'built-in' }),
+        expect.objectContaining({ value: 'User Style', source: 'userSettings' }),
+        expect.objectContaining({ value: 'Project Style', source: 'projectSettings' }),
+      ]),
+    )
+  })
+
+  it('PUT /api/settings/output-style should save to project-local settings and preserve fields', async () => {
+    const projectRoot = path.join(tmpDir, 'myproject')
+    await fs.mkdir(path.join(projectRoot, '.claude'), { recursive: true })
+    await fs.writeFile(
+      path.join(projectRoot, '.claude', 'settings.local.json'),
+      JSON.stringify({ preserved: 'yes' }),
+      'utf-8',
+    )
+
+    const { req, url, segments } = makeRequest('PUT', '/api/settings/output-style', {
+      outputStyle: 'Learning',
+      workDir: projectRoot,
+    })
+    const res = await handleSettingsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({
+      ok: true,
+      outputStyle: 'Learning',
+      scope: 'localSettings',
+      workDir: projectRoot,
+    })
+
+    const raw = await fs.readFile(
+      path.join(projectRoot, '.claude', 'settings.local.json'),
+      'utf-8',
+    )
+    const settings = JSON.parse(raw)
+    expect(settings.outputStyle).toBe('Learning')
+    expect(settings.preserved).toBe('yes')
+  })
+
+  it('PUT /api/settings/output-style should reject unavailable styles', async () => {
+    const { req, url, segments } = makeRequest('PUT', '/api/settings/output-style', {
+      outputStyle: 'Missing Style',
+    })
+    const res = await handleSettingsApi(req, url, segments)
+
+    expect(res.status).toBe(400)
   })
 
   it('GET /api/settings/cli-launcher should expose bundled launcher status', async () => {

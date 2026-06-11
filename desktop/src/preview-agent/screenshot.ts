@@ -39,7 +39,7 @@ function computeBadgePosition(rect: DOMRect): { left: number; top: number } {
   return { left, top: clamp(topAbove, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, window.innerHeight - BADGE_SIZE - VIEWPORT_MARGIN)) }
 }
 
-function createAnnotationOverlay(el: Element, label: number | string): HTMLElement {
+export function createAnnotationOverlay(el: Element, label: number | string): HTMLElement {
   const rect = el.getBoundingClientRect()
   const root = document.createElement('div')
   root.dataset.previewSelectionAnnotationRoot = 'true'

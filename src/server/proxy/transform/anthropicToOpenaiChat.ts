@@ -53,7 +53,7 @@ export function anthropicToOpenaiChat(
   const result: OpenAIChatRequest = {
     model: body.model,
     messages,
-    stream: body.stream,
+    stream: body.stream === true,
   }
 
   // max_tokens — omit to let upstream provider use its own default/max.

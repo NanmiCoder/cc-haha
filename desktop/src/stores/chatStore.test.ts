@@ -568,6 +568,56 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('restores visual selection history as annotated screenshot attachment without exposing model prompt', () => {
+    const modelPrompt = [
+      '请根据截图中编号 1 的蓝色标注修改本地前端。',
+      '目标元素：<time>',
+      'Selector：#root > main > section > ol > li:nth-of-type(1) > article > div:nth-of-type(1) > time',
+      'DOM 路径：body:nth-child(2) > div:nth-child(1) > main:nth-child(1) > section:nth-child(1) > ol:nth-child(4) > li:nth-child(1) > article:nth-child(1) > div:nth-child(3) > time:nth-child(2)',
+      '页面标题：Todo Desk Board',
+      '页面 URL：http://127.0.0.1:47931/',
+      '当前文本：06/10 21:12',
+      '用户注释：',
+      '这里的时间加上年份',
+      '请优先依据截图里的编号标注定位元素，selector 只作为辅助线索。',
+    ].join('\n')
+
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'selection-user-1',
+        type: 'user',
+        timestamp: '2026-06-10T16:20:00.000Z',
+        content: [
+          { type: 'text', text: modelPrompt },
+          {
+            type: 'image',
+            source: {
+              media_type: 'image/png',
+              data: 'SELECTIONPNG',
+            },
+          },
+        ],
+      } as MessageEntry,
+    ])
+
+    expect(mapped).toMatchObject([
+      {
+        id: 'selection-user-1',
+        type: 'user_text',
+        content: '',
+        modelContent: modelPrompt,
+        attachments: [{
+          type: 'image',
+          name: '<time>',
+          data: 'data:image/png;base64,SELECTIONPNG',
+          mimeType: 'image/png',
+          note: '这里的时间加上年份',
+          quote: '#root > main > section > ol > li:nth-of-type(1) > article > div:nth-of-type(1) > time',
+        }],
+      },
+    ])
+  })
+
   it('restores /goal local command output from transcript history', () => {
     const messages: MessageEntry[] = [
       {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { Settings } from '../pages/Settings'
@@ -75,8 +75,13 @@ vi.mock('../stores/skillStore', () => ({
       isLoading: false,
       isDetailLoading: false,
       error: null,
+      catalog: [],
+      isCatalogLoading: false,
+      installingName: null,
       fetchSkills: MOCK_FETCH_SKILLS,
       fetchSkillDetail: MOCK_FETCH_SKILL_DETAIL,
+      fetchCatalog: vi.fn(async () => {}),
+      installSkill: vi.fn(async () => {}),
       clearSelection: vi.fn(),
     }
     return selector ? selector(state) : state
@@ -87,8 +92,13 @@ vi.mock('../stores/skillStore', () => ({
       isLoading: false,
       isDetailLoading: false,
       error: null,
+      catalog: [],
+      isCatalogLoading: false,
+      installingName: null,
       fetchSkills: MOCK_FETCH_SKILLS,
       fetchSkillDetail: MOCK_FETCH_SKILL_DETAIL,
+      fetchCatalog: vi.fn(async () => {}),
+      installSkill: vi.fn(async () => {}),
       clearSelection: vi.fn(),
     }),
   }),
@@ -165,8 +175,14 @@ describe('Settings > Plugins tab', () => {
       isDetailLoading: false,
       isApplying: false,
       error: null,
+      catalog: [],
+      installingCatalogId: null,
+      isAddingMarketplace: false,
       fetchPlugins: noop,
       fetchPluginDetail: noop,
+      fetchCatalog: vi.fn().mockResolvedValue(undefined),
+      installCatalogPlugin: vi.fn().mockResolvedValue('installed'),
+      addMarketplaceFromInput: vi.fn().mockResolvedValue({ name: 'mock', alreadyMaterialized: true }),
       reloadPlugins: vi.fn().mockResolvedValue({
         enabled: 1,
         disabled: 0,
@@ -179,6 +195,8 @@ describe('Settings > Plugins tab', () => {
       }),
       enablePlugin: vi.fn().mockResolvedValue('enabled'),
       disablePlugin: vi.fn().mockResolvedValue('disabled'),
+      bulkEnablePlugins: vi.fn().mockResolvedValue(0),
+      bulkDisablePlugins: vi.fn().mockResolvedValue(0),
       updatePlugin: vi.fn().mockResolvedValue('updated'),
       uninstallPlugin: vi.fn().mockResolvedValue('uninstalled'),
       clearSelection: vi.fn(),
@@ -249,6 +267,170 @@ describe('Settings > Plugins tab', () => {
     expect(screen.getByText('github')).toBeInTheDocument()
     expect(screen.getByText('Python language tooling')).toBeInTheDocument()
     expect(screen.getByText('Known marketplaces')).toBeInTheDocument()
+  })
+
+  it('bulk enables selected disabled plugins from the list after confirmation', async () => {
+    const bulkEnablePlugins = vi.fn().mockResolvedValue(2)
+    usePluginStore.setState({
+      plugins: [
+        {
+          id: 'drawing@claude-plugins-official',
+          name: 'drawing',
+          marketplace: 'claude-plugins-official',
+          scope: 'user',
+          enabled: false,
+          hasErrors: false,
+          isBuiltin: false,
+          description: 'Render diagrams.',
+          componentCounts: {
+            commands: 0,
+            agents: 0,
+            skills: 1,
+            hooks: 0,
+            mcpServers: 0,
+            lspServers: 0,
+          },
+          errors: [],
+        },
+        {
+          id: 'review@claude-plugins-official',
+          name: 'review',
+          marketplace: 'claude-plugins-official',
+          scope: 'project',
+          enabled: false,
+          hasErrors: false,
+          isBuiltin: false,
+          description: 'Review pull requests.',
+          componentCounts: {
+            commands: 0,
+            agents: 1,
+            skills: 0,
+            hooks: 0,
+            mcpServers: 0,
+            lspServers: 0,
+          },
+          errors: [],
+        },
+        {
+          id: 'github@claude-plugins-official',
+          name: 'github',
+          marketplace: 'claude-plugins-official',
+          scope: 'user',
+          enabled: true,
+          hasErrors: false,
+          isBuiltin: false,
+          description: 'GitHub integration',
+          componentCounts: {
+            commands: 1,
+            agents: 0,
+            skills: 0,
+            hooks: 0,
+            mcpServers: 1,
+            lspServers: 0,
+          },
+          errors: [],
+        },
+      ],
+      summary: { total: 3, enabled: 1, errorCount: 0, marketplaceCount: 1 },
+      bulkEnablePlugins,
+    })
+
+    render(<Settings />)
+    switchToPluginsTab()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select drawing' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select review' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enable selected' }))
+
+    expect(screen.getByText('Enable 2 selected plugins?')).toBeInTheDocument()
+    expect(screen.getByText('This will enable drawing, review and apply plugin changes to the current desktop runtime.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+
+    await waitFor(() => {
+      expect(bulkEnablePlugins).toHaveBeenCalledWith(
+        [
+          { id: 'drawing@claude-plugins-official', scope: 'user' },
+          { id: 'review@claude-plugins-official', scope: 'project' },
+        ],
+        '/workspace/project',
+        'session-1',
+      )
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Select drawing' })).not.toBeChecked()
+      expect(screen.queryByText('2 selected')).not.toBeInTheDocument()
+    })
+  })
+
+  it('bulk disables selected enabled plugins from the list after confirmation', async () => {
+    const bulkDisablePlugins = vi.fn().mockResolvedValue(1)
+    usePluginStore.setState({
+      plugins: [
+        {
+          id: 'github@claude-plugins-official',
+          name: 'github',
+          marketplace: 'claude-plugins-official',
+          scope: 'user',
+          enabled: true,
+          hasErrors: false,
+          isBuiltin: false,
+          description: 'GitHub integration',
+          componentCounts: {
+            commands: 1,
+            agents: 0,
+            skills: 0,
+            hooks: 0,
+            mcpServers: 1,
+            lspServers: 0,
+          },
+          errors: [],
+        },
+        {
+          id: 'drawing@claude-plugins-official',
+          name: 'drawing',
+          marketplace: 'claude-plugins-official',
+          scope: 'user',
+          enabled: false,
+          hasErrors: false,
+          isBuiltin: false,
+          description: 'Render diagrams.',
+          componentCounts: {
+            commands: 0,
+            agents: 0,
+            skills: 1,
+            hooks: 0,
+            mcpServers: 0,
+            lspServers: 0,
+          },
+          errors: [],
+        },
+      ],
+      summary: { total: 2, enabled: 1, errorCount: 0, marketplaceCount: 1 },
+      bulkDisablePlugins,
+    })
+
+    render(<Settings />)
+    switchToPluginsTab()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select github' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Disable selected' }))
+
+    expect(screen.getByText('Disable 1 selected plugins?')).toBeInTheDocument()
+    expect(screen.getByText('This will disable github and apply plugin changes to the current desktop runtime.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+
+    await waitFor(() => {
+      expect(bulkDisablePlugins).toHaveBeenCalledWith(
+        [
+          { id: 'github@claude-plugins-official', scope: 'user' },
+        ],
+        '/workspace/project',
+        'session-1',
+      )
+    })
   })
 
   it('renders plugin detail with bundled capability sections', () => {

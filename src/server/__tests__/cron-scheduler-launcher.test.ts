@@ -22,6 +22,7 @@ const originalClaudeCodeEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
 const originalHome = process.env.HOME
 const originalShell = process.env.SHELL
 const originalZdotdir = process.env.ZDOTDIR
+const originalNvmDir = process.env.NVM_DIR
 const originalDisableTerminalShellEnv = process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
 
 const isWindows = process.platform === 'win32'
@@ -101,6 +102,11 @@ function restoreEnv(): void {
   } else {
     delete process.env.ZDOTDIR
   }
+  if (originalNvmDir) {
+    process.env.NVM_DIR = originalNvmDir
+  } else {
+    delete process.env.NVM_DIR
+  }
   if (originalDisableTerminalShellEnv) {
     process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = originalDisableTerminalShellEnv
   } else {
@@ -111,16 +117,28 @@ function restoreEnv(): void {
 
 describe('cron scheduler launcher resolution', () => {
   let tmpDir: string
+  let originalServerPort: number | undefined
 
   beforeEach(async () => {
     tmpDir = await createTmpDir()
     process.env.CLAUDE_CONFIG_DIR = path.join(tmpDir, 'config')
     process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
+    // The CI runner exports a real NVM_DIR (/home/runner/.nvm); the shell-env
+    // merge lets inherited process env shadow shell-captured values, which would
+    // break the shell-capture assertions. Clear it so the fake shell is the only
+    // source.
+    delete process.env.NVM_DIR
+    // ProviderService.serverPort is a process-wide static other tests may leave
+    // at a random value; pin it so the managed ANTHROPIC_BASE_URL assertions are
+    // deterministic, restore afterwards.
+    originalServerPort = ProviderService.getServerPort()
+    ProviderService.setServerPort(3456)
     resetTerminalShellEnvironmentCacheForTests()
   })
 
   afterEach(async () => {
     restoreEnv()
+    if (originalServerPort !== undefined) ProviderService.setServerPort(originalServerPort)
     await cleanupTmpDir(tmpDir)
   })
 

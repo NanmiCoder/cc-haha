@@ -60,6 +60,18 @@ describe('electron desktop host', () => {
     })
   })
 
+  it('opens dedicated trace windows through a narrow IPC channel', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const host = createElectronHost({
+      invoke,
+      subscribe: vi.fn(),
+    })
+
+    await host.trace?.openWindow('session-123')
+
+    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.traceOpenWindow, 'session-123')
+  })
+
   it('keeps event subscriptions behind named event channels', async () => {
     const unlisten = vi.fn()
     const subscribe = vi.fn().mockResolvedValue(unlisten)

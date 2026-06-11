@@ -158,4 +158,122 @@ describe('AdapterHttpClient', () => {
       'http://127.0.0.1:3456/api/tasks/lists/session-123',
     )
   })
+
+  it('listSessions calls GET /api/sessions with project and pagination query', async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response(JSON.stringify({
+        sessions: [
+          {
+            id: 'session-1',
+            title: 'Fix Telegram menu',
+            createdAt: '2026-06-09T00:00:00.000Z',
+            modifiedAt: '2026-06-09T01:00:00.000Z',
+            messageCount: 3,
+            projectPath: '-repo',
+            projectRoot: '/repo',
+            workDir: '/repo',
+            workDirExists: true,
+          },
+        ],
+        total: 1,
+      }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    ) as any
+
+    const result = await client.listSessions({ project: '/repo', limit: 10, offset: 5 })
+
+    expect(result.sessions[0]?.id).toBe('session-1')
+    expect((globalThis.fetch as any).mock.calls[0][0]).toBe(
+      'http://127.0.0.1:3456/api/sessions?project=%2Frepo&limit=10&offset=5',
+    )
+  })
+
+  it('lists and activates providers through the server provider API', async () => {
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/providers') && !init?.method) {
+        return Promise.resolve(new Response(JSON.stringify({
+          providers: [{ id: 'provider-1', name: 'Provider One', models: { main: 'model-main' } }],
+          activeId: null,
+        }), {
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    }) as any
+
+    const providers = await client.listProviders()
+    await client.activateProvider('provider-1')
+    await client.activateOfficialProvider()
+
+    expect(providers.providers[0]?.name).toBe('Provider One')
+    expect((globalThis.fetch as any).mock.calls[1][0]).toBe(
+      'http://127.0.0.1:3456/api/providers/provider-1/activate',
+    )
+    expect((globalThis.fetch as any).mock.calls[1][1].method).toBe('POST')
+    expect((globalThis.fetch as any).mock.calls[2][0]).toBe(
+      'http://127.0.0.1:3456/api/providers/official',
+    )
+  })
+
+  it('lists and sets models through the server models API', async () => {
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/models') && !init?.method) {
+        return Promise.resolve(new Response(JSON.stringify({
+          provider: null,
+          models: [{ id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Most capable', context: '1m' }],
+        }), {
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      }
+      if (url.endsWith('/api/models/current') && !init?.method) {
+        return Promise.resolve(new Response(JSON.stringify({
+          model: { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Most capable', context: '1m' },
+        }), {
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, model: 'claude-sonnet-4-6' }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    }) as any
+
+    const models = await client.listModels()
+    const current = await client.getCurrentModel()
+    await client.setCurrentModel('claude-sonnet-4-6')
+
+    expect(models.models[0]?.id).toBe('claude-opus-4-7')
+    expect(current.model.id).toBe('claude-opus-4-7')
+    expect(JSON.parse((globalThis.fetch as any).mock.calls[2][1].body)).toEqual({
+      modelId: 'claude-sonnet-4-6',
+    })
+  })
+
+  it('lists skills for a cwd through the server skills API', async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response(JSON.stringify({
+        skills: [
+          {
+            name: 'reviewer',
+            description: 'Review code',
+            source: 'user',
+            userInvocable: true,
+            contentLength: 120,
+            hasDirectory: true,
+          },
+        ],
+      }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    ) as any
+
+    const result = await client.listSkills('/repo')
+
+    expect(result.skills[0]?.name).toBe('reviewer')
+    expect((globalThis.fetch as any).mock.calls[0][0]).toBe(
+      'http://127.0.0.1:3456/api/skills?cwd=%2Frepo',
+    )
+  })
 })

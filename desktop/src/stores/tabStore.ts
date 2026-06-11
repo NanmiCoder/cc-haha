@@ -7,9 +7,11 @@ const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
 
 export const SETTINGS_TAB_ID = '__settings__'
 export const SCHEDULED_TAB_ID = '__scheduled__'
+export const TRACE_LIST_TAB_ID = '__traces__'
 export const TERMINAL_TAB_PREFIX = '__terminal__'
+export const TRACE_TAB_PREFIX = '__trace__'
 
-export type TabType = 'session' | 'settings' | 'scheduled' | 'terminal'
+export type TabType = 'session' | 'settings' | 'scheduled' | 'terminal' | 'trace' | 'traces'
 
 export type Tab = {
   sessionId: string
@@ -18,10 +20,11 @@ export type Tab = {
   status: 'idle' | 'running' | 'error'
   terminalCwd?: string
   terminalRuntimeId?: string
+  traceSessionId?: string
 }
 
 type TabPersistence = {
-  openTabs: Array<{ sessionId: string; title: string; type?: TabType }>
+  openTabs: Array<{ sessionId: string; title: string; type?: TabType; traceSessionId?: string }>
   activeTabId: string | null
 }
 
@@ -30,6 +33,8 @@ type TabStore = {
   activeTabId: string | null
 
   openTab: (sessionId: string, title: string, type?: TabType) => void
+  openTracesTab: (title?: string) => string
+  openTraceTab: (sessionId: string, title?: string) => string
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
   closeTab: (sessionId: string) => void
   setActiveTab: (sessionId: string) => void
@@ -69,6 +74,51 @@ export const useTabStore = create<TabStore>((set, get) => ({
       })
     }
     get().saveTabs()
+  },
+
+  openTracesTab: (title = 'Traces') => {
+    const { tabs } = get()
+    const existing = tabs.find((tab) => tab.sessionId === TRACE_LIST_TAB_ID)
+    if (existing) {
+      set({
+        tabs: tabs.map((tab) => (
+          tab.sessionId === TRACE_LIST_TAB_ID
+            ? { ...tab, title, type: 'traces' }
+            : tab
+        )),
+        activeTabId: TRACE_LIST_TAB_ID,
+      })
+    } else {
+      set({
+        tabs: [...tabs, { sessionId: TRACE_LIST_TAB_ID, title, type: 'traces', status: 'idle' }],
+        activeTabId: TRACE_LIST_TAB_ID,
+      })
+    }
+    get().saveTabs()
+    return TRACE_LIST_TAB_ID
+  },
+
+  openTraceTab: (sessionId, title = 'Trace') => {
+    const traceTabId = `${TRACE_TAB_PREFIX}${sessionId}`
+    const { tabs } = get()
+    const existing = tabs.find((tab) => tab.sessionId === traceTabId)
+    if (existing) {
+      set({
+        tabs: tabs.map((tab) => (
+          tab.sessionId === traceTabId
+            ? { ...tab, title, type: 'trace', traceSessionId: sessionId }
+            : tab
+        )),
+        activeTabId: traceTabId,
+      })
+    } else {
+      set({
+        tabs: [...tabs, { sessionId: traceTabId, title, type: 'trace', status: 'idle', traceSessionId: sessionId }],
+        activeTabId: traceTabId,
+      })
+    }
+    get().saveTabs()
+    return traceTabId
   },
 
   openTerminalTab: (cwd, terminalRuntimeId) => {
@@ -162,7 +212,12 @@ export const useTabStore = create<TabStore>((set, get) => ({
     const { tabs, activeTabId } = get()
     const persistableTabs = tabs.filter((tab) => tab.type !== 'terminal')
     const data: TabPersistence = {
-      openTabs: persistableTabs.map((t) => ({ sessionId: t.sessionId, title: t.title, type: t.type })),
+      openTabs: persistableTabs.map((t) => ({
+        sessionId: t.sessionId,
+        title: t.title,
+        type: t.type,
+        ...(t.traceSessionId ? { traceSessionId: t.traceSessionId } : {}),
+      })),
       activeTabId: activeTabId && persistableTabs.some((tab) => tab.sessionId === activeTabId)
         ? activeTabId
         : (persistableTabs[0]?.sessionId ?? null),
@@ -174,6 +229,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
 
   restoreTabs: async () => {
     try {
+      const restoreStartedWith = get()
       const raw = localStorage.getItem(TAB_STORAGE_KEY)
       if (!raw) return
 
@@ -185,19 +241,37 @@ export const useTabStore = create<TabStore>((set, get) => ({
       }
 
       const { sessions } = await sessionsApi.list({ limit: 200 })
+      const current = get()
+      if (
+        current.tabs !== restoreStartedWith.tabs ||
+        current.activeTabId !== restoreStartedWith.activeTabId
+      ) {
+        return
+      }
       const existingIds = new Set(sessions.map((s) => s.id))
 
       const validTabs: Tab[] = data.openTabs
         .filter((t) => {
           // Special tabs are always valid
-          if (t.type === 'settings' || t.type === 'scheduled') return true
+          if (t.type === 'settings' || t.type === 'scheduled' || t.type === 'traces') return true
+          if (t.type === 'trace') return !!t.traceSessionId && existingIds.has(t.traceSessionId)
           if (t.type === 'terminal') return false
           // Session tabs must exist on server
           return existingIds.has(t.sessionId)
         })
         .map((t) => {
-          if (t.type === 'settings' || t.type === 'scheduled') {
+          if (t.type === 'settings' || t.type === 'scheduled' || t.type === 'traces') {
             return { sessionId: t.sessionId, title: t.title, type: t.type, status: 'idle' as const }
+          }
+          if (t.type === 'trace' && t.traceSessionId) {
+            const sourceTitle = sessions.find((s) => s.id === t.traceSessionId)?.title || t.title
+            return {
+              sessionId: `${TRACE_TAB_PREFIX}${t.traceSessionId}`,
+              title: sourceTitle === t.title ? t.title : `Trace: ${sourceTitle}`,
+              type: 'trace' as const,
+              status: 'idle' as const,
+              traceSessionId: t.traceSessionId,
+            }
           }
           return {
             sessionId: t.sessionId,

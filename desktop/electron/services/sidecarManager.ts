@@ -211,7 +211,7 @@ export function createAdapterPlan({
   desktopRoot: string
   appRoot: string
   serverUrl: string
-  flag: '--feishu' | '--telegram' | '--wechat' | '--dingtalk'
+  flag: '--feishu' | '--telegram' | '--wechat' | '--dingtalk' | '--whatsapp'
   h5DistDir?: string
   env?: NodeJS.ProcessEnv
 }): SidecarPlan {

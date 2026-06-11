@@ -9,6 +9,7 @@ import {
   parseChangedLinesFromDiff,
   parseLcov,
   prefixRelativeLcovSourcePaths,
+  rangeContainsMergeCommit,
 } from './coverage'
 
 describe('coverage gate helpers', () => {
@@ -265,5 +266,42 @@ describe('coverage gate helpers', () => {
     })
 
     expect(failures).toEqual(['new-suite: branches coverage 80% is below minimum 85%'])
+  })
+
+  test('detects a merge commit in the base..HEAD range (upstream-sync exemption)', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-merge-'))
+    const git = (...args: string[]) => {
+      const proc = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' })
+      if (proc.exitCode !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${new TextDecoder().decode(proc.stderr)}`)
+      }
+    }
+    try {
+      git('init', '-b', 'main')
+      git('config', 'user.email', 'test@example.com')
+      git('config', 'user.name', 'Test')
+      writeFileSync(join(repo, 'base.txt'), 'base\n')
+      git('add', '.')
+      git('commit', '-m', 'base')
+
+      // A linear feature commit on top of main: no merge in range.
+      git('checkout', '-b', 'feature')
+      writeFileSync(join(repo, 'feature.txt'), 'feature\n')
+      git('add', '.')
+      git('commit', '-m', 'feature work')
+      expect(rangeContainsMergeCommit(repo, 'main')).toBe(false)
+
+      // Bring in a side branch via a merge commit: now the range has a merge.
+      git('checkout', 'main')
+      git('checkout', '-b', 'side')
+      writeFileSync(join(repo, 'side.txt'), 'side\n')
+      git('add', '.')
+      git('commit', '-m', 'side work')
+      git('checkout', 'feature')
+      git('merge', '--no-ff', 'side', '-m', 'merge side into feature')
+      expect(rangeContainsMergeCommit(repo, 'main')).toBe(true)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 })

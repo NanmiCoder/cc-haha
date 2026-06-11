@@ -2233,6 +2233,14 @@ function isTeammateMessage(text: string): boolean {
 const SIMPLE_IMAGE_SOURCE_RE = /^\[Image source: (.+)\]$/
 const DETAILED_IMAGE_SOURCE_RE = /^\[Image: source: (.+?)(?:, original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.)?\]$/
 const IMAGE_RESIZE_METADATA_RE = /^\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$/
+const VISUAL_SELECTION_PROMPT_HEADER = '请根据截图中编号 1 的蓝色标注修改本地前端。'
+const VISUAL_SELECTION_PROMPT_FOOTER = '请优先依据截图里的编号标注定位元素，selector 只作为辅助线索。'
+
+type VisualSelectionHistoryDisplay = {
+  displayName: string
+  selector?: string
+  note?: string
+}
 
 function getHistoryImageMediaType(block: UserHistoryBlock): string {
   const mediaType = block.source?.media_type ?? block.mimeType ?? block.media_type
@@ -2257,6 +2265,50 @@ function extractImageMetadataSourcePath(text: string): string | undefined {
 
 function isGeneratedImageMetadataText(text: string): boolean {
   return Boolean(extractImageMetadataSourcePath(text)) || IMAGE_RESIZE_METADATA_RE.test(text.trim())
+}
+
+function parseVisualSelectionHistoryPrompt(text: string): VisualSelectionHistoryDisplay | null {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  if (lines[0]?.trim() !== VISUAL_SELECTION_PROMPT_HEADER) return null
+
+  let displayName: string | undefined
+  let selector: string | undefined
+  let note: string | undefined
+
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? ''
+    if (line.startsWith('目标元素：')) {
+      displayName = line.slice('目标元素：'.length).trim()
+    } else if (line.startsWith('Selector：')) {
+      selector = line.slice('Selector：'.length).trim()
+    } else if (line === '用户注释：') {
+      const noteLines: string[] = []
+      for (let noteIndex = index + 1; noteIndex < lines.length; noteIndex += 1) {
+        const noteLine = lines[noteIndex] ?? ''
+        if (noteLine.trim() === VISUAL_SELECTION_PROMPT_FOOTER) break
+        noteLines.push(noteLine)
+      }
+      const trimmedNote = noteLines.join('\n').trim()
+      note = trimmedNote || undefined
+      break
+    }
+  }
+
+  return displayName
+    ? {
+        displayName,
+        ...(selector ? { selector } : {}),
+        ...(note ? { note } : {}),
+      }
+    : null
+}
+
+function applyVisualSelectionHistoryDisplay(attachments: UIAttachment[], display: VisualSelectionHistoryDisplay): void {
+  const imageAttachment = attachments.find((attachment) => attachment.type === 'image')
+  if (!imageAttachment) return
+  imageAttachment.name = display.displayName
+  if (display.selector) imageAttachment.quote = display.selector
+  if (display.note) imageAttachment.note = display.note
 }
 
 function normalizeHistoryImageAttachment(block: UserHistoryBlock): UIAttachment {
@@ -3023,13 +3075,21 @@ export function mapHistoryMessagesToUiMessages(
       if (visibleTextParts.length > 0 || attachments.length > 0) {
         const visibleText = visibleTextParts.join('\n')
         const modelText = modelTextParts.join('\n')
+        const visualSelectionDisplay =
+          msg.type === 'user' && hasImageBlock
+            ? parseVisualSelectionHistoryPrompt(modelText)
+            : null
+        if (visualSelectionDisplay) {
+          applyVisualSelectionHistoryDisplay(attachments, visualSelectionDisplay)
+        }
         const parsed = extractLeadingFileReferences(visibleText)
-        const modelContent = modelText !== visibleText ? modelText : parsed.modelContent
+        const userContent = visualSelectionDisplay ? '' : parsed.content
+        const modelContent = visualSelectionDisplay || modelText !== visibleText ? modelText : parsed.modelContent
         const allAttachments = [...(parsed.attachments ?? []), ...attachments]
         uiMessages.push({
           id: msg.id || nextId(),
           type: 'user_text',
-          content: parsed.content,
+          content: userContent,
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(modelContent ? { modelContent } : {}),
           attachments: allAttachments.length > 0 ? allAttachments : undefined,

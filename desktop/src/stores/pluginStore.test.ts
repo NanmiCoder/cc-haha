@@ -88,4 +88,72 @@ describe('pluginStore', () => {
       errors: 0,
     })
   })
+
+  it('reloads and refreshes once after bulk enabling plugins', async () => {
+    mockedPluginsApi.enable.mockResolvedValue({
+      ok: true,
+      message: 'enabled',
+    })
+
+    const changed = await usePluginStore.getState().bulkEnablePlugins(
+      [
+        { id: 'draw@test', scope: 'user' },
+        { id: 'review@test', scope: 'project' },
+      ],
+      '/workspace/project',
+      'session-1',
+    )
+
+    expect(changed).toBe(2)
+    expect(mockedPluginsApi.enable).toHaveBeenCalledTimes(2)
+    expect(mockedPluginsApi.enable).toHaveBeenNthCalledWith(1, {
+      id: 'draw@test',
+      scope: 'user',
+    })
+    expect(mockedPluginsApi.enable).toHaveBeenNthCalledWith(2, {
+      id: 'review@test',
+      scope: 'project',
+    })
+    expect(mockedPluginsApi.reload).toHaveBeenCalledTimes(1)
+    expect(mockedPluginsApi.reload).toHaveBeenCalledWith(
+      '/workspace/project',
+      'session-1',
+    )
+    expect(mockedPluginsApi.list).toHaveBeenCalledTimes(1)
+    expect(mockedPluginsApi.list).toHaveBeenCalledWith('/workspace/project')
+  })
+
+  it('reloads and refreshes once after bulk disabling plugins', async () => {
+    mockedPluginsApi.disable.mockResolvedValue({
+      ok: true,
+      message: 'disabled',
+    })
+
+    const changed = await usePluginStore.getState().bulkDisablePlugins(
+      [
+        { id: 'github@test', scope: 'user' },
+        { id: 'review@test', scope: 'project' },
+      ],
+      '/workspace/project',
+      'session-1',
+    )
+
+    expect(changed).toBe(2)
+    expect(mockedPluginsApi.disable).toHaveBeenCalledTimes(2)
+    expect(mockedPluginsApi.disable).toHaveBeenNthCalledWith(1, {
+      id: 'github@test',
+      scope: 'user',
+    })
+    expect(mockedPluginsApi.disable).toHaveBeenNthCalledWith(2, {
+      id: 'review@test',
+      scope: 'project',
+    })
+    expect(mockedPluginsApi.reload).toHaveBeenCalledTimes(1)
+    expect(mockedPluginsApi.reload).toHaveBeenCalledWith(
+      '/workspace/project',
+      'session-1',
+    )
+    expect(mockedPluginsApi.list).toHaveBeenCalledTimes(1)
+    expect(mockedPluginsApi.list).toHaveBeenCalledWith('/workspace/project')
+  })
 })

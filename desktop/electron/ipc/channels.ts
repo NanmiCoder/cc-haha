@@ -4,6 +4,7 @@ export const ELECTRON_IPC_CHANNELS = {
   commandInvoke: 'desktop:command:invoke',
   shellOpen: 'desktop:shell:open',
   shellOpenPath: 'desktop:shell:open-path',
+  traceOpenWindow: 'desktop:trace:open-window',
   dialogOpen: 'desktop:dialog:open',
   dialogSave: 'desktop:dialog:save',
   updateCheck: 'desktop:update:check',

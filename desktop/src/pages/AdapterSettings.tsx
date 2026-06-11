@@ -7,11 +7,12 @@ import { DirectoryPicker } from '../components/shared/DirectoryPicker'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import QRCode from 'qrcode'
 
-type ImTab = 'feishu' | 'wechat' | 'dingtalk' | 'telegram'
-type ImPlatform = 'telegram' | 'feishu' | 'wechat' | 'dingtalk'
-type AdapterUnbindTarget = 'wechatAccount' | 'dingtalkBot'
+type ImTab = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp'
+type ImPlatform = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp'
+type AdapterUnbindTarget = 'wechatAccount' | 'dingtalkBot' | 'whatsappAccount'
 
 const FEISHU_CREATE_BOT_URL = 'https://open.feishu.cn/page/openclaw?form=multiAgent'
+const IM_CONFIG_DOCS_URL = 'https://claudecode-haha.relakkesyang.org/im/'
 
 export function AdapterSettings() {
   const t = useTranslation()
@@ -23,15 +24,18 @@ export function AdapterSettings() {
     generatePairingCode,
     startWechatLogin,
     pollWechatLogin,
+    startWhatsAppLogin,
+    pollWhatsAppLogin,
     removePairedUser,
     beginDingtalkRegistration,
     pollDingtalkRegistration,
     unbindWechatAccount,
     unbindDingtalkBot,
+    unbindWhatsAppAccount,
   } = useAdapterStore()
 
-  // Active IM tab —— Feishu 默认展示，在前
-  const [activeIm, setActiveIm] = useState<ImTab>('feishu')
+  // Active IM tab
+  const [activeIm, setActiveIm] = useState<ImTab>('telegram')
 
   // Server —— serverUrl 不再暴露在 UI 里（见下方 Server URL 注释），
   // 桌面端用 sidecar env var 注入动态端口。
@@ -56,6 +60,14 @@ export function AdapterSettings() {
   const [wechatStatus, setWechatStatus] = useState('')
   const [isWechatBinding, setIsWechatBinding] = useState(false)
   const [isUnbindingWechatAccount, setIsUnbindingWechatAccount] = useState(false)
+
+  // WhatsApp
+  const [waAllowedUsers, setWaAllowedUsers] = useState('')
+  const [whatsappQrUrl, setWhatsappQrUrl] = useState<string | null>(null)
+  const [whatsappSessionKey, setWhatsappSessionKey] = useState<string | null>(null)
+  const [whatsappStatus, setWhatsappStatus] = useState('')
+  const [isWhatsAppBinding, setIsWhatsAppBinding] = useState(false)
+  const [isUnbindingWhatsAppAccount, setIsUnbindingWhatsAppAccount] = useState(false)
 
   // DingTalk
   const [dtClientId, setDtClientId] = useState('')
@@ -102,6 +114,7 @@ export function AdapterSettings() {
     setFsAllowedUsers(config.feishu?.allowedUsers?.join(', ') ?? '')
     setFsStreamingCard(config.feishu?.streamingCard ?? false)
     setWcAllowedUsers(config.wechat?.allowedUsers?.join(', ') ?? '')
+    setWaAllowedUsers(config.whatsapp?.allowedUsers?.join(', ') ?? '')
     setDtClientId(config.dingtalk?.clientId ?? '')
     setDtClientSecret(config.dingtalk?.clientSecret ?? '')
     setDtAllowedUsers(config.dingtalk?.allowedUsers?.join(', ') ?? '')
@@ -151,6 +164,51 @@ export function AdapterSettings() {
       if (timer != null) window.clearTimeout(timer)
     }
   }, [wechatSessionKey, pollWechatLogin, t])
+
+  useEffect(() => {
+    if (!whatsappSessionKey) return
+
+    let cancelled = false
+    let timer: number | null = null
+
+    const poll = async () => {
+      try {
+        const result = await pollWhatsAppLogin(whatsappSessionKey)
+        if (cancelled) return
+        if (result.connected) {
+          setWhatsappStatus(t('settings.adapters.whatsappBindSuccess'))
+          setWhatsappQrUrl(null)
+          setWhatsappSessionKey(null)
+          setIsWhatsAppBinding(false)
+          return
+        }
+        if (result.qrDataUrl) {
+          setWhatsappQrUrl(result.qrDataUrl)
+        }
+        if (result.message) {
+          setWhatsappStatus(result.message)
+        }
+        if (result.status === 'expired' || result.status === 'error') {
+          setWhatsappSessionKey(null)
+          setIsWhatsAppBinding(false)
+          return
+        }
+      } catch (err) {
+        if (!cancelled) setWhatsappStatus(err instanceof Error ? err.message : t('settings.adapters.whatsappBindFailed'))
+      }
+
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 1200)
+      }
+    }
+
+    timer = window.setTimeout(() => void poll(), 1200)
+
+    return () => {
+      cancelled = true
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [whatsappSessionKey, pollWhatsAppLogin, t])
 
   useEffect(() => {
     if (!dtRegistration || dtAuthStatus !== 'waiting') return
@@ -238,6 +296,16 @@ export function AdapterSettings() {
         allowedUsers: wcUsers.length ? wcUsers : [],
       }
 
+      const waUsers = waAllowedUsers
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+
+      patch.whatsapp = {
+        ...config.whatsapp,
+        allowedUsers: waUsers.length ? waUsers : [],
+      }
+
       const dtUsers = dtAllowedUsers
         .split(',')
         .map((s) => s.trim())
@@ -296,6 +364,22 @@ export function AdapterSettings() {
     }
   }, [startWechatLogin])
 
+  const handleWhatsAppBind = useCallback(async () => {
+    setIsWhatsAppBinding(true)
+    setWhatsappStatus('')
+    try {
+      const result = await startWhatsAppLogin()
+      if (result.qrDataUrl) {
+        setWhatsappQrUrl(result.qrDataUrl)
+      }
+      setWhatsappSessionKey(result.sessionKey)
+      setWhatsappStatus(result.message)
+    } catch (err) {
+      setWhatsappStatus(err instanceof Error ? err.message : t('settings.adapters.whatsappBindFailed'))
+      setIsWhatsAppBinding(false)
+    }
+  }, [startWhatsAppLogin, t])
+
   const handleStartDingtalkAuth = useCallback(async () => {
     setIsStartingDtAuth(true)
     setDtAuthStatus('idle')
@@ -353,6 +437,24 @@ export function AdapterSettings() {
     }
   }, [unbindDingtalkBot, fetchConfig, t])
 
+  const handleUnbindWhatsAppAccount = useCallback(async () => {
+    setIsUnbindingWhatsAppAccount(true)
+    setWhatsappStatus('')
+    try {
+      await unbindWhatsAppAccount()
+      await fetchConfig()
+      setWhatsappQrUrl(null)
+      setWhatsappSessionKey(null)
+      setWhatsappStatus(t('settings.adapters.whatsappUnbound'))
+    } catch (err) {
+      setWhatsappStatus(err instanceof Error ? err.message : t('settings.adapters.whatsappUnbindFailed'))
+    } finally {
+      setIsUnbindingWhatsAppAccount(false)
+      setIsWhatsAppBinding(false)
+      setPendingAdapterUnbind(null)
+    }
+  }, [unbindWhatsAppAccount, fetchConfig, t])
+
   const handleUnbind = useCallback(async (platform: ImPlatform, userId: string | number) => {
     setPendingUnbind({ platform, userId })
   }, [])
@@ -375,6 +477,7 @@ export function AdapterSettings() {
     ...(config.feishu?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'feishu' as const })),
     ...(config.wechat?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'wechat' as const })),
     ...(config.dingtalk?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'dingtalk' as const })),
+    ...(config.whatsapp?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'whatsapp' as const })),
   ]
 
   // Check pairing expiry
@@ -396,7 +499,19 @@ export function AdapterSettings() {
     <div className="max-w-2xl space-y-8">
       {/* Description */}
       <div>
-        <p className="text-sm text-[var(--color-text-secondary)]">{t('settings.adapters.description')}</p>
+        <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+          {t('settings.adapters.description')}{' '}
+          <a
+            href={IM_CONFIG_DOCS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-medium text-[var(--color-brand)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]"
+          >
+            {t('settings.adapters.configurationDocs')}
+            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">open_in_new</span>
+          </a>
+          {t('settings.adapters.descriptionAfterDocs')}
+        </p>
       </div>
 
       {/* Pairing */}
@@ -485,9 +600,14 @@ export function AdapterSettings() {
         </p>
       </div>
 
-      {/* IM Adapter Tabs —— Feishu 默认在前，Telegram 在后 */}
+      {/* IM Adapter Tabs */}
       <section className="rounded-xl border border-[var(--color-border)] overflow-hidden">
         <div role="tablist" aria-label="IM adapter" className="flex items-stretch border-b border-[var(--color-border)] bg-[var(--color-surface-hover)]">
+          <ImTabButton
+            label={t('settings.adapters.telegram')}
+            active={activeIm === 'telegram'}
+            onClick={() => setActiveIm('telegram')}
+          />
           <ImTabButton
             label={t('settings.adapters.feishu')}
             active={activeIm === 'feishu'}
@@ -504,9 +624,9 @@ export function AdapterSettings() {
             onClick={() => setActiveIm('dingtalk')}
           />
           <ImTabButton
-            label={t('settings.adapters.telegram')}
-            active={activeIm === 'telegram'}
-            onClick={() => setActiveIm('telegram')}
+            label={t('settings.adapters.whatsapp')}
+            active={activeIm === 'whatsapp'}
+            onClick={() => setActiveIm('whatsapp')}
           />
         </div>
 
@@ -760,6 +880,64 @@ export function AdapterSettings() {
             </div>
           </div>
         )}
+
+        {activeIm === 'whatsapp' && (
+          <div className="p-4 space-y-4">
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                    {config.whatsapp?.accountJid ? t('settings.adapters.whatsappConnected') : t('settings.adapters.whatsappNotConnected')}
+                  </div>
+                  <p className="text-xs text-[var(--color-text-tertiary)]">
+                    {t('settings.adapters.whatsappQrHint')}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button onClick={handleWhatsAppBind} loading={isWhatsAppBinding && !whatsappQrUrl} size="sm">
+                    {config.whatsapp?.accountJid ? t('settings.adapters.whatsappRebind') : t('settings.adapters.whatsappBind')}
+                  </Button>
+                  {config.whatsapp?.accountJid && (
+                    <Button onClick={() => setPendingAdapterUnbind('whatsappAccount')} loading={isUnbindingWhatsAppAccount} size="sm" variant="danger">
+                      {t('settings.adapters.whatsappUnbindAccount')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {config.whatsapp?.accountJid && (
+                <p className="text-xs text-[var(--color-text-tertiary)]">{config.whatsapp.accountJid}</p>
+              )}
+
+              {whatsappQrUrl && (
+                <div className="flex items-start gap-4">
+                  <img
+                    src={whatsappQrUrl}
+                    alt={t('settings.adapters.whatsappQrAlt')}
+                    className="h-40 w-40 rounded-lg border border-[var(--color-border)] bg-white object-contain p-2"
+                  />
+                  <div className="pt-2 text-sm text-[var(--color-text-secondary)]">
+                    {whatsappStatus || t('settings.adapters.whatsappWaiting')}
+                  </div>
+                </div>
+              )}
+
+              {!whatsappQrUrl && whatsappStatus && (
+                <p className="text-sm text-[var(--color-text-secondary)]">{whatsappStatus}</p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <Input
+                label={t('settings.adapters.allowedUsers')}
+                value={waAllowedUsers}
+                onChange={(e) => setWaAllowedUsers(e.target.value)}
+                placeholder={t('settings.adapters.waAllowedUsersPlaceholder')}
+              />
+              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.whatsappAllowedUsersHint')}</p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Save */}
@@ -798,22 +976,32 @@ export function AdapterSettings() {
       <ConfirmDialog
         open={pendingAdapterUnbind !== null}
         onClose={() => {
-          if (isUnbindingWechatAccount || isUnbindingDtBot) return
+          if (isUnbindingWechatAccount || isUnbindingDtBot || isUnbindingWhatsAppAccount) return
           setPendingAdapterUnbind(null)
         }}
-        onConfirm={pendingAdapterUnbind === 'wechatAccount' ? handleUnbindWechatAccount : handleUnbindDingtalkBot}
+        onConfirm={pendingAdapterUnbind === 'wechatAccount'
+          ? handleUnbindWechatAccount
+          : pendingAdapterUnbind === 'whatsappAccount'
+            ? handleUnbindWhatsAppAccount
+            : handleUnbindDingtalkBot}
         title={pendingAdapterUnbind === 'wechatAccount'
           ? t('settings.adapters.wechatUnbindAccount')
-          : t('settings.adapters.dingtalkUnbindBot')}
+          : pendingAdapterUnbind === 'whatsappAccount'
+            ? t('settings.adapters.whatsappUnbindAccount')
+            : t('settings.adapters.dingtalkUnbindBot')}
         body={pendingAdapterUnbind === 'wechatAccount'
           ? t('settings.adapters.wechatUnbindAccountConfirm')
-          : t('settings.adapters.dingtalkUnbindBotConfirm')}
+          : pendingAdapterUnbind === 'whatsappAccount'
+            ? t('settings.adapters.whatsappUnbindAccountConfirm')
+            : t('settings.adapters.dingtalkUnbindBotConfirm')}
         confirmLabel={pendingAdapterUnbind === 'wechatAccount'
           ? t('settings.adapters.wechatUnbindAccount')
-          : t('settings.adapters.dingtalkUnbindBot')}
+          : pendingAdapterUnbind === 'whatsappAccount'
+            ? t('settings.adapters.whatsappUnbindAccount')
+            : t('settings.adapters.dingtalkUnbindBot')}
         cancelLabel={t('common.cancel')}
         confirmVariant="danger"
-        loading={isUnbindingWechatAccount || isUnbindingDtBot}
+        loading={isUnbindingWechatAccount || isUnbindingDtBot || isUnbindingWhatsAppAccount}
       />
     </div>
   )

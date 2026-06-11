@@ -12,6 +12,12 @@ const booleanPayload: Validator = value => typeof value === 'boolean'
 const hasOnlyKeys = (value: Record<string, unknown>, allowedKeys: string[]) =>
   Object.keys(value).every(key => allowedKeys.includes(key))
 
+const sessionIdPayload: Validator = value =>
+  typeof value === 'string'
+  && value.length > 0
+  && value.length <= 200
+  && /^[A-Za-z0-9._:-]+$/.test(value)
+
 const commandInvoke: Validator = value =>
   isRecord(value)
   && typeof value.command === 'string'
@@ -80,6 +86,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.commandInvoke]: commandInvoke,
   [ELECTRON_IPC_CHANNELS.shellOpen]: stringPayload,
   [ELECTRON_IPC_CHANNELS.shellOpenPath]: stringPayload,
+  [ELECTRON_IPC_CHANNELS.traceOpenWindow]: sessionIdPayload,
   [ELECTRON_IPC_CHANNELS.dialogOpen]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.dialogSave]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.updateCheck]: updateCheckOptions,

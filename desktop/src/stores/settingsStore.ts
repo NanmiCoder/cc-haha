@@ -3,6 +3,7 @@ import { ApiError } from '../api/client'
 import { settingsApi } from '../api/settings'
 import { modelsApi } from '../api/models'
 import { h5AccessApi } from '../api/h5Access'
+import { tracesApi } from '../api/traces'
 import {
   isThemeMode,
   type AppMode,
@@ -13,6 +14,8 @@ import {
   type H5AccessDiagnostics,
   type H5AccessSettings,
   type NetworkSettings,
+  type OutputStyleOption,
+  type OutputStylesResponse,
   type PermissionMode,
   type EffortLevel,
   type ModelInfo,
@@ -21,6 +24,7 @@ import {
   type UpdateProxySettings,
   type WebSearchSettings,
 } from '../types/settings'
+import type { TraceCaptureSettings } from '../types/trace'
 import { getDesktopHost } from '../lib/desktopHost'
 import type { Locale } from '../i18n'
 import {
@@ -61,12 +65,19 @@ type SettingsStore = {
   locale: Locale
   theme: ThemeMode
   chatSendBehavior: ChatSendBehavior
+  outputStyle: string
+  outputStyles: OutputStyleOption[]
+  outputStyleScope: OutputStylesResponse['scope']
+  outputStyleWorkDir: string | null
+  outputStylesLoading: boolean
+  outputStyleError: string | null
   skipWebFetchPreflight: boolean
   desktopNotificationsEnabled: boolean
   desktopTerminal: DesktopTerminalSettings
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
+  traceCapture: TraceCaptureSettings
   h5Access: H5AccessSettings
   h5AccessDiagnostics: H5AccessDiagnostics | null
   h5AccessError: string | null
@@ -87,12 +98,15 @@ type SettingsStore = {
   setLocale: (locale: Locale) => void
   setTheme: (theme: ThemeMode) => Promise<void>
   setChatSendBehavior: (behavior: ChatSendBehavior) => Promise<void>
+  fetchOutputStyles: (workDir?: string | null) => Promise<void>
+  setOutputStyle: (outputStyle: string, workDir?: string | null) => Promise<void>
   setSkipWebFetchPreflight: (enabled: boolean) => Promise<void>
   setDesktopNotificationsEnabled: (enabled: boolean) => Promise<void>
   setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
+  setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
   enableH5Access: () => Promise<string>
   disableH5Access: () => Promise<void>
   regenerateH5AccessToken: () => Promise<string>
@@ -135,6 +149,21 @@ const DEFAULT_NETWORK_SETTINGS: NetworkSettings = {
   },
 }
 
+const DEFAULT_OUTPUT_STYLE = 'default'
+const DEFAULT_OUTPUT_STYLE_OPTIONS: OutputStyleOption[] = [
+  {
+    value: DEFAULT_OUTPUT_STYLE,
+    label: 'Default',
+    description: 'Claude completes coding tasks efficiently and provides concise responses',
+    source: 'built-in',
+  },
+]
+
+const DEFAULT_TRACE_CAPTURE_SETTINGS: TraceCaptureSettings = {
+  enabled: true,
+  storageDir: '',
+}
+
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   permissionMode: 'default',
   currentModel: null,
@@ -145,12 +174,19 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   locale: getStoredLocale(),
   theme: useUIStore.getState().theme,
   chatSendBehavior: 'enter',
+  outputStyle: DEFAULT_OUTPUT_STYLE,
+  outputStyles: DEFAULT_OUTPUT_STYLE_OPTIONS,
+  outputStyleScope: 'userSettings',
+  outputStyleWorkDir: null,
+  outputStylesLoading: false,
+  outputStyleError: null,
   skipWebFetchPreflight: true,
   desktopNotificationsEnabled: false,
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
+  traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
   h5Access: DEFAULT_H5_ACCESS_SETTINGS,
   h5AccessDiagnostics: null,
   h5AccessError: null,
@@ -177,13 +213,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const previousH5Access = get().h5Access
-      const [{ mode }, modelsRes, { model }, { level }, userSettings, h5AccessResult] = await Promise.all([
+      const [{ mode }, modelsRes, { model }, { level }, userSettings, h5AccessResult, traceCapture] = await Promise.all([
         settingsApi.getPermissionMode(),
         modelsApi.list(),
         modelsApi.getCurrent(),
         modelsApi.getEffort(),
         settingsApi.getUser(),
         loadH5AccessSettings(previousH5Access),
+        loadTraceCaptureSettings(),
       ])
       const serverTheme = isThemeMode(userSettings.theme) ? userSettings.theme : 'white'
       // 'system' is a desktop-only logical mode that never gets persisted to the
@@ -202,12 +239,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         theme,
         chatSendBehavior: normalizeChatSendBehavior(userSettings.chatSendBehavior),
+        outputStyle: normalizeOutputStyle(userSettings.outputStyle),
         skipWebFetchPreflight: userSettings.skipWebFetchPreflight !== false,
         desktopNotificationsEnabled: userSettings.desktopNotificationsEnabled === true,
         desktopTerminal: normalizeDesktopTerminalSettings(userSettings.desktopTerminal),
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
+        traceCapture,
         h5Access: h5AccessResult.settings,
         h5AccessDiagnostics: h5AccessResult.diagnostics,
         h5AccessError: h5AccessResult.error,
@@ -300,6 +339,57 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  fetchOutputStyles: async (workDir) => {
+    set({ outputStylesLoading: true, outputStyleError: null })
+    try {
+      const response = await settingsApi.getOutputStyles(workDir)
+      set({
+        outputStyle: normalizeOutputStyle(response.outputStyle),
+        outputStyles: normalizeOutputStyleOptions(response.styles),
+        outputStyleScope: response.scope,
+        outputStyleWorkDir: response.workDir,
+        outputStylesLoading: false,
+        outputStyleError: null,
+      })
+    } catch (error) {
+      set({
+        outputStylesLoading: false,
+        outputStyleError: getErrorMessage(error, 'Failed to load output styles.'),
+      })
+      throw error
+    }
+  },
+
+  setOutputStyle: async (outputStyle, workDir) => {
+    const prev = {
+      outputStyle: get().outputStyle,
+      outputStyleScope: get().outputStyleScope,
+      outputStyleWorkDir: get().outputStyleWorkDir,
+      outputStyleError: get().outputStyleError,
+    }
+    set({
+      outputStyle,
+      outputStyleError: null,
+    })
+    try {
+      const result = await settingsApi.setOutputStyle(outputStyle, workDir)
+      set({
+        outputStyle: normalizeOutputStyle(result.outputStyle),
+        outputStyleScope: result.scope,
+        outputStyleWorkDir: result.workDir,
+        outputStyleError: null,
+      })
+    } catch (error) {
+      set({
+        outputStyle: prev.outputStyle,
+        outputStyleScope: prev.outputStyleScope,
+        outputStyleWorkDir: prev.outputStyleWorkDir,
+        outputStyleError: getErrorMessage(error, 'Failed to save output style.'),
+      })
+      throw error
+    }
+  },
+
   setSkipWebFetchPreflight: async (enabled) => {
     const prev = get().skipWebFetchPreflight
     set({ skipWebFetchPreflight: enabled })
@@ -374,6 +464,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ network: next })
     } catch (error) {
       set({ network: prev })
+      throw error
+    }
+  },
+
+  setTraceCaptureEnabled: async (enabled) => {
+    const prev = get().traceCapture
+    set({ traceCapture: { ...prev, enabled } })
+    try {
+      const next = await tracesApi.updateSettings({ enabled })
+      set({ traceCapture: normalizeTraceCaptureSettings(next) })
+    } catch (error) {
+      set({ traceCapture: prev })
       throw error
     }
   },
@@ -498,6 +600,30 @@ function normalizeChatSendBehavior(value: unknown): ChatSendBehavior {
   return value === 'modifierEnter' ? 'modifierEnter' : 'enter'
 }
 
+function normalizeOutputStyle(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value
+    : DEFAULT_OUTPUT_STYLE
+}
+
+function normalizeOutputStyleOptions(styles: OutputStyleOption[] | undefined): OutputStyleOption[] {
+  if (!Array.isArray(styles) || styles.length === 0) return DEFAULT_OUTPUT_STYLE_OPTIONS
+  const normalized = styles
+    .filter((style): style is OutputStyleOption =>
+      typeof style?.value === 'string' &&
+      style.value.trim().length > 0 &&
+      typeof style.label === 'string' &&
+      typeof style.description === 'string',
+    )
+    .map(style => ({
+      ...style,
+      value: style.value.trim(),
+      label: style.label.trim() || style.value.trim(),
+      description: style.description.trim(),
+    }))
+  return normalized.length > 0 ? normalized : DEFAULT_OUTPUT_STYLE_OPTIONS
+}
+
 function isUpdateProxyMode(value: unknown): value is UpdateProxyMode {
   return value === 'system' || value === 'manual'
 }
@@ -531,6 +657,15 @@ function normalizeNetworkSettings(
   }
 }
 
+function normalizeTraceCaptureSettings(
+  settings: TraceCaptureSettings | undefined,
+): TraceCaptureSettings {
+  return {
+    enabled: settings?.enabled !== false,
+    storageDir: typeof settings?.storageDir === 'string' ? settings.storageDir : '',
+  }
+}
+
 function normalizeDesktopTerminalSettings(
   settings: Partial<DesktopTerminalSettings> | undefined,
 ): DesktopTerminalSettings {
@@ -552,6 +687,14 @@ function normalizeH5AccessSettings(settings: H5AccessSettings | undefined): H5Ac
     tokenPreview: settings?.tokenPreview ?? null,
     allowedOrigins: Array.isArray(settings?.allowedOrigins) ? settings.allowedOrigins : [],
     publicBaseUrl: settings?.publicBaseUrl ?? null,
+  }
+}
+
+async function loadTraceCaptureSettings(): Promise<TraceCaptureSettings> {
+  try {
+    return normalizeTraceCaptureSettings(await tracesApi.getSettings())
+  } catch {
+    return DEFAULT_TRACE_CAPTURE_SETTINGS
   }
 }
 

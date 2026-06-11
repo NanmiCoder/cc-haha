@@ -4,6 +4,7 @@ import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
   TERMINAL_TAB_PREFIX,
+  TRACE_TAB_PREFIX,
   useTabStore,
   type TabType,
 } from '../stores/tabStore'
@@ -54,7 +55,8 @@ function isSessionTabState(activeTabId: string | null, activeTabType: TabType | 
   if (activeTabType) return false
   return activeTabId !== SETTINGS_TAB_ID &&
     activeTabId !== SCHEDULED_TAB_ID &&
-    !activeTabId.startsWith(TERMINAL_TAB_PREFIX)
+    !activeTabId.startsWith(TERMINAL_TAB_PREFIX) &&
+    !activeTabId.startsWith(TRACE_TAB_PREFIX)
 }
 
 function getSessionTerminalCwd(session: SessionListItem | undefined) {
@@ -563,15 +565,17 @@ export function ActiveSession() {
                   }
                 >
                   <div className={showRightPanel ? 'min-w-0 flex-1' : 'mx-auto w-full max-w-[860px] min-w-0'}>
-                    <h1
-                      className={
-                        showRightPanel
-                          ? 'truncate text-[15px] font-bold font-headline leading-tight text-on-surface'
-                          : 'text-lg font-bold font-headline text-on-surface leading-tight'
-                      }
-                    >
-                      {session?.title || t('session.untitled')}
-                    </h1>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <h1
+                        className={
+                          showRightPanel
+                            ? 'min-w-0 flex-1 truncate text-[15px] font-bold font-headline leading-tight text-on-surface'
+                            : 'min-w-0 flex-1 text-lg font-bold font-headline text-on-surface leading-tight'
+                        }
+                      >
+                        {session?.title || t('session.untitled')}
+                      </h1>
+                    </div>
                     <div
                       className={
                         showRightPanel

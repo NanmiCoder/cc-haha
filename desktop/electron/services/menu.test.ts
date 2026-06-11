@@ -2,40 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
 import { ELECTRON_EVENT_CHANNELS } from '../ipc/channels'
 import { buildApplicationMenuTemplate, installApplicationMenu } from './menu'
+import { buildElectronModuleMock, getElectronServiceMocks, resetElectronServiceMocks } from './__electronMock'
 
-const menuMocksKey = '__electronMenuMocks'
+const getElectronMenuMocks = getElectronServiceMocks
 
-function createElectronMenuMocks() {
-  return {
-    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
-    setApplicationMenu: vi.fn(),
-  }
-}
-
-function getElectronMenuMocks() {
-  const store = globalThis as Record<string, unknown>
-  const existing = store[menuMocksKey] as ReturnType<typeof createElectronMenuMocks> | undefined
-  if (existing) return existing
-  const created = createElectronMenuMocks()
-  store[menuMocksKey] = created
-  return created
-}
-
-vi.mock('electron', () => {
-  const mocks = getElectronMenuMocks()
-  return {
-    Menu: {
-      buildFromTemplate: mocks.buildFromTemplate,
-      setApplicationMenu: mocks.setApplicationMenu,
-    },
-  }
-})
+vi.mock('electron', () => buildElectronModuleMock())
 
 describe('Electron application menu service', () => {
   afterEach(() => {
-    const mocks = getElectronMenuMocks()
-    mocks.buildFromTemplate.mockClear()
-    mocks.setApplicationMenu.mockClear()
+    resetElectronServiceMocks()
   })
 
   it('emits native navigation destinations from macOS app menu items', () => {

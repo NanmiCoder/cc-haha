@@ -4,6 +4,8 @@ import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
   TERMINAL_TAB_PREFIX,
+  TRACE_LIST_TAB_ID,
+  TRACE_TAB_PREFIX,
   useTabStore,
   type Tab,
 } from '../../stores/tabStore'
@@ -40,7 +42,9 @@ function isSessionTabId(tabId: string | null) {
   if (!tabId) return false
   return tabId !== SETTINGS_TAB_ID &&
     tabId !== SCHEDULED_TAB_ID &&
-    !tabId.startsWith(TERMINAL_TAB_PREFIX)
+    tabId !== TRACE_LIST_TAB_ID &&
+    !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
+    !tabId.startsWith(TRACE_TAB_PREFIX)
 }
 
 export function TabBar() {

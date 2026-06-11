@@ -5,6 +5,7 @@ import type {
   DesktopHostUnlisten,
   NotificationPermissionState,
 } from './types'
+import { buildTraceWindowUrl } from '../traceLaunch'
 
 const browserCapabilities: DesktopHostCapabilities = {
   appMode: false,
@@ -73,6 +74,15 @@ export const browserHost: DesktopHost = {
     },
     async openPath() {
       unsupported('Opening system file paths')
+    },
+  },
+  trace: {
+    async openWindow(sessionId) {
+      if (typeof window !== 'undefined') {
+        window.open(buildTraceWindowUrl(sessionId), '_blank', 'noopener,noreferrer')
+        return
+      }
+      unsupported('Opening trace windows')
     },
   },
   dialogs: {
