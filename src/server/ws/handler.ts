@@ -119,19 +119,6 @@ const prewarmIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const DEFAULT_PREWARM_IDLE_TIMEOUT_MS = 5 * 60_000
 const VALID_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'max'])
 
-// Track whether a session is currently mid-turn (anything other than 'idle').
-// Updated inside sendMessage by observing outbound `status` events. Used to
-// avoid yanking the CLI subprocess out from under an in-progress generation
-// when the user changes runtime config (model / effort / thinking) mid-stream.
-const sessionGenerationBusy = new Set<string>()
-
-// When a runtime config change arrives while the session is busy, we record
-// the WS that should drive the eventual restart and apply it on the next
-// transition to 'idle'. The actual override values are read from
-// `runtimeOverrides` at restart time, so a later set_runtime_config naturally
-// supersedes an earlier deferred one.
-const pendingDeferredRuntimeRestarts = new Map<string, ServerWebSocket<WebSocketData>>()
-
 async function sendRepositoryStartupStatus(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
@@ -1331,8 +1318,6 @@ function cleanupSessionRuntimeState(sessionId: string) {
   runtimeTransitionPromises.delete(sessionId)
   sessionStartupPromises.delete(sessionId)
   lastResolvedStartupWorkDirs.delete(sessionId)
-  sessionGenerationBusy.delete(sessionId)
-  pendingDeferredRuntimeRestarts.delete(sessionId)
   clearPrewarmState(sessionId)
 }
 
@@ -2133,49 +2118,21 @@ function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
 }
 
 function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage) {
-  // Track per-session generation busy state by observing outbound `status`
-  // events. This lets handleSetRuntimeConfig defer a restart that would
-  // otherwise kill the CLI subprocess in the middle of a streaming response.
-  const sessionId = ws.data.sessionId
-  if (sessionId && message.type === 'status') {
-    if (message.state === 'idle') {
-      const wasBusy = sessionGenerationBusy.delete(sessionId)
-      if (wasBusy) drainPendingRuntimeRestart(sessionId)
-    } else {
-      sessionGenerationBusy.add(sessionId)
-    }
-  }
   ws.send(JSON.stringify(message))
 }
 
-// Apply a pending deferred runtime restart that was queued while the session
-// was busy. Reads the latest override from `runtimeOverrides` at restart time,
-// so multiple toggles during streaming naturally collapse into a single
-// restart with the most recent config.
-function drainPendingRuntimeRestart(sessionId: string) {
-  const ws = pendingDeferredRuntimeRestarts.get(sessionId)
-  if (!ws) return
-  pendingDeferredRuntimeRestarts.delete(sessionId)
-  if (!conversationService.hasSession(sessionId)) return
-  void enqueueRuntimeTransition(sessionId, async () => {
-    if (!conversationService.hasSession(sessionId)) return
-    await restartSessionWithRuntimeConfig(ws, sessionId)
-  })
-}
-
-// Schedule a runtime-config restart, but defer until the session is idle to
-// avoid interrupting an in-progress generation. The override values are
-// already in `runtimeOverrides[sessionId]` (and persisted) before this is
-// called, so getRuntimeSettings will read them when the deferred restart
-// finally runs.
+// Restart the CLI subprocess to apply a runtime-config change. The override
+// values are already in `runtimeOverrides[sessionId]` (and persisted) before
+// this is called, so getRuntimeSettings will read them at restart time.
+//
+// Mid-turn protection is handled upstream by the active-turn deferral
+// (`shouldDeferRuntimeRestartForActiveTurn` + `deferredRuntimeRestarts`, drained
+// by the turn's `result` callback in `bindActiveUserTurnCompletion`), which
+// gates on the real turn lifecycle rather than on outbound status events.
 async function scheduleRestartSessionWithRuntimeConfig(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
 ): Promise<void> {
-  if (sessionGenerationBusy.has(sessionId)) {
-    pendingDeferredRuntimeRestarts.set(sessionId, ws)
-    return
-  }
   await restartSessionWithRuntimeConfig(ws, sessionId)
 }
 

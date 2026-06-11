@@ -51,10 +51,16 @@ describe('MCP stdio environment', () => {
       PATH: process.env.PATH,
       SHELL: process.env.SHELL,
       ZDOTDIR: process.env.ZDOTDIR,
+      NVM_DIR: process.env.NVM_DIR,
       CC_HAHA_DISABLE_TERMINAL_SHELL_ENV:
         process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV,
     }
     delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
+    // The CI runner exports a real NVM_DIR (/home/runner/.nvm). The env merge
+    // lets inherited process env win over shell-captured values, so a leaked
+    // NVM_DIR would shadow the fake .zshrc value asserted below. Clear it so the
+    // only source of NVM_DIR is the fake shell config.
+    delete process.env.NVM_DIR
     resetMcpStdioEnvironmentCacheForTests()
   })
 

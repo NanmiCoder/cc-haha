@@ -31,10 +31,19 @@ describe('ConversationService', () => {
   let originalPath: string | undefined
   let originalShell: string | undefined
   let originalZdotdir: string | undefined
+  let originalNvmDir: string | undefined
   let originalDisableTerminalShellEnv: string | undefined
+  let originalServerPort: number | undefined
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-conversation-service-'))
+    // ProviderService.serverPort is a process-wide static; other server tests
+    // (e.g. conversations.test.ts starting a server on an OS-assigned port) can
+    // leave it set to a random value. Pin it to the default so the managed
+    // ANTHROPIC_BASE_URL assertions below are deterministic, and restore it
+    // afterwards.
+    originalServerPort = ProviderService.getServerPort()
+    ProviderService.setServerPort(3456)
     originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     originalApiKey = process.env.ANTHROPIC_API_KEY
     originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
@@ -54,6 +63,7 @@ describe('ConversationService', () => {
     originalPath = process.env.PATH
     originalShell = process.env.SHELL
     originalZdotdir = process.env.ZDOTDIR
+    originalNvmDir = process.env.NVM_DIR
     originalDisableTerminalShellEnv = process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
 
     process.env.CLAUDE_CONFIG_DIR = tmpDir
@@ -74,6 +84,11 @@ describe('ConversationService', () => {
     delete process.env.CC_HAHA_TRACE_PROVIDER_NAME
     delete process.env.CC_HAHA_TRACE_PROVIDER_FORMAT
     process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
+    // The CI runner exports a real NVM_DIR (/home/runner/.nvm). buildChildEnv's
+    // shell-env merge lets inherited process env win over shell-captured values,
+    // so a leaked NVM_DIR would shadow the fake .zshrc value the shell-capture
+    // tests assert. Clear it; the per-test fake shell is the only intended source.
+    delete process.env.NVM_DIR
     resetTerminalShellEnvironmentCacheForTests()
   })
 
@@ -135,10 +150,14 @@ describe('ConversationService', () => {
     if (originalZdotdir === undefined) delete process.env.ZDOTDIR
     else process.env.ZDOTDIR = originalZdotdir
 
+    if (originalNvmDir === undefined) delete process.env.NVM_DIR
+    else process.env.NVM_DIR = originalNvmDir
+
     if (originalDisableTerminalShellEnv === undefined) delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
     else process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = originalDisableTerminalShellEnv
 
     resetTerminalShellEnvironmentCacheForTests()
+    if (originalServerPort !== undefined) ProviderService.setServerPort(originalServerPort)
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 

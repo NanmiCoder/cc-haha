@@ -96,6 +96,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Install root dependencies
         run: bun install
 
