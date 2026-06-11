@@ -257,6 +257,39 @@ describe('ConversationService', () => {
     expect((svc as any).getRuntimeArgs({})).not.toContain('--append-system-prompt')
   })
 
+  it('should append the Solo Pipeline system prompt when soloPipelineMode is on', () => {
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({ soloPipelineMode: true }) as string[]
+    const idx = args.indexOf('--append-system-prompt')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    // The injected text must be the Solo prompt — sniff for the unique
+    // Stage-0 intent-triage phrasing locked in soloPipelinePrompt.test.ts.
+    expect(args[idx + 1]).toContain('Solo Pipeline mode')
+  })
+
+  it('should not append the Solo prompt when soloPipelineMode is off', () => {
+    const svc = new ConversationService()
+    expect((svc as any).getRuntimeArgs({ soloPipelineMode: false })).not.toContain('--append-system-prompt')
+  })
+
+  it('routes coordinator and Solo into separate --append-system-prompt slots when both flags are set', () => {
+    // The WS handler enforces mutual exclusion, but getRuntimeArgs must still
+    // produce a deterministic shape if a caller somehow passes both true —
+    // we want each branch's text appended exactly once with no cross-talk.
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({
+      coordinatorMode: true,
+      soloPipelineMode: true,
+    }) as string[]
+    const flagIndices = args
+      .map((arg, i) => (arg === '--append-system-prompt' ? i : -1))
+      .filter((i) => i >= 0)
+    expect(flagIndices.length).toBe(2)
+    const texts = flagIndices.map((i) => args[i + 1] ?? '')
+    expect(texts.some((t) => t.includes(ORCHESTRATION_PROMPT_MARKER))).toBe(true)
+    expect(texts.some((t) => t.includes('Solo Pipeline mode'))).toBe(true)
+  })
+
   // Locks the orchestrator's "propagate project tool rules into every dispatched
   // sub-agent prompt" rule. The bug this guards against was observed live: when the
   // rule was a soft "for example, restate codegraph rules" bullet, the orchestrator

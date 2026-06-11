@@ -170,6 +170,7 @@ type ChatStore = {
   setSessionRuntime: (sessionId: string, selection: RuntimeSelection) => void
   setSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void
   setSessionCoordinatorMode: (sessionId: string, enabled: boolean) => void
+  setSessionSoloPipelineMode: (sessionId: string, enabled: boolean) => void
   stopGeneration: (sessionId: string) => void
   loadHistory: (sessionId: string) => Promise<void>
   reloadHistory: (sessionId: string) => Promise<void>
@@ -966,6 +967,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (useSessionRuntimeStore.getState().coordinatorModes[sessionId]) {
       wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: true })
     }
+    // Same replay for the Solo Pipeline mode toggle. Mutually exclusive with
+    // coordinator mode at the action layer (setSessionSoloPipelineMode), so
+    // both replay branches will never both fire in the same connect.
+    if (useSessionRuntimeStore.getState().soloPipelineModes[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'solo' })
+    }
     if (!sessionId.startsWith('__') && !useTeamStore.getState().getMemberBySessionId(sessionId)) {
       wsManager.send(sessionId, { type: 'prewarm_session' })
     }
@@ -1270,8 +1277,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // is replayed on connect). Only push to a live session; otherwise the
     // replay on next connect carries it.
     useSessionRuntimeStore.getState().setCoordinatorMode(sessionId, enabled)
+    // Mutual exclusion: enabling coordinator clears any Solo Pipeline flag
+    // for the same session. The server side enforces the same exclusion in
+    // handleSetCoordinatorMode / handleSetPipelineMode, but doing it here
+    // keeps the desktop runtime store and the wire payload symmetric so the
+    // replay-on-connect path never sends both.
+    if (enabled && useSessionRuntimeStore.getState().soloPipelineModes[sessionId]) {
+      useSessionRuntimeStore.getState().setSoloPipelineMode(sessionId, false)
+      if (get().sessions[sessionId]) {
+        wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'normal' })
+      }
+    }
     if (get().sessions[sessionId]) {
       wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled })
+    }
+  },
+
+  setSessionSoloPipelineMode: (sessionId, enabled) => {
+    // Sibling of setSessionCoordinatorMode. Persists the preference, enforces
+    // mutual exclusion with coordinator mode (clears it locally + on the
+    // wire when Solo turns on), and pushes to a live session.
+    useSessionRuntimeStore.getState().setSoloPipelineMode(sessionId, enabled)
+    if (enabled && useSessionRuntimeStore.getState().coordinatorModes[sessionId]) {
+      useSessionRuntimeStore.getState().setCoordinatorMode(sessionId, false)
+      if (get().sessions[sessionId]) {
+        wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: false })
+      }
+    }
+    if (get().sessions[sessionId]) {
+      wsManager.send(sessionId, {
+        type: 'set_pipeline_mode',
+        flavor: enabled ? 'solo' : 'normal',
+      })
     }
   },
 

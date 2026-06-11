@@ -2192,6 +2192,135 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('persists Solo Pipeline mode and only sends it to a live session', () => {
+    useSessionRuntimeStore.setState({ coordinatorModes: {}, soloPipelineModes: {} })
+    sendMock.mockReset()
+
+    // No live session: persisted, not pushed.
+    useChatStore.getState().setSessionSoloPipelineMode('solo-session', true)
+    expect(useSessionRuntimeStore.getState().soloPipelineModes['solo-session']).toBe(true)
+    expect(sendMock).not.toHaveBeenCalled()
+
+    useChatStore.setState({
+      sessions: {
+        'solo-session': {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+    useChatStore.getState().setSessionSoloPipelineMode('solo-session', false)
+
+    expect(useSessionRuntimeStore.getState().soloPipelineModes['solo-session']).toBe(false)
+    expect(sendMock).toHaveBeenCalledWith('solo-session', {
+      type: 'set_pipeline_mode',
+      flavor: 'normal',
+    })
+  })
+
+  it('enabling Solo Pipeline mode clears coordinator mode for the same session', () => {
+    useSessionRuntimeStore.setState({
+      coordinatorModes: { 'mut-session': true },
+      soloPipelineModes: {},
+    })
+    sendMock.mockReset()
+    useChatStore.setState({
+      sessions: {
+        'mut-session': {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().setSessionSoloPipelineMode('mut-session', true)
+
+    // Local store: Solo on, coordinator off.
+    expect(useSessionRuntimeStore.getState().soloPipelineModes['mut-session']).toBe(true)
+    expect(useSessionRuntimeStore.getState().coordinatorModes['mut-session']).toBe(false)
+    // Wire: must broadcast both transitions so the server clears the
+    // previously-active coordinator flag and arms the Solo flag in lockstep.
+    expect(sendMock).toHaveBeenCalledWith('mut-session', {
+      type: 'set_coordinator_mode',
+      enabled: false,
+    })
+    expect(sendMock).toHaveBeenCalledWith('mut-session', {
+      type: 'set_pipeline_mode',
+      flavor: 'solo',
+    })
+  })
+
+  it('enabling coordinator mode clears Solo Pipeline mode for the same session', () => {
+    useSessionRuntimeStore.setState({
+      coordinatorModes: {},
+      soloPipelineModes: { 'mut-session2': true },
+    })
+    sendMock.mockReset()
+    useChatStore.setState({
+      sessions: {
+        'mut-session2': {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().setSessionCoordinatorMode('mut-session2', true)
+
+    expect(useSessionRuntimeStore.getState().coordinatorModes['mut-session2']).toBe(true)
+    expect(useSessionRuntimeStore.getState().soloPipelineModes['mut-session2']).toBe(false)
+    expect(sendMock).toHaveBeenCalledWith('mut-session2', {
+      type: 'set_pipeline_mode',
+      flavor: 'normal',
+    })
+    expect(sendMock).toHaveBeenCalledWith('mut-session2', {
+      type: 'set_coordinator_mode',
+      enabled: true,
+    })
+  })
+
   it('mirrors CLI permission-mode broadcasts locally without echoing back to the server', () => {
     sendMock.mockReset()
     updateSessionPermissionModeMock.mockReset()

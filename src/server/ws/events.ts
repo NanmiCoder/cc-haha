@@ -26,6 +26,7 @@ export type ClientMessage =
   | { type: 'set_permission_mode'; mode: string }
   | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string; thinkingEnabled?: boolean }
   | { type: 'set_coordinator_mode'; enabled: boolean }
+  | { type: 'set_pipeline_mode'; flavor: 'solo' | 'normal' }
   | { type: 'set_handoff_summary'; previousSessionId: string; deep?: boolean }
   | { type: 'stop_generation' }
   | { type: 'ping' }

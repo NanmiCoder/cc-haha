@@ -129,6 +129,13 @@ type SessionStartOptions = {
   providerId?: string | null
   coordinatorMode?: boolean
   /**
+   * Solo Pipeline mode toggle. When true, the CLI is launched (or
+   * restarted) with `--append-system-prompt` carrying the 5-stage
+   * Solo prompt. Mutually exclusive with `coordinatorMode` — the WS
+   * handler enforces that exclusion before this field is read.
+   */
+  soloPipelineMode?: boolean
+  /**
    * If set, append this exact text to the system prompt via
    * `--append-system-prompt`. Used by the welcome-screen "Continue from
    * here" flow to inject a hand-off summary of the previous session.
@@ -1050,6 +1057,19 @@ export class ConversationService {
 
     if (options?.coordinatorMode) {
       args.push('--append-system-prompt', ORCHESTRATION_SYSTEM_PROMPT)
+    }
+
+    // Solo Pipeline mode appends a different prompt addendum than
+    // coordinator mode (5-stage solo workflow). The WS handler keeps the
+    // two modes mutually exclusive, so at most one branch fires here.
+    if (options?.soloPipelineMode) {
+      // Lazy require to avoid pulling the prompt module into builds that
+      // don't enable the COORDINATOR_MODE feature flag (the flag gates
+      // both coordinator and Solo wiring at the moment).
+      const { getSoloPipelineSystemPrompt } =
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../../coordinator/soloPipelinePrompt.js') as typeof import('../../coordinator/soloPipelinePrompt.js')
+      args.push('--append-system-prompt', getSoloPipelineSystemPrompt())
     }
 
     // Hand-off context from the previous session (welcome screen "Continue

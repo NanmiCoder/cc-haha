@@ -281,6 +281,17 @@ export function ActiveSession() {
   const handoffInfoForActive = useSessionRuntimeStore((s) =>
     activeTabId ? s.handoffInfo[activeTabId] : undefined,
   )
+  // Live mode flags drive the always-visible status chip in the chat header
+  // so the user can see at a glance which session-level mode is active. The
+  // `+`-menu toggle in ChatInput is the entry point but only surfaces the
+  // current state inside that menu — the chip is the persistent affordance
+  // that the steering contract calls "明示当前模式" (must be explicit).
+  const coordinatorModeForActive = useSessionRuntimeStore((s) =>
+    activeTabId ? s.coordinatorModes[activeTabId] ?? false : false,
+  )
+  const soloPipelineModeForActive = useSessionRuntimeStore((s) =>
+    activeTabId ? s.soloPipelineModes[activeTabId] ?? false : false,
+  )
   const pendingComputerUsePermission = sessionState?.pendingComputerUsePermission ?? null
   const fetchSessionTasks = useCLITaskStore((s) => s.fetchSessionTasks)
   const trackedTaskSessionId = useCLITaskStore((s) => s.sessionId)
@@ -622,6 +633,42 @@ export function ActiveSession() {
                             {t('session.handoffChip', {
                               tokens: handoffInfoForActive.approxTokens,
                             })}
+                          </span>
+                        </>
+                      )}
+                      {coordinatorModeForActive && (
+                        <>
+                          <span className="text-[var(--color-outline)]">·</span>
+                          <span
+                            data-testid="session-coordinator-chip"
+                            title={t('session.coordinatorChipTooltip')}
+                            className="inline-flex shrink-0 items-center gap-1 cursor-help text-[var(--color-primary)]"
+                          >
+                            <span
+                              className="material-symbols-outlined text-[12px]"
+                              aria-hidden="true"
+                            >
+                              hub
+                            </span>
+                            {t('session.coordinatorChip')}
+                          </span>
+                        </>
+                      )}
+                      {soloPipelineModeForActive && (
+                        <>
+                          <span className="text-[var(--color-outline)]">·</span>
+                          <span
+                            data-testid="session-solo-chip"
+                            title={t('session.soloPipelineChipTooltip')}
+                            className="inline-flex shrink-0 items-center gap-1 cursor-help text-[var(--color-primary)]"
+                          >
+                            <span
+                              className="material-symbols-outlined text-[12px]"
+                              aria-hidden="true"
+                            >
+                              linear_scale
+                            </span>
+                            {t('session.soloPipelineChip')}
                           </span>
                         </>
                       )}
