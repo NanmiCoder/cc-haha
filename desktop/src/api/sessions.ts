@@ -277,6 +277,18 @@ export type WorkspaceDiffResult = {
   error?: string
 }
 
+export type SaveWorkspaceFileInput = {
+  path: string
+  content: string
+  expectedBaseHash: string
+  bom: 'none' | 'utf-8'
+  lineEnding: 'LF' | 'CRLF' | 'CR'
+}
+
+export type SaveWorkspaceFileResult =
+  | { ok: true; hash: string; bytes: number; timestamp: number }
+  | { ok: false; error: string; message: string; details?: Record<string, unknown> }
+
 export type SessionTurnCheckpoint = {
   target: SessionRewindResponse['target']
   conversation?: SessionRewindResponse['conversation']
@@ -394,6 +406,10 @@ export const sessionsApi = {
 
   getWorkspaceFile(sessionId: string, workspacePath: string) {
     return api.get<WorkspaceReadFileResult>(buildWorkspacePath(sessionId, 'file', workspacePath))
+  },
+
+  saveWorkspaceFile(sessionId: string, input: SaveWorkspaceFileInput) {
+    return api.post<SaveWorkspaceFileResult>(`/api/sessions/${sessionId}/workspace/file`, input)
   },
 
   getWorkspaceDiff(sessionId: string, workspacePath: string) {

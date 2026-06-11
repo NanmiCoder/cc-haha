@@ -24,6 +24,7 @@ import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { closeSessionConnection, getSlashCommands } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService } from '../services/workspaceService.js'
+import { WorkspaceFileService } from '../services/workspaceFileService.js'
 import {
   getRepositoryContext,
   type CreateSessionRepositoryOptions,
@@ -55,6 +56,13 @@ const workspaceService = new WorkspaceService(
   ),
   async (sessionId) => sessionService.getSessionMessages(sessionId),
   async (sessionId) => sessionService.getSessionFileHistorySnapshots(sessionId),
+)
+
+const workspaceFileService = new WorkspaceFileService(
+  async (sessionId) => (
+    conversationService.getSessionWorkDir(sessionId) ||
+    await sessionService.getSessionWorkDir(sessionId)
+  ),
 )
 
 export async function handleSessionsApi(
@@ -193,6 +201,9 @@ export async function handleSessionsApi(
     }
 
     if (subResource === 'workspace') {
+      if (req.method === 'POST') {
+        return await handleSessionWorkspacePost(req, sessionId, segments[4])
+      }
       if (req.method !== 'GET') {
         return Response.json(
           { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
@@ -376,6 +387,40 @@ async function handleSessionWorkspaceRoute(
     default:
       throw ApiError.notFound(`Unknown workspace resource: ${workspaceResource || 'workspace'}`)
   }
+}
+
+async function handleSessionWorkspacePost(
+  req: Request,
+  sessionId: string,
+  workspaceResource?: string,
+): Promise<Response> {
+  if (workspaceResource !== 'file') {
+    return Response.json(
+      { error: 'METHOD_NOT_ALLOWED', message: `POST not supported for workspace/${workspaceResource ?? ''}` },
+      { status: 405 },
+    )
+  }
+
+  await requireSessionWorkspace(sessionId)
+
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json(
+      { error: 'INVALID_JSON', message: 'Request body must be valid JSON' },
+      { status: 400 },
+    )
+  }
+
+  const result = await workspaceFileService.writeFile(sessionId, body)
+  if (result.ok) {
+    return Response.json({ ok: true, hash: result.hash, bytes: result.bytes, timestamp: result.timestamp })
+  }
+  return Response.json(
+    { ok: false, error: result.error, message: result.message, ...(result.details ? { details: result.details } : {}) },
+    { status: result.status },
+  )
 }
 
 async function createSession(req: Request): Promise<Response> {

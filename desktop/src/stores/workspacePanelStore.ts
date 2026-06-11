@@ -42,6 +42,52 @@ export type WorkspacePanelSessionState = {
   hasUserSelectedView?: boolean
 }
 
+export type WorkspaceFileEncoding = 'utf-8' | 'utf-8-bom'
+export type WorkspaceFileLineEnding = 'LF' | 'CRLF' | 'CR'
+
+export type WorkspaceConflictSource = 'user' | 'agent'
+
+export type WorkspaceBufferConflict = {
+  source: WorkspaceConflictSource
+  hash: string
+  timestamp: number
+  actor?: string
+}
+
+/**
+ * Editable-buffer state for a single open file tab.
+ *
+ * `baseHash` / `baseContent` capture the snapshot the editor opened with.
+ * `currentContent` tracks the in-memory edits. `conflict` is set when the
+ * file has been modified externally (another window saving the same path
+ * for `source: 'user'`, or an agent edit for `source: 'agent'`). Phase 2
+ * (this PR) populates `'user'` only — agent-source events ship in PR-4.
+ */
+export type WorkspaceBufferState = {
+  tabId: string
+  path: string
+  baseHash: string
+  baseContent: string
+  currentContent: string
+  isDirty: boolean
+  encoding: WorkspaceFileEncoding
+  lineEnding: WorkspaceFileLineEnding
+  conflict: WorkspaceBufferConflict | null
+}
+
+export type WorkspaceBufferInit = Omit<
+  WorkspaceBufferState,
+  'currentContent' | 'isDirty' | 'conflict'
+>
+
+export type WorkspaceExternalSavePayload = {
+  source: WorkspaceConflictSource
+  hash: string
+  timestamp: number
+  actor?: string
+  content?: string
+}
+
 type WorkspacePanelLoadingState = {
   statusBySession: Record<string, boolean | undefined>
   treeBySessionPath: Record<string, boolean | undefined>
@@ -63,6 +109,7 @@ type WorkspacePanelStore = {
   treeBySessionPath: Record<string, Record<string, WorkspaceTreeResult | undefined> | undefined>
   previewTabsBySession: Record<string, WorkspacePreviewTab[] | undefined>
   activePreviewTabIdBySession: Record<string, string | null | undefined>
+  bufferStateByTabId: Record<string, WorkspaceBufferState | undefined>
   loading: WorkspacePanelLoadingState
   errors: WorkspacePanelErrorState
 
@@ -81,6 +128,11 @@ type WorkspacePanelStore = {
   openPreview: (sessionId: string, path: string, kind: WorkspacePreviewKind) => Promise<void>
   closePreview: (sessionId: string, tabId: string) => void
   closePreviewTabs: (sessionId: string, tabId: string, scope: WorkspacePreviewCloseScope) => void
+  initBuffer: (init: WorkspaceBufferInit) => void
+  setBufferState: (tabId: string, content: string) => void
+  applyExternalSave: (tabId: string, event: WorkspaceExternalSavePayload) => void
+  acknowledgeConflict: (tabId: string, action: 'reload' | 'keepMine' | 'openConflict') => void
+  clearBuffer: (tabId: string) => void
   clearSession: (sessionId: string) => void
   resetSessionUi: (sessionId: string) => void
 }
@@ -195,6 +247,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
   treeBySessionPath: {},
   previewTabsBySession: {},
   activePreviewTabIdBySession: {},
+  bufferStateByTabId: {},
   loading: {
     statusBySession: {},
     treeBySessionPath: {},
@@ -622,6 +675,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
         const requestKey = makePreviewKey(sessionId, tabId)
         invalidateRequest(previewRequestIds, requestKey)
         return {
+          bufferStateByTabId: removeRecordKey(state.bufferStateByTabId, tabId),
           loading: {
             ...state.loading,
             previewByTabId: removeRecordKey(state.loading.previewByTabId, requestKey),
@@ -689,6 +743,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
           ...state.activePreviewTabIdBySession,
           [sessionId]: nextActiveTabId,
         },
+        bufferStateByTabId: removeRecordKeys(state.bufferStateByTabId, closingTabIds),
         loading: {
           ...state.loading,
           previewByTabId: removeRecordKeys(state.loading.previewByTabId, requestKeys),
@@ -701,30 +756,152 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
     })
   },
 
+  initBuffer: (init) =>
+    set((state) => ({
+      bufferStateByTabId: {
+        ...state.bufferStateByTabId,
+        [init.tabId]: {
+          ...init,
+          currentContent: init.baseContent,
+          isDirty: false,
+          conflict: null,
+        },
+      },
+    })),
+
+  setBufferState: (tabId, content) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing) return state
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            currentContent: content,
+            isDirty: content !== existing.baseContent,
+          },
+        },
+      }
+    }),
+
+  applyExternalSave: (tabId, event) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing) return state
+      // Same hash as our base — nothing to do (echo of our own save).
+      if (event.hash === existing.baseHash) return state
+
+      // Clean buffer: silently rebase to the new content if provided; otherwise
+      // surface a single-button "Reload" banner so the editor refetches.
+      if (!existing.isDirty && typeof event.content === 'string') {
+        return {
+          bufferStateByTabId: {
+            ...state.bufferStateByTabId,
+            [tabId]: {
+              ...existing,
+              baseHash: event.hash,
+              baseContent: event.content,
+              currentContent: event.content,
+              isDirty: false,
+              conflict: null,
+            },
+          },
+        }
+      }
+
+      // Dirty buffer (or clean buffer without content): surface conflict banner.
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            conflict: {
+              source: event.source,
+              hash: event.hash,
+              timestamp: event.timestamp,
+              actor: event.actor,
+            },
+          },
+        },
+      }
+    }),
+
+  acknowledgeConflict: (tabId, action) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing || !existing.conflict) return state
+
+      // 'reload' clears conflict + dirty marker — caller is expected to
+      // refetch and re-init the buffer with fresh base content/hash.
+      // 'keepMine' clears conflict but keeps dirty marker so the user can
+      // overwrite on next save (with stale-base 409 risk acknowledged).
+      // 'openConflict' is a UI-routing action; the store just dismisses the
+      // banner so the caller can drive a side-by-side diff view.
+      if (action === 'reload') {
+        return {
+          bufferStateByTabId: {
+            ...state.bufferStateByTabId,
+            [tabId]: {
+              ...existing,
+              currentContent: existing.baseContent,
+              isDirty: false,
+              conflict: null,
+            },
+          },
+        }
+      }
+
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            conflict: null,
+          },
+        },
+      }
+    }),
+
+  clearBuffer: (tabId) =>
+    set((state) => ({
+      bufferStateByTabId: removeRecordKey(state.bufferStateByTabId, tabId),
+    })),
+
   clearSession: (sessionId) => {
     invalidateRequest(statusRequestIds, sessionId)
     invalidateSessionScopedRequests(treeRequestIds, sessionId)
     invalidateSessionScopedRequests(previewRequestIds, sessionId)
 
-    set((state) => ({
-      panelBySession: removeRecordKey(state.panelBySession, sessionId),
-      modeBySession: removeRecordKey(state.modeBySession, sessionId),
-      statusBySession: removeRecordKey(state.statusBySession, sessionId),
-      expandedPathsBySession: removeRecordKey(state.expandedPathsBySession, sessionId),
-      treeBySessionPath: removeRecordKey(state.treeBySessionPath, sessionId),
-      previewTabsBySession: removeRecordKey(state.previewTabsBySession, sessionId),
-      activePreviewTabIdBySession: removeRecordKey(state.activePreviewTabIdBySession, sessionId),
-      loading: {
-        statusBySession: removeRecordKey(state.loading.statusBySession, sessionId),
-        treeBySessionPath: stripSessionKeys(state.loading.treeBySessionPath, sessionId),
-        previewByTabId: stripSessionKeys(state.loading.previewByTabId, sessionId),
-      },
-      errors: {
-        statusBySession: removeRecordKey(state.errors.statusBySession, sessionId),
-        treeBySessionPath: stripSessionKeys(state.errors.treeBySessionPath, sessionId),
-        previewByTabId: stripSessionKeys(state.errors.previewByTabId, sessionId),
-      },
-    }))
+    set((state) => {
+      const sessionTabs = state.previewTabsBySession[sessionId] ?? []
+      const tabIdsToDrop = new Set(sessionTabs.map((tab) => tab.id))
+      const nextBufferStateByTabId: Record<string, WorkspaceBufferState | undefined> = {}
+      for (const [tabId, buffer] of Object.entries(state.bufferStateByTabId)) {
+        if (!tabIdsToDrop.has(tabId)) nextBufferStateByTabId[tabId] = buffer
+      }
+
+      return {
+        panelBySession: removeRecordKey(state.panelBySession, sessionId),
+        modeBySession: removeRecordKey(state.modeBySession, sessionId),
+        statusBySession: removeRecordKey(state.statusBySession, sessionId),
+        expandedPathsBySession: removeRecordKey(state.expandedPathsBySession, sessionId),
+        treeBySessionPath: removeRecordKey(state.treeBySessionPath, sessionId),
+        previewTabsBySession: removeRecordKey(state.previewTabsBySession, sessionId),
+        activePreviewTabIdBySession: removeRecordKey(state.activePreviewTabIdBySession, sessionId),
+        bufferStateByTabId: nextBufferStateByTabId,
+        loading: {
+          statusBySession: removeRecordKey(state.loading.statusBySession, sessionId),
+          treeBySessionPath: stripSessionKeys(state.loading.treeBySessionPath, sessionId),
+          previewByTabId: stripSessionKeys(state.loading.previewByTabId, sessionId),
+        },
+        errors: {
+          statusBySession: removeRecordKey(state.errors.statusBySession, sessionId),
+          treeBySessionPath: stripSessionKeys(state.errors.treeBySessionPath, sessionId),
+          previewByTabId: stripSessionKeys(state.errors.previewByTabId, sessionId),
+        },
+      }
+    })
   },
 
   resetSessionUi: (sessionId) => {
