@@ -80,6 +80,10 @@ import {
 import type { ContentReplacementState } from '../../utils/toolResultStorage.js'
 import { createAgentId } from '../../utils/uuid.js'
 import { resolveAgentTools } from './agentToolUtils.js'
+import {
+  createStallDetector,
+  type StallStatus,
+} from './agentStallDetector.js'
 import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
 
 /**
@@ -267,6 +271,7 @@ export async function* runAgent({
   description,
   transcriptSubdir,
   onQueryProgress,
+  onStallTransition,
 }: {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
@@ -326,6 +331,12 @@ export async function* runAgent({
    * during long single-block streams (e.g. thinking) where no assistant
    * message is yielded for >60s. */
   onQueryProgress?: () => void
+  /** Optional callback fired exactly once per stall / resume transition.
+   * Called from a setInterval inside runAgent: when the worker hasn't
+   * yielded a message for STALL_THRESHOLD_MS, the next interval tick fires
+   * `kind:'stalled'`; the next yield fires `kind:'resumed'`. Used by the
+   * coordinator panel to surface "(stalled NNs)" in the worker row. */
+  onStallTransition?: (status: StallStatus) => void
 }): AsyncGenerator<Message, void> {
   // Track subagent usage for feature discovery
 
@@ -744,6 +755,33 @@ export async function* runAgent({
   // Track the last recorded message UUID for parent chain continuity
   let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
 
+  // Stall watchdog — fires onStallTransition when the worker hasn't yielded
+  // for STALL_THRESHOLD_MS, and again when it resumes. Driven by setInterval
+  // because the generator is consumer-driven (no internal time source). Timer
+  // is unref'd so it doesn't keep the process alive on its own.
+  const STALL_THRESHOLD_MS = 90_000
+  const STALL_POLL_INTERVAL_MS = 15_000
+  const stallDetector = createStallDetector({
+    thresholdMs: STALL_THRESHOLD_MS,
+    startedAt: Date.now(),
+  })
+  let stallTimer: ReturnType<typeof setInterval> | undefined
+  if (onStallTransition) {
+    stallTimer = setInterval(() => {
+      const status = stallDetector.check(Date.now())
+      if (status.transitioned) {
+        try {
+          onStallTransition(status)
+        } catch (e) {
+          logForDebugging(`onStallTransition handler threw: ${String(e)}`)
+        }
+      }
+    }, STALL_POLL_INTERVAL_MS)
+    // Don't keep the event loop alive just for the watchdog — the agent's
+    // own work owns process lifetime; the watchdog is observational.
+    stallTimer.unref?.()
+  }
+
   try {
     for await (const message of query({
       messages: initialMessages,
@@ -756,6 +794,7 @@ export async function* runAgent({
       maxTurns: maxTurns ?? agentDefinition.maxTurns,
     })) {
       onQueryProgress?.()
+      stallDetector.notify(Date.now())
       // Forward subagent API request starts to parent's metrics display
       // so TTFT/OTPS update during subagent execution.
       if (
@@ -814,6 +853,9 @@ export async function* runAgent({
       agentDefinition.callback()
     }
   } finally {
+    // Stop the stall watchdog before any other cleanup so it can't fire
+    // mid-teardown with stale state.
+    if (stallTimer) clearInterval(stallTimer)
     // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
     await mcpCleanup()
     // Clean up agent's session hooks

@@ -64,6 +64,13 @@ export type InvocationCheckResult = {
   limit: number
   /** True when this invocation pushes the count past the cap. */
   capped: boolean
+  /**
+   * True when this invocation is the LAST one allowed before the cap
+   * fires. (count === limit and !capped). Callers can use this to surface
+   * a one-shot system reminder so the model has a chance to switch
+   * strategy before the next invocation is hard-blocked.
+   */
+  nearLimit: boolean
 }
 
 /**
@@ -84,7 +91,37 @@ export function noteInvocation(agentType: string): InvocationCheckResult {
   const next = (counters.get(agentType) ?? 0) + 1
   counters.set(agentType, next)
   const limit = getLimitFor(agentType)
-  return { count: next, limit, capped: next > limit }
+  const capped = next > limit
+  // nearLimit fires once, on the last allowed invocation (next === limit).
+  // Skip on small caps where it would coincide with the very first call:
+  // a "you're near the limit" reminder on call #1 is noise, not signal.
+  const nearLimit = !capped && next === limit && limit >= 2
+  return { count: next, limit, capped, nearLimit }
+}
+
+/**
+ * Format a one-shot reminder injected on the LAST allowed invocation.
+ * Surfaced to the model as a `<system-reminder>` text block prepended to
+ * the subagent's result, so the model reads "you're at the cap" alongside
+ * the worker's report and can decide to change tack instead of retrying.
+ */
+export function formatNearLimitWarning(
+  agentType: string,
+  result: InvocationCheckResult,
+): string {
+  const envName = `CLAUDE_CODE_AGENT_LIMIT_${agentType
+    .replace(/[-/]/g, '_')
+    .toUpperCase()}`
+  return (
+    `<system-reminder>\n` +
+    `Subagent '${agentType}' invocation ${result.count} of ${result.limit} (the cap). ` +
+    `One more call to this subagent type in this session will be blocked. ` +
+    `Repeated calls without progress usually mean the approach needs to change — ` +
+    `consider a different specialist, narrowing the scope, or asking the user. ` +
+    `If you must keep retrying, raise the cap via ${envName}=N or disable the ` +
+    `gate with CLAUDE_CODE_AGENT_LIMITER_OFF=1.\n` +
+    `</system-reminder>`
+  )
 }
 
 /**

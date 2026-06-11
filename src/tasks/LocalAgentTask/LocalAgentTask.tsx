@@ -7,6 +7,10 @@ import { createTaskStateBase } from '../../Task.js';
 import type { Tools } from '../../Tool.js';
 import { findToolByName } from '../../Tool.js';
 import type { AgentToolResult } from '../../tools/AgentTool/agentToolUtils.js';
+import {
+  formatStalledSummary,
+  type StallStatus,
+} from '../../tools/AgentTool/agentStallDetector.js';
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js';
 import { asAgentId } from '../../types/ids.js';
@@ -145,6 +149,11 @@ export type LocalAgentTaskState = TaskStateBase & {
   // timestamp = hide + GC-eligible after this time. Set at terminal transition
   // and on unselect; cleared on retain.
   evictAfter?: number;
+  // Stall watchdog: ms since last yield from the underlying query() loop,
+  // sampled at the moment the stall was reported. undefined = not stalled.
+  // Mirrored into progress.summary as a "(stalled NNs) ..." prefix so the
+  // panel row surfaces the state without a UI change.
+  stalledSinceMs?: number;
 };
 export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
   return typeof task === 'object' && task !== null && 'type' in task && task.type === 'local_agent';
@@ -349,6 +358,63 @@ export function updateAgentProgress(taskId: string, progress: AgentProgress, set
         summary: existingSummary
       } : progress
     };
+  });
+}
+
+/**
+ * Apply a stall-detector transition to a running agent task.
+ *
+ * On `stalled`: overlays a `(stalled NNs) ...` prefix on progress.summary so
+ * the existing AgentLine renderer (which already reads progress.summary)
+ * surfaces the wedge without a UI-side change.
+ * On `resumed`: strips the overlay if it's still present (it can be replaced
+ * naturally by a fresh background summary mid-stall, in which case we leave
+ * the new summary alone).
+ *
+ * Idempotent / no-op for terminal tasks. Tracks `stalledSinceMs` independently
+ * so callers (analytics, future UI) can react without parsing the prefix.
+ */
+export function applyAgentStallStatus(taskId: string, status: StallStatus, setAppState: SetAppState): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (task.status !== 'running') {
+      return task;
+    }
+    if (status.kind === 'stalled') {
+      const stalledSummary = formatStalledSummary(status.idleMs, task.progress?.summary, task.description);
+      const baseProgress: AgentProgress = task.progress ?? {
+        toolUseCount: 0,
+        tokenCount: 0,
+        recentActivities: []
+      };
+      return {
+        ...task,
+        stalledSinceMs: status.idleMs,
+        progress: {
+          ...baseProgress,
+          summary: stalledSummary
+        }
+      };
+    }
+    if (status.kind === 'resumed') {
+      const cur = task.progress?.summary;
+      // Strip our prefix if still present; otherwise leave the (likely fresh)
+      // summary alone.
+      const cleared = cur && /^\(stalled \d+s\)\s*/.test(cur)
+        ? cur.replace(/^\(stalled \d+s\)\s*/, '') || undefined
+        : cur;
+      const next: LocalAgentTaskState = {
+        ...task,
+        stalledSinceMs: undefined
+      };
+      if (task.progress) {
+        next.progress = {
+          ...task.progress,
+          summary: cleared
+        };
+      }
+      return next;
+    }
+    return task;
   });
 }
 

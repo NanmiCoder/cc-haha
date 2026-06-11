@@ -3,6 +3,7 @@ import {
   _getLimiterStateSnapshot,
   _resetLimiterState,
   formatLimitExceededMessage,
+  formatNearLimitWarning,
   getLimitFor,
   isLimiterDisabled,
   noteInvocation,
@@ -83,11 +84,50 @@ describe('invocationLimiter', () => {
       count: 9,
       limit: 8,
       capped: true,
+      nearLimit: false,
     })
     expect(msg).toContain("'code-reviewer'")
     expect(msg).toContain('9 times')
     expect(msg).toContain('cap of 8')
     expect(msg).toContain('CLAUDE_CODE_AGENT_LIMIT_CODE_REVIEWER')
+    expect(msg).toContain('CLAUDE_CODE_AGENT_LIMITER_OFF=1')
+  })
+
+  test('nearLimit fires once on the last allowed invocation', () => {
+    // verification cap = 5; nearLimit should be true on the 5th call only.
+    const flags: boolean[] = []
+    for (let i = 1; i <= 5; i++) {
+      const r = noteInvocation('verification')
+      flags.push(r.nearLimit)
+    }
+    // Calls 1–4: not near; call 5: near (last allowed); call 6 would be capped.
+    expect(flags).toEqual([false, false, false, false, true])
+    // Verify post-cap state isn't flagged as nearLimit.
+    const r6 = noteInvocation('verification')
+    expect(r6.capped).toBe(true)
+    expect(r6.nearLimit).toBe(false)
+  })
+
+  test('nearLimit is suppressed when limit is 1 (would coincide with first call)', () => {
+    process.env.CLAUDE_CODE_AGENT_LIMIT_CODE_REVIEWER = '1'
+    const r = noteInvocation('code-reviewer')
+    expect(r.limit).toBe(1)
+    expect(r.capped).toBe(false)
+    expect(r.nearLimit).toBe(false)
+  })
+
+  test('formatNearLimitWarning is a system-reminder block with cap details', () => {
+    const msg = formatNearLimitWarning('verification', {
+      count: 5,
+      limit: 5,
+      capped: false,
+      nearLimit: true,
+    })
+    expect(msg).toContain('<system-reminder>')
+    expect(msg).toContain('</system-reminder>')
+    expect(msg).toContain("'verification'")
+    expect(msg).toContain('5 of 5')
+    expect(msg).toContain('CLAUDE_CODE_AGENT_LIMIT_VERIFICATION')
     expect(msg).toContain('CLAUDE_CODE_AGENT_LIMITER_OFF=1')
   })
 
