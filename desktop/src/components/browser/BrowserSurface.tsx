@@ -6,8 +6,10 @@ import { previewBridge } from '../../lib/previewBridge'
 import { subscribePreviewEvents } from '../../lib/previewEvents'
 import { useBrowserPanelStore } from '../../stores/browserPanelStore'
 import { useOverlayStore } from '../../stores/overlayStore'
+import { useTranslation } from '../../i18n'
 
 export function BrowserSurface({ sessionId }: { sessionId: string }) {
+  const t = useTranslation()
   const hostRef = useRef<HTMLDivElement>(null)
   const session = useBrowserPanelStore((s) => s.bySession[sessionId])
   const store = useBrowserPanelStore.getState()
@@ -94,8 +96,8 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
   const previewActions = (
     <>
       <button
-        aria-label="截图"
-        title="截图"
+        aria-label={t('browser.screenshot')}
+        title={t('browser.screenshot')}
         className={[
           actionButtonClass,
           'border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-border)]',
@@ -106,9 +108,9 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
         <Camera size={16} />
       </button>
       <button
-        aria-label="选择元素"
+        aria-label={t('browser.selectElement')}
         aria-pressed={Boolean(session.pickerActive)}
-        title="选择元素"
+        title={t('browser.selectElement')}
         className={[
           actionButtonClass,
           session.pickerActive

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Loader2, RotateCw } from 'lucide-react'
+import { useTranslation } from '../../i18n'
 
 type Props = {
   url: string
@@ -15,6 +16,7 @@ type Props = {
 }
 
 export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = false, onNavigate, onBack, onForward, onReload, rightActions }: Props) {
+  const t = useTranslation()
   const [draft, setDraft] = useState(url)
   useEffect(() => { setDraft(url) }, [url])
 
@@ -23,9 +25,9 @@ export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = fals
       data-testid="browser-address-bar"
       className="relative flex h-11 items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2"
     >
-      <button aria-label="后退" disabled={!canGoBack} onClick={onBack} className="p-1 disabled:opacity-40"><ArrowLeft size={16} /></button>
-      <button aria-label="前进" disabled={!canGoForward} onClick={onForward} className="p-1 disabled:opacity-40"><ArrowRight size={16} /></button>
-      <button aria-label="刷新" aria-busy={loading} onClick={onReload} className="p-1">
+      <button aria-label={t('browser.back')} disabled={!canGoBack} onClick={onBack} className="p-1 disabled:opacity-40"><ArrowLeft size={16} /></button>
+      <button aria-label={t('browser.forward')} disabled={!canGoForward} onClick={onForward} className="p-1 disabled:opacity-40"><ArrowRight size={16} /></button>
+      <button aria-label={t('browser.refresh')} aria-busy={loading} onClick={onReload} className="p-1">
         {loading ? <Loader2 size={16} className="animate-spin" /> : <RotateCw size={16} />}
       </button>
       <form className="min-w-0 flex-1" onSubmit={(e) => { e.preventDefault(); onNavigate(normalizeBrowserAddress(draft)) }}>
@@ -33,7 +35,7 @@ export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = fals
           className="w-full rounded-md bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text-primary)]"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="输入网址..."
+          placeholder={t('browser.enterUrl')}
           spellCheck={false}
         />
       </form>
@@ -45,7 +47,7 @@ export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = fals
       {loading && (
         <div
           role="progressbar"
-          aria-label="加载中"
+          aria-label={t('browser.loading')}
           data-testid="browser-loading-bar"
           className="progress-indeterminate-track pointer-events-none absolute inset-x-0 bottom-0 h-0.5"
         />

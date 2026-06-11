@@ -1300,6 +1300,7 @@ export const zh: Record<TranslationKey, string> = {
   'repoLaunch.checkedOutWarning': '選中的分支已在其他工作樹中檢出。直接啟動可能會被 Git 阻止；使用“獨立工作樹”可以避免切換當前目錄。',
 
   // ─── Chat Input ──────────────────────────────────────
+  'chat.messageLog': '聊天訊息',
   'chat.placeholder': '讓 Claude 編輯、除錯或解釋程式碼...',
   'chat.placeholderMissing': '此會話指向的工作目錄缺失。請新建會話或選擇其他專案。',
   'chat.addFiles': '新增檔案或圖片',
@@ -2064,6 +2065,17 @@ export const zh: Record<TranslationKey, string> = {
   'tabs.hideWorkspace': '隱藏工作區',
   'tabs.showBrowser': '顯示瀏覽器',
   'tabs.hideBrowser': '隱藏瀏覽器',
+  'tabs.scrollLeft': '向左滾動標籤頁',
+  'tabs.scrollRight': '向右滾動標籤頁',
+
+  // ─── Browser ──────────────────────────────────────
+  'browser.back': '返回',
+  'browser.forward': '前進',
+  'browser.refresh': '重新整理',
+  'browser.enterUrl': '輸入網址...',
+  'browser.loading': '載入中',
+  'browser.screenshot': '截圖',
+  'browser.selectElement': '選擇元素',
 
   // ─── 外掛前置相依套件對話框 ─────────────────────────────────────
   'pluginPrereq.title': '{name} 缺少前置相依套件',

@@ -6,6 +6,7 @@ import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
 import { useUIStore } from '../stores/uiStore'
 import { useTranslation } from '../i18n'
 import { Button } from '../components/shared/Button'
+import { Skeleton } from '../components/shared/Skeleton'
 import { getDesktopHost } from '../lib/desktopHost'
 import type { TraceSessionList, TraceSessionListItem } from '../types/trace'
 
@@ -380,13 +381,13 @@ function TraceListSkeleton({ label }: { label: string }) {
         {Array.from({ length: 6 }, (_, index) => (
           <div key={index} className="flex h-14 items-center gap-4 px-5">
             <div className="min-w-0 flex-1">
-              <div className="h-3 w-48 max-w-full animate-pulse rounded bg-[var(--color-surface-container-high)]" />
-              <div className="mt-2 h-2.5 w-72 max-w-full animate-pulse rounded bg-[var(--color-surface-container-low)]" />
+              <Skeleton variant="text" width="48%" height={12} />
+              <Skeleton variant="text" width="72%" height={10} className="mt-2" />
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <div className="h-3 w-10 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
-              <div className="h-3 w-12 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
-              <div className="h-3 w-12 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+              <Skeleton variant="text" width={40} height={12} />
+              <Skeleton variant="text" width={48} height={12} />
+              <Skeleton variant="text" width={48} height={12} />
             </div>
           </div>
         ))}

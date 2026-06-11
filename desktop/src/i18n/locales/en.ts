@@ -1325,6 +1325,7 @@ export const en = {
   'repoLaunch.checkedOutWarning': 'Selected branch is already checked out in another worktree. Direct launch may be blocked by Git; use "Isolated worktree" to avoid changing directories.',
 
   // ─── Chat Input ──────────────────────────────────────
+  'chat.messageLog': 'Chat messages',
   'chat.placeholder': 'Ask Claude to edit, debug or explain...',
   'chat.placeholderMissing': 'This session points to a missing workspace. Create a new session or pick another project.',
   'chat.addFiles': 'Add files or photos',
@@ -2089,6 +2090,17 @@ export const en = {
   'tabs.hideWorkspace': 'Hide Workspace',
   'tabs.showBrowser': 'Show Browser',
   'tabs.hideBrowser': 'Hide Browser',
+  'tabs.scrollLeft': 'Scroll tabs left',
+  'tabs.scrollRight': 'Scroll tabs right',
+
+  // ─── Browser ──────────────────────────────────────
+  'browser.back': 'Back',
+  'browser.forward': 'Forward',
+  'browser.refresh': 'Refresh',
+  'browser.enterUrl': 'Enter URL...',
+  'browser.loading': 'Loading',
+  'browser.screenshot': 'Screenshot',
+  'browser.selectElement': 'Select element',
 
   // ─── Plugin Prerequisites Modal ─────────────────────────────────────
   'pluginPrereq.title': 'Missing prerequisites for {name}',

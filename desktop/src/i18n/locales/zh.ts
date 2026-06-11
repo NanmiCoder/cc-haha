@@ -1300,6 +1300,7 @@ export const zh: Record<TranslationKey, string> = {
   'repoLaunch.checkedOutWarning': '选中的分支已在其他工作树中检出。直接启动可能会被 Git 阻止；使用“独立工作树”可以避免切换当前目录。',
 
   // ─── Chat Input ──────────────────────────────────────
+  'chat.messageLog': '聊天消息',
   'chat.placeholder': '让 Claude 编辑、调试或解释代码...',
   'chat.placeholderMissing': '此会话指向的工作目录缺失。请新建会话或选择其他项目。',
   'chat.addFiles': '添加文件或图片',
@@ -2064,6 +2065,17 @@ export const zh: Record<TranslationKey, string> = {
   'tabs.hideWorkspace': '隐藏工作区',
   'tabs.showBrowser': '显示浏览器',
   'tabs.hideBrowser': '隐藏浏览器',
+  'tabs.scrollLeft': '向左滚动标签页',
+  'tabs.scrollRight': '向右滚动标签页',
+
+  // ─── Browser ──────────────────────────────────────
+  'browser.back': '后退',
+  'browser.forward': '前进',
+  'browser.refresh': '刷新',
+  'browser.enterUrl': '输入网址...',
+  'browser.loading': '加载中',
+  'browser.screenshot': '截图',
+  'browser.selectElement': '选择元素',
 
   // ─── 插件前置依赖弹窗 ─────────────────────────────────────
   'pluginPrereq.title': '{name} 缺少前置依赖',

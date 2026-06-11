@@ -1904,6 +1904,11 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
       <div
         ref={scrollContainerRef}
         onScroll={updateAutoScrollState}
+        role="log"
+        aria-live="polite"
+        aria-label={t('chat.messageLog')}
+        aria-relevant="additions"
+        aria-atomic="false"
         className={`${CHAT_SCROLL_AREA_CLASS} h-full overflow-y-auto ${compact ? 'px-3 py-3 pb-5' : 'px-4 py-4'}`}
       >
         <div

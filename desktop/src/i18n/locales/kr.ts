@@ -1300,6 +1300,7 @@ export const kr: Record<TranslationKey, string> = {
   'repoLaunch.checkedOutWarning': '선택한 브랜치는 다른 worktree에서 이미 체크아웃되어 있습니다. Git에 의해 직접 시작이 차단될 수 있습니다. 디렉터리 변경을 피하려면 "독립 worktree"를 사용하세요.',
 
   // ─── Chat Input ──────────────────────────────────────
+  'chat.messageLog': '채팅 메시지',
   'chat.placeholder': '편집, 디버그 또는 설명을 Claude에 요청...',
   'chat.placeholderMissing': '이 세션은 없는 작업 공간을 가리킵니다. 새 세션을 만들거나 다른 프로젝트를 선택하세요.',
   'chat.addFiles': '파일 또는 사진 추가',
@@ -2064,6 +2065,17 @@ export const kr: Record<TranslationKey, string> = {
   'tabs.hideWorkspace': '작업 공간 숨기기',
   'tabs.showBrowser': '브라우저 표시',
   'tabs.hideBrowser': '브라우저 숨기기',
+  'tabs.scrollLeft': '탭 왼쪽으로 스크롤',
+  'tabs.scrollRight': '탭 오른쪽으로 스크롤',
+
+  // ─── Browser ──────────────────────────────────────
+  'browser.back': '뒤로',
+  'browser.forward': '앞으로',
+  'browser.refresh': '새로고침',
+  'browser.enterUrl': 'URL 입력...',
+  'browser.loading': '로딩 중',
+  'browser.screenshot': '스크린샷',
+  'browser.selectElement': '요소 선택',
 
   // ─── 플러그인 사전 요구 모달 ─────────────────────────────────────
   'pluginPrereq.title': '{name} 사전 요구사항이 누락되었습니다',

@@ -331,7 +331,11 @@ export function TabBar() {
     >
 
       {canScrollLeft && (
-        <button onClick={() => scroll('left')} className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+        <button
+          onClick={() => scroll('left')}
+          aria-label={t('tabs.scrollLeft')}
+          className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        >
           <span className="material-symbols-outlined text-[16px]">chevron_left</span>
         </button>
       )}
@@ -406,7 +410,11 @@ export function TabBar() {
       )}
 
       {canScrollRight && (
-        <button onClick={() => scroll('right')} className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+        <button
+          onClick={() => scroll('right')}
+          aria-label={t('tabs.scrollRight')}
+          className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        >
           <span className="material-symbols-outlined text-[16px]">chevron_right</span>
         </button>
       )}
