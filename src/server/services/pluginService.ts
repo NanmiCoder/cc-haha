@@ -137,6 +137,45 @@ export type ApiPluginPrerequisitesResponse = {
   prerequisites: ApiPluginPrerequisiteRow[]
 }
 
+/**
+ * Merge two `install` maps so the resulting row presents every
+ * unique (manager, cmd) pair the plugin authors ever declared for
+ * this command, in declared order. Without merge, the dedup-by-
+ * command logic would silently drop fallback options declared on a
+ * server other than the one whose decl was iterated first — and on
+ * a host without the most-ergonomic manager (e.g. a Windows machine
+ * without winget AND without scoop), the modal's smart installer
+ * would have nothing to fall back to even though the plugin
+ * declared a no-package-manager `irm | iex` step elsewhere.
+ *
+ * Dedup key is the literal `manager + '|' + cmd` string; trivially
+ * different manager labels (e.g. "winget" vs "Winget") are kept
+ * separate so plugin authors aren't silently overruled by a casing
+ * accident.
+ */
+/** @internal — exported only for unit testing the merge contract. */
+export function mergeInstallMap(
+  existing: McpPrerequisite['install'] | undefined,
+  incoming: McpPrerequisite['install'],
+): McpPrerequisite['install'] {
+  const merged: McpPrerequisite['install'] = { ...existing }
+  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+    const incomingSteps = incoming?.[platform]
+    if (!incomingSteps || incomingSteps.length === 0) continue
+    const baseSteps = merged[platform] ?? []
+    const seen = new Set(baseSteps.map((s) => `${s.manager}|${s.cmd}`))
+    const out = [...baseSteps]
+    for (const step of incomingSteps) {
+      const key = `${step.manager}|${step.cmd}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(step)
+    }
+    merged[platform] = out
+  }
+  return merged
+}
+
 export type ApiPluginDetail = ApiPluginSummary & {
   capabilities: ApiPluginCapabilitySet
   commandEntries: ApiPluginCommandEntry[]
@@ -291,6 +330,27 @@ export class PluginService {
               ? { displayName: decl.serverDisplayName }
               : {}),
           })
+        }
+        // Merge install options from this declaration into the
+        // already-deduped row. The first-decl-wins approach silently
+        // dropped fallback options declared on later servers (e.g.
+        // ghidra's `powershell -c "irm ... | iex"` step that survives
+        // when winget+scoop are both absent). With merge, all unique
+        // (manager, cmd) pairs participate in the smart "Install all"
+        // flow, in declared order. Dedup is by manager+cmd so re-
+        // declaring the same step on multiple servers doesn't bloat
+        // the modal.
+        const incoming = decl.prerequisite.install
+        if (incoming) {
+          existing.install = mergeInstallMap(existing.install, incoming)
+        }
+        // Promote label / homepage if the existing row didn't carry
+        // them but a later decl does — purely cosmetic.
+        if (!existing.label && decl.prerequisite.label) {
+          existing.label = decl.prerequisite.label
+        }
+        if (!existing.homepage && decl.prerequisite.homepage) {
+          existing.homepage = decl.prerequisite.homepage
         }
         continue
       }

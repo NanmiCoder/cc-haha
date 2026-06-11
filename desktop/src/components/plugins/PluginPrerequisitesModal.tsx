@@ -6,6 +6,10 @@ import { useUIStore } from '../../stores/uiStore'
 import { useTabStore } from '../../stores/tabStore'
 import { copyTextToClipboard } from '../chat/clipboard'
 import { injectInstallScriptIntoNewTerminal } from '../../lib/terminalCommandInjection'
+import {
+  buildSmartInstallPlan,
+  buildSmartInstallCommandLine,
+} from '../../lib/smartInstallScript'
 import type {
   PluginPrerequisiteInstallStep,
   PluginPrerequisiteRow,
@@ -104,12 +108,23 @@ export function PluginPrerequisitesModal({
   const missingRows = rows.filter((r) => !r.installed)
 
   // Build the "install all" command list for the current platform.
-  // Pick the FIRST install step per row — plugin authors put the most
-  // ergonomic option first (e.g. winget on Windows, brew on macOS).
-  // A row with no install step for this platform is silently dropped
-  // — the user still sees the row in the modal with the "no automated
-  // install for {platform}" hint.
+  // On Windows, switch to the smart-installer path: ONE command line
+  // that runs an encoded PowerShell script handling PATH refresh,
+  // manager-availability fallthrough, and per-command verification.
+  // The naive per-command path stays for darwin/linux where PATH
+  // doesn't suffer the same staleness issue (POSIX shells respect
+  // `export PATH` updates from the install scripts themselves).
+  // Pick the FIRST install step per row — plugin authors put the
+  // most ergonomic option first (e.g. winget on Windows, brew on
+  // macOS). A row with no install step for this platform is silently
+  // dropped — the user still sees the row in the modal with the
+  // "no automated install for {platform}" hint.
   const installAllCommands = useMemo(() => {
+    if (platform === 'win32') {
+      const plan = buildSmartInstallPlan(missingRows, 'win32')
+      if (plan.length === 0) return []
+      return [buildSmartInstallCommandLine(plan)]
+    }
     const cmds: string[] = []
     for (const row of missingRows) {
       const steps = row.install?.[platform] ?? []
@@ -118,6 +133,18 @@ export function PluginPrerequisitesModal({
       }
     }
     return cmds
+  }, [missingRows, platform])
+
+  // The user-visible "(N)" badge on the button shows the count of
+  // missing prereqs being addressed, NOT the count of injected
+  // commands (smart mode is one injection covering N prereqs).
+  const installAllCount = useMemo(() => {
+    let n = 0
+    for (const row of missingRows) {
+      const steps = row.install?.[platform] ?? []
+      if (steps.length > 0) n++
+    }
+    return n
   }, [missingRows, platform])
 
   const canInstallAll = installAllCommands.length > 0
@@ -159,11 +186,11 @@ export function PluginPrerequisitesModal({
     if (installAllRunning || !canInstallAll) return
     setInstallAllRunning(true)
     try {
-      const result = await injectInstallScriptIntoNewTerminal(installAllCommands)
+      await injectInstallScriptIntoNewTerminal(installAllCommands)
       addToast({
         type: 'info',
         message: t('pluginPrereq.installAllRunningToast', {
-          count: String(result.commands.length),
+          count: String(installAllCount),
         }),
         duration: 8000,
       })
@@ -198,12 +225,12 @@ export function PluginPrerequisitesModal({
               loading={installAllRunning}
               data-testid="plugin-prereq-install-all"
               title={t('pluginPrereq.installAllTooltip', {
-                count: String(installAllCommands.length),
+                count: String(installAllCount),
               })}
             >
               <span className="material-symbols-outlined text-[16px]">play_arrow</span>
               {t('pluginPrereq.installAll', {
-                count: String(installAllCommands.length),
+                count: String(installAllCount),
               })}
             </Button>
           )}
