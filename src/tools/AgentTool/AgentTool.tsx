@@ -11,7 +11,7 @@ import { startAgentSummarization } from '../../services/AgentSummary/agentSummar
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
-import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage, applyAgentStallStatus } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, isPanelAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage, applyAgentStallStatus } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { checkRemoteAgentEligibility, formatPreconditionError, getRemoteTaskSessionUrl, registerRemoteAgentTask } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import { assembleToolPool } from '../../tools.js';
 import { asAgentId } from '../../types/ids.js';
@@ -43,6 +43,7 @@ import { createAgentWorktree, hasWorktreeChanges, removeAgentWorktree } from '..
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js';
 import { BackgroundHint } from '../BashTool/UI.js';
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js';
+import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js';
 import { spawnTeammate } from '../shared/spawnMultiAgent.js';
 import { setAgentColor } from './agentColorManager.js';
 import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, finalizeAgentTool, getLastToolUseName, runAsyncAgentLifecycle } from './agentToolUtils.js';
@@ -60,6 +61,13 @@ import {
   formatThinSpecError,
   isTaskSpecStrictEnabled,
 } from './taskSpecQuality.js';
+import {
+  type ContinueCandidateTask,
+  extractTouchedFilesFromActivities,
+  findContinueCandidate,
+  formatContinueHintError,
+  isContinueHintEnabled,
+} from './workerContinueAdvisor.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
@@ -402,6 +410,55 @@ export const AgentTool = buildTool({
       const assessment = assessTaskSpec(prompt);
       if (assessment.quality === 'underspecified') {
         throw new Error(formatThinSpecError(assessment, AGENT_TOOL_NAME));
+      }
+    }
+
+    // Coordinator-mode worker-continue advisor (OPT-IN, off by default). When
+    // a recently-completed panel worker of the SAME subagent_type already
+    // touched files this prompt mentions, recommend SendMessage instead of
+    // a fresh spawn. Reuses the prior worker's prompt cache + loaded context
+    // (typically 10-50k tokens of saved prefill). Skips fork (no
+    // subagent_type) since fork inherits parent context anyway. Enable with
+    // CLAUDE_CODE_COORDINATOR_CONTINUE_HINT=1.
+    if (
+      isCoordinatorMode() &&
+      !!subagent_type &&
+      isContinueHintEnabled()
+    ) {
+      const tasks = appState.tasks;
+      const candidates: ContinueCandidateTask[] = [];
+      for (const t of Object.values(tasks)) {
+        // Only panel-tracked agent tasks (excludes main-session); only
+        // completed (running -> address via SendMessage anyway, failed/killed
+        // -> don't revive blindly); only those still visible (evictAfter !== 0
+        // means a user x-key dismissal, no longer a continue candidate).
+        if (!isPanelAgentTask(t)) continue;
+        if (t.status !== 'completed') continue;
+        if (t.evictAfter === 0) continue;
+        const recent = t.progress?.recentActivities ?? [];
+        candidates.push({
+          agentId: t.agentId,
+          agentType: t.agentType,
+          description: t.description,
+          startTime: t.startTime,
+          touchedFiles: extractTouchedFilesFromActivities(recent),
+          isCompleted: true,
+        });
+      }
+      const winner = findContinueCandidate({
+        prompt,
+        subagentType: subagent_type,
+        candidates,
+      });
+      if (winner) {
+        logEvent('tengu_agent_continue_hint', {
+          agent_type: subagent_type as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          shared_files: String(winner.sharedFiles.length) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          candidate_age_ms: String(winner.candidateAgeMs) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        });
+        throw new Error(
+          formatContinueHintError(winner, AGENT_TOOL_NAME, SEND_MESSAGE_TOOL_NAME),
+        );
       }
     }
 

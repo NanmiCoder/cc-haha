@@ -19,6 +19,11 @@
 #   6. Task-spec quality (taskSpecQuality, B2)
 #      Full brief → well-specified; "fix it" → underspecified with a
 #      missing-dimensions report; reasonable one-liner is NOT flagged.
+#   7. Worker-continue advisor (workerContinueAdvisor, B3)
+#      Same-type worker that already touched the prompt's file(s) is
+#      surfaced as a continuation candidate; type mismatch and
+#      file-free prompts are not flagged; error message contract
+#      preserved (agentId, SendMessage, env flag named).
 #
 # This script does NOT spin up the API server or a real LLM call. The five
 # B1 behaviors are all enforced inside the AgentTool boundary and are best
@@ -76,6 +81,7 @@ try {
       'src/tools/AgentTool/specialistRouter.test.ts',
       'src/tools/AgentTool/agentStallDetector.test.ts',
       'src/tools/AgentTool/taskSpecQuality.test.ts',
+      'src/tools/AgentTool/workerContinueAdvisor.test.ts',
       'src/utils/modeAdvice.test.ts'
     )
     & bun test @tests
@@ -117,6 +123,11 @@ import {
   assessTaskSpec,
   formatThinSpecError,
 } from '../src/tools/AgentTool/taskSpecQuality.js'
+import {
+  findContinueCandidate,
+  formatContinueHintError,
+  type ContinueCandidateTask,
+} from '../src/tools/AgentTool/workerContinueAdvisor.js'
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) {
@@ -247,6 +258,65 @@ function assert(cond: unknown, msg: string): asserts cond {
   const ok = assessTaskSpec('Run the test suite and report which tests fail.')
   assert(ok.quality !== 'underspecified', `reasonable one-liner should not be underspecified, got ${ok.quality}`)
   console.log('6. task-spec quality: OK')
+}
+
+// 7. Worker-continue advisor (B3).
+{
+  const T0 = 1_700_000_000_000
+  const candidates: ContinueCandidateTask[] = [
+    {
+      agentId: 'agent-old',
+      agentType: 'worker',
+      description: 'auth investigation',
+      startTime: T0,
+      touchedFiles: ['src/auth/validate.ts', 'src/auth/session.ts'],
+      isCompleted: true,
+    },
+    {
+      agentId: 'agent-mismatch-type',
+      agentType: 'code-reviewer',
+      description: 'reviewed auth',
+      startTime: T0 + 1000,
+      touchedFiles: ['src/auth/validate.ts'],
+      isCompleted: true,
+    },
+  ]
+
+  // Overlap on the right type → continue
+  const c = findContinueCandidate({
+    prompt: 'Fix the null pointer in src/auth/validate.ts:42',
+    subagentType: 'worker',
+    candidates,
+    options: { now: T0 + 5000 },
+  })
+  assert(c !== null, 'should recommend continuation when same-type worker overlaps')
+  assert(c?.agentId === 'agent-old', `expected agent-old, got ${c?.agentId}`)
+  assert(c?.sharedFiles.includes('src/auth/validate.ts'), 'shared file echoed')
+
+  // Type mismatch → no recommendation
+  const c2 = findContinueCandidate({
+    prompt: 'Fix src/auth/validate.ts',
+    subagentType: 'docs-writer',
+    candidates,
+    options: { now: T0 + 5000 },
+  })
+  assert(c2 === null, 'type mismatch should not recommend continuation')
+
+  // Prompt with no file refs → no recommendation
+  const c3 = findContinueCandidate({
+    prompt: 'fix the bug',
+    subagentType: 'worker',
+    candidates,
+    options: { now: T0 + 5000 },
+  })
+  assert(c3 === null, 'prompt without file refs should not recommend continuation')
+
+  // Error message contract
+  const err = formatContinueHintError(c!, 'Agent', 'SendMessage')
+  assert(err.includes('agent-old'), 'error contains agent id')
+  assert(err.includes('SendMessage'), 'error names SendMessage tool')
+  assert(err.includes('CLAUDE_CODE_COORDINATOR_CONTINUE_HINT'), 'error names env flag')
+  console.log('7. worker-continue advisor: OK')
 }
 
 console.log('\nB1 end-to-end smoke: ALL PASS')
