@@ -80,17 +80,21 @@ describe('getSoloPipelineSystemPrompt — invariants', () => {
     expect(prompt).toMatch(/5\.\s+\*\*LAND\*\*/)
   })
 
-  it('requires the prompt-level A/B/C Plan Gate before implementation', () => {
+  it('requires real AgentTool fan-out for the A/B/C Plan Gate before implementation', () => {
     expect(prompt).toContain('A/B/C Plan Gate')
     expect(prompt).toContain('Solo Council')
     expect(prompt).toContain('A = Planner')
     expect(prompt).toContain('B = Reviewer')
     expect(prompt).toContain('C = Critic')
     expect(prompt).toContain('final execution plan')
-    expect(prompt).toContain('use the `Plan` specialist when available')
-    expect(prompt).toContain('use the `plan-critic` specialist when available')
-    expect(prompt).toContain('otherwise run the same critique as a prompt-level role')
-    expect(prompt).toContain('Do not enter Stage 2')
+    expect(prompt).toContain('Do not simulate')
+    expect(prompt).toContain('[Solo Council: Planner]')
+    expect(prompt).toContain('[Solo Council: Reviewer]')
+    expect(prompt).toContain('[Solo Council: Critic]')
+    expect(prompt).toContain('subagent_type: "Plan"')
+    expect(prompt).toContain('subagent_type: "plan-reviewer"')
+    expect(prompt).toContain('subagent_type: "plan-critic"')
+    expect(prompt).toContain('Do not enter Stage 2 until all Council agents have reported back')
   })
 
   it('keeps the HUMAN GATE in Stage 4 (the safety contract)', () => {
@@ -123,6 +127,6 @@ describe('SOLO_PIPELINE_PROMPT — text shape', () => {
     // Loose envelope — flag accidental truncation or accidental
     // tripling. ~3-6kB is the right ballpark for this template.
     expect(text.length).toBeGreaterThan(2_000)
-    expect(text.length).toBeLessThan(8_000)
+    expect(text.length).toBeLessThan(10_000)
   })
 })

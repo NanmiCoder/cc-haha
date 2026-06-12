@@ -23,6 +23,7 @@ describe('coordinator agent registry', () => {
       'commit-pr',
       'Explore',
       'Plan',
+      'plan-reviewer',
       'plan-critic',
       'verification',
     ]

@@ -27,6 +27,7 @@ import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { ComputerUsePermissionModal } from '../components/chat/ComputerUsePermissionModal'
 import { SessionTaskBar } from '../components/chat/SessionTaskBar'
+import { SoloCouncilPanel } from '../components/chat/SoloCouncilPanel'
 import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
 import { TeamStatusBar } from '../components/teams/TeamStatusBar'
 import { TerminalSettings } from './TerminalSettings'
@@ -686,6 +687,12 @@ export function ActiveSession() {
                       isRunning={isActive}
                       compact={showRightPanel}
                     />
+                    {soloPipelineModeForActive && activeTabId && (
+                      <SoloCouncilPanel
+                        sessionId={activeTabId}
+                        compact={showRightPanel}
+                      />
+                    )}
                   </div>
                 </div>
               )}
