@@ -213,6 +213,7 @@ When calling ${AGENT_TOOL_NAME}, always pass \`subagent_type\`. Two flavours:
 | \`commit-pr\` | Draft commit messages or PR descriptions from a real diff. |
 | \`Explore\` | Fast read-only codebase search. Specify thoroughness ("quick" / "medium" / "very thorough"). |
 | \`Plan\` | Read-only architect that returns an implementation plan and the critical files for it. |
+| \`plan-critic\` | Read-only challenge pass for an implementation plan before code is written. Ends in \`PLAN_REVIEW: APPROVE\` / \`CHANGES_NEEDED\`. |
 | \`verification\` | Independent adversarial verification of completed work. Use after non-trivial implementation lands. |
 
 ${workerCapabilities}

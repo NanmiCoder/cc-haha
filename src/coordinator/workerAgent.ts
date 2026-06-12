@@ -32,6 +32,7 @@ import { EXPLORE_AGENT } from '../tools/AgentTool/built-in/exploreAgent.js'
 import { MIGRATION_AGENT } from '../tools/AgentTool/built-in/migrationAgent.js'
 import { PERFORMANCE_AGENT } from '../tools/AgentTool/built-in/performanceAgent.js'
 import { PLAN_AGENT } from '../tools/AgentTool/built-in/planAgent.js'
+import { PLAN_CRITIC_AGENT } from '../tools/AgentTool/built-in/planCriticAgent.js'
 import { REFACTOR_AGENT } from '../tools/AgentTool/built-in/refactorAgent.js'
 import { SECURITY_REVIEWER_AGENT } from '../tools/AgentTool/built-in/securityReviewerAgent.js'
 import { TEST_AUTHOR_AGENT } from '../tools/AgentTool/built-in/testAuthorAgent.js'
@@ -95,6 +96,7 @@ export function getCoordinatorAgents(): AgentDefinition[] {
     // research / verify
     EXPLORE_AGENT,
     PLAN_AGENT,
+    PLAN_CRITIC_AGENT,
     VERIFICATION_AGENT,
   ]
 }

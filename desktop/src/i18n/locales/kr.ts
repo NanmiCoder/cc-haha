@@ -1269,7 +1269,7 @@ export const kr: Record<TranslationKey, string> = {
   'session.coordinatorChip': '오케스트레이션',
   'session.coordinatorChipTooltip': '이 세션은 오케스트레이션 모드입니다. 작업은 전문 worker 에이전트로 분산되고 메인 스레드가 조정합니다. 컴포저의 + 메뉴에서 전환할 수 있습니다.',
   'session.soloPipelineChip': '솔로 파이프라인',
-  'session.soloPipelineChipTooltip': '이 세션은 솔로 파이프라인 모드입니다. AI가 5 단계 (계획 → 구현 → 테스트 → 리뷰 → 통합)를 단독으로 실행합니다. 컴포저의 + 메뉴에서 전환할 수 있습니다.',
+  'session.soloPipelineChipTooltip': '이 세션은 솔로 파이프라인 모드입니다. 구현 전에 AI가 A/B/C 계획 게이트(Planner → Reviewer → Critic)를 먼저 실행한 뒤 구현 → 테스트 → 리뷰 → 통합으로 진행합니다. 컴포저의 + 메뉴에서 전환할 수 있습니다.',
   'empty.recentActivity.handoff.branchLine': '지난 세션({branch}): "{title}".',
   'empty.recentActivity.handoff.titleLine': '지난 세션: "{title}".',
   'empty.recentActivity.handoff.filesLine': '수정한 파일: {files}{more}.',
@@ -1283,7 +1283,7 @@ export const kr: Record<TranslationKey, string> = {
   'solo.suggest.finishWip.title': '{count}개의 미커밋 변경 마무리',
   'solo.suggest.finishWip.detail': '미커밋: {sample}',
   'solo.suggest.finishWip.detailForeign': '미커밋 (다른 에이전트의 작업 포함 가능): {sample}',
-  'solo.suggest.finishWip.taskPrompt': '현재 worktree의 {count}개 미커밋 변경({files})을 마무리해 주세요. plan → implement → test → review → land 한 사이클을 진행합니다.',
+  'solo.suggest.finishWip.taskPrompt': '현재 worktree의 {count}개 미커밋 변경({files})을 마무리해 주세요. 먼저 A/B/C 계획 게이트를 거친 뒤 구현 → 테스트 → 리뷰 → 통합을 진행합니다.',
 
   'solo.suggest.shipAhead.title': '{branch} 출시 ({count}개 커밋 앞섬)',
   'solo.suggest.shipAhead.detail': '로컬이 업스트림보다 {count}개 앞서 있고 작업은 이미 완료됨 — 리뷰 + 출시.',

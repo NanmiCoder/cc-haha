@@ -6,6 +6,7 @@ import {
   areExplorePlanAgentsEnabled,
   getBuiltInAgents,
 } from './builtInAgents.js'
+import { PLAN_CRITIC_AGENT } from './built-in/planCriticAgent.js'
 
 const originalDisableBuiltIns =
   process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
@@ -48,6 +49,7 @@ describe('built-in agents', () => {
     expect(agentTypes).toContain('docs-writer')
     expect(agentTypes).toContain('performance')
     expect(agentTypes).toContain('commit-pr')
+    expect(agentTypes).toContain('plan-critic')
     // game-developer is a project-level agent (.claude/agents), not a built-in.
     expect(agentTypes).not.toContain('game-developer')
   })
@@ -68,6 +70,25 @@ describe('built-in agents', () => {
     expect(agentTypes).toContain('docs-writer')
     expect(agentTypes).toContain('performance')
     expect(agentTypes).toContain('commit-pr')
+    expect(agentTypes).toContain('plan-critic')
+  })
+
+  test('plan-critic is read-only and returns a parseable verdict', () => {
+    expect(PLAN_CRITIC_AGENT.agentType).toBe('plan-critic')
+    expect(PLAN_CRITIC_AGENT.disallowedTools).toEqual(expect.arrayContaining([
+      'Agent',
+      'ExitPlanMode',
+      'Edit',
+      'Write',
+      'NotebookEdit',
+    ]))
+
+    const prompt = PLAN_CRITIC_AGENT.getSystemPrompt({} as never)
+    expect(prompt).toContain('READ-ONLY plan critique task')
+    expect(prompt).toContain('PLAN_REVIEW: APPROVE')
+    expect(prompt).toContain('PLAN_REVIEW: CHANGES_NEEDED')
+    expect(prompt).toContain('smaller or safer path')
+    expect(PLAN_CRITIC_AGENT.criticalSystemReminder_EXPERIMENTAL).toContain('PLAN_REVIEW: APPROVE')
   })
 
   test('preserves SDK opt-out in noninteractive sessions', () => {

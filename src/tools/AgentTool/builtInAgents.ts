@@ -12,6 +12,7 @@ import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { MIGRATION_AGENT } from './built-in/migrationAgent.js'
 import { PERFORMANCE_AGENT } from './built-in/performanceAgent.js'
 import { PLAN_AGENT } from './built-in/planAgent.js'
+import { PLAN_CRITIC_AGENT } from './built-in/planCriticAgent.js'
 import { REFACTOR_AGENT } from './built-in/refactorAgent.js'
 import { SECURITY_REVIEWER_AGENT } from './built-in/securityReviewerAgent.js'
 import { STATUSLINE_SETUP_AGENT } from './built-in/statuslineSetup.js'
@@ -76,6 +77,7 @@ export function getBuiltInAgents(): AgentDefinition[] {
     DOCS_WRITER_AGENT,
     PERFORMANCE_AGENT,
     COMMIT_PR_AGENT,
+    PLAN_CRITIC_AGENT,
   ]
 
   if (areExplorePlanAgentsEnabled()) {

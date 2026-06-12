@@ -23,6 +23,7 @@ describe('coordinator agent registry', () => {
       'commit-pr',
       'Explore',
       'Plan',
+      'plan-critic',
       'verification',
     ]
     for (const expected of required) {

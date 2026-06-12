@@ -265,6 +265,9 @@ describe('ConversationService', () => {
     // The injected text must be the Solo prompt — sniff for the unique
     // Stage-0 intent-triage phrasing locked in soloPipelinePrompt.test.ts.
     expect(args[idx + 1]).toContain('Solo Pipeline mode')
+    expect(args[idx + 1]).toContain('A/B/C Plan Gate')
+    expect(args[idx + 1]).toContain('Critic')
+    expect(args[idx + 1]).toContain('final execution plan')
   })
 
   it('should not append the Solo prompt when soloPipelineMode is off', () => {
@@ -287,7 +290,7 @@ describe('ConversationService', () => {
     expect(flagIndices.length).toBe(2)
     const texts = flagIndices.map((i) => args[i + 1] ?? '')
     expect(texts.some((t) => t.includes(ORCHESTRATION_PROMPT_MARKER))).toBe(true)
-    expect(texts.some((t) => t.includes('Solo Pipeline mode'))).toBe(true)
+    expect(texts.some((t) => t.includes('A/B/C Plan Gate'))).toBe(true)
   })
 
   // Locks the orchestrator's "propagate project tool rules into every dispatched

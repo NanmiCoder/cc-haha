@@ -1269,7 +1269,7 @@ export const zh: Record<TranslationKey, string> = {
   'session.coordinatorChip': '编排模式',
   'session.coordinatorChipTooltip': '该会话已开启编排模式。任务会扇出到专家 worker 代理执行，主线程负责协调。在输入框 + 菜单里切换。',
   'session.soloPipelineChip': '独立流水线',
-  'session.soloPipelineChipTooltip': '该会话已开启独立流水线模式。AI 会按 5 个阶段（规划 → 实现 → 测试 → 审查 → 落地）独立运行。在输入框 + 菜单里切换。',
+  'session.soloPipelineChipTooltip': '该会话已开启独立流水线模式。实现前 AI 会先走 A/B/C 计划闸门（Planner → Reviewer → Critic），再继续实现 → 测试 → 审查 → 落地。在输入框 + 菜单里切换。',
   'empty.recentActivity.handoff.branchLine': '上次在 {branch} 上做了:"{title}"。',
   'empty.recentActivity.handoff.titleLine': '上次会话:"{title}"。',
   'empty.recentActivity.handoff.filesLine': '动了这些文件:{files}{more}。',
@@ -1283,7 +1283,7 @@ export const zh: Record<TranslationKey, string> = {
   'solo.suggest.finishWip.title': '收尾 {count} 个未提交改动',
   'solo.suggest.finishWip.detail': '未提交:{sample}',
   'solo.suggest.finishWip.detailForeign': '未提交(可能含其他 agent 的改动):{sample}',
-  'solo.suggest.finishWip.taskPrompt': '把当前 worktree 里 {count} 个未提交改动({files})收尾。走完一轮 plan → implement → test → review → land。',
+  'solo.suggest.finishWip.taskPrompt': '把当前 worktree 里 {count} 个未提交改动({files})收尾。先走 A/B/C 计划闸门，再实现 → 测试 → 审查 → 落地。',
 
   'solo.suggest.shipAhead.title': '把 {branch} 落地({count} 个领先提交)',
   'solo.suggest.shipAhead.detail': '本地领先上游 {count} 个提交,工作已经做完——评审 + 落地。',

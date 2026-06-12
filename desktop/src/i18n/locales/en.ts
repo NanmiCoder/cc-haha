@@ -1276,7 +1276,7 @@ export const en = {
   'session.coordinatorChip': 'Orchestration',
   'session.coordinatorChipTooltip': 'Orchestration mode is on for this session. Tasks fan out to specialist worker agents and the main thread coordinates them. Toggle it from the + menu in the composer.',
   'session.soloPipelineChip': 'Solo pipeline',
-  'session.soloPipelineChipTooltip': 'Solo Pipeline mode is on for this session. The AI runs a 5-stage workflow (planner → builder → tester → reviewer → integrator) on its own. Toggle it from the + menu in the composer.',
+  'session.soloPipelineChipTooltip': 'Solo Pipeline mode is on for this session. Before implementation, the AI runs an A/B/C plan gate (Planner → Reviewer → Critic), then continues through implement → test → review → land. Toggle it from the + menu in the composer.',
   'empty.recentActivity.handoff.branchLine': 'Last session on {branch}: "{title}".',
   'empty.recentActivity.handoff.titleLine': 'Last session: "{title}".',
   'empty.recentActivity.handoff.filesLine': 'Files touched: {files}{more}.',
@@ -1297,7 +1297,7 @@ export const en = {
   'solo.suggest.finishWip.title': 'Finish {count} pending change(s)',
   'solo.suggest.finishWip.detail': 'Uncommitted: {sample}',
   'solo.suggest.finishWip.detailForeign': 'Uncommitted (some may be from another agent): {sample}',
-  'solo.suggest.finishWip.taskPrompt': 'Wrap up the {count} uncommitted change(s) in this worktree ({files}). Walk them through plan → implement → test → review → land.',
+  'solo.suggest.finishWip.taskPrompt': 'Wrap up the {count} uncommitted change(s) in this worktree ({files}). Run the A/B/C plan gate first, then implement → test → review → land.',
 
   'solo.suggest.shipAhead.title': 'Ship {branch} ({count} commit(s) ahead)',
   'solo.suggest.shipAhead.detail': 'Local is {count} commit(s) ahead of upstream. The work is done — review and land.',

@@ -1269,7 +1269,7 @@ export const jp: Record<TranslationKey, string> = {
   'session.coordinatorChip': 'オーケストレーション',
   'session.coordinatorChipTooltip': 'このセッションはオーケストレーションモードです。タスクは専門 worker エージェントへ分散し、メインスレッドが調整します。コンポーザーの + メニューから切り替えできます。',
   'session.soloPipelineChip': 'ソロパイプライン',
-  'session.soloPipelineChipTooltip': 'このセッションはソロパイプラインモードです。AI は 5 段階 (プランナー → 実装 → テスト → レビュー → 統合) を単独で実行します。コンポーザーの + メニューから切り替えできます。',
+  'session.soloPipelineChipTooltip': 'このセッションはソロパイプラインモードです。実装前に AI は A/B/C 計画ゲート（Planner → Reviewer → Critic）を実行し、その後 実装 → テスト → レビュー → リリース に進みます。コンポーザーの + メニューから切り替えできます。',
   'empty.recentActivity.handoff.branchLine': '前回のセッション ({branch}): 「{title}」。',
   'empty.recentActivity.handoff.titleLine': '前回のセッション:「{title}」。',
   'empty.recentActivity.handoff.filesLine': '触ったファイル: {files}{more}。',
@@ -1283,7 +1283,7 @@ export const jp: Record<TranslationKey, string> = {
   'solo.suggest.finishWip.title': '{count} 件の未コミット変更を仕上げる',
   'solo.suggest.finishWip.detail': '未コミット: {sample}',
   'solo.suggest.finishWip.detailForeign': '未コミット（他のエージェントの作業を含む可能性）: {sample}',
-  'solo.suggest.finishWip.taskPrompt': '現在の worktree にある {count} 件の未コミット変更（{files}）を仕上げてください。plan → implement → test → review → land を一通り通します。',
+  'solo.suggest.finishWip.taskPrompt': '現在の worktree にある {count} 件の未コミット変更（{files}）を仕上げてください。まず A/B/C 計画ゲートを通し、その後 実装 → テスト → レビュー → リリース に進みます。',
 
   'solo.suggest.shipAhead.title': '{branch} をリリース（{count} 件先行）',
   'solo.suggest.shipAhead.detail': 'ローカルが上流より {count} 件先行しており、作業はすでに完了しています — レビュー + リリース。',

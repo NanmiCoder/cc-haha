@@ -72,12 +72,25 @@ describe('getSoloPipelineSystemPrompt — invariants', () => {
     expect(prompt).toContain('Never run the pipeline for chat')
   })
 
-  it('declares all five stages with the planned specialists', () => {
-    expect(prompt).toMatch(/1\.\s+\*\*PLAN\*\*/)
+  it('declares all five Solo pipeline stages', () => {
+    expect(prompt).toMatch(/1\.\s+\*\*PLAN GATE/)
     expect(prompt).toMatch(/2\.\s+\*\*IMPLEMENT\*\*/)
     expect(prompt).toMatch(/3\.\s+\*\*TEST\*\*/)
     expect(prompt).toMatch(/4\.\s+\*\*REVIEW\*\*/)
     expect(prompt).toMatch(/5\.\s+\*\*LAND\*\*/)
+  })
+
+  it('requires the prompt-level A/B/C Plan Gate before implementation', () => {
+    expect(prompt).toContain('A/B/C Plan Gate')
+    expect(prompt).toContain('Solo Council')
+    expect(prompt).toContain('A = Planner')
+    expect(prompt).toContain('B = Reviewer')
+    expect(prompt).toContain('C = Critic')
+    expect(prompt).toContain('final execution plan')
+    expect(prompt).toContain('use the `Plan` specialist when available')
+    expect(prompt).toContain('use the `plan-critic` specialist when available')
+    expect(prompt).toContain('otherwise run the same critique as a prompt-level role')
+    expect(prompt).toContain('Do not enter Stage 2')
   })
 
   it('keeps the HUMAN GATE in Stage 4 (the safety contract)', () => {
