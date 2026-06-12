@@ -4,6 +4,7 @@ import { Input } from '../components/shared/Input'
 import { Modal } from '../components/shared/Modal'
 import { useTranslation } from '../i18n'
 import { mcpApi } from '../api/mcp'
+import { useMcpStore } from '../stores/mcpStore'
 import { useUIStore } from '../stores/uiStore'
 import type {
   MarketplaceCatalog,
@@ -52,6 +53,49 @@ function commandPreview(entry: MarketplaceEntry): string {
   return entry.transport.url
 }
 
+/**
+ * Match an existing MCP server against a marketplace entry by *transport
+ * shape*. We deliberately ignore the user-chosen save name (the install
+ * modal lets users rename) and instead compare what actually gets spawned:
+ * the stdio command + args, or the http/sse URL. Env values aren't part
+ * of the match — two installs of the same package with different tokens
+ * still count as "this server is here".
+ */
+function entryMatchesServer(
+  entry: MarketplaceEntry,
+  server: Pick<McpServerRecord, 'config'>,
+): boolean {
+  const config = server.config as {
+    type: string
+    command?: unknown
+    args?: unknown
+    url?: unknown
+  }
+  if (entry.transport.type === 'stdio') {
+    if (config.type !== 'stdio') return false
+    if (config.command !== entry.transport.command) return false
+    const args = Array.isArray(config.args) ? (config.args as unknown[]) : []
+    const expected = entry.transport.args
+    if (args.length !== expected.length) return false
+    for (let i = 0; i < expected.length; i++) {
+      if (args[i] !== expected[i]) return false
+    }
+    return true
+  }
+  if (entry.transport.type === 'http' || entry.transport.type === 'sse') {
+    if (config.type !== entry.transport.type) return false
+    return config.url === entry.transport.url
+  }
+  return false
+}
+
+function findInstalledServer(
+  entry: MarketplaceEntry,
+  servers: McpServerRecord[],
+): McpServerRecord | undefined {
+  return servers.find((server) => entryMatchesServer(entry, server))
+}
+
 function buildUpsertPayload(
   entry: MarketplaceEntry,
   scope: McpWritableScope,
@@ -96,11 +140,24 @@ export type MarketplacePageProps = {
   cwd?: string
   onBack: () => void
   onInstalled: (server: McpServerRecord) => void
+  /**
+   * Called when the user clicks "Configure" on an entry that already maps
+   * to an installed server. Lets the parent settings view jump straight
+   * into the existing server's details/edit screen instead of forcing a
+   * round-trip through the marketplace back button.
+   */
+  onOpenInstalled?: (server: McpServerRecord) => void
 }
 
-export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePageProps) {
+export function MarketplacePage({
+  cwd,
+  onBack,
+  onInstalled,
+  onOpenInstalled,
+}: MarketplacePageProps) {
   const t = useTranslation()
   const addToast = useUIStore((s) => s.addToast)
+  const servers = useMcpStore((s) => s.servers)
   const browserLocale = typeof navigator !== 'undefined' ? navigator.language : 'en'
 
   const [state, setState] = useState<LoadState>({ status: 'loading' })
@@ -213,6 +270,20 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
     if (isInstalling) return
     setInstallEntry(null)
   }
+
+  /**
+   * `requiresEnv` literally says "required". Empty values block the
+   * Confirm button so users don't install a server that immediately
+   * crashes with `-32000 Connection closed` because a token is missing.
+   */
+  const missingRequiredEnv = useMemo(() => {
+    if (!installEntry) return []
+    return (installEntry.requiresEnv ?? []).filter(
+      (variable) => (installEnv[variable.name] ?? '').trim().length === 0,
+    )
+  }, [installEntry, installEnv])
+
+  const canConfirmInstall = installName.trim().length > 0 && missingRequiredEnv.length === 0
 
   const handleInstall = async () => {
     if (!installEntry) return
@@ -367,7 +438,9 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {entries.map((entry) => (
+                  {entries.map((entry) => {
+                    const installedServer = findInstalledServer(entry, servers)
+                    return (
                     <article
                       key={`${entry.source}:${entry.id}`}
                       className="flex h-full flex-col rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5"
@@ -376,11 +449,18 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
                         <h4 className="text-base font-semibold text-[var(--color-text-primary)]">
                           {entry.name}
                         </h4>
-                        {entry.source !== 'builtin' && (
-                          <span className="rounded-full border border-[var(--color-border)] px-2 py-[2px] text-[10px] font-medium text-[var(--color-text-tertiary)]">
-                            {entry.source}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {installedServer && (
+                            <span className="rounded-full border border-[var(--color-inspector-success)] bg-[var(--color-inspector-success-bg)] px-2 py-[2px] text-[10px] font-medium text-[var(--color-inspector-success)]">
+                              {t('settings.mcp.marketplace.installedBadge')}
+                            </span>
+                          )}
+                          {entry.source !== 'builtin' && (
+                            <span className="rounded-full border border-[var(--color-border)] px-2 py-[2px] text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                              {entry.source}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <p className="text-sm text-[var(--color-text-secondary)]">
                         {entry.description}
@@ -401,15 +481,37 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
                         ) : (
                           <span />
                         )}
-                        <Button onClick={() => openInstall(entry)}>
-                          <span className="material-symbols-outlined text-[16px]">
-                            download
-                          </span>
-                          {t('settings.mcp.marketplace.install')}
-                        </Button>
+                        {installedServer ? (
+                          onOpenInstalled ? (
+                            <Button
+                              variant="secondary"
+                              onClick={() => onOpenInstalled(installedServer)}
+                            >
+                              <span className="material-symbols-outlined text-[16px]">
+                                tune
+                              </span>
+                              {t('settings.mcp.marketplace.configure')}
+                            </Button>
+                          ) : (
+                            <Button variant="secondary" disabled>
+                              <span className="material-symbols-outlined text-[16px]">
+                                check
+                              </span>
+                              {t('settings.mcp.marketplace.installed')}
+                            </Button>
+                          )
+                        ) : (
+                          <Button onClick={() => openInstall(entry)}>
+                            <span className="material-symbols-outlined text-[16px]">
+                              download
+                            </span>
+                            {t('settings.mcp.marketplace.install')}
+                          </Button>
+                        )}
                       </div>
                     </article>
-                  ))}
+                    )
+                  })}
                 </div>
               </section>
             )
@@ -431,7 +533,7 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
             <Button
               onClick={handleInstall}
               loading={isInstalling}
-              disabled={!installName.trim()}
+              disabled={!canConfirmInstall}
             >
               {t('settings.mcp.marketplace.installConfirm')}
             </Button>
@@ -494,24 +596,43 @@ export function MarketplacePage({ cwd, onBack, onInstalled }: MarketplacePagePro
                   {t('settings.mcp.marketplace.installEnvHint')}
                 </p>
                 <div className="flex flex-col gap-3">
-                  {(installEntry.requiresEnv ?? []).map((variable) => (
-                    <div key={variable.name}>
-                      <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">
-                        <code className="font-mono">{variable.name}</code>
-                      </label>
-                      <Input
-                        value={installEnv[variable.name] ?? ''}
-                        onChange={(event) =>
-                          setInstallEnv((current) => ({
-                            ...current,
-                            [variable.name]: event.target.value,
-                          }))
-                        }
-                        placeholder={variable.description}
-                      />
-                    </div>
-                  ))}
+                  {(installEntry.requiresEnv ?? []).map((variable) => {
+                    const isMissing =
+                      (installEnv[variable.name] ?? '').trim().length === 0
+                    return (
+                      <div key={variable.name}>
+                        <label className="mb-1 flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)]">
+                          <code className="font-mono">{variable.name}</code>
+                          <span
+                            aria-hidden="true"
+                            className="text-[var(--color-inspector-danger)]"
+                          >
+                            *
+                          </span>
+                        </label>
+                        <Input
+                          value={installEnv[variable.name] ?? ''}
+                          onChange={(event) =>
+                            setInstallEnv((current) => ({
+                              ...current,
+                              [variable.name]: event.target.value,
+                            }))
+                          }
+                          placeholder={variable.description}
+                          aria-required="true"
+                          aria-invalid={isMissing}
+                        />
+                      </div>
+                    )
+                  })}
                 </div>
+                {missingRequiredEnv.length > 0 && (
+                  <p className="mt-2 text-xs text-[var(--color-inspector-danger)]">
+                    {t('settings.mcp.marketplace.installEnvMissing', {
+                      names: missingRequiredEnv.map((v) => v.name).join(', '),
+                    })}
+                  </p>
+                )}
               </div>
             )}
           </div>

@@ -1170,6 +1170,10 @@ export function McpSettings() {
           // marketplace toast already covers user-facing failure messaging.
           void fetchServers(projectPathsForFetchRef.current, currentWorkDir)
         }}
+        onOpenInstalled={(server) => {
+          selectServer(server)
+          setView({ type: 'details', server })
+        }}
       />
     )
   }

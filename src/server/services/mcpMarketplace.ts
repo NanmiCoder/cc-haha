@@ -144,46 +144,15 @@ const BUILTIN_CATALOG: MarketplaceEntry[] = [
   },
 
   // ---- dev-platform ----
-  {
-    id: 'github',
-    name: 'GitHub',
-    description:
-      'Read repos, issues, PRs and run code searches against GitHub via the official server.',
-    category: 'dev-platform',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-github'],
-    },
-    requiresEnv: [
-      {
-        name: 'GITHUB_PERSONAL_ACCESS_TOKEN',
-        description: 'Personal access token (classic or fine-grained).',
-      },
-    ],
-    homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/github',
-    source: 'builtin',
-  },
-  {
-    id: 'gitlab',
-    name: 'GitLab',
-    description: 'Issues, merge requests, and project search against GitLab.',
-    category: 'dev-platform',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-gitlab'],
-    },
-    requiresEnv: [
-      { name: 'GITLAB_PERSONAL_ACCESS_TOKEN', description: 'Personal access token.' },
-      {
-        name: 'GITLAB_API_URL',
-        description: 'Optional API base URL (default https://gitlab.com/api/v4).',
-      },
-    ],
-    homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab',
-    source: 'builtin',
-  },
+  // Note: `@modelcontextprotocol/server-github` and `@modelcontextprotocol/
+  // server-gitlab` previously lived here. Both moved to the
+  // modelcontextprotocol/servers-archived repository on 2025-05-29 and
+  // their npm packages are flagged "Package no longer supported". Users
+  // were repeatedly hitting `-32000 Connection closed` because the
+  // archived snapshots fall over against current MCP clients. Until the
+  // upstream replacements (GitHub's official `github-mcp-server` Go
+  // binary, GitLab's hosted MCP server) ship a stable `npx`-style
+  // launcher we don't ship a one-click install for them.
 
   // ---- data ----
   {
@@ -215,26 +184,10 @@ const BUILTIN_CATALOG: MarketplaceEntry[] = [
       'https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite',
     source: 'builtin',
   },
-  {
-    id: 'postgres',
-    name: 'PostgreSQL',
-    description: 'Read-only SQL access to a Postgres instance.',
-    category: 'data',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-postgres'],
-    },
-    requiresEnv: [
-      {
-        name: 'POSTGRES_URL',
-        description: 'postgres://user:pass@host:port/db connection URI.',
-      },
-    ],
-    homepage:
-      'https://github.com/modelcontextprotocol/servers/tree/main/src/postgres',
-    source: 'builtin',
-  },
+  // Note: `@modelcontextprotocol/server-postgres` was removed for the same
+  // reason as the GitHub/GitLab entries above — archived upstream, npm
+  // package marked "no longer supported", and a known SQL-injection CVE
+  // (CVE in v0.6.2) that the maintainers are not patching.
 
   // ---- memory ----
   {
@@ -254,26 +207,11 @@ const BUILTIN_CATALOG: MarketplaceEntry[] = [
   },
 
   // ---- search ----
-  {
-    id: 'brave-search',
-    name: 'Brave Search',
-    description: 'Web and local search powered by the Brave Search API.',
-    category: 'search',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-brave-search'],
-    },
-    requiresEnv: [
-      {
-        name: 'BRAVE_API_KEY',
-        description: 'Brave Search API key (free tier available).',
-      },
-    ],
-    homepage:
-      'https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search',
-    source: 'builtin',
-  },
+  // Note: `@modelcontextprotocol/server-brave-search` was removed for the
+  // same reason as the GitHub/GitLab/Postgres entries above — archived
+  // upstream and flagged "Package no longer supported" on npm. Users
+  // can still add it manually if their Brave API key works against the
+  // archived snapshot.
 
   // ---- ai ----
   {
