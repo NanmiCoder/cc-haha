@@ -1,6 +1,10 @@
 import type { PluginScope } from '../../utils/plugins/schemas.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { PluginService } from '../services/pluginService.js'
+import {
+  clearKnownLanguageServerCache,
+  getKnownLanguageServerStatuses,
+} from '../services/knownLanguageServers.js'
 import { conversationService } from '../services/conversationService.js'
 import { updateSessionSlashCommands } from '../ws/handler.js'
 
@@ -55,6 +59,15 @@ export async function handlePluginsApi(
       return Response.json(
         await pluginService.checkPluginPrerequisites(pluginId, cwd),
       )
+    }
+
+    if (method === 'GET' && sub === 'language-servers') {
+      if (url.searchParams.get('refresh')) {
+        clearKnownLanguageServerCache()
+      }
+      return Response.json({
+        servers: await getKnownLanguageServerStatuses(),
+      })
     }
 
     if (method === 'POST' && sub === 'reload') {

@@ -231,6 +231,11 @@ export function PluginDetail() {
               icon="hub"
             />
             <DetailStat
+              label={t('settings.plugins.capabilityLabel.lspServers')}
+              value={String(selectedPlugin.componentCounts.lspServers)}
+              icon="code_blocks"
+            />
+            <DetailStat
               label={t('settings.plugins.summary.hooks')}
               value={String(selectedPlugin.componentCounts.hooks)}
               icon="bolt"

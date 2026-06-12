@@ -174,3 +174,29 @@ export type PluginPrerequisitesResponse = {
   pluginId: string
   prerequisites: PluginPrerequisiteRow[]
 }
+
+
+// ─── Known language servers (host-binary detection) ───────────────────────
+
+/**
+ * A detected status row for one well-known language server. This is a
+ * separate dimension from plugin-declared `lspServers` — it only reflects
+ * whether the binary is resolvable on PATH, plus per-platform install
+ * hints. Install commands run in a user-confirmed terminal, never
+ * silently. Mirrors the server `KnownLanguageServerStatus` shape.
+ */
+export type KnownLanguageServerRow = {
+  language: string
+  label: string
+  command: string
+  candidates?: string[]
+  homepage?: string
+  install: PluginPrerequisiteInstallMap
+  installed: boolean
+  resolvedPath: string | null
+  resolvedCommand: string | null
+}
+
+export type KnownLanguageServersResponse = {
+  servers: KnownLanguageServerRow[]
+}

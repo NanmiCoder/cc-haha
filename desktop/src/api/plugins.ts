@@ -2,6 +2,7 @@ import { api } from './client'
 import type {
   AddMarketplaceResponse,
   CatalogPlugin,
+  KnownLanguageServersResponse,
   PluginDetail,
   PluginListResponse,
   PluginPrerequisitesResponse,
@@ -80,5 +81,11 @@ export const pluginsApi = {
       `/api/plugins/marketplace`,
       { input },
       { timeout: 120_000 },
+    ),
+
+  languageServers: (refresh?: boolean) =>
+    api.get<KnownLanguageServersResponse>(
+      `/api/plugins/language-servers${refresh ? '?refresh=1' : ''}`,
+      { timeout: 15_000 },
     ),
 }

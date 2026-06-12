@@ -16,6 +16,10 @@ const terminalMocks = vi.hoisted(() => {
     write: vi.fn(),
     writeln: vi.fn(),
     clear: vi.fn(),
+    attachCustomKeyEventHandler: vi.fn(),
+    getSelection: vi.fn(() => ''),
+    hasSelection: vi.fn(() => false),
+    clearSelection: vi.fn(),
   }
   const fitInstance = {
     fit: vi.fn(),

@@ -263,9 +263,13 @@ describe('Settings > Plugins tab', () => {
 
     expect(screen.getByText('Browse installed plugins')).toBeInTheDocument()
     expect(screen.getByText('Plugin Manager')).toBeInTheDocument()
+    expect(screen.getByText('Language Servers')).toBeInTheDocument()
+    expect(screen.getByText('Install LSP plugins to add diagnostics, go-to-definition, references, and other code intelligence to the workspace editor.')).toBeInTheDocument()
+    expect(screen.getAllByText('pyright-lsp').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('1 LSP servers').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0)
     expect(screen.getByText('github')).toBeInTheDocument()
-    expect(screen.getByText('Python language tooling')).toBeInTheDocument()
+    expect(screen.getAllByText('Python language tooling').length).toBeGreaterThan(0)
     expect(screen.getByText('Known marketplaces')).toBeInTheDocument()
   })
 
@@ -453,7 +457,7 @@ describe('Settings > Plugins tab', () => {
           skills: 2,
           hooks: 1,
           mcpServers: 1,
-          lspServers: 0,
+          lspServers: 1,
         },
         capabilities: {
           commands: ['review-pr'],
@@ -461,7 +465,7 @@ describe('Settings > Plugins tab', () => {
           skills: ['commit', 'create-pr'],
           hooks: ['SessionStart'],
           mcpServers: ['github-api'],
-          lspServers: [],
+          lspServers: ['github-lsp'],
         },
         commandEntries: [
           {
@@ -516,6 +520,8 @@ describe('Settings > Plugins tab', () => {
     expect(screen.getByText('echo preparing plugin runtime')).toBeInTheDocument()
     expect(screen.getByText('Create a pull request from the current branch.')).toBeInTheDocument()
     expect(screen.getByText('https://api.github.com/mcp')).toBeInTheDocument()
+    expect(screen.getAllByText('LSP servers').length).toBeGreaterThan(0)
+    expect(screen.getByText('github-lsp')).toBeInTheDocument()
     expect(screen.getByText('Apply changes')).toBeInTheDocument()
     expect(screen.getByText('Uninstall')).toBeInTheDocument()
   })

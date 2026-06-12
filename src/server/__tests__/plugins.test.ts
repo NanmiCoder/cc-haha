@@ -557,3 +557,34 @@ describe('Plugins catalog & install API', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('Language servers API', () => {
+  it('GET /api/plugins/language-servers returns status for every known language', async () => {
+    const { req, url, segments } = makeRequest(
+      'GET',
+      '/api/plugins/language-servers',
+    )
+    const res = await handlePluginsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      servers: Array<{
+        language: string
+        label: string
+        installed: boolean
+        resolvedPath: string | null
+        install: Record<string, unknown>
+      }>
+    }
+
+    const ids = body.servers.map((s) => s.language).sort()
+    expect(ids).toEqual(
+      ['c', 'cpp', 'csharp', 'go', 'java', 'lua', 'php', 'python', 'rust', 'typescript'].sort(),
+    )
+    for (const server of body.servers) {
+      expect(typeof server.installed).toBe('boolean')
+      expect(typeof server.label).toBe('string')
+    }
+  })
+})
+

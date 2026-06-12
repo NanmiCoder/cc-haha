@@ -9,11 +9,14 @@ import { ConfirmDialog } from '../shared/ConfirmDialog'
 import { ToggleSwitch } from '../shared/ToggleSwitch'
 import type {
   CatalogPlugin,
+  KnownLanguageServerRow,
   PluginPrerequisiteRow,
   PluginSummary,
 } from '../../types/plugin'
 import { pluginsApi } from '../../api/plugins'
 import { PluginPrerequisitesModal } from './PluginPrerequisitesModal'
+import { detectPlatform } from '../../lib/detectPlatform'
+import { injectInstallScriptIntoNewTerminal } from '../../lib/terminalCommandInjection'
 
 type PluginBucket = 'attention' | 'enabled' | 'disabled'
 type BatchAction = 'enable' | 'disable'
@@ -124,6 +127,11 @@ export function PluginList() {
 
     return buckets
   }, [plugins])
+
+  const languageServerPlugins = useMemo(
+    () => plugins.filter((plugin) => plugin.componentCounts.lspServers > 0),
+    [plugins],
+  )
 
   useEffect(() => {
     setSelectedPluginIds((current) => {
@@ -522,6 +530,13 @@ export function PluginList() {
         t={t}
       />
 
+      <LanguageServersSection
+        plugins={languageServerPlugins}
+        fetchPluginDetail={fetchPluginDetail}
+        cwd={currentWorkDir}
+        t={t}
+      />
+
       <UrlInstallSection
         value={marketplaceInput}
         onChange={setMarketplaceInput}
@@ -783,6 +798,9 @@ function renderGroup(
                       {plugin.componentCounts.mcpServers > 0 && (
                         <span>{t('settings.plugins.capability.mcpServers', { count: String(plugin.componentCounts.mcpServers) })}</span>
                       )}
+                      {plugin.componentCounts.lspServers > 0 && (
+                        <span>{t('settings.plugins.capability.lspServers', { count: String(plugin.componentCounts.lspServers) })}</span>
+                      )}
                       {plugin.errors.length > 0 && (
                         <span className="text-[var(--color-error)]">
                           {t('settings.plugins.errorCount', { count: String(plugin.errors.length) })}
@@ -888,6 +906,237 @@ function ScopePill({ scope }: { scope: PluginSummary['scope'] }) {
     <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
       {t(`settings.plugins.scope.${scope}`)}
     </span>
+  )
+}
+
+function LanguageServersSection({
+  plugins,
+  fetchPluginDetail,
+  cwd,
+  t,
+}: {
+  plugins: PluginSummary[]
+  fetchPluginDetail: (id: string, cwd?: string) => Promise<void>
+  cwd: string | undefined
+  t: ReturnType<typeof useTranslation>
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
+      <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-primary-fixed)] text-[var(--color-brand)]">
+              <span className="material-symbols-outlined text-[16px]">code_blocks</span>
+            </span>
+            <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">
+              {t('settings.plugins.languageServers.title')}
+            </h4>
+            <span className="text-xs text-[var(--color-text-tertiary)]">{plugins.length}</span>
+          </div>
+          <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">
+            {t('settings.plugins.languageServers.description')}
+          </p>
+        </div>
+      </div>
+
+      {plugins.length === 0 ? (
+        <div className="px-5 py-4 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {t('settings.plugins.languageServers.empty')}
+        </div>
+      ) : (
+        <div className="grid gap-2 p-2 sm:grid-cols-2">
+          {plugins.map((plugin) => (
+            <button
+              key={plugin.id}
+              type="button"
+              onClick={() => void fetchPluginDetail(plugin.id, cwd)}
+              className="flex min-w-0 items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-left transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+            >
+              <span className="mt-0.5 material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
+                code_blocks
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">
+                    {plugin.name}
+                  </span>
+                  <span className="rounded-full bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                    {t('settings.plugins.capability.lspServers', { count: String(plugin.componentCounts.lspServers) })}
+                  </span>
+                  <StatusPill plugin={plugin} />
+                </div>
+                <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)] break-words">
+                  {plugin.description || t('settings.plugins.noDescription')}
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)] break-all">
+                  {plugin.id}
+                </p>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <KnownLanguageServersPanel t={t} />
+    </section>
+  )
+}
+
+export function KnownLanguageServersPanel({
+  t,
+}: {
+  t: ReturnType<typeof useTranslation>
+}) {
+  const addToast = useUIStore((s) => s.addToast)
+  const [servers, setServers] = useState<KnownLanguageServerRow[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [installingLanguage, setInstallingLanguage] = useState<string | null>(null)
+
+  const load = async (refresh?: boolean) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await pluginsApi.languageServers(refresh)
+      setServers(result.servers)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // Detection runs once on mount; the recheck button re-probes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleInstall = async (server: KnownLanguageServerRow) => {
+    const platform = detectPlatform()
+    const steps = server.install[platform] ?? []
+    const step = steps[0]
+    if (!step) {
+      if (server.homepage) {
+        window.open(server.homepage, '_blank', 'noopener,noreferrer')
+      }
+      return
+    }
+    setInstallingLanguage(server.language)
+    try {
+      await injectInstallScriptIntoNewTerminal([step.cmd])
+      addToast({
+        type: 'success',
+        message: t('settings.plugins.languageServers.known.injectedToast', {
+          name: server.label,
+        }),
+      })
+    } catch (err) {
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setInstallingLanguage(null)
+    }
+  }
+
+  return (
+    <div className="border-t border-[var(--color-border)]">
+      <div className="flex items-start justify-between gap-3 px-5 py-3">
+        <div className="min-w-0">
+          <h5 className="text-xs font-semibold text-[var(--color-text-primary)]">
+            {t('settings.plugins.languageServers.known.title')}
+          </h5>
+          <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+            {t('settings.plugins.languageServers.known.description')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load(true)}
+          disabled={loading}
+          className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:opacity-60"
+        >
+          <span className="material-symbols-outlined text-[14px]">refresh</span>
+          {t('settings.plugins.languageServers.known.recheck')}
+        </button>
+      </div>
+
+      {error ? (
+        <div className="px-5 pb-3 text-[11px] text-[var(--color-error)]">{error}</div>
+      ) : loading && !servers ? (
+        <div className="px-5 pb-4">
+          <div className="h-8 animate-pulse rounded-lg bg-[var(--color-surface-container-high)]" />
+        </div>
+      ) : (
+        <div className="grid gap-2 px-2 pb-2 sm:grid-cols-2">
+          {(servers ?? []).map((server) => {
+            const platform = detectPlatform()
+            const hasInstallStep = (server.install[platform]?.length ?? 0) > 0
+            return (
+              <div
+                key={server.language}
+                className="flex min-w-0 items-center gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-2.5"
+              >
+                <span
+                  className={`material-symbols-outlined text-[18px] ${
+                    server.installed
+                      ? 'text-[var(--color-success)]'
+                      : 'text-[var(--color-text-tertiary)]'
+                  }`}
+                >
+                  {server.installed ? 'check_circle' : 'radio_button_unchecked'}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-[var(--color-text-primary)] break-all">
+                    {server.label}
+                  </div>
+                  {server.installed && server.resolvedPath ? (
+                    <div className="mt-0.5 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                      {server.resolvedPath}
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+                      {t('settings.plugins.languageServers.known.notInstalled')}
+                    </div>
+                  )}
+                </div>
+                {server.installed ? (
+                  <span className="shrink-0 text-[10px] font-medium text-[var(--color-success)]">
+                    {t('settings.plugins.languageServers.known.installed')}
+                  </span>
+                ) : hasInstallStep ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleInstall(server)}
+                    disabled={installingLanguage === server.language}
+                    className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:opacity-60"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">download</span>
+                    {t('settings.plugins.languageServers.known.install')}
+                  </button>
+                ) : server.homepage ? (
+                  <a
+                    href={server.homepage}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                    {t('settings.plugins.languageServers.known.guide')}
+                  </a>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <p className="px-5 pb-4 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+        {t('settings.plugins.languageServers.known.note')}
+      </p>
+    </div>
   )
 }
 
