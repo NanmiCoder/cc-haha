@@ -6,6 +6,8 @@ import {
   buildSoloCouncilRows,
   getSoloCouncilRole,
   parseSoloCouncilVerdict,
+  parseSoloCouncilReviewArtifact,
+  extractSoloCouncilSynthesis,
 } from './SoloCouncilPanel'
 import { useChatStore } from '../../stores/chatStore'
 import type { AgentTaskNotification, BackgroundAgentTask } from '../../types/chat'
@@ -34,6 +36,17 @@ vi.mock('../../i18n', () => ({
       'soloCouncil.output.standby.planner': 'Standing by, ready to shape the implementation plan.',
       'soloCouncil.output.standby.reviewer': 'Standing by, waiting to review the draft plan.',
       'soloCouncil.output.standby.critic': 'Standing by, waiting to check risks and counterexamples.',
+      'soloCouncil.flow.planner': 'Planner',
+      'soloCouncil.flow.reviewer': 'Reviewer',
+      'soloCouncil.flow.critic': 'Critic',
+      'soloCouncil.flow.synthesis': 'Final plan',
+      'soloCouncil.synthesis.title': 'Final execution plan',
+      'soloCouncil.synthesis.subtitle': 'Synthesized after Planner, Reviewer, and Critic finish.',
+      'soloCouncil.synthesis.showFull': 'Show full plan',
+      'soloCouncil.synthesis.collapse': 'Collapse plan',
+      'soloCouncil.synthesis.toggleLabel': 'Toggle full final plan',
+      'soloCouncil.objections.title': 'Blocking objections',
+      'soloCouncil.actions.title': 'Executable actions',
     }
     return translations[key] ?? key
   },
@@ -78,6 +91,46 @@ describe('SoloCouncilPanel helpers', () => {
     expect(parseSoloCouncilVerdict('reviewer', task, baseNotification({ result: 'PLAN_REVIEWER: APPROVE' }))).toBe('approve')
     expect(parseSoloCouncilVerdict('critic', task, baseNotification({ result: 'PLAN_REVIEW: CHANGES_NEEDED' }))).toBe('changes-needed')
     expect(parseSoloCouncilVerdict('planner', task)).toBe('plan-ready')
+  })
+
+  it('prefers structured JSON verdict over conflicting sentinel text', () => {
+    const artifact = parseSoloCouncilReviewArtifact(
+      'reviewer',
+      'SOLO_COUNCIL_REVIEW_JSON: {"role":"reviewer","verdict":"changes_needed","blockingObjections":["Missing tests"],"executableActions":["Add tests"]}\nPLAN_REVIEWER: APPROVE',
+    )
+
+    expect(artifact?.verdict).toBe('changes-needed')
+    expect(parseSoloCouncilVerdict('reviewer', baseTask({ status: 'completed' }), baseNotification({ result: 'PLAN_REVIEWER: APPROVE' }), artifact)).toBe('changes-needed')
+  })
+
+  it('falls back to sentinel text when structured JSON is malformed', () => {
+    const result = 'SOLO_COUNCIL_REVIEW_JSON: {not-json}\nPLAN_REVIEW: CHANGES_NEEDED'
+
+    expect(parseSoloCouncilReviewArtifact('critic', result)).toBeNull()
+    expect(parseSoloCouncilVerdict('critic', baseTask({ status: 'completed' }), baseNotification({ result }))).toBe('changes-needed')
+  })
+
+  it('ignores invalid structured artifact shapes safely', () => {
+    expect(parseSoloCouncilReviewArtifact('critic', 'SOLO_COUNCIL_REVIEW_JSON: {"role":"reviewer","verdict":"approve","blockingObjections":[],"executableActions":[]}')).toBeNull()
+    expect(parseSoloCouncilReviewArtifact('critic', 'SOLO_COUNCIL_REVIEW_JSON: {"role":"critic","verdict":"maybe","blockingObjections":[],"executableActions":[]}')).toBeNull()
+    expect(parseSoloCouncilReviewArtifact('critic', 'SOLO_COUNCIL_REVIEW_JSON: {"role":"critic","verdict":"approve","blockingObjections":[123],"executableActions":[]}')).toBeNull()
+    expect(parseSoloCouncilReviewArtifact('critic', `SOLO_COUNCIL_REVIEW_JSON: {"role":"critic","verdict":"approve","blockingObjections":["${'x'.repeat(241)}"],"executableActions":[]}`)).toBeNull()
+    expect(parseSoloCouncilReviewArtifact('critic', 'SOLO_COUNCIL_REVIEW_JSON: {"role":"critic","verdict":"approve","blockingObjections":["1","2","3","4","5","6"],"executableActions":[]}')).toBeNull()
+  })
+
+  it('extracts synthesis only from the latest assistant text exact marker', () => {
+    expect(extractSoloCouncilSynthesis([
+      { id: 'm1', type: 'assistant_text', content: 'SOLO_COUNCIL_SYNTHESIS_START\nOld plan\nSOLO_COUNCIL_SYNTHESIS_END', timestamp: 1 },
+      { id: 'm2', type: 'user_text', content: 'SOLO_COUNCIL_SYNTHESIS_START\nIgnore me\nSOLO_COUNCIL_SYNTHESIS_END', timestamp: 2 },
+      { id: 'm3', type: 'assistant_text', content: 'SOLO_COUNCIL_SYNTHESIS_START\nLatest plan\nSOLO_COUNCIL_SYNTHESIS_END', timestamp: 3 },
+    ])).toBe('Latest plan')
+    expect(extractSoloCouncilSynthesis([
+      { id: 'm1', type: 'assistant_text', content: 'SOLO_COUNCIL_SYNTHESIS_START\nOld plan\nSOLO_COUNCIL_SYNTHESIS_END', timestamp: 1 },
+      { id: 'm2', type: 'assistant_text', content: 'Latest assistant text without marker', timestamp: 2 },
+    ])).toBeNull()
+    expect(extractSoloCouncilSynthesis([
+      { id: 'm1', type: 'assistant_text', content: 'Final execution plan\nLoose heading only', timestamp: 1 },
+    ])).toBeNull()
   })
 
   it('keeps only the latest task for each council role', () => {
@@ -277,7 +330,7 @@ describe('SoloCouncilPanel', () => {
   })
 
   it('keeps expanded output when the same task updatedAt changes', () => {
-    const longOutput = Array.from({ length: 20 }, (_, index) => `Planner line ${index + 1}`).join('\n')
+    const longOutput = Array.from({ length: 80 }, (_, index) => `Planner line ${index + 1}`).join('\n')
     const session = useChatStore.getState().getSession('s1')
     useChatStore.setState({
       sessions: {
@@ -407,7 +460,7 @@ describe('SoloCouncilPanel', () => {
   })
 
   it('renders long output collapsed by default and toggles expanded state', () => {
-    const longOutput = Array.from({ length: 20 }, (_, index) => `Planner line ${index + 1}`).join('\n')
+    const longOutput = Array.from({ length: 80 }, (_, index) => `Planner line ${index + 1}`).join('\n')
     useChatStore.setState({
       sessions: {
         s1: {
@@ -451,7 +504,7 @@ describe('SoloCouncilPanel', () => {
   })
 
   it('toggles long Planner, Reviewer, and Critic cards independently', () => {
-    const longOutput = (role: string) => Array.from({ length: 20 }, (_, index) => `${role} line ${index + 1}`).join('\n')
+    const longOutput = (role: string) => Array.from({ length: 80 }, (_, index) => `${role} line ${index + 1}`).join('\n')
     useChatStore.setState({
       sessions: {
         s1: {
@@ -496,5 +549,110 @@ describe('SoloCouncilPanel', () => {
     expect(screen.getByTestId('solo-council-toggle-planner')).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByTestId('solo-council-toggle-reviewer')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('solo-council-toggle-critic')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('renders the four-step causal flow', () => {
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-flow')).toBeInTheDocument()
+    expect(screen.getByTestId('solo-council-flow-step-planner')).toHaveTextContent('Planner')
+    expect(screen.getByTestId('solo-council-flow-step-reviewer')).toHaveTextContent('Reviewer')
+    expect(screen.getByTestId('solo-council-flow-step-critic')).toHaveTextContent('Critic')
+    expect(screen.getByTestId('solo-council-flow-step-synthesis')).toHaveTextContent('Final plan')
+  })
+
+  it('renders final plan card only from exact synthesis markers', () => {
+    useChatStore.setState({
+      sessions: {
+        s1: {
+          ...useChatStore.getState().getSession('s1'),
+          messages: [
+            { id: 'm1', type: 'assistant_text', content: 'SOLO_COUNCIL_SYNTHESIS_START\nImplement the final plan.\nSOLO_COUNCIL_SYNTHESIS_END', timestamp: 1 },
+          ],
+        },
+      },
+    })
+
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-synthesis')).toHaveTextContent('Final execution plan')
+    expect(screen.getByTestId('solo-council-synthesis-output')).toHaveTextContent('Implement the final plan.')
+  })
+
+  it('does not render synthesis card for loose final execution plan heading', () => {
+    useChatStore.setState({
+      sessions: {
+        s1: {
+          ...useChatStore.getState().getSession('s1'),
+          messages: [
+            { id: 'm1', type: 'assistant_text', content: 'Final execution plan\nThis should not be extracted.', timestamp: 1 },
+          ],
+        },
+      },
+    })
+
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.queryByTestId('solo-council-synthesis')).not.toBeInTheDocument()
+  })
+
+  it('renders structured objections and executable actions for changes-needed review artifacts', () => {
+    useChatStore.setState({
+      sessions: {
+        s1: {
+          ...useChatStore.getState().getSession('s1'),
+          backgroundAgentTasks: {
+            reviewer: baseTask({
+              taskId: 'reviewer',
+              toolUseId: 'reviewerTool',
+              status: 'completed',
+              description: '[Solo Council: Reviewer] audit',
+            }),
+          },
+          agentTaskNotifications: {
+            reviewerTool: baseNotification({
+              taskId: 'reviewer',
+              toolUseId: 'reviewerTool',
+              result: 'SOLO_COUNCIL_REVIEW_JSON: {"role":"reviewer","verdict":"changes_needed","blockingObjections":["Need bounded marker"],"executableActions":["Add parser test"]}\nPLAN_REVIEWER: APPROVE',
+            }),
+          },
+        },
+      },
+    })
+
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-card-reviewer')).toHaveTextContent('Changes needed')
+    expect(screen.getByTestId('solo-council-objections-reviewer')).toHaveTextContent('Blocking objections')
+    expect(screen.getByTestId('solo-council-objections-reviewer')).toHaveTextContent('Need bounded marker')
+    expect(screen.getByTestId('solo-council-actions-reviewer')).toHaveTextContent('Executable actions')
+    expect(screen.getByTestId('solo-council-actions-reviewer')).toHaveTextContent('Add parser test')
+  })
+
+  it('does not fold medium role output below the safer threshold', () => {
+    const mediumOutput = Array.from({ length: 30 }, (_, index) => `Medium Solo Council line ${index + 1}`).join('\n')
+    expect(mediumOutput.length).toBeGreaterThan(220)
+    expect(mediumOutput.length).toBeLessThan(900)
+    useChatStore.setState({
+      sessions: {
+        s1: {
+          ...useChatStore.getState().getSession('s1'),
+          backgroundAgentTasks: {
+            planner: baseTask({
+              taskId: 'planner',
+              toolUseId: 'plannerTool',
+              status: 'completed',
+              description: '[Solo Council: Planner] propose',
+              summary: mediumOutput,
+            }),
+          },
+        },
+      },
+    })
+
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-output-planner')).not.toHaveClass('line-clamp-3')
+    expect(screen.queryByTestId('solo-council-toggle-planner')).not.toBeInTheDocument()
   })
 })

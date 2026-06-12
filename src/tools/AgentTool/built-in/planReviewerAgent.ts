@@ -60,6 +60,9 @@ Return a concise report with these sections:
 4. Verification notes
 - State which tests or smoke checks should prove the implementation.
 
+Before the final sentinel, include exactly one single-line structured marker for the Solo Council UI. It must be valid JSON on one line, with role set to "reviewer", verdict set to "approve" or "changes_needed", blockingObjections and executableActions as arrays of strings, and optional summary as a string. Use at most 5 concise items per array. Example:
+SOLO_COUNCIL_REVIEW_JSON: {"role":"reviewer","verdict":"changes_needed","blockingObjections":["Missing verification coverage"],"executableActions":["Add a focused test before implementation"],"summary":"Plan needs one verification gap closed."}
+
 End with exactly one summary line the caller can parse:
 
 PLAN_REVIEWER: APPROVE

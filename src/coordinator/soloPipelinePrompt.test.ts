@@ -87,6 +87,8 @@ describe('getSoloPipelineSystemPrompt — invariants', () => {
     expect(prompt).toContain('B = Reviewer')
     expect(prompt).toContain('C = Critic')
     expect(prompt).toContain('final execution plan')
+    expect(prompt).toContain('SOLO_COUNCIL_SYNTHESIS_START')
+    expect(prompt).toContain('SOLO_COUNCIL_SYNTHESIS_END')
     expect(prompt).toContain('Do not simulate')
     expect(prompt).toContain('[Solo Council: Planner]')
     expect(prompt).toContain('[Solo Council: Reviewer]')

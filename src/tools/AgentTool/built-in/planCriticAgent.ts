@@ -60,6 +60,9 @@ Return a concise report with these sections:
 4. Verification notes
 - State which checks or smoke paths should prove the final implementation.
 
+Before the final sentinel, include exactly one single-line structured marker for the Solo Council UI. It must be valid JSON on one line, with role set to "critic", verdict set to "approve" or "changes_needed", blockingObjections and executableActions as arrays of strings, and optional summary as a string. Use at most 5 concise items per array. Example:
+SOLO_COUNCIL_REVIEW_JSON: {"role":"critic","verdict":"changes_needed","blockingObjections":["The proposed scope is too broad"],"executableActions":["Ship the smaller UI-only path first"],"summary":"Narrow the plan before implementation."}
+
 End with exactly one summary line the caller can parse:
 
 PLAN_REVIEW: APPROVE

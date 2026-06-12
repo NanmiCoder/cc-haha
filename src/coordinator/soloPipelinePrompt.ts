@@ -182,7 +182,15 @@ line "▸ Stage N/5: <name> — <one-line goal>".
      execution plan**. If Reviewer or Critic returns \`CHANGES_NEEDED\`, revise
      the plan, rerun the relevant review/critic pass if needed, or ask the user
      one short clarifying question. Do not implement while a blocking objection
-     remains.
+     remains. Print the final execution plan before Stage 2 inside this exact
+     bounded marker block so the Solo Council UI can render it without loose
+     heading inference:
+     \`\`\`text
+     SOLO_COUNCIL_SYNTHESIS_START
+     final execution plan
+     <concrete final execution plan>
+     SOLO_COUNCIL_SYNTHESIS_END
+     \`\`\`
    - Hand-off artifact: \`final execution plan\` with concrete files,
      implementation steps, success criteria, verification commands, and
      residual risks.

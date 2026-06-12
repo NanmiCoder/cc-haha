@@ -88,6 +88,8 @@ describe('built-in agents', () => {
 
     const prompt = PLAN_CRITIC_AGENT.getSystemPrompt({} as never)
     expect(prompt).toContain('READ-ONLY plan critique task')
+    expect(prompt).toContain('SOLO_COUNCIL_REVIEW_JSON')
+    expect(prompt).toContain('"role":"critic"')
     expect(prompt).toContain('PLAN_REVIEW: APPROVE')
     expect(prompt).toContain('PLAN_REVIEW: CHANGES_NEEDED')
     expect(prompt).toContain('smaller or safer path')
@@ -106,6 +108,8 @@ describe('built-in agents', () => {
 
     const prompt = PLAN_REVIEWER_AGENT.getSystemPrompt({} as never)
     expect(prompt).toContain('READ-ONLY plan review task')
+    expect(prompt).toContain('SOLO_COUNCIL_REVIEW_JSON')
+    expect(prompt).toContain('"role":"reviewer"')
     expect(prompt).toContain('PLAN_REVIEWER: APPROVE')
     expect(prompt).toContain('PLAN_REVIEWER: CHANGES_NEEDED')
     expect(prompt).toContain('Completeness')
