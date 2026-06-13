@@ -33,6 +33,7 @@ type WorkspaceApiMocks = {
   getWorkspaceTreeMock: ReturnType<typeof vi.fn>
   getWorkspaceFileMock: ReturnType<typeof vi.fn>
   getWorkspaceDiffMock: ReturnType<typeof vi.fn>
+  saveWorkspaceFileMock: ReturnType<typeof vi.fn>
 }
 
 var mocks: WorkspaceApiMocks | undefined
@@ -108,64 +109,6 @@ function findTextNodeContaining(container: Element, text: string) {
   throw new Error(`Unable to find text node containing ${text}`)
 }
 
-async function selectWorkspaceCodeText(
-  view: Awaited<ReturnType<typeof renderPanel>>,
-  startLine: number,
-  startText: string,
-  endLine: number,
-  endText: string,
-) {
-  const code = view.getByTestId('workspace-code')
-  const startRow = code.querySelector(`[data-workspace-line-number="${startLine}"]`)
-  const endRow = code.querySelector(`[data-workspace-line-number="${endLine}"]`)
-  if (!startRow || !endRow) throw new Error('Selection rows were not rendered')
-
-  Object.assign(code.parentElement?.parentElement ?? code, {
-    getBoundingClientRect: () => ({
-      left: 100,
-      top: 24,
-      right: 520,
-      bottom: 420,
-      width: 420,
-      height: 396,
-      x: 100,
-      y: 24,
-      toJSON: () => ({}),
-    }),
-  })
-
-  const startNode = findTextNodeContaining(startRow, startText)
-  const endNode = findTextNodeContaining(endRow, endText)
-  const startOffset = startNode.textContent?.indexOf(startText) ?? -1
-  const endOffset = (endNode.textContent?.indexOf(endText) ?? -1) + endText.length
-  const range = document.createRange()
-  range.setStart(startNode, startOffset)
-  range.setEnd(endNode, endOffset)
-  Object.assign(range, {
-    getBoundingClientRect: () => ({
-      left: 120,
-      top: 100,
-      right: 240,
-      bottom: 118,
-      width: 120,
-      height: 18,
-      x: 120,
-      y: 100,
-      toJSON: () => ({}),
-    }),
-  })
-
-  const selection = window.getSelection()
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-
-  await act(async () => {
-    fireEvent.mouseUp(code, { clientX: 180, clientY: 122 })
-    await Promise.resolve()
-  })
-  await flushReactWork()
-}
-
 async function selectRenderedText(container: Element, text: string, target?: Element) {
   const textNode = findTextNodeContaining(container, text)
   const startOffset = textNode.textContent?.indexOf(text) ?? -1
@@ -210,17 +153,6 @@ async function selectRenderedText(container: Element, text: string, target?: Ele
   await flushReactWork()
 }
 
-function classNameContains(element: Element | null, needle: string) {
-  let current = element
-  while (current) {
-    if (typeof current.className === 'string' && current.className.includes(needle)) {
-      return true
-    }
-    current = current.parentElement
-  }
-  return false
-}
-
 vi.mock('../../api/sessions', () => ({
   sessionsApi: (() => {
     if (!mocks) {
@@ -229,6 +161,7 @@ vi.mock('../../api/sessions', () => ({
         getWorkspaceTreeMock: vi.fn(),
         getWorkspaceFileMock: vi.fn(),
         getWorkspaceDiffMock: vi.fn(),
+        saveWorkspaceFileMock: vi.fn(),
       }
     }
 
@@ -237,6 +170,7 @@ vi.mock('../../api/sessions', () => ({
       getWorkspaceTree: mocks.getWorkspaceTreeMock,
       getWorkspaceFile: mocks.getWorkspaceFileMock,
       getWorkspaceDiff: mocks.getWorkspaceDiffMock,
+      saveWorkspaceFile: mocks.saveWorkspaceFileMock,
     }
   })(),
 }))
@@ -287,6 +221,12 @@ describe('WorkspacePanel', () => {
         entries: [],
       },
     )
+    getMocks().saveWorkspaceFileMock.mockResolvedValue({
+      ok: true,
+      hash: 'a'.repeat(64),
+      bytes: 0,
+      timestamp: Date.now(),
+    })
   })
 
   afterEach(async () => {
@@ -701,7 +641,7 @@ describe('WorkspacePanel', () => {
     })
 
     await waitFor(() => {
-      expect(view.getByTestId('workspace-code').textContent).toContain('export const ready = true')
+      expect(view.getByTestId('workspace-editor-path').textContent).toContain('src/index.ts')
     })
     expect(view.getAllByText('File').length).toBeGreaterThan(0)
   })
@@ -826,14 +766,13 @@ describe('WorkspacePanel', () => {
     const view = await renderPanel('session-dark-theme')
     const panel = view.getByTestId('workspace-panel')
     const tabList = view.getByRole('tablist', { name: 'Preview tabs' })
-    const codeSurface = view.getByTestId('workspace-code')
+    const editorPath = await view.findByTestId('workspace-editor-path')
 
     expect(panel.className).toContain('bg-[var(--color-surface)]')
     expect(panel.className).not.toContain('bg-white')
     expect(tabList.className).toContain('bg-[var(--color-surface-container-lowest)]')
     expect(tabList.className).not.toContain('bg-white')
-    expect(classNameContains(codeSurface, 'bg-[var(--color-code-bg)]')).toBe(true)
-    expect(classNameContains(codeSurface, 'bg-white')).toBe(false)
+    expect(editorPath.className).toContain('text-[var(--color-text)]')
   })
 
   it('can expand long diff previews beyond the default rendered line cap', async () => {
@@ -942,7 +881,7 @@ describe('WorkspacePanel', () => {
     expect(diffSurface.textContent).toContain(longDiffLine)
   })
 
-  it('can expand long file previews beyond the default rendered line cap', async () => {
+  it('opens long file previews in the editor by default', async () => {
     const longFile = Array.from({ length: 2300 }, (_, index) => `const line${index + 1} = ${index + 1}`).join('\n')
 
     await setWorkspaceState((state) => ({
@@ -974,17 +913,10 @@ describe('WorkspacePanel', () => {
     }))
 
     const view = await renderPanel('session-large-file-preview')
-    const highlightedCode = view.getByTestId('workspace-code').textContent ?? ''
 
-    expect(highlightedCode).toContain('const line1 = 1')
-    expect(highlightedCode).toContain('const line2000 = 2000')
-    expect(highlightedCode).not.toContain('const line2001 = 2001')
-    await clickElement(view.getByRole('button', { name: 'Show all loaded lines' }))
-
-    await waitFor(() => {
-      expect(view.getByTestId('workspace-code').textContent).toContain('const line2300 = 2300')
-    })
-    expect(view.getByRole('button', { name: 'Collapse preview' })).toBeTruthy()
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.getByTestId('workspace-editor-path').textContent).toContain('large-file.ts')
+    expect(view.queryByTestId('workspace-code')).toBeNull()
   }, 60_000)
 
   it('renders image previews from workspace files', async () => {
@@ -1073,6 +1005,223 @@ describe('WorkspacePanel', () => {
     expect(view.getByText('Done')).toBeTruthy()
     expect(view.container.textContent).toContain('export const ok = true')
     expect(view.queryByTestId('workspace-code')).toBeNull()
+    expect(view.queryByTestId('workspace-editor-path')).toBeNull()
+  })
+
+  it('opens ordinary text files in the editor by default', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-text-editor': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-text-editor': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-text-editor': [{
+          id: 'file:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'file',
+          title: 'app.ts',
+          language: 'typescript',
+          content: 'export const ok = true\n',
+          state: 'ok',
+          size: 23,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-text-editor': 'file:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-text-editor')
+
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.getByTestId('workspace-editor-path').textContent).toContain('src/app.ts')
+    expect(view.queryByTestId('workspace-code')).toBeNull()
+  })
+
+  it('switches markdown previews into edit mode', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-markdown-edit': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-markdown-edit': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-markdown-edit': [{
+          id: 'file:README.md',
+          path: 'README.md',
+          kind: 'file',
+          title: 'README.md',
+          language: 'markdown',
+          content: '# Editable Notes\n',
+          state: 'ok',
+          size: 17,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-markdown-edit': 'file:README.md',
+      },
+    }))
+
+    const view = await renderPanel('session-markdown-edit')
+
+    expect(view.getByRole('heading', { name: 'Editable Notes', level: 1 })).toBeTruthy()
+    await clickElement(view.getByTestId('workspace-markdown-edit-toggle'))
+
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.getByTestId('workspace-editor-path').textContent).toContain('README.md')
+  })
+
+  it('guards dirty tab closes from the preview tab button', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-dirty-close': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-dirty-close': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-dirty-close': [{
+          id: 'file:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'file',
+          title: 'app.ts',
+          language: 'typescript',
+          content: 'export const ok = true\n',
+          state: 'ok',
+          size: 23,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-dirty-close': 'file:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-dirty-close')
+    await waitFor(() => {
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId['file:src/app.ts']).toBeDefined()
+    })
+    await act(async () => {
+      useWorkspacePanelStore.getState().setBufferState('file:src/app.ts', 'edited')
+      await Promise.resolve()
+    })
+
+    await clickElement(view.getByLabelText(/Close tab app\.ts file/i))
+
+    expect(view.getByTestId('unsaved-changes-modal')).toBeTruthy()
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-dirty-close']).toHaveLength(1)
+
+    await clickElement(view.getByTestId('unsaved-changes-cancel'))
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-dirty-close']).toHaveLength(1)
+  })
+
+  it('saves dirty tabs from the close guard before closing', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-dirty-save-close': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-dirty-save-close': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-dirty-save-close': [{
+          id: 'file:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'file',
+          title: 'app.ts',
+          language: 'typescript',
+          content: 'export const ok = true\n',
+          state: 'ok',
+          size: 23,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-dirty-save-close': 'file:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-dirty-save-close')
+    await waitFor(() => {
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId['file:src/app.ts']).toBeDefined()
+    })
+    await act(async () => {
+      useWorkspacePanelStore.getState().setBufferState('file:src/app.ts', 'edited')
+      await Promise.resolve()
+    })
+
+    await clickElement(view.getByLabelText(/Close tab app\.ts file/i))
+    await clickElement(view.getByTestId('unsaved-changes-save'))
+
+    await waitFor(() => {
+      expect(getMocks().saveWorkspaceFileMock).toHaveBeenCalledWith('session-dirty-save-close', expect.objectContaining({
+        path: 'src/app.ts',
+        content: 'edited',
+      }))
+      expect(useWorkspacePanelStore.getState().previewTabsBySession['session-dirty-save-close']).toBeUndefined()
+      expect(getMocks().getWorkspaceStatusMock).toHaveBeenCalled()
+    })
   })
 
   it('opens a context menu for preview tabs and closes tabs to the right', async () => {
@@ -1423,7 +1572,7 @@ describe('WorkspacePanel', () => {
     }
   })
 
-  it('adds a line comment from a code preview to the chat context', async () => {
+  it('does not expose code-preview line comments for files opened in the editor', async () => {
     await setWorkspaceState((state) => ({
       ...state,
       panelBySession: {
@@ -1465,28 +1614,11 @@ describe('WorkspacePanel', () => {
 
     const view = await renderPanel('session-line-comment')
 
-    await clickElement(view.getByRole('button', { name: 'Comment line 1' }))
-    const textarea = view.getByPlaceholderText('Describe what should change here...')
-    await act(() => {
-      fireEvent.change(textarea, { target: { value: 'Rename this title' } })
-    })
-    await clickElement(view.getByRole('button', { name: 'Add comment' }))
-
-    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-line-comment']).toMatchObject([
-      {
-        kind: 'code-comment',
-        path: 'src/App.tsx',
-        absolutePath: '/repo/src/App.tsx',
-        name: 'App.tsx',
-        lineStart: 1,
-        lineEnd: 1,
-        note: 'Rename this title',
-        quote: 'const title = "Todo"',
-      },
-    ])
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.queryByRole('button', { name: 'Comment line 1' })).toBeNull()
   })
 
-  it('adds selected code from a preview to the chat context without requiring a note', async () => {
+  it('does not expose code-preview selection actions for files opened in the editor', async () => {
     await setWorkspaceState((state) => ({
       ...state,
       panelBySession: {
@@ -1528,25 +1660,12 @@ describe('WorkspacePanel', () => {
 
     const view = await renderPanel('session-code-selection')
 
-    await selectWorkspaceCodeText(view, 1, 'const title = "Todo"', 2, 'export default title')
-    const addButtons = view.getAllByRole('button', { name: 'Add to chat' })
-    await clickElement(addButtons[addButtons.length - 1]!)
-
-    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-code-selection']).toMatchObject([
-      {
-        kind: 'code-selection',
-        path: 'src/App.ts',
-        absolutePath: '/repo/src/App.ts',
-        name: 'App.ts',
-        lineStart: 1,
-        lineEnd: 2,
-        quote: 'const title = "Todo"\nexport default title',
-      },
-    ])
-    expect(useWorkspaceChatContextStore.getState().referencesBySession['session-code-selection']?.[0]?.note).toBeUndefined()
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.queryByTestId('workspace-code')).toBeNull()
+    expect(view.getAllByRole('button', { name: 'Add to chat' })).toHaveLength(1)
   })
 
-  it('keeps the selected-code action near the preview instead of the file tree', async () => {
+  it('keeps only the header add-to-chat action for files opened in the editor', async () => {
     await setWorkspaceState((state) => ({
       ...state,
       panelBySession: {
@@ -1588,21 +1707,12 @@ describe('WorkspacePanel', () => {
 
     const view = await renderPanel('session-selection-position')
 
-    await selectWorkspaceCodeText(view, 1, 'const title = "Todo"', 1, 'const title = "Todo"')
-    const addButtons = view.getAllByRole('button', { name: 'Add to chat' })
-    const floatingAddButton = addButtons[addButtons.length - 1]!
-
-    expect(floatingAddButton.style.left).toBe('101px')
-    expect(floatingAddButton.style.top).toBe('46px')
-
-    fireEvent.keyDown(view.getByTestId('workspace-code').parentElement?.parentElement ?? view.getByTestId('workspace-code'), {
-      key: 'Escape',
-    })
-    await flushReactWork()
-    expect(view.queryAllByRole('button', { name: 'Add to chat' })).toHaveLength(1)
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
+    expect(view.queryByTestId('workspace-code')).toBeNull()
+    expect(view.getAllByRole('button', { name: 'Add to chat' })).toHaveLength(1)
   })
 
-  it('dismisses the selected-code action when clicking outside the popover', async () => {
+  it('does not render a selected-code popover for files opened in the editor', async () => {
     await setWorkspaceState((state) => ({
       ...state,
       panelBySession: {
@@ -1644,17 +1754,8 @@ describe('WorkspacePanel', () => {
 
     const view = await renderPanel('session-selection-dismiss')
 
-    await selectWorkspaceCodeText(view, 1, 'const title = "Todo"', 1, 'const title = "Todo"')
-    expect(view.getAllByRole('button', { name: 'Add to chat' })).toHaveLength(2)
-
-    await act(async () => {
-      fireEvent.pointerDown(document.body)
-      await Promise.resolve()
-    })
-    await flushReactWork()
-
+    expect(await view.findByTestId('workspace-editor-path')).toBeTruthy()
     expect(view.queryAllByRole('button', { name: 'Add to chat' })).toHaveLength(1)
-    expect(window.getSelection()?.toString()).toBe('')
   })
 
   it('adds selected markdown text from a preview to the chat context', async () => {
