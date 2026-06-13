@@ -12,6 +12,7 @@ import * as os from 'os'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ConversationService, ConversationStartupError, conversationService } from '../services/conversationService.js'
+import { getSoloPipelineSystemPrompt } from '../../coordinator/soloPipelinePrompt.js'
 import { ORCHESTRATION_PROMPT_MARKER, ORCHESTRATION_SYSTEM_PROMPT, ORCHESTRATION_PROPAGATE_RULES_MARKER } from '../orchestrationPrompt.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
@@ -2443,6 +2444,77 @@ describe('WebSocket Chat Integration', () => {
     } finally {
       ws.close()
       conversationService.startSession = originalStartSession
+      conversationService.stopSession(sessionId)
+    }
+  }, 20_000)
+
+  it('restarts an already prewarmed session when Solo Pipeline is enabled', async () => {
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd() }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+    const argsLogPath = path.join(tmpDir, `solo-toggle-${sessionId}.jsonl`)
+    process.env.MOCK_SDK_STARTUP_ARGS_LOG = argsLogPath
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const messages: any[] = []
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const waitForPrewarm = setInterval(() => {
+          fs.readFile(argsLogPath, 'utf8')
+            .then((text) => {
+              if (!text.trim()) return
+              clearInterval(waitForPrewarm)
+              ws.send(JSON.stringify({ type: 'set_pipeline_mode', flavor: 'solo' }))
+            })
+            .catch(() => undefined)
+        }, 25)
+
+        const timeout = setTimeout(() => {
+          clearInterval(waitForPrewarm)
+          reject(new Error(`Timed out waiting for Solo toggle restart for session ${sessionId}`))
+        }, 15_000)
+
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+
+          if (msg.type === 'connected') {
+            ws.send(JSON.stringify({ type: 'prewarm_session' }))
+            return
+          }
+
+          if (msg.type === 'status' && msg.state === 'idle') {
+            clearInterval(waitForPrewarm)
+            clearTimeout(timeout)
+            resolve()
+            return
+          }
+
+          if (msg.type === 'error') {
+            clearInterval(waitForPrewarm)
+            clearTimeout(timeout)
+            reject(new Error(msg.message))
+          }
+        }
+
+        ws.onerror = () => {
+          clearInterval(waitForPrewarm)
+          clearTimeout(timeout)
+          reject(new Error(`WebSocket error for Solo toggle restart session ${sessionId}`))
+        }
+      })
+
+      const argLines = (await fs.readFile(argsLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[])
+      expect(argLines.length).toBeGreaterThanOrEqual(2)
+      expect(argLines[0]).not.toContain(getSoloPipelineSystemPrompt())
+      expect(argLines.at(-1)).toContain(getSoloPipelineSystemPrompt())
+    } finally {
+      ws.close()
+      delete process.env.MOCK_SDK_STARTUP_ARGS_LOG
       conversationService.stopSession(sessionId)
     }
   }, 20_000)

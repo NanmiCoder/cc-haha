@@ -97,6 +97,9 @@ describe('getSoloPipelineSystemPrompt — invariants', () => {
     expect(prompt).toContain('subagent_type: "plan-reviewer"')
     expect(prompt).toContain('subagent_type: "plan-critic"')
     expect(prompt).toContain('Do not enter Stage 2 until all Council agents have reported back')
+    expect(prompt).toContain('USER APPROVAL GATE')
+    expect(prompt).toContain('Approve this plan and start implementation?')
+    expect(prompt).toContain('Do NOT enter Stage 2 until the user explicitly approves')
   })
 
   it('keeps the HUMAN GATE in Stage 4 (the safety contract)', () => {

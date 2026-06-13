@@ -277,6 +277,8 @@ export function SoloCouncilPanel({
       messages: session?.messages ?? EMPTY_MESSAGES,
     }
   }))
+  const [manuallyExpanded, setManuallyExpanded] = useState(false)
+  const [manuallyCollapsed, setManuallyCollapsed] = useState(false)
   const rows = useMemo(
     () => buildSoloCouncilRows(sessionSnapshot.tasks, sessionSnapshot.notifications, sessionSnapshot.messages),
     [sessionSnapshot.tasks, sessionSnapshot.notifications, sessionSnapshot.messages],
@@ -290,6 +292,11 @@ export function SoloCouncilPanel({
     () => rows.some((row) => row.verdict === 'changes-needed' || row.displayStatus === 'failed'),
     [rows],
   )
+  const hasActivity = useMemo(
+    () => rows.some((row) => row.origin !== 'standby'),
+    [rows],
+  )
+  const collapsed = manuallyCollapsed || (!manuallyExpanded && !hasActivity && !synthesis)
 
   // With includeStandby defaulted to true, buildSoloCouncilRows always returns
   // ROLE_ORDER.length rows. Kept defensively in case a future caller opts out.
@@ -308,20 +315,47 @@ export function SoloCouncilPanel({
               {t('soloCouncil.subtitle')}
             </div>
           </div>
-          {hasDebate && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-warning)]/35 bg-[var(--color-warning)]/10 px-2 py-1 text-[10px] font-semibold text-[var(--color-warning)]">
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">forum</span>
-              {t('soloCouncil.debateActive')}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {hasDebate && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-warning)]/35 bg-[var(--color-warning)]/10 px-2 py-1 text-[10px] font-semibold text-[var(--color-warning)]">
+                <span className="material-symbols-outlined text-[13px]" aria-hidden="true">forum</span>
+                {t('soloCouncil.debateActive')}
+              </span>
+            )}
+            <button
+              type="button"
+              data-testid="solo-council-panel-toggle"
+              aria-expanded={!collapsed}
+              aria-controls="solo-council-panel-body"
+              onClick={() => {
+                if (collapsed) {
+                  setManuallyExpanded(true)
+                  setManuallyCollapsed(false)
+                } else {
+                  setManuallyCollapsed(true)
+                  setManuallyExpanded(false)
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+            >
+              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">
+                {collapsed ? 'expand_more' : 'expand_less'}
+              </span>
+              {t(collapsed ? 'soloCouncil.panel.expand' : 'soloCouncil.panel.collapse')}
+            </button>
+          </div>
         </div>
-        <SoloCouncilFlow rows={rows} hasSynthesis={Boolean(synthesis)} />
-        <div className="grid gap-2 md:grid-cols-3">
-          {rows.map((row) => (
-            <SoloCouncilCard key={`${row.role}-${row.task?.taskId ?? `standby-${row.role}`}`} row={row} />
-          ))}
-        </div>
-        {synthesis ? <SoloCouncilSynthesis text={synthesis} /> : null}
+        {!collapsed ? (
+          <div id="solo-council-panel-body" data-testid="solo-council-panel-body">
+            <SoloCouncilFlow rows={rows} hasSynthesis={Boolean(synthesis)} />
+            <div className="grid gap-2 md:grid-cols-3">
+              {rows.map((row) => (
+                <SoloCouncilCard key={`${row.role}-${row.task?.taskId ?? `standby-${row.role}`}`} row={row} />
+              ))}
+            </div>
+            {synthesis ? <SoloCouncilSynthesis text={synthesis} /> : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -466,6 +500,9 @@ function SoloCouncilSynthesis({ text }: { text: string }) {
         {t('soloCouncil.synthesis.title')}
       </div>
       <div className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">{t('soloCouncil.synthesis.subtitle')}</div>
+      <div className="mt-2 rounded-[var(--radius-sm)] border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/8 px-2 py-1.5 text-[11px] font-medium text-[var(--color-text-primary)]">
+        {t('soloCouncil.synthesis.approvalHint')}
+      </div>
       <div id="solo-council-synthesis-output" data-testid="solo-council-synthesis-output" className={outputClassName}>
         {text}
       </div>

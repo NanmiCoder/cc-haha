@@ -194,6 +194,7 @@ line "▸ Stage N/5: <name> — <one-line goal>".
    - Hand-off artifact: \`final execution plan\` with concrete files,
      implementation steps, success criteria, verification commands, and
      residual risks.
+   - **USER APPROVAL GATE**: after printing the final execution plan, STOP and ask exactly one approval question before Stage 2: "Approve this plan and start implementation? (approve / changes / abort)". Do NOT enter Stage 2 until the user explicitly approves. "changes" revises the plan and reruns the relevant Council pass; "abort" ends the pipeline.
 
 2. **IMPLEMENT** (specialist: implementer)
    - Receives the final execution plan verbatim. Makes the narrowest change

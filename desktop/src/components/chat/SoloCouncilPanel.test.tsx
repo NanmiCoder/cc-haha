@@ -30,6 +30,8 @@ vi.mock('../../i18n', () => ({
       'soloCouncil.verdict.changesNeeded': 'Changes needed',
       'soloCouncil.verdict.pending': 'Pending',
       'soloCouncil.debateActive': 'Debate active',
+      'soloCouncil.panel.expand': 'Expand',
+      'soloCouncil.panel.collapse': 'Collapse',
       'soloCouncil.output.showFull': 'Show full output',
       'soloCouncil.output.collapse': 'Collapse',
       'soloCouncil.output.toggleLabel': 'Toggle full Solo Council output',
@@ -45,6 +47,7 @@ vi.mock('../../i18n', () => ({
       'soloCouncil.synthesis.showFull': 'Show full plan',
       'soloCouncil.synthesis.collapse': 'Collapse plan',
       'soloCouncil.synthesis.toggleLabel': 'Toggle full final plan',
+      'soloCouncil.synthesis.approvalHint': 'Review this plan, then approve before implementation starts.',
       'soloCouncil.objections.title': 'Blocking objections',
       'soloCouncil.actions.title': 'Executable actions',
     }
@@ -158,7 +161,54 @@ describe('SoloCouncilPanel helpers', () => {
 })
 
 describe('SoloCouncilPanel', () => {
-  it('renders standby role cards when there are no council tasks or messages', () => {
+  it('collapses all-standby council cards by default and expands manually', () => {
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('solo-council-panel-body')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('solo-council-card-planner')).not.toBeInTheDocument()
+
+    const toggle = screen.getByTestId('solo-council-panel-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveTextContent('Expand')
+
+    fireEvent.click(toggle)
+
+    expect(screen.getByTestId('solo-council-panel-body')).toBeInTheDocument()
+    expect(screen.getByTestId('solo-council-card-planner')).toHaveTextContent('Standby')
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveTextContent('Collapse')
+  })
+
+  it('supports manually collapsing active council cards', () => {
+    useChatStore.setState({
+      sessions: {
+        s1: {
+          ...useChatStore.getState().getSession('s1'),
+          backgroundAgentTasks: {
+            planner: baseTask({
+              taskId: 'planner',
+              toolUseId: 'plannerTool',
+              status: 'completed',
+              description: '[Solo Council: Planner] propose',
+              summary: 'Live plan ready',
+            }),
+          },
+        },
+      },
+    })
+
+    render(<SoloCouncilPanel sessionId="s1" />)
+
+    expect(screen.getByTestId('solo-council-panel-body')).toBeInTheDocument()
+    const toggle = screen.getByTestId('solo-council-panel-toggle')
+    fireEvent.click(toggle)
+
+    expect(screen.queryByTestId('solo-council-panel-body')).not.toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('renders standby role cards when manually expanded and there are no council tasks or messages', () => {
     useChatStore.setState({
       sessions: {
         s1: {
@@ -171,6 +221,7 @@ describe('SoloCouncilPanel', () => {
     })
 
     render(<SoloCouncilPanel sessionId="s1" />)
+    fireEvent.click(screen.getByTestId('solo-council-panel-toggle'))
 
     expect(screen.getByTestId('solo-council-panel')).toBeInTheDocument()
     expect(screen.getByTestId('solo-council-card-planner')).toHaveTextContent('Standby')
@@ -322,6 +373,7 @@ describe('SoloCouncilPanel', () => {
     })
 
     render(<SoloCouncilPanel sessionId="s1" />)
+    fireEvent.click(screen.getByTestId('solo-council-panel-toggle'))
 
     expect(screen.queryByText('Should not render')).not.toBeInTheDocument()
     expect(screen.getByTestId('solo-council-card-planner')).toHaveTextContent('Standby')
@@ -551,8 +603,9 @@ describe('SoloCouncilPanel', () => {
     expect(screen.getByTestId('solo-council-toggle-critic')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('renders the four-step causal flow', () => {
+  it('renders the four-step causal flow when expanded', () => {
     render(<SoloCouncilPanel sessionId="s1" />)
+    fireEvent.click(screen.getByTestId('solo-council-panel-toggle'))
 
     expect(screen.getByTestId('solo-council-flow')).toBeInTheDocument()
     expect(screen.getByTestId('solo-council-flow-step-planner')).toHaveTextContent('Planner')
@@ -576,6 +629,7 @@ describe('SoloCouncilPanel', () => {
     render(<SoloCouncilPanel sessionId="s1" />)
 
     expect(screen.getByTestId('solo-council-synthesis')).toHaveTextContent('Final execution plan')
+    expect(screen.getByTestId('solo-council-synthesis')).toHaveTextContent('Review this plan, then approve before implementation starts.')
     expect(screen.getByTestId('solo-council-synthesis-output')).toHaveTextContent('Implement the final plan.')
   })
 
