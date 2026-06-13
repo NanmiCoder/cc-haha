@@ -223,9 +223,10 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
         <div
           data-code-viewer-content=""
           data-highlight-engine="shiki"
+          className="transition-opacity duration-150 ease-in-out"
           style={
             loaded
-              ? { padding: CODE_AREA_PADDING }
+              ? { padding: CODE_AREA_PADDING, opacity: 1 }
               : {
                   position: 'absolute',
                   inset: 0,

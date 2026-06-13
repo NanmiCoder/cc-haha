@@ -115,7 +115,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       </button>
 
       {expandable && expanded && (
-        <div className="space-y-2.5 border-t border-[var(--color-border)]/60 px-3 py-3">
+        <div className="fade-in space-y-2.5 border-t border-[var(--color-border)]/60 px-3 py-3">
           {preview}
           {details}
         </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -304,7 +304,7 @@ export function SoloCouncilPanel({
 
   return (
     <div className={compact ? 'mt-2' : 'mt-3'} data-testid="solo-council-panel">
-      <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-3 shadow-sm">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-3 shadow-md">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
@@ -346,9 +346,9 @@ export function SoloCouncilPanel({
           </div>
         </div>
         {!collapsed ? (
-          <div id="solo-council-panel-body" data-testid="solo-council-panel-body">
+          <div id="solo-council-panel-body" data-testid="solo-council-panel-body" className="fade-in">
             <SoloCouncilFlow rows={rows} hasSynthesis={Boolean(synthesis)} />
-            <div className="grid gap-2 md:grid-cols-3">
+            <div className="grid gap-2 grid-cols-1 sm:grid-cols-3">
               {rows.map((row) => (
                 <SoloCouncilCard key={`${row.role}-${row.task?.taskId ?? `standby-${row.role}`}`} row={row} />
               ))}
@@ -408,7 +408,7 @@ function SoloCouncilCard({ row }: { row: SoloCouncilRow }) {
   return (
     <div
       data-testid={`solo-council-card-${row.role}`}
-      className={`min-w-0 rounded-[var(--radius-md)] border px-3 py-2.5 ${tone.className}`}
+      className={`min-w-0 rounded-[var(--radius-md)] border px-3 py-2.5 transition-colors duration-300 ${tone.className}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -483,15 +483,54 @@ function SoloCouncilStructuredReview({ row, artifact }: { row: SoloCouncilRow; a
   )
 }
 
+function renderSynthesisText(text: string) {
+  const lines = text.split('\n')
+  const elements: React.ReactNode[] = []
+  let listItems: string[] = []
+  let listKey = 0
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={`list-${listKey++}`} className="mt-1 list-disc space-y-0.5 pl-4">
+          {listItems.map((item, i) => <li key={i}>{item}</li>)}
+        </ul>,
+      )
+      listItems = []
+    }
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('## ')) {
+      flushList()
+      elements.push(<h4 key={`h-${elements.length}`} className="mt-2 text-[12px] font-semibold text-[var(--color-text-primary)]">{trimmed.slice(3)}</h4>)
+    } else if (trimmed.startsWith('# ')) {
+      flushList()
+      elements.push(<h4 key={`h-${elements.length}`} className="mt-2 text-[12px] font-bold text-[var(--color-text-primary)]">{trimmed.slice(2)}</h4>)
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      listItems.push(trimmed.slice(2))
+    } else if (trimmed === '') {
+      flushList()
+    } else {
+      flushList()
+      elements.push(<p key={`p-${elements.length}`}>{trimmed}</p>)
+    }
+  }
+  flushList()
+  return elements
+}
+
 function SoloCouncilSynthesis({ text }: { text: string }) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const canExpand = text.length > SOLO_COUNCIL_SYNTHESIS_COLLAPSE_THRESHOLD
+  const renderedContent = useMemo(() => renderSynthesisText(text), [text])
   const outputClassName = canExpand
     ? expanded
-      ? 'mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] border border-[var(--color-border)]/60 bg-[var(--color-surface-container-lowest)]/50 p-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
-      : 'mt-2 line-clamp-5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
-    : 'mt-2 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
+      ? 'mt-2 max-h-80 overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)]/60 bg-[var(--color-surface-container-lowest)]/50 p-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
+      : 'mt-2 line-clamp-[8] text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
+    : 'mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
 
   return (
     <div data-testid="solo-council-synthesis" className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-primary)]/25 bg-[var(--color-primary)]/6 px-3 py-2.5">
@@ -504,7 +543,7 @@ function SoloCouncilSynthesis({ text }: { text: string }) {
         {t('soloCouncil.synthesis.approvalHint')}
       </div>
       <div id="solo-council-synthesis-output" data-testid="solo-council-synthesis-output" className={outputClassName}>
-        {text}
+        {renderedContent}
       </div>
       {canExpand ? (
         <button
@@ -534,7 +573,7 @@ function getFlowState(row: SoloCouncilRow | undefined): 'muted' | 'running' | 's
 function flowStateClassName(state: 'muted' | 'running' | 'success' | 'warning') {
   if (state === 'success') return 'border-[var(--color-success)]/30 bg-[var(--color-success)]/10 text-[var(--color-success)]'
   if (state === 'warning') return 'border-[var(--color-warning)]/35 bg-[var(--color-warning)]/10 text-[var(--color-warning)]'
-  if (state === 'running') return 'border-[var(--color-primary)]/35 bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
+  if (state === 'running') return 'border-[var(--color-primary)]/35 bg-[var(--color-primary)]/10 text-[var(--color-primary)] animate-pulse'
   return 'border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-text-tertiary)]'
 }
 
@@ -545,21 +584,28 @@ function getVerdictKey(verdict: SoloCouncilVerdict) {
   return 'soloCouncil.verdict.pending'
 }
 
+function getRoleAccent(role: SoloCouncilRole): string {
+  if (role === 'planner') return 'border-l-[3px] border-l-[var(--color-primary)]'
+  if (role === 'reviewer') return 'border-l-[3px] border-l-[var(--color-success)]'
+  return 'border-l-[3px] border-l-[var(--color-warning)]'
+}
+
 function getCardTone(row: SoloCouncilRow) {
+  const roleAccent = getRoleAccent(row.role)
   if (row.displayStatus === 'failed' || row.verdict === 'changes-needed') {
     return {
-      className: 'border-[var(--color-warning)]/45 bg-[var(--color-warning)]/8',
+      className: `${roleAccent} border-[var(--color-warning)]/45 bg-[var(--color-warning)]/8`,
       badgeClassName: 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]',
     }
   }
   if (row.displayStatus === 'completed' && row.verdict !== 'pending') {
     return {
-      className: 'border-[var(--color-success)]/30 bg-[var(--color-success)]/7',
+      className: `${roleAccent} border-[var(--color-success)]/30 bg-[var(--color-success)]/7`,
       badgeClassName: 'bg-[var(--color-success)]/12 text-[var(--color-success)]',
     }
   }
   return {
-    className: 'border-[var(--color-border)] bg-[var(--color-surface-container-low)]',
+    className: `${roleAccent} border-[var(--color-border)] bg-[var(--color-surface-container-low)]`,
     badgeClassName: 'bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]',
   }
 }

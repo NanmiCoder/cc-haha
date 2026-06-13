@@ -1247,11 +1247,55 @@ button, input, textarea, select, a, [role="button"] {
   color: inherit;
 }
 
+/* Fade-in animation for expand/appear transitions */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fade-in 200ms ease-out;
+}
+
+/* Thinking block animations */
+@keyframes thinking-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes thinking-dots {
+  0%, 20% { content: ''; }
+  40% { content: '.'; }
+  60% { content: '..'; }
+  80%, 100% { content: '...'; }
+}
+.thinking-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--color-text-tertiary);
+  vertical-align: middle;
+  margin-left: 1px;
+  animation: thinking-cursor-blink 1s step-end infinite;
+}
+.thinking-dots::after {
+  content: '';
+  animation: thinking-dots 1.4s steps(1, end) infinite;
+}
+.thinking-markdown > :first-child,
+.thinking-markdown > :first-child > :first-child {
+  margin-top: 0;
+}
+.thinking-markdown > :last-child,
+.thinking-markdown > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-outline); border-radius: 9999px; opacity: 0.3; }
 ::-webkit-scrollbar-thumb:hover { opacity: 0.6; }
+.dark ::-webkit-scrollbar-thumb { background: var(--color-on-surface); opacity: 0.15; }
+.dark ::-webkit-scrollbar-thumb:hover { opacity: 0.35; }
 
 .sidebar-scroll-area {
   padding-bottom: 72px;
