@@ -1101,6 +1101,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.general.thinkingDescription': '新しいセッションをモデルの思考を有効にして開始するかどうかを制御します。オフの場合、DeepSeek などの対応プロバイダーには明示的に非思考パラメーターが渡されます。',
   'settings.general.thinkingEnabled': '思考モードを有効にする',
   'settings.general.thinkingHint': '新しいセッションを --thinking 無効で開始するにはこれをオフにします。DeepSeek V4 Flash/Pro やその他の非思考ワークフローに便利です。',
+  'settings.general.thinkingAutoCollapse': '思考ブロックを自動折りたたみ',
   'settings.general.notificationsTitle': 'システム通知',
   'settings.general.notificationsDescription': '権限の確認、エージェントの応答、スケジュールタスクの結果に OS ネイティブの通知を使用します。',
   'settings.general.notificationsEnabled': 'システム通知を有効にする',

@@ -1256,6 +1256,15 @@ button, input, textarea, select, a, [role="button"] {
   animation: fade-in 200ms ease-out;
 }
 
+/* Thinking brain icon pulse animation */
+@keyframes thinking-brain-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+.thinking-brain-icon {
+  animation: thinking-brain-pulse 1.8s ease-in-out infinite;
+}
+
 /* Thinking block animations */
 @keyframes thinking-cursor-blink {
   0%, 100% { opacity: 1; }

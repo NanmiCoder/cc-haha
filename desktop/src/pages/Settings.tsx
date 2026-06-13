@@ -1811,6 +1811,8 @@ export function GeneralSettings() {
   const {
     thinkingEnabled,
     setThinkingEnabled,
+    thinkingAutoCollapse,
+    setThinkingAutoCollapse,
     locale,
     setLocale,
     theme,
@@ -2463,6 +2465,21 @@ export function GeneralSettings() {
             </div>
             <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
               {t('settings.general.thinkingHint')}
+            </div>
+          </div>
+        </label>
+        <label className="mt-2 flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
+          <input
+            type="checkbox"
+            aria-label={t('settings.general.thinkingAutoCollapse')}
+            checked={thinkingAutoCollapse}
+            onChange={(e) => void setThinkingAutoCollapse(e.target.checked)}
+            className="peer sr-only"
+          />
+          <SettingsCheckboxMark checked={thinkingAutoCollapse} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.general.thinkingAutoCollapse')}
             </div>
           </div>
         </label>
