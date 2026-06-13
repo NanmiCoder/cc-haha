@@ -46,7 +46,7 @@ import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js';
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js';
 import { spawnTeammate } from '../shared/spawnMultiAgent.js';
 import { setAgentColor } from './agentColorManager.js';
-import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, finalizeAgentTool, getLastToolUseName, runAsyncAgentLifecycle } from './agentToolUtils.js';
+import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, finalizeAgentTool, getAgentProgressOutputPath, getLastToolUseName, runAsyncAgentLifecycle } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 import { buildForkedMessages, buildWorktreeNotice, COORDINATOR_RESEARCH_FORK_SUBAGENT_TYPE, FORK_AGENT, type ForkMode, isCoordinatorResearchForkEnabled, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
@@ -165,7 +165,8 @@ export const outputSchema = lazySchema(() => {
   });
   const asyncOutputSchema = z.object({
     status: z.literal('async_launched'),
-    agentId: z.string().describe('The ID of the async agent'),
+    agentId: z.string().describe('The ID of the async agent. Alias for taskId.'),
+    taskId: z.string().describe('The task ID for TaskOutput and task notifications'),
     description: z.string().describe('The description of the task'),
     prompt: z.string().describe('The prompt for the agent'),
     outputFile: z.string().describe('Path to the output file for checking agent progress'),
@@ -951,9 +952,10 @@ export const AgentTool = buildTool({
           isAsync: true as const,
           status: 'async_launched' as const,
           agentId: agentBackgroundTask.agentId,
+          taskId: agentBackgroundTask.agentId,
           description: description,
           prompt: prompt,
-          outputFile: getTaskOutputPath(agentBackgroundTask.agentId),
+          outputFile: getAgentProgressOutputPath(agentBackgroundTask.agentId),
           canReadOutputFile
         }
       };
@@ -1145,7 +1147,7 @@ export const AgentTool = buildTool({
                       updateProgressFromMessage(tracker, msg, resolveActivity2, toolUseContext.options.tools);
                       updateAsyncAgentProgress(backgroundedTaskId, getProgressUpdate(tracker), rootSetAppState);
                       const lastToolName = getLastToolUseName(msg);
-                      if (lastToolName) {
+                      if (msg.type === 'assistant') {
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
                       }
                     }
@@ -1181,6 +1183,7 @@ export const AgentTool = buildTool({
                         toolUses: agentResult.totalToolUseCount,
                         durationMs: agentResult.totalDurationMs
                       },
+                      outputPath: getAgentProgressOutputPath(backgroundedTaskId),
                       toolUseId: toolUseContext.toolUseId
                     });
                     void (async () => {
@@ -1221,7 +1224,8 @@ export const AgentTool = buildTool({
                         status: 'killed',
                         setAppState: rootSetAppState,
                         toolUseId: toolUseContext.toolUseId,
-                        finalMessage: partialResult
+                        finalMessage: partialResult,
+                        outputPath: getAgentProgressOutputPath(backgroundedTaskId)
                       });
                       void cleanupWorktreeIfNeeded().catch(cleanupError => logForDebugging(`Backgrounded sync agent post-cancel cleanup failed: ${errorMessage(cleanupError)}`));
                       return;
@@ -1234,7 +1238,8 @@ export const AgentTool = buildTool({
                       status: 'failed',
                       error: errMsg,
                       setAppState: rootSetAppState,
-                      toolUseId: toolUseContext.toolUseId
+                      toolUseId: toolUseContext.toolUseId,
+                      outputPath: getAgentProgressOutputPath(backgroundedTaskId)
                     });
                     void cleanupWorktreeIfNeeded().catch(cleanupError => logForDebugging(`Backgrounded sync agent post-failure cleanup failed: ${errorMessage(cleanupError)}`));
                   } finally {
@@ -1253,9 +1258,10 @@ export const AgentTool = buildTool({
                     isAsync: true as const,
                     status: 'async_launched' as const,
                     agentId: backgroundedTaskId,
+                    taskId: backgroundedTaskId,
                     description: description,
                     prompt: prompt,
-                    outputFile: getTaskOutputPath(backgroundedTaskId),
+                    outputFile: getAgentProgressOutputPath(backgroundedTaskId),
                     canReadOutputFile
                   }
                 };
@@ -1276,16 +1282,14 @@ export const AgentTool = buildTool({
 
             // Emit task_progress for the VS Code subagent panel
             updateProgressFromMessage(syncTracker, message, syncResolveActivity, toolUseContext.options.tools);
-            if (foregroundTaskId) {
+            if (foregroundTaskId && message.type === 'assistant') {
               const lastToolName = getLastToolUseName(message);
-              if (lastToolName) {
-                emitTaskProgress(syncTracker, foregroundTaskId, toolUseContext.toolUseId, description, agentStartTime, lastToolName);
-                // Keep AppState task.progress in sync when SDK summaries are
-                // enabled, so updateAgentSummary reads correct token/tool counts
-                // instead of zeros.
-                if (getSdkAgentProgressSummariesEnabled()) {
-                  updateAsyncAgentProgress(foregroundTaskId, getProgressUpdate(syncTracker), rootSetAppState);
-                }
+              emitTaskProgress(syncTracker, foregroundTaskId, toolUseContext.toolUseId, description, agentStartTime, lastToolName);
+              // Keep AppState task.progress in sync when SDK summaries are
+              // enabled, so updateAgentSummary reads correct token/tool counts
+              // instead of zeros.
+              if (getSdkAgentProgressSummariesEnabled()) {
+                updateAsyncAgentProgress(foregroundTaskId, getProgressUpdate(syncTracker), rootSetAppState);
               }
             }
 
@@ -1382,7 +1386,7 @@ export const AgentTool = buildTool({
                 task_id: foregroundTaskId,
                 tool_use_id: toolUseContext.toolUseId,
                 status: syncAgentError ? 'failed' : wasAborted ? 'stopped' : 'completed',
-                output_file: '',
+                output_file: getAgentProgressOutputPath(foregroundTaskId),
                 summary: description,
                 usage: {
                   total_tokens: progress.tokenCount,
@@ -1546,7 +1550,7 @@ The agent is now running and will receive instructions via mailbox.`
       };
     }
     if (data.status === 'async_launched') {
-      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. Use SendMessage with to: '${data.agentId}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.`;
+      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. Use SendMessage with to: '${data.agentId}' to continue this agent.)\ntaskId: ${data.taskId}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const stopGuidance = `Do not stop this agent just because you have enough partial output. Stop it only if the user asks to cancel it, or if it is clearly runaway, harmful, duplicative, or no longer useful.`;
       const instructions = data.canReadOutputFile ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\n${stopGuidance}\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion by using ${FILE_READ_TOOL_NAME} or ${BASH_TOOL_NAME} tail on the output file.` : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.\n${stopGuidance}`;
       const text = `${prefix}\n${instructions}`;

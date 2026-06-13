@@ -213,7 +213,8 @@ export function enqueueAgentNotification({
   usage,
   toolUseId,
   worktreePath,
-  worktreeBranch
+  worktreeBranch,
+  outputPath
 }: {
   taskId: string;
   description: string;
@@ -229,6 +230,7 @@ export function enqueueAgentNotification({
   toolUseId?: string;
   worktreePath?: string;
   worktreeBranch?: string;
+  outputPath?: string;
 }): void {
   // Atomically check and set notified flag to prevent duplicate notifications.
   // If the task was already marked as notified (e.g., by TaskStopTool), skip
@@ -253,14 +255,14 @@ export function enqueueAgentNotification({
   // preserved; only the pre-computed response is discarded.
   abortSpeculation(setAppState);
   const summary = status === 'completed' ? `Agent "${description}" completed` : status === 'failed' ? `Agent "${description}" failed: ${error || 'Unknown error'}` : `Agent "${description}" was stopped`;
-  const outputPath = getTaskOutputPath(taskId);
+  const notificationOutputPath = outputPath ?? getTaskOutputPath(taskId);
   const toolUseIdLine = toolUseId ? `\n<${TOOL_USE_ID_TAG}>${toolUseId}</${TOOL_USE_ID_TAG}>` : '';
   const resultSection = finalMessage ? `\n<result>${finalMessage}</result>` : '';
   const usageSection = usage ? `\n<usage><total_tokens>${usage.totalTokens}</total_tokens><tool_uses>${usage.toolUses}</tool_uses><duration_ms>${usage.durationMs}</duration_ms></usage>` : '';
   const worktreeSection = worktreePath ? `\n<${WORKTREE_TAG}><${WORKTREE_PATH_TAG}>${worktreePath}</${WORKTREE_PATH_TAG}>${worktreeBranch ? `<${WORKTREE_BRANCH_TAG}>${worktreeBranch}</${WORKTREE_BRANCH_TAG}>` : ''}</${WORKTREE_TAG}>` : '';
   const message = `<${TASK_NOTIFICATION_TAG}>
 <${TASK_ID_TAG}>${taskId}</${TASK_ID_TAG}>${toolUseIdLine}
-<${OUTPUT_FILE_TAG}>${outputPath}</${OUTPUT_FILE_TAG}>
+<${OUTPUT_FILE_TAG}>${notificationOutputPath}</${OUTPUT_FILE_TAG}>
 <${STATUS_TAG}>${status}</${STATUS_TAG}>
 <${SUMMARY_TAG}>${summary}</${SUMMARY_TAG}>${resultSection}${usageSection}${worktreeSection}
 </${TASK_NOTIFICATION_TAG}>`;

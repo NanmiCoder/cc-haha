@@ -37,6 +37,7 @@ import {
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message as MessageType } from '../../types/message.js'
+import { getAgentTranscriptPath } from '../../utils/sessionStorage.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isInProtectedNamespace } from '../../utils/envUtils.js'
@@ -395,23 +396,28 @@ export function getLastToolUseName(message: MessageType): string | undefined {
   return block?.type === 'tool_use' ? block.name : undefined
 }
 
+export function getAgentProgressOutputPath(taskId: string): string {
+  return getAgentTranscriptPath(asAgentId(taskId))
+}
+
 export function emitTaskProgress(
   tracker: ProgressTracker,
   taskId: string,
   toolUseId: string | undefined,
   description: string,
   startTime: number,
-  lastToolName: string,
+  lastToolName?: string,
 ): void {
   const progress = getProgressUpdate(tracker)
   emitTaskProgressEvent({
     taskId,
     toolUseId,
-    description: progress.lastActivity?.activityDescription ?? description,
+    description: progress.lastActivity?.activityDescription ?? progress.summary ?? description,
     startTime,
     totalTokens: progress.tokenCount,
     toolUses: progress.toolUseCount,
     lastToolName,
+    summary: progress.summary ?? (lastToolName ? undefined : description),
   })
 }
 
@@ -609,7 +615,7 @@ export async function runAsyncAgentLifecycle({
         rootSetAppState,
       )
       const lastToolName = getLastToolUseName(message)
-      if (lastToolName) {
+      if (message.type === 'assistant') {
         emitTaskProgress(
           tracker,
           taskId,
@@ -641,6 +647,7 @@ export async function runAsyncAgentLifecycle({
         toolUses: agentResult.totalToolUseCount,
         durationMs: agentResult.totalDurationMs,
       },
+      outputPath: getAgentProgressOutputPath(taskId),
       toolUseId: toolUseContext.toolUseId,
     })
 
@@ -691,6 +698,7 @@ export async function runAsyncAgentLifecycle({
         setAppState: rootSetAppState,
         toolUseId: toolUseContext.toolUseId,
         finalMessage: partialResult,
+        outputPath: getAgentProgressOutputPath(taskId),
       })
       void getWorktreeResult().catch(cleanupError =>
         logForDebugging(
@@ -708,6 +716,7 @@ export async function runAsyncAgentLifecycle({
       error: msg,
       setAppState: rootSetAppState,
       toolUseId: toolUseContext.toolUseId,
+      outputPath: getAgentProgressOutputPath(taskId),
     })
     void getWorktreeResult().catch(cleanupError =>
       logForDebugging(
