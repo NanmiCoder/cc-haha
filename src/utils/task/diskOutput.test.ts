@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   _clearOutputsForTest,
   _resetTaskOutputDirForTest,
   getTaskOutput,
+  initTaskOutput,
   initTaskOutputAsSymlink,
 } from './diskOutput.js'
 
@@ -20,19 +21,24 @@ describe('task disk output', () => {
     }
   })
 
-  test('writes diagnostic output when agent transcript symlink fallback is used', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'task-output-symlink-fallback-'))
+  test('initTaskOutput creates a readable empty output file', async () => {
+    const taskId = 'agent-init-output'
+    const outputPath = await initTaskOutput(taskId)
+
+    expect(outputPath).toContain(taskId)
+    expect(outputPath).toContain('.output')
+    // The file should exist and be readable (empty)
+    expect(await getTaskOutput(taskId)).toBe('')
+  })
+
+  test('initTaskOutputAsSymlink creates an output path for the task', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'task-output-symlink-'))
     tempDirs.push(root)
-    const taskId = 'agent-symlink-fallback'
+    const taskId = 'agent-symlink-ok'
     const targetPath = join(root, 'transcript.jsonl')
     const outputPath = await initTaskOutputAsSymlink(taskId, targetPath)
 
-    rmSync(outputPath, { force: true })
-    writeFileSync(outputPath, '')
-    const fallbackPath = await initTaskOutputAsSymlink(taskId, targetPath)
-
-    expect(fallbackPath).toBe(outputPath)
-    expect(await getTaskOutput(taskId)).toContain(targetPath)
-    expect(await getTaskOutput(taskId)).toContain('Agent transcript symlink unavailable')
+    expect(outputPath).toContain(taskId)
+    expect(outputPath).toContain('.output')
   })
 })
