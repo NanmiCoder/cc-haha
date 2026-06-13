@@ -1099,6 +1099,7 @@ export const en = {
   'settings.general.thinkingDescription': 'Controls whether new sessions start with model thinking enabled. When off, compatible providers such as DeepSeek receive an explicit non-thinking parameter.',
   'settings.general.thinkingEnabled': 'Enable thinking mode',
   'settings.general.thinkingHint': 'Turn this off to start new sessions with --thinking disabled; useful for DeepSeek V4 Flash/Pro and other non-thinking workflows.',
+  'settings.general.thinkingAutoCollapse': 'Auto-collapse thinking blocks',
   'settings.general.notificationsTitle': 'System Notifications',
   'settings.general.notificationsDescription': 'Use native OS notifications for permission prompts, agent replies, and scheduled task results.',
   'settings.general.notificationsEnabled': 'Enable system notifications',

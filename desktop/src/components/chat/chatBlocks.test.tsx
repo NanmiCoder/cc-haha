@@ -25,6 +25,9 @@ describe('chat blocks', () => {
   it('does not animate inactive historical thinking blocks', () => {
     const { container } = render(<ThinkingBlock content="old reasoning" isActive={false} />)
 
+    // Auto-collapsed by default; click to expand
+    fireEvent.click(screen.getByRole('button', { name: /Thought/ }))
+
     expect(container.textContent).toContain('old reasoning')
     expect(container.querySelector('.thinking-cursor')).toBeNull()
 
@@ -34,8 +37,11 @@ describe('chat blocks', () => {
     expect(container.querySelector('.thinking-cursor')).toBeNull()
   })
 
-  it('renders thinking content as markdown by default and hides it after collapsing', () => {
+  it('renders thinking content as markdown after expanding and hides it after collapsing', () => {
     const { container } = render(<ThinkingBlock content={'**important**\n\n- item one'} />)
+
+    // Auto-collapsed by default; click to expand
+    fireEvent.click(screen.getByRole('button', { name: /Thought/ }))
 
     expect(container.querySelector('strong')?.textContent).toBe('important')
     expect(container.querySelector('li')?.textContent).toBe('item one')
@@ -47,9 +53,12 @@ describe('chat blocks', () => {
     expect(container.querySelector('li')).toBeNull()
   })
 
-  it('shows full thinking content by default and hides it after collapsing', () => {
+  it('shows full thinking content after expanding and hides it after collapsing', () => {
     const content = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join('\n')
     const { container } = render(<ThinkingBlock content={content} />)
+
+    // Auto-collapsed by default; click to expand
+    fireEvent.click(screen.getByRole('button', { name: /Thought/ }))
 
     expect(container.textContent).toContain('line-1')
     expect(container.textContent).toContain('line-11')

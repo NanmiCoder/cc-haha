@@ -13,6 +13,7 @@ export function useKeyboardShortcuts() {
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
   const stopGeneration = useChatStore((s) => s.stopGeneration)
@@ -50,6 +51,13 @@ export function useKeyboardShortcuts() {
         setActiveView('code')
       }
 
+      // Cmd+B / Ctrl+B — Toggle sidebar
+      if (meta && e.key === 'b') {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
+
       // Cmd+K — Focus search (sidebar search input)
       if (meta && e.key === 'k') {
         e.preventDefault()
@@ -79,5 +87,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, setActiveSession, setActiveView, setSidebarOpen, setUiZoom, stopGeneration])
+  }, [closeModal, setActiveSession, setActiveView, setSidebarOpen, toggleSidebar, setUiZoom, stopGeneration])
 }

@@ -1101,6 +1101,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.general.thinkingDescription': '控制新会话是否启用模型思考。关闭后，DeepSeek 等兼容供应商会收到显式非思考模式参数。',
   'settings.general.thinkingEnabled': '启用思考模式',
   'settings.general.thinkingHint': '关闭后会以 --thinking disabled 启动新会话；适合 DeepSeek V4 Flash/Pro 等需要非思考模式的模型。',
+  'settings.general.thinkingAutoCollapse': '自动折叠思考内容',
   'settings.general.notificationsTitle': '系统通知',
   'settings.general.notificationsDescription': '使用操作系统原生通知提醒授权确认、Agent 回复完成和定时任务结果。',
   'settings.general.notificationsEnabled': '启用系统通知',

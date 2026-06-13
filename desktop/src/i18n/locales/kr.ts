@@ -1101,6 +1101,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.general.thinkingDescription': '새 세션을 모델 사고를 사용으로 시작할지 제어합니다. 꺼져 있으면 DeepSeek 같은 호환 공급자에 명시적인 비사고 매개변수가 전달됩니다.',
   'settings.general.thinkingEnabled': '사고 모드 사용',
   'settings.general.thinkingHint': '새 세션을 --thinking 비활성화로 시작하려면 이를 끄세요. DeepSeek V4 Flash/Pro 및 기타 비사고 워크플로에 유용합니다.',
+  'settings.general.thinkingAutoCollapse': '사고 블록 자동 접기',
   'settings.general.notificationsTitle': '시스템 알림',
   'settings.general.notificationsDescription': '권한 확인, 에이전트 응답, 예약 작업 결과에 OS 기본 알림을 사용합니다.',
   'settings.general.notificationsEnabled': '시스템 알림 사용',
