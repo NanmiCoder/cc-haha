@@ -12,6 +12,8 @@ import { markdown } from '@codemirror/lang-markdown'
 import { sessionsApi, type SaveWorkspaceFileInput } from '../../api/sessions'
 import {
   useWorkspacePanelStore,
+  type WorkspaceBufferInit,
+  type WorkspaceBufferState,
   type WorkspacePreviewTab,
 } from '../../stores/workspacePanelStore'
 import { detectEncoding, detectLineEnding } from './encodingDetect'
@@ -66,19 +68,57 @@ async function sha256Hex(text: string): Promise<string> {
     .join('')
 }
 
+export type SaveWorkspaceBufferResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
+export async function saveWorkspaceBuffer(
+  sessionId: string,
+  buffer: WorkspaceBufferState,
+  initBuffer: (init: WorkspaceBufferInit) => void,
+): Promise<SaveWorkspaceBufferResult> {
+  const payload: SaveWorkspaceFileInput = {
+    path: buffer.path,
+    content: buffer.currentContent,
+    expectedBaseHash: buffer.baseHash,
+    bom: buffer.encoding === 'utf-8-bom' ? 'utf-8' : 'none',
+    lineEnding: buffer.lineEnding,
+  }
+
+  try {
+    const result = await sessionsApi.saveWorkspaceFile(sessionId, payload)
+    if (!result.ok) {
+      return { ok: false, message: result.message }
+    }
+
+    initBuffer({
+      tabId: buffer.tabId,
+      path: buffer.path,
+      baseHash: result.hash,
+      baseContent: buffer.currentContent,
+      encoding: buffer.encoding,
+      lineEnding: buffer.lineEnding,
+    })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : 'Failed to save' }
+  }
+}
+
 export type WorkspaceEditorProps = {
   sessionId: string
   tab: WorkspacePreviewTab
   /** Called when the file's encoding is unsupported so the parent can fall
    *  back to the read-only preview surface. */
   onUnsupportedEncoding?: (path: string) => void
+  onSaved?: (path: string) => void
   /** Called when the user explicitly closes the tab (caller manages tab
    *  lifecycle through the store). */
   onClose?: () => void
 }
 
 export function WorkspaceEditor(props: WorkspaceEditorProps) {
-  const { sessionId, tab, onUnsupportedEncoding, onClose } = props
+  const { sessionId, tab, onUnsupportedEncoding, onSaved, onClose } = props
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -183,43 +223,23 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
     if (!buffer) return false
     setSaving(true)
     setSaveError(null)
-    const payload: SaveWorkspaceFileInput = {
-      path: buffer.path,
-      content: buffer.currentContent,
-      expectedBaseHash: buffer.baseHash,
-      bom: buffer.encoding === 'utf-8-bom' ? 'utf-8' : 'none',
-      lineEnding: buffer.lineEnding,
-    }
     const timeoutHandle = setTimeout(() => {
       setSaveError('Save timed out')
       setSaving(false)
     }, SAVE_TIMEOUT_MS)
-    try {
-      const result = await sessionsApi.saveWorkspaceFile(sessionId, payload)
-      clearTimeout(timeoutHandle)
-      if (!result.ok) {
-        setSaveError(result.message)
-        setSaving(false)
-        return false
-      }
-      // Re-init buffer with the new on-disk content as the new base.
-      initBuffer({
-        tabId: buffer.tabId,
-        path: buffer.path,
-        baseHash: result.hash,
-        baseContent: buffer.currentContent,
-        encoding: buffer.encoding,
-        lineEnding: buffer.lineEnding,
-      })
-      setSaving(false)
-      return true
-    } catch (err) {
-      clearTimeout(timeoutHandle)
-      setSaveError(err instanceof Error ? err.message : 'Failed to save')
-      setSaving(false)
+
+    const result = await saveWorkspaceBuffer(sessionId, buffer, initBuffer)
+    clearTimeout(timeoutHandle)
+    setSaving(false)
+
+    if (!result.ok) {
+      setSaveError(result.message)
       return false
     }
-  }, [buffer, sessionId, initBuffer])
+
+    onSaved?.(buffer.path)
+    return true
+  }, [buffer, sessionId, initBuffer, onSaved])
 
   // -- Close: dirty buffer triggers the unsaved-changes modal. -------------
   const handleClose = useCallback(() => {

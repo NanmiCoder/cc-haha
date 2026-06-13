@@ -93,7 +93,9 @@ export function isContextWindowExceededMessage(message: string): boolean {
   return (
     raw.includes('context_too_large') ||
     raw.includes('exceeds the context window') ||
-    raw.includes('exceed the context window')
+    raw.includes('exceed the context window') ||
+    raw.includes('maximum context length') ||
+    raw.includes('context length exceeded')
   )
 }
 

@@ -1,34 +1,94 @@
-// @generated stub from scan-missing-imports
-// 该文件自动生成，对应 ant-internal 的 feature() gated 模块。
-// 所有外部 build 的代码路径在 DCE 后都不会真的执行这里的代码，这只是
-// bun build resolver 的占位符。
-const __target = function noop() {}
-const __handler: ProxyHandler<any> = {
-  get(_t, prop) {
-    if (prop === '__esModule') return true
-    if (prop === 'default') return new Proxy(__target, __handler)
-    if (prop === Symbol.toPrimitive) return () => undefined
-    if (prop === Symbol.iterator) return function* () {}
-    if (prop === Symbol.asyncIterator) return async function* () {}
-    if (prop === 'then') return undefined
-    return new Proxy(__target, __handler)
-  },
-  apply() {
-    return new Proxy(__target, __handler)
-  },
-  construct() {
-    return new Proxy(__target, __handler)
-  },
+import type { AssistantMessage, Message } from '../../types/message.js'
+import type { CacheSafeParams } from '../../utils/forkedAgent.js'
+import { hasExactErrorMessage } from '../../utils/errors.js'
+import { logError } from '../../utils/log.js'
+import { getMessagesAfterCompactBoundary } from '../../utils/messages.js'
+import { isPromptTooLongMessage } from '../api/errors.js'
+import {
+  compactConversation,
+  ERROR_MESSAGE_PROMPT_TOO_LONG,
+  ERROR_MESSAGE_USER_ABORT,
+  type CompactionResult,
+} from './compact.js'
+
+export type ReactiveCompactOutcome =
+  | { ok: true; result: CompactionResult }
+  | {
+      ok: false
+      reason: 'too_few_groups' | 'aborted' | 'exhausted' | 'error' | 'media_unstrippable'
+    }
+
+export function isWithheldPromptTooLong(
+  message: Message | undefined,
+): message is AssistantMessage {
+  return message?.type === 'assistant' && isPromptTooLongMessage(message)
 }
-const stub: any = new Proxy(__target, __handler)
-export default stub
-export const __stubMissing = true
-// 兼容常见的命名导出 —— 没列在这里的也会通过 default Proxy 兜底
-export const createCachedMCState = stub
-export const isCachedMicrocompactEnabled = stub
-export const isModelSupportedForCacheEditing = stub
-export const getCachedMCConfig = stub
-export const markToolsSentToAPI = stub
-export const resetCachedMCState = stub
-export const checkProtectedNamespace = stub
-export const getCoordinatorUserContext = stub
+
+export function isWithheldMediaSizeError(_message: Message | undefined): boolean {
+  return false
+}
+
+export function isReactiveCompactEnabled(): boolean {
+  return true
+}
+
+export function isReactiveOnlyMode(): boolean {
+  return false
+}
+
+export async function tryReactiveCompact({
+  hasAttempted,
+  aborted,
+  messages,
+  cacheSafeParams,
+}: {
+  hasAttempted: boolean
+  querySource?: unknown
+  aborted: boolean
+  messages: Message[]
+  cacheSafeParams: CacheSafeParams
+}): Promise<CompactionResult | null> {
+  if (hasAttempted || aborted) return null
+
+  const messagesForCompact = getMessagesAfterCompactBoundary(messages)
+  if (messagesForCompact.length === 0) return null
+
+  try {
+    return await compactConversation(
+      messagesForCompact,
+      cacheSafeParams.toolUseContext,
+      {
+        ...cacheSafeParams,
+        forkContextMessages: messagesForCompact,
+      },
+      true,
+      undefined,
+      true,
+    )
+  } catch (error) {
+    if (
+      !hasExactErrorMessage(error, ERROR_MESSAGE_PROMPT_TOO_LONG) &&
+      !hasExactErrorMessage(error, ERROR_MESSAGE_USER_ABORT)
+    ) {
+      logError(error)
+    }
+    return null
+  }
+}
+
+export async function reactiveCompactOnPromptTooLong(
+  _messages: Message[],
+  _cacheSafeParams: CacheSafeParams,
+  _options?: { customInstructions?: string; trigger?: 'manual' | 'auto' },
+): Promise<ReactiveCompactOutcome> {
+  return { ok: false, reason: 'error' }
+}
+
+export const createCachedMCState = undefined
+export const isCachedMicrocompactEnabled = () => false
+export const isModelSupportedForCacheEditing = () => false
+export const getCachedMCConfig = () => undefined
+export const markToolsSentToAPI = () => undefined
+export const resetCachedMCState = () => undefined
+export const checkProtectedNamespace = () => undefined
+export const getCoordinatorUserContext = () => undefined

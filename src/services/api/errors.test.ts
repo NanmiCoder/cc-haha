@@ -47,6 +47,7 @@ describe('context-window-overflow relay errors', () => {
       'API Error: 400 {"error":{"type":"context_too_large","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}',
       'Your input exceeds the context window of this model.',
       'context_too_large',
+      'This model maximum context length exceeded. Please reduce your prompt.',
     ]
     for (const message of overflowErrors) {
       expect(isContextWindowExceededMessage(message)).toBe(true)

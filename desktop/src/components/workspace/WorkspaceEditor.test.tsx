@@ -182,6 +182,55 @@ describe('WorkspaceEditor', () => {
     expect((screen.getByTestId('unsaved-changes-save') as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('saves dirty buffers, resets dirty state, and calls onSaved', async () => {
+    const tab = makeTab()
+    const onSaved = vi.fn()
+    render(<WorkspaceEditor sessionId="s1" tab={tab} onSaved={onSaved} />)
+
+    await waitFor(() => {
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId[tab.id]).toBeDefined()
+    })
+    act(() => {
+      useWorkspacePanelStore.getState().setBufferState(tab.id, 'export const x = 2\n')
+    })
+
+    fireEvent.click(screen.getByTestId('workspace-editor-save'))
+
+    await waitFor(() => {
+      expect(mocks.saveWorkspaceFileMock).toHaveBeenCalledWith('s1', expect.objectContaining({
+        path: 'src/app.ts',
+        content: 'export const x = 2\n',
+        expectedBaseHash: expect.any(String),
+        bom: 'none',
+        lineEnding: 'LF',
+      }))
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId[tab.id]?.isDirty).toBe(false)
+      expect(onSaved).toHaveBeenCalledWith('src/app.ts')
+    })
+  })
+
+  it('keeps dirty state and skips onSaved when save fails', async () => {
+    mocks.saveWorkspaceFileMock.mockResolvedValueOnce({ ok: false, error: 'stale_base', message: 'File changed on disk' })
+    const tab = makeTab()
+    const onSaved = vi.fn()
+    render(<WorkspaceEditor sessionId="s1" tab={tab} onSaved={onSaved} />)
+
+    await waitFor(() => {
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId[tab.id]).toBeDefined()
+    })
+    act(() => {
+      useWorkspacePanelStore.getState().setBufferState(tab.id, 'edited')
+    })
+
+    fireEvent.click(screen.getByTestId('workspace-editor-save'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-editor-save-error').textContent).toContain('File changed on disk')
+      expect(useWorkspacePanelStore.getState().bufferStateByTabId[tab.id]?.isDirty).toBe(true)
+      expect(onSaved).not.toHaveBeenCalled()
+    })
+  })
+
   it('renders the conflict banner when buffer.conflict is set', async () => {
     const tab = makeTab()
     render(<WorkspaceEditor sessionId="s1" tab={tab} />)
