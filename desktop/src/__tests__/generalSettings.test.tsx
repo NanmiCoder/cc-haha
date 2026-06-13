@@ -1379,6 +1379,13 @@ describe('Settings > About tab', () => {
     })
   })
 
+  it('shows the current product name', async () => {
+    render(<Settings />)
+
+    expect(await screen.findByRole('heading', { name: 'Code Council' })).toBeInTheDocument()
+    expect(screen.getByAltText('Code Council')).toBeInTheDocument()
+  })
+
   it('renders release notes with markdown formatting', async () => {
     render(<Settings />)
 
