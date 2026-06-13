@@ -381,7 +381,7 @@ export function TabBar() {
         ref={scrollRef}
         data-testid="tab-bar-scroll-region"
         data-desktop-drag-region={isDesktopRuntime ? true : undefined}
-        className="flex-1 flex items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onDragOver={(e) => e.preventDefault()}
       >
         {tabs.map((tab, index) => (

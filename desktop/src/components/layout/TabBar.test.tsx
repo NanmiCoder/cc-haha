@@ -238,6 +238,7 @@ describe('TabBar', () => {
 
     const region = screen.getByTestId('tab-bar-scroll-region')
     expect(region).toHaveClass('overflow-x-auto')
+    expect(region).toHaveClass('min-w-0')
     expect(region.className).toContain('[scrollbar-width:none]')
     expect(region.className).toContain('[&::-webkit-scrollbar]:hidden')
   })
