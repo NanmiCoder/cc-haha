@@ -234,7 +234,8 @@ async function editWithFallback(prompt, imageUrl, size, n, transparent, provider
           throw new Error(`不允许的 URL 协议: ${parsed.protocol}。仅支持 http/https/data URL。`)
         }
         // Block private/link-local IP ranges
-        const hostname = parsed.hostname
+        // new URL() returns IPv6 with brackets like "[::1]", strip them
+        const hostname = parsed.hostname.replace(/^\[|\]$/g, '')
         if (
           hostname === 'localhost' ||
           hostname === '127.0.0.1' ||
