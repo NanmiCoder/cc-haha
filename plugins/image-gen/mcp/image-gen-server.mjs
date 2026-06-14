@@ -19,6 +19,40 @@ function isUnset(val) {
   return !val || val.trim() === '' || val.startsWith('${user_config.')
 }
 
+const MODEL_CAPABILITIES = {
+  // Agnes image models
+  'agnes-image-2.1-flash': { sizes: ['512x512', '768x768', '1024x1024'], edit: false, transparent: false, maxN: 4, format: 'url' },
+  'agnes-image-2.0-flash': { sizes: ['512x512', '768x768', '1024x1024'], edit: false, transparent: false, maxN: 4, format: 'url' },
+  // GPT image models
+  'gpt-image-2': { sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'], edit: true, transparent: true, maxN: 10, format: 'b64_json', notes: 'size must be multiple of 16, max 3840px' },
+  'gpt-image-1': { sizes: ['1024x1024', '1536x1024', '1024x1536', '256x256', '512x512', 'auto'], edit: true, transparent: true, maxN: 10, format: 'b64_json' },
+  // DALL-E models
+  'dall-e-3': { sizes: ['1024x1024', '1792x1024', '1024x1792'], edit: false, transparent: false, maxN: 1, format: 'url' },
+  'dall-e-2': { sizes: ['256x256', '512x512', '1024x1024'], edit: true, transparent: false, maxN: 10, format: 'url' },
+  // Gemini image
+  'gemini-2.5-flash-image-preview': { sizes: ['1024x1024', '512x512', '1536x1536'], edit: true, transparent: false, maxN: 4, format: 'b64_json' },
+  'gemini-2.0-flash-exp-image-generation': { sizes: ['1024x1024', '512x512'], edit: false, transparent: false, maxN: 4, format: 'b64_json' },
+  // Flux models
+  'flux-schnell': { sizes: ['512x512', '768x768', '1024x1024', '1536x1024', '1024x1536'], edit: false, transparent: false, maxN: 4, format: 'url' },
+  'flux-pro': { sizes: ['512x512', '768x768', '1024x1024', '1536x1024', '1024x1536'], edit: false, transparent: true, maxN: 4, format: 'url' },
+  // Stable Diffusion
+  'stable-diffusion-xl': { sizes: ['512x512', '768x768', '1024x1024'], edit: true, transparent: false, maxN: 4, format: 'url' },
+}
+
+function getModelCapabilities(model) {
+  // Exact match
+  if (MODEL_CAPABILITIES[model]) return MODEL_CAPABILITIES[model]
+  // Partial match
+  const lower = model.toLowerCase()
+  for (const [key, caps] of Object.entries(MODEL_CAPABILITIES)) {
+    if (lower.includes(key) || key.includes(lower)) return caps
+  }
+  // Pattern-based defaults
+  if (/image/i.test(lower)) return { sizes: ['512x512', '1024x1024'], edit: false, transparent: false, maxN: 4, format: 'url' }
+  // Unknown
+  return null
+}
+
 function loadProviderFromEnv(prefix) {
   const name = process.env[`${prefix}_NAME`]
   const baseUrl = process.env[`${prefix}_BASE_URL`]
@@ -34,6 +68,7 @@ function loadProviderFromEnv(prefix) {
     model,
     enabled: true,
     timeoutMs: 300_000,
+    capabilities: getModelCapabilities(model),
   }
 }
 
@@ -435,10 +470,19 @@ async function handleToolCall(name, args) {
       if (!args.prompt || typeof args.prompt !== 'string' || args.prompt.trim() === '') {
         return { content: [{ type: 'text', text: 'Error: prompt is required and must be a non-empty string.' }], isError: true }
       }
-      const n = Math.min(Math.max(Math.floor(Number(args.n) || 1), 1), 10)
+      const firstCaps = providers[0]?.capabilities
+      const maxN = firstCaps?.maxN || 10
+      const n = Math.min(Math.max(Math.floor(Number(args.n) || 1), 1), maxN)
+      const requestedSize = args.size || '1024x1024'
+      if (firstCaps && firstCaps.sizes.length > 0 && !firstCaps.sizes.includes(requestedSize) && requestedSize !== 'auto') {
+        return {
+          content: [{ type: 'text', text: `Size "${requestedSize}" may not be supported by ${providers[0].model}. Supported sizes: ${firstCaps.sizes.join(', ')}. Will attempt anyway with compatibility fallback.` }],
+          isError: false,
+        }
+      }
       const result = await generateWithFallback(
         args.prompt.trim(),
-        args.size || '1024x1024',
+        requestedSize,
         n,
         args.transparent,
         providers,
@@ -447,13 +491,26 @@ async function handleToolCall(name, args) {
     }
 
     case 'edit_image': {
+      if (!args.prompt || typeof args.prompt !== 'string' || args.prompt.trim() === '') {
+        return { content: [{ type: 'text', text: 'Error: prompt is required.' }], isError: true }
+      }
+      if (!args.image_url || typeof args.image_url !== 'string') {
+        return { content: [{ type: 'text', text: 'Error: image_url is required.' }], isError: true }
+      }
+      const editProviders = providers.filter(p => p.capabilities?.edit !== false)
+      if (editProviders.length === 0) {
+        return {
+          content: [{ type: 'text', text: 'None of the configured providers support image editing. Use generate_image instead, or add a provider that supports editing (e.g., gpt-image-2, gemini-2.5-flash-image-preview).' }],
+          isError: true,
+        }
+      }
       const result = await editWithFallback(
-        args.prompt,
+        args.prompt.trim(),
         args.image_url,
-        args.size,
-        args.n,
+        args.size || '1024x1024',
+        args.n || 1,
         args.transparent,
-        providers,
+        editProviders,
       )
       return formatResult(result)
     }
@@ -461,7 +518,21 @@ async function handleToolCall(name, args) {
     case 'list_providers': {
       const lines = providers.map((p, i) => {
         const status = p.enabled === false ? ' [DISABLED]' : ''
-        return `${i}. ${p.name}${status}\n   baseUrl: ${p.baseUrl}\n   model: ${p.model}\n   timeout: ${p.timeoutMs || 300_000}ms`
+        const caps = p.capabilities
+        let capStr = ''
+        if (caps) {
+          const parts = []
+          parts.push(`sizes: ${caps.sizes.join(', ')}`)
+          if (caps.edit) parts.push('supports edit')
+          if (caps.transparent) parts.push('supports transparent')
+          parts.push(`max n: ${caps.maxN}`)
+          parts.push(`returns: ${caps.format}`)
+          if (caps.notes) parts.push(`note: ${caps.notes}`)
+          capStr = `\n   capabilities: ${parts.join(' | ')}`
+        } else {
+          capStr = '\n   capabilities: unknown (will try all params, fallback on error)'
+        }
+        return `${i}. ${p.name}${status}\n   baseUrl: ${p.baseUrl}\n   model: ${p.model}${capStr}`
       })
       return {
         content: [{ type: 'text', text: `Configured providers (${providers.length}):\n\n${lines.join('\n\n')}` }],
