@@ -46,6 +46,12 @@ import {
   useWorkspacePanelStore,
 } from './workspacePanelStore'
 
+type SettingsState = ReturnType<typeof useSettingsStore.getState>
+
+function settingsState(workspaceLsp: SettingsState['workspaceLsp']): SettingsState {
+  return { workspaceLsp } as SettingsState
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -61,7 +67,7 @@ describe('workspacePanelStore', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(useSettingsStore.getState).mockReturnValue({ workspaceLsp: {} })
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
     useWorkspacePanelStore.setState(initialState, true)
   })
 
@@ -115,7 +121,7 @@ describe('workspacePanelStore', () => {
         extensionToLanguage: { '.ts': 'typescript' },
       },
     }
-    vi.mocked(useSettingsStore.getState).mockReturnValue({ workspaceLsp })
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState(workspaceLsp))
     mocks.syncWorkspaceLspMock.mockResolvedValue({
       state: { state: 'ready', path: 'src/app.ts', serverName: 'custom:lsp', command: workspaceLsp.server.path },
     })
@@ -145,7 +151,7 @@ describe('workspacePanelStore', () => {
   })
 
   it('does not request a diagnostics refresh after LSP save sync', async () => {
-    vi.mocked(useSettingsStore.getState).mockReturnValue({ workspaceLsp: {} })
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
     mocks.syncWorkspaceLspMock.mockResolvedValue({
       state: { state: 'ready', path: 'src/app.ts', serverName: 'custom:lsp', command: 'example-lsp' },
     })
@@ -181,7 +187,7 @@ describe('workspacePanelStore', () => {
         extensionToLanguage: { '.foo': 'foo' },
       },
     }
-    vi.mocked(useSettingsStore.getState).mockReturnValue({ workspaceLsp })
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState(workspaceLsp))
     mocks.getWorkspaceLspStateMock.mockResolvedValue({
       state: { state: 'ready', path: 'src/app.foo', serverName: 'custom:lsp', command: 'example-lsp' },
     })
@@ -192,7 +198,7 @@ describe('workspacePanelStore', () => {
   })
 
   it('does not send an empty custom LSP config', async () => {
-    vi.mocked(useSettingsStore.getState).mockReturnValue({ workspaceLsp: {} })
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
     mocks.syncWorkspaceLspMock.mockResolvedValue({
       state: { state: 'idle', path: 'src/app.ts', serverName: null, command: null },
     })
