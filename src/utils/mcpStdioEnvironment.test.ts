@@ -8,7 +8,6 @@ import {
 } from './mcpStdioEnvironment.js'
 
 let tmpDir: string
-const shellCaptureTest = process.platform === 'win32' ? it.skip : it
 let originalEnv: {
   HOME?: string
   PATH?: string
@@ -77,7 +76,7 @@ describe('MCP stdio environment', () => {
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  shellCaptureTest('adds PATH entries sourced from the user zshrc when MCP env has no explicit PATH', async () => {
+  it('adds PATH entries sourced from the user zshrc when MCP env has no explicit PATH', async () => {
     const shellPath = path.join(tmpDir, 'zsh')
     const nodeBin = path.join(tmpDir, 'node-bin')
     await mkdir(nodeBin, { recursive: true })
