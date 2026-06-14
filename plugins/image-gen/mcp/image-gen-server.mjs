@@ -686,6 +686,7 @@ function main() {
   const rl = createInterface({ input: process.stdin })
 
   let buffer = ''
+  const pending = new Set()
 
   rl.on('line', (line) => {
     buffer += line
@@ -697,17 +698,22 @@ function main() {
     try {
       const msg = JSON.parse(buffer)
       buffer = ''
-      handleMessage(msg).catch(err => {
+      const p = handleMessage(msg).catch(err => {
         if (msg.id !== undefined) {
           sendError(msg.id, -32603, `Internal error: ${err.message}`)
         }
-      })
+      }).finally(() => pending.delete(p))
+      pending.add(p)
     } catch {
       // Incomplete message, wait for more lines
     }
   })
 
-  rl.on('close', () => {
+  rl.on('close', async () => {
+    // Wait for all pending message handlers to complete before exiting
+    if (pending.size > 0) {
+      await Promise.allSettled([...pending])
+    }
     process.exit(0)
   })
 
