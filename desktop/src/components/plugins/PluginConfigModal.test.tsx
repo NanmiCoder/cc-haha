@@ -2,9 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PluginConfigModal } from './PluginConfigModal'
 
-// Mock the plugins API
-const mockGetOptions = vi.fn()
-const mockSaveOptions = vi.fn()
+// Mock the plugins API — use vi.hoisted to make mocks available before vi.mock hoisting
+const { mockGetOptions, mockSaveOptions, mockAddToast } = vi.hoisted(() => ({
+  mockGetOptions: vi.fn(),
+  mockSaveOptions: vi.fn(),
+  mockAddToast: vi.fn(),
+}))
+
 vi.mock('../../api/plugins', () => ({
   pluginsApi: {
     getOptions: (...args: unknown[]) => mockGetOptions(...args),
@@ -13,7 +17,6 @@ vi.mock('../../api/plugins', () => ({
 }))
 
 // Mock useUIStore — zustand store with selector pattern
-const mockAddToast = vi.fn()
 vi.mock('../../stores/uiStore', () => {
   const store = { addToast: mockAddToast }
   const useUIStore = (selector: (s: typeof store) => unknown) => selector(store)

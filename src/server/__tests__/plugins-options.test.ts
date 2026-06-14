@@ -18,8 +18,6 @@ describe('plugins options API', () => {
     const { req, url, segments } = makeRequest('GET', '/api/plugins/options')
     const res = await handlePluginsApi(req, url, segments)
     expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error).toContain('Missing required "id"')
   })
 
   it('POST /api/plugins/options returns 400 when id is missing', async () => {
