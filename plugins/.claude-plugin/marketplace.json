@@ -31,6 +31,25 @@
         "debugger",
         "single-step"
       ]
+    },
+    {
+      "name": "image-gen",
+      "source": "./image-gen",
+      "description": "Multi-provider image generation with automatic fallback. Supports OpenAI-compatible APIs (Agnes, GPT-image-2, Gemini image, nano-banana, DALL-E, Flux, Stable Diffusion). Configurable provider priority with compatibility fallback.",
+      "category": "creative",
+      "tags": [
+        "image-generation",
+        "ai-art",
+        "openai-compatible",
+        "multi-provider",
+        "fallback",
+        "agnes",
+        "gpt-image",
+        "gemini",
+        "dall-e",
+        "flux",
+        "stable-diffusion"
+      ]
     }
   ]
 }

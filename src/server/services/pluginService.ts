@@ -183,6 +183,7 @@ export type ApiPluginDetail = ApiPluginSummary & {
   hookEntries: ApiPluginHookEntry[]
   skillEntries: ApiPluginSkillEntry[]
   mcpServerEntries: ApiPluginMcpServerEntry[]
+  userConfig?: Record<string, unknown>
 }
 
 export type ApiPluginMarketplaceSummary = {
@@ -696,6 +697,7 @@ export class PluginService {
       agentEntries,
       hookEntries,
       skillEntries,
+      userConfig: loaded.manifest.userConfig,
       mcpServerEntries,
     }
   }

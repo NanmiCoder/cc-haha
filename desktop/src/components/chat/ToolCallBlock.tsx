@@ -55,7 +55,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
 
   const preview = useMemo(() => renderPreview(toolName, obj, result, t), [obj, result, toolName, t])
   const details = useMemo(() => renderDetails(toolName, obj, t, isPending ? partialInput : undefined), [isPending, obj, partialInput, toolName, t])
-  const hasResultDetails = Boolean(result && extractTextContent(result.content))
+  const hasResultDetails = Boolean(result && (extractTextContent(result.content) || extractImageBlocks(result.content).length > 0))
   const hasEditPreview = toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string'
   const hasWritePreview = toolName === 'Write' && typeof obj.content === 'string'
   const expandable = hasEditPreview || hasWritePreview || hasResultDetails || Boolean(isPending && partialInput)
@@ -192,8 +192,33 @@ function renderResultOutput(
   text: string,
   t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ) {
+  const imageBlocks = extractImageBlocks(result.content)
   return (
     <>
+      {imageBlocks.length > 0 && (
+        <div className="mt-2 space-y-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
+            <span className="material-symbols-outlined text-[12px]">image</span>
+            {imageBlocks.length === 1 ? '1 image' : `${imageBlocks.length} images`}
+          </div>
+          <div className={`grid gap-2 ${imageBlocks.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+            {imageBlocks.map((img, i) => (
+              <div
+                key={i}
+                className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)]"
+              >
+                <img
+                  src={img.src}
+                  alt={`Generated image ${i + 1}`}
+                  loading="lazy"
+                  className="w-full object-contain"
+                  style={{ maxHeight: 400 }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <InlineImageGallery text={text} />
       <div className={`overflow-hidden rounded-lg border ${
         result.isError
@@ -457,6 +482,29 @@ function extractTextContent(content: unknown): string | null {
     return JSON.stringify(content, null, 2)
   }
   return null
+}
+
+type ImageBlock = { src: string; mimeType: string }
+
+function extractImageBlocks(content: unknown): ImageBlock[] {
+  if (!Array.isArray(content)) return []
+  const images: ImageBlock[] = []
+  for (const block of content) {
+    if (!block || typeof block !== 'object' || !('type' in block)) continue
+    const typed = block as Record<string, unknown>
+    if (typed.type === 'image' && typeof typed.data === 'string') {
+      const mime = typeof typed.mimeType === 'string' ? typed.mimeType : 'image/png'
+      images.push({ src: `data:${mime};base64,${typed.data}`, mimeType: mime })
+    }
+    // Handle OpenAI-style image_url blocks (from MCP proxy transforms)
+    if (typed.type === 'image_url' && typed.image_url && typeof typed.image_url === 'object') {
+      const url = (typed.image_url as Record<string, unknown>).url
+      if (typeof url === 'string' && /^(https?:|data:)/i.test(url)) {
+        images.push({ src: url, mimeType: 'image/png' })
+      }
+    }
+  }
+  return images
 }
 
 function changedLineSummary(oldString: string, newString: string, t?: (key: TranslationKey, params?: Record<string, string | number>) => string): string {

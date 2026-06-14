@@ -1,0 +1,83 @@
+{
+  "name": "image-gen",
+  "version": "1.0.0",
+  "description": "Multi-provider image generation with automatic fallback. Supports OpenAI-compatible APIs (Agnes, GPT-image-2, Gemini image, nano-banana, etc.)",
+  "author": { "name": "cc-haha" },
+  "license": "MIT",
+  "mcpServers": "./mcp/servers.json",
+  "userConfig": {
+    "PROVIDER_1_NAME": {
+      "type": "string",
+      "title": "Provider 1 名称",
+      "description": "第一个 provider 的显示名称（优先级最高）",
+      "default": "Agnes"
+    },
+    "PROVIDER_1_BASE_URL": {
+      "type": "string",
+      "title": "Provider 1 Base URL",
+      "description": "OpenAI 兼容的 API 地址",
+      "default": "https://apihub.agnes-ai.com/v1"
+    },
+    "PROVIDER_1_API_KEY": {
+      "type": "string",
+      "title": "Provider 1 API Key",
+      "description": "API 密钥",
+      "required": true,
+      "sensitive": true
+    },
+    "PROVIDER_1_MODEL": {
+      "type": "string",
+      "title": "Provider 1 模型",
+      "description": "图像生成模型名称",
+      "default": "agnes-image-2.1-flash"
+    },
+    "PROVIDER_2_NAME": {
+      "type": "string",
+      "title": "Provider 2 名称（可选）",
+      "description": "第二个 provider，作为 fallback。留空则跳过。",
+      "default": ""
+    },
+    "PROVIDER_2_BASE_URL": {
+      "type": "string",
+      "title": "Provider 2 Base URL",
+      "description": "OpenAI 兼容的 API 地址",
+      "default": ""
+    },
+    "PROVIDER_2_API_KEY": {
+      "type": "string",
+      "title": "Provider 2 API Key",
+      "description": "API 密钥",
+      "sensitive": true
+    },
+    "PROVIDER_2_MODEL": {
+      "type": "string",
+      "title": "Provider 2 模型",
+      "description": "图像生成模型名称",
+      "default": ""
+    },
+    "PROVIDER_3_NAME": {
+      "type": "string",
+      "title": "Provider 3 名称（可选）",
+      "description": "第三个 provider，作为二级 fallback。留空则跳过。",
+      "default": ""
+    },
+    "PROVIDER_3_BASE_URL": {
+      "type": "string",
+      "title": "Provider 3 Base URL",
+      "description": "OpenAI 兼容的 API 地址",
+      "default": ""
+    },
+    "PROVIDER_3_API_KEY": {
+      "type": "string",
+      "title": "Provider 3 API Key",
+      "description": "API 密钥",
+      "sensitive": true
+    },
+    "PROVIDER_3_MODEL": {
+      "type": "string",
+      "title": "Provider 3 模型",
+      "description": "图像生成模型名称",
+      "default": ""
+    }
+  }
+}

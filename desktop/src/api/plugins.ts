@@ -88,4 +88,16 @@ export const pluginsApi = {
       `/api/plugins/language-servers${refresh ? '?refresh=1' : ''}`,
       { timeout: 15_000 },
     ),
+
+  getOptions: (id: string) => {
+    const query = new URLSearchParams({ id })
+    return api.get<{
+      pluginId: string
+      schema: Record<string, { type: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }>
+      values: Record<string, unknown>
+    }>(`/api/plugins/options?${query.toString()}`)
+  },
+
+  saveOptions: (id: string, values: Record<string, unknown>) =>
+    api.post<{ ok: true; pluginId: string }>('/api/plugins/options', { id, values }),
 }

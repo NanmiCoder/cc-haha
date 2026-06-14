@@ -1,0 +1,20 @@
+{
+  "image-gen": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/image-gen-server.mjs"],
+    "env": {
+      "IMAGE_GEN_P1_NAME": "${user_config.PROVIDER_1_NAME}",
+      "IMAGE_GEN_P1_BASE_URL": "${user_config.PROVIDER_1_BASE_URL}",
+      "IMAGE_GEN_P1_API_KEY": "${user_config.PROVIDER_1_API_KEY}",
+      "IMAGE_GEN_P1_MODEL": "${user_config.PROVIDER_1_MODEL}",
+      "IMAGE_GEN_P2_NAME": "${user_config.PROVIDER_2_NAME}",
+      "IMAGE_GEN_P2_BASE_URL": "${user_config.PROVIDER_2_BASE_URL}",
+      "IMAGE_GEN_P2_API_KEY": "${user_config.PROVIDER_2_API_KEY}",
+      "IMAGE_GEN_P2_MODEL": "${user_config.PROVIDER_2_MODEL}",
+      "IMAGE_GEN_P3_NAME": "${user_config.PROVIDER_3_NAME}",
+      "IMAGE_GEN_P3_BASE_URL": "${user_config.PROVIDER_3_BASE_URL}",
+      "IMAGE_GEN_P3_API_KEY": "${user_config.PROVIDER_3_API_KEY}",
+      "IMAGE_GEN_P3_MODEL": "${user_config.PROVIDER_3_MODEL}"
+    }
+  }
+}

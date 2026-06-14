@@ -7,6 +7,12 @@ import {
 } from '../services/knownLanguageServers.js'
 import { conversationService } from '../services/conversationService.js'
 import { updateSessionSlashCommands } from '../ws/handler.js'
+import {
+  loadPluginOptions,
+  savePluginOptions,
+  clearPluginOptionsCache,
+} from '../../utils/plugins/pluginOptionsStorage.js'
+import type { PluginManifest } from '../../utils/plugins/schemas.js'
 
 const pluginService = new PluginService()
 
@@ -59,6 +65,57 @@ export async function handlePluginsApi(
       return Response.json(
         await pluginService.checkPluginPrerequisites(pluginId, cwd),
       )
+    }
+
+    if (method === 'GET' && sub === 'options') {
+      const pluginId = url.searchParams.get('id')
+      if (!pluginId) {
+        throw ApiError.badRequest('Missing required "id" query parameter')
+      }
+      const detail = await pluginService.getPluginDetail(pluginId, cwd)
+      const userConfig = (detail as Record<string, unknown>).userConfig as PluginManifest['userConfig'] | undefined
+      const options = loadPluginOptions(pluginId)
+      // Mask sensitive values — frontend only needs to know they exist
+      const masked: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(options)) {
+        if (userConfig?.[key]?.sensitive === true) {
+          masked[key] = typeof value === 'string' && value.length > 0 ? '********' : ''
+        } else {
+          masked[key] = value
+        }
+      }
+      return Response.json({
+        pluginId,
+        schema: userConfig ?? {},
+        values: masked,
+      })
+    }
+
+    if (method === 'POST' && sub === 'options') {
+      const body = await parseJsonBody(req)
+      const pluginId = asString(body.id)
+      if (!pluginId) {
+        throw ApiError.badRequest('Missing required "id" field')
+      }
+      const values = body.values as Record<string, unknown> | undefined
+      if (!values || typeof values !== 'object') {
+        throw ApiError.badRequest('Missing required "values" field')
+      }
+      const detail = await pluginService.getPluginDetail(pluginId, cwd)
+      const userConfig = (detail as Record<string, unknown>).userConfig as PluginManifest['userConfig'] | undefined
+      if (!userConfig || Object.keys(userConfig).length === 0) {
+        throw ApiError.badRequest('Plugin has no userConfig options')
+      }
+      // Filter to only schema-declared keys (prevent injection of arbitrary keys)
+      const filtered: Record<string, unknown> = {}
+      for (const key of Object.keys(userConfig)) {
+        if (key in values) {
+          filtered[key] = values[key]
+        }
+      }
+      savePluginOptions(pluginId, filtered, userConfig)
+      clearPluginOptionsCache()
+      return Response.json({ ok: true, pluginId })
     }
 
     if (method === 'GET' && sub === 'language-servers') {

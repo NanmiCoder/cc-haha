@@ -10,6 +10,7 @@ import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useSkillStore } from '../../stores/skillStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useMcpStore } from '../../stores/mcpStore'
+import { PluginConfigModal } from './PluginConfigModal'
 
 const CAPABILITY_ORDER: PluginCapabilityKey[] = [
   'lspServers',
@@ -38,6 +39,7 @@ export function PluginDetail() {
   const t = useTranslation()
   const [actionKey, setActionKey] = useState<string | null>(null)
   const [showUninstallDialog, setShowUninstallDialog] = useState(false)
+  const [showConfigModal, setShowConfigModal] = useState(false)
 
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = activeSession?.workDir || undefined
@@ -287,6 +289,17 @@ export function PluginDetail() {
             {t('settings.plugins.apply')}
           </Button>
 
+          {selectedPlugin.userConfig && Object.keys(selectedPlugin.userConfig).length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowConfigModal(true)}
+            >
+              <span className="material-symbols-outlined text-[16px]">settings</span>
+              Configure
+            </Button>
+          )}
+
           {canMutate && (
             <Button
               variant="danger"
@@ -503,6 +516,17 @@ export function PluginDetail() {
         confirmVariant="danger"
         loading={isApplying && actionKey === 'uninstall'}
       />
+
+      {selectedPlugin.userConfig && Object.keys(selectedPlugin.userConfig).length > 0 && (
+        <PluginConfigModal
+          open={showConfigModal}
+          pluginId={selectedPlugin.id}
+          pluginName={selectedPlugin.name}
+          schema={selectedPlugin.userConfig}
+          onClose={() => setShowConfigModal(false)}
+          onSaved={() => void handleReload()}
+        />
+      )}
     </div>
   )
 }

@@ -68,6 +68,7 @@ export type PluginDetail = PluginSummary & {
   hookEntries: PluginHookEntry[]
   skillEntries: PluginSkillEntry[]
   mcpServerEntries: PluginMcpServerEntry[]
+  userConfig?: Record<string, { type: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }>
 }
 
 export type PluginMarketplaceSummary = {
