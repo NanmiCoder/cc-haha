@@ -4,6 +4,7 @@ import { fireEvent } from '@testing-library/dom'
 
 const mocks = vi.hoisted(() => ({
   saveWorkspaceFileMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  syncLspMock: vi.fn(),
 }))
 
 vi.mock('../../api/sessions', () => ({
@@ -49,6 +50,7 @@ describe('WorkspaceEditor', () => {
 
   beforeEach(() => {
     mocks.saveWorkspaceFileMock.mockReset()
+    mocks.syncLspMock.mockReset()
     mocks.saveWorkspaceFileMock.mockResolvedValue({
       ok: true,
       hash: 'a'.repeat(64),
@@ -182,9 +184,10 @@ describe('WorkspaceEditor', () => {
     expect((screen.getByTestId('unsaved-changes-save') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('saves dirty buffers, resets dirty state, and calls onSaved', async () => {
+  it('saves dirty buffers, resets dirty state, syncs LSP content, and calls onSaved', async () => {
     const tab = makeTab()
     const onSaved = vi.fn()
+    useWorkspacePanelStore.setState({ syncLsp: mocks.syncLspMock }, false)
     render(<WorkspaceEditor sessionId="s1" tab={tab} onSaved={onSaved} />)
 
     await waitFor(() => {
@@ -206,6 +209,11 @@ describe('WorkspaceEditor', () => {
       }))
       expect(useWorkspacePanelStore.getState().bufferStateByTabId[tab.id]?.isDirty).toBe(false)
       expect(onSaved).toHaveBeenCalledWith('src/app.ts')
+      expect(mocks.syncLspMock).toHaveBeenCalledWith('s1', {
+        path: 'src/app.ts',
+        content: 'export const x = 2\n',
+        event: 'save',
+      })
     })
   })
 

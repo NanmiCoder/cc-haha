@@ -332,6 +332,131 @@ describe('settingsStore network persistence', () => {
   })
 })
 
+describe('settingsStore workspace LSP persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('hydrates custom workspace LSP settings from user settings', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({
+          workspaceLsp: {
+            server: {
+              name: 'custom:typescript',
+              path: '  C:\\Program Files\\Example LSP\\server.exe  ',
+              args: ['--stdio', 123],
+              extensionToLanguage: { ts: ' typescript ', bad: '' },
+            },
+          },
+        }),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().workspaceLsp).toEqual({
+      server: {
+        name: 'custom:typescript',
+        path: 'C:\\Program Files\\Example LSP\\server.exe',
+        args: ['--stdio'],
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    })
+  })
+
+  it('persists custom workspace LSP path or bare command with args array', async () => {
+    const updateUser = vi.fn().mockResolvedValue({})
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(),
+        updateUser,
+        getPermissionMode: vi.fn(),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn(),
+        getCurrent: vi.fn(),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn(),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn(),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().setWorkspaceLsp({
+      server: {
+        path: ' C:\\Program Files\\Example LSP\\server.exe ',
+        command: 'ignored-when-path-is-set',
+        args: ['--stdio'],
+        extensionToLanguage: { '.TS': 'typescript' },
+      },
+    })
+
+    expect(useSettingsStore.getState().workspaceLsp).toEqual({
+      server: {
+        path: 'C:\\Program Files\\Example LSP\\server.exe',
+        args: ['--stdio'],
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    })
+    expect(updateUser).toHaveBeenCalledWith({
+      workspaceLsp: {
+        server: {
+          path: 'C:\\Program Files\\Example LSP\\server.exe',
+          args: ['--stdio'],
+          extensionToLanguage: { '.ts': 'typescript' },
+        },
+      },
+    })
+  })
+})
 describe('settingsStore app mode', () => {
   const installElectronAppModeHost = (appMode: Partial<typeof browserHost.appMode>) => {
     window.desktopHost = {

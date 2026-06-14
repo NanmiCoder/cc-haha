@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   getWorkspaceTreeMock: vi.fn(),
   getWorkspaceFileMock: vi.fn(),
   getWorkspaceDiffMock: vi.fn(),
+  getWorkspaceLspStateMock: vi.fn(),
+  getWorkspaceLspDiagnosticsMock: vi.fn(),
+  syncWorkspaceLspMock: vi.fn(),
 }))
 
 vi.mock('../api/sessions', () => ({
@@ -21,10 +24,20 @@ vi.mock('../api/sessions', () => ({
     getWorkspaceTree: mocks.getWorkspaceTreeMock,
     getWorkspaceFile: mocks.getWorkspaceFileMock,
     getWorkspaceDiff: mocks.getWorkspaceDiffMock,
+    getWorkspaceLspState: mocks.getWorkspaceLspStateMock,
+    getWorkspaceLspDiagnostics: mocks.getWorkspaceLspDiagnosticsMock,
+    syncWorkspaceLsp: mocks.syncWorkspaceLspMock,
+  },
+}))
+
+vi.mock('./settingsStore', () => ({
+  useSettingsStore: {
+    getState: vi.fn(() => ({ workspaceLsp: {} })),
   },
 }))
 
 import { sessionsApi } from '../api/sessions'
+import { useSettingsStore } from './settingsStore'
 import {
   WORKSPACE_PANEL_DEFAULT_WIDTH,
   WORKSPACE_PANEL_MAX_WIDTH,
@@ -32,6 +45,12 @@ import {
   getWorkspacePreviewTabId,
   useWorkspacePanelStore,
 } from './workspacePanelStore'
+
+type SettingsState = ReturnType<typeof useSettingsStore.getState>
+
+function settingsState(workspaceLsp: SettingsState['workspaceLsp']): SettingsState {
+  return { workspaceLsp } as SettingsState
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -48,6 +67,7 @@ describe('workspacePanelStore', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
     useWorkspacePanelStore.setState(initialState, true)
   })
 
@@ -61,6 +81,7 @@ describe('workspacePanelStore', () => {
     expect(sessionsApi.getWorkspaceTree).toBe(mocks.getWorkspaceTreeMock)
     expect(sessionsApi.getWorkspaceFile).toBe(mocks.getWorkspaceFileMock)
     expect(sessionsApi.getWorkspaceDiff).toBe(mocks.getWorkspaceDiffMock)
+    expect(sessionsApi.syncWorkspaceLsp).toBe(mocks.syncWorkspaceLspMock)
   })
 
   it('keeps panel open state and active view isolated per session', () => {
@@ -90,6 +111,117 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().width).toBe(WORKSPACE_PANEL_MIN_WIDTH)
     store.setWidth(1200)
     expect(useWorkspacePanelStore.getState().width).toBe(WORKSPACE_PANEL_MAX_WIDTH)
+  })
+
+  it('passes persisted custom LSP config into sync and diagnostics requests', async () => {
+    const workspaceLsp = {
+      server: {
+        path: 'C:\\Program Files\\Example LSP\\server.exe',
+        args: ['--stdio'],
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    }
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState(workspaceLsp))
+    mocks.syncWorkspaceLspMock.mockResolvedValue({
+      state: { state: 'ready', path: 'src/app.ts', serverName: 'custom:lsp', command: workspaceLsp.server.path },
+    })
+    mocks.getWorkspaceLspDiagnosticsMock.mockResolvedValue({
+      state: 'ready',
+      diagnostics: [],
+      diagnosticsTotal: 0,
+      diagnosticsTruncated: false,
+    })
+
+    await useWorkspacePanelStore.getState().syncLsp('session-lsp', {
+      path: 'src/app.ts',
+      content: 'const x = 1\n',
+      event: 'open',
+    })
+
+    expect(mocks.syncWorkspaceLspMock).toHaveBeenCalledWith('session-lsp', {
+      path: 'src/app.ts',
+      content: 'const x = 1\n',
+      event: 'open',
+      ...workspaceLsp,
+    })
+    expect(mocks.getWorkspaceLspDiagnosticsMock).toHaveBeenCalledWith('session-lsp', 'src/app.ts', {
+      refresh: false,
+      config: workspaceLsp,
+    })
+  })
+
+  it('does not request a diagnostics refresh after LSP save sync', async () => {
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
+    mocks.syncWorkspaceLspMock.mockResolvedValue({
+      state: { state: 'ready', path: 'src/app.ts', serverName: 'custom:lsp', command: 'example-lsp' },
+    })
+    mocks.getWorkspaceLspDiagnosticsMock.mockResolvedValue({
+      state: 'ready',
+      diagnostics: [],
+      diagnosticsTotal: 0,
+      diagnosticsTruncated: false,
+    })
+
+    await useWorkspacePanelStore.getState().syncLsp('session-lsp', {
+      path: 'src/app.ts',
+      content: 'const x = 2\n',
+      event: 'save',
+    })
+
+    expect(mocks.syncWorkspaceLspMock).toHaveBeenCalledWith('session-lsp', {
+      path: 'src/app.ts',
+      content: 'const x = 2\n',
+      event: 'save',
+    })
+    expect(mocks.getWorkspaceLspDiagnosticsMock).toHaveBeenCalledWith('session-lsp', 'src/app.ts', {
+      refresh: false,
+      config: undefined,
+    })
+  })
+
+  it('passes persisted custom LSP config into state requests', async () => {
+    const workspaceLsp = {
+      server: {
+        command: 'example-lsp',
+        args: ['--stdio'],
+        extensionToLanguage: { '.foo': 'foo' },
+      },
+    }
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState(workspaceLsp))
+    mocks.getWorkspaceLspStateMock.mockResolvedValue({
+      state: { state: 'ready', path: 'src/app.foo', serverName: 'custom:lsp', command: 'example-lsp' },
+    })
+
+    await useWorkspacePanelStore.getState().loadLspState('session-lsp', 'src/app.foo')
+
+    expect(mocks.getWorkspaceLspStateMock).toHaveBeenCalledWith('session-lsp', 'src/app.foo', workspaceLsp)
+  })
+
+  it('does not send an empty custom LSP config', async () => {
+    vi.mocked(useSettingsStore.getState).mockReturnValue(settingsState({}))
+    mocks.syncWorkspaceLspMock.mockResolvedValue({
+      state: { state: 'idle', path: 'src/app.ts', serverName: null, command: null },
+    })
+    mocks.getWorkspaceLspDiagnosticsMock.mockResolvedValue({
+      state: 'idle',
+      diagnostics: [],
+      diagnosticsTotal: 0,
+      diagnosticsTruncated: false,
+    })
+
+    await useWorkspacePanelStore.getState().syncLsp('session-lsp', {
+      path: 'src/app.ts',
+      event: 'change',
+    })
+
+    expect(mocks.syncWorkspaceLspMock).toHaveBeenCalledWith('session-lsp', {
+      path: 'src/app.ts',
+      event: 'change',
+    })
+    expect(mocks.getWorkspaceLspDiagnosticsMock).toHaveBeenCalledWith('session-lsp', 'src/app.ts', {
+      refresh: false,
+      config: undefined,
+    })
   })
 
   it('loads workspace status successfully', async () => {
@@ -860,6 +992,15 @@ describe('workspacePanelStore', () => {
         isGitRepo: true,
         changedFiles: [],
       })
+      mocks.syncWorkspaceLspMock.mockResolvedValue({
+        state: { state: 'ready', path: '/repo/src/whatever.ts', serverName: 'fake', command: 'fake-lsp' },
+      })
+      mocks.getWorkspaceLspDiagnosticsMock.mockResolvedValue({
+        state: 'ready',
+        diagnostics: [],
+        diagnosticsTotal: 0,
+        diagnosticsTruncated: false,
+      })
       useWorkspacePanelStore.getState().openPanel('session-loaded')
 
       useWorkspacePanelStore.getState().notifyAgentFileEdit(
@@ -867,10 +1008,14 @@ describe('workspacePanelStore', () => {
         '/repo/src/whatever.ts',
       )
 
-      // Drain any pending microtasks scheduled by void loadStatus(...)
+      // Drain any pending microtasks scheduled by void loadStatus(...)/syncLsp(...)
       await Promise.resolve()
       await Promise.resolve()
       expect(mocks.getWorkspaceStatusMock).toHaveBeenCalledWith('session-loaded')
+      expect(mocks.syncWorkspaceLspMock).toHaveBeenCalledWith('session-loaded', expect.objectContaining({
+        path: '/repo/src/whatever.ts',
+        event: 'change',
+      }))
     })
 
     it('skips loadStatus when the panel is closed for the session', () => {

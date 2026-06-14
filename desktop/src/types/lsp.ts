@@ -22,6 +22,8 @@ export type LspDiagnostic = {
   code?: string | number
 }
 
+export type WorkspaceLspDiagnostic = LspDiagnostic
+
 export type LspUnavailableReason =
   | 'prereq-missing'
   | 'init-timeout'
@@ -30,6 +32,12 @@ export type LspUnavailableReason =
   | 'restart-cap-exhausted'
 
 export type WorkspaceLspState =
+  | { state: 'idle'; path: string | null; serverName: string | null; command: string | null; error?: string }
+  | { state: 'starting'; path: string | null; serverName: string | null; command: string | null; error?: string }
+  | { state: 'ready'; path: string | null; serverName: string | null; command: string | null; error?: string }
+  | { state: 'unavailable'; path: string | null; serverName: string | null; command: string | null; error?: string }
+
+export type LegacyWorkspaceLspState =
   | { state: 'starting'; workspaceId: string; errorCount: 0 }
   | { state: 'ready'; workspaceId: string; errorCount: number }
   | {

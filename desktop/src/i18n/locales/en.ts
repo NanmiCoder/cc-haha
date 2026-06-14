@@ -131,6 +131,8 @@ export const en = {
   'workspace.closeTab': 'Close tab',
   'workspace.preview': 'Preview',
   'workspace.previewEmpty': 'Select a file to preview.',
+  'workspace.lspState': 'LSP {state}',
+  'workspace.lspDiagnostics': '{count} diagnostics',
   'workspace.notGitRepo': 'Not a git repository.',
   'workspace.missingWorkdir': 'Working directory is missing.',
   'workspace.loadError': 'Failed to load workspace data.',

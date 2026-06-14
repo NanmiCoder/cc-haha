@@ -122,11 +122,13 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const lspDebounceRef = useRef<number | undefined>(undefined)
 
   const buffer = useWorkspacePanelStore((s) => s.bufferStateByTabId[tab.id])
   const initBuffer = useWorkspacePanelStore((s) => s.initBuffer)
   const setBufferState = useWorkspacePanelStore((s) => s.setBufferState)
   const acknowledgeConflict = useWorkspacePanelStore((s) => s.acknowledgeConflict)
+  const syncLsp = useWorkspacePanelStore((s) => s.syncLsp)
 
   const [unsupported, setUnsupported] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -164,6 +166,11 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
     }
   }, [buffer, tab.id, tab.path, tab.content, initBuffer, onUnsupportedEncoding])
 
+  useEffect(() => {
+    if (!buffer || unsupported) return
+    void syncLsp(sessionId, { path: buffer.path, content: buffer.currentContent, event: 'open' })
+  }, [buffer?.tabId, sessionId, syncLsp, unsupported])
+
   // -- Mount the CodeMirror view once we have an initialized buffer. -------
   useEffect(() => {
     if (!buffer || unsupported) return
@@ -182,7 +189,12 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
       EditorState.tabSize.of(2),
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) return
-        setBufferState(buffer.tabId, update.state.doc.toString())
+        const content = update.state.doc.toString()
+        setBufferState(buffer.tabId, content)
+        window.clearTimeout(lspDebounceRef.current)
+        lspDebounceRef.current = window.setTimeout(() => {
+          void syncLsp(sessionId, { path: buffer.path, content, event: 'change' })
+        }, 350)
       }),
     ]
     if (language) extensions.push(language)
@@ -197,6 +209,7 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
     viewRef.current = view
 
     return () => {
+      window.clearTimeout(lspDebounceRef.current)
       view.destroy()
       viewRef.current = null
     }
@@ -238,8 +251,9 @@ export function WorkspaceEditor(props: WorkspaceEditorProps) {
     }
 
     onSaved?.(buffer.path)
+    void syncLsp(sessionId, { path: buffer.path, content: buffer.currentContent, event: 'save' })
     return true
-  }, [buffer, sessionId, initBuffer, onSaved])
+  }, [buffer, sessionId, initBuffer, onSaved, syncLsp])
 
   // -- Close: dirty buffer triggers the unsaved-changes modal. -------------
   const handleClose = useCallback(() => {

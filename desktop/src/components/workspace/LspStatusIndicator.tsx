@@ -4,7 +4,7 @@ import { AlertCircle, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react'
 import type {
   LspDiagnostic,
   LspUnavailableReason,
-  WorkspaceLspState,
+  LegacyWorkspaceLspState,
 } from '../../types/lsp'
 
 /**
@@ -34,7 +34,7 @@ const ERROR_COUNT_DISPLAY_CAP = 9999
 const DIAGNOSTIC_MESSAGE_TRUNCATE_AT = 200
 
 export type LspStatusIndicatorProps = {
-  state: WorkspaceLspState
+  state: LegacyWorkspaceLspState
   diagnostics: LspDiagnostic[]
   /** Called for prereq-missing — host opens PluginPrerequisitesModal. */
   onInstallClick?: () => void
@@ -69,7 +69,7 @@ function describeUnavailable(reason: LspUnavailableReason): StatusVisual {
   }
 }
 
-function describe(state: WorkspaceLspState): StatusVisual {
+function describe(state: LegacyWorkspaceLspState): StatusVisual {
   if (state.state === 'starting') {
     return {
       Icon: Loader2,

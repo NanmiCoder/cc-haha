@@ -980,6 +980,7 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
   const openPreview = useWorkspacePanelStore((state) => state.openPreview)
   const closePreviewTabs = useWorkspacePanelStore((state) => state.closePreviewTabs)
   const initBuffer = useWorkspacePanelStore((state) => state.initBuffer)
+  const syncLsp = useWorkspacePanelStore((state) => state.syncLsp)
   const bufferStateByTabId = useWorkspacePanelStore((state) => state.bufferStateByTabId)
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const addWorkspaceReference = useWorkspaceChatContextStore((state) => state.addReference)
@@ -1018,6 +1019,13 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
   const activePreviewError = useWorkspacePanelStore((state) =>
     activePreviewRequestKey ? state.errors.previewByTabId[activePreviewRequestKey] ?? null : null,
   )
+  const activeLspKey = activePreviewTab?.kind === 'file'
+    ? makeTreeStateKey(sessionId, activePreviewTab.path)
+    : null
+  const activeLspDiagnostics = useWorkspacePanelStore((state) =>
+    activeLspKey ? state.lspDiagnosticsBySessionPath[activeLspKey] : undefined,
+  )
+  const lspState = useWorkspacePanelStore((state) => state.lspStateBySession[sessionId])
 
   useEffect(() => {
     const previous = refreshLifecycleRef.current
@@ -1172,6 +1180,11 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
         setPendingCloseError(result.message)
         setIsSavingPendingClose(false)
         return
+      }
+      try {
+        void syncLsp(sessionId, { path: buffer.path, content: buffer.currentContent, event: 'save' }).catch(() => undefined)
+      } catch {
+        // Preserve close behavior when LSP save sync is unavailable.
       }
     }
 
@@ -1339,14 +1352,29 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
               </span>
             </span>
           ))}
-          <button
-            type="button"
-            onClick={() => addWorkspacePathToChat(activePreviewTab.path)}
-            className="ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[14px]">person_add</span>
-            <span>{t('workspace.addToChat')}</span>
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {activePreviewTab.kind === 'file' && (
+              <span
+                data-testid="workspace-lsp-summary"
+                className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[10px] font-medium ${
+                  activeLspDiagnostics?.diagnosticsTotal
+                    ? 'border-[var(--color-error)]/30 text-[var(--color-error)]'
+                    : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]'
+                }`}
+                title={lspState?.error ?? lspState?.command ?? undefined}
+              >
+                {t('workspace.lspState', { state: lspState?.state ?? 'idle' })} · {t('workspace.lspDiagnostics', { count: activeLspDiagnostics?.diagnosticsTotal ?? 0 })}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => addWorkspacePathToChat(activePreviewTab.path)}
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">person_add</span>
+              <span>{t('workspace.addToChat')}</span>
+            </button>
+          </div>
           <span className="shrink-0 rounded-[5px] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-tertiary)]">
             {kindLabel}
           </span>

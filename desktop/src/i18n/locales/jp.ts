@@ -133,6 +133,8 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.closeTab': 'タブを閉じる',
   'workspace.preview': 'プレビュー',
   'workspace.previewEmpty': 'プレビューするファイルを選択してください。',
+  'workspace.lspState': 'LSP {state}',
+  'workspace.lspDiagnostics': '{count} 件の診断',
   'workspace.notGitRepo': 'Git リポジトリではありません。',
   'workspace.missingWorkdir': '作業ディレクトリが見つかりません。',
   'workspace.loadError': 'ワークスペースデータの読み込みに失敗しました。',

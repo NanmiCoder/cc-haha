@@ -23,6 +23,7 @@ import {
   type UpdateProxyMode,
   type UpdateProxySettings,
   type WebSearchSettings,
+  type WorkspaceLspSettings,
 } from '../types/settings'
 import type { TraceCaptureSettings } from '../types/trace'
 import { getDesktopHost } from '../lib/desktopHost'
@@ -75,6 +76,7 @@ type SettingsStore = {
   skipWebFetchPreflight: boolean
   desktopNotificationsEnabled: boolean
   desktopTerminal: DesktopTerminalSettings
+  workspaceLsp: WorkspaceLspSettings
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
@@ -105,6 +107,7 @@ type SettingsStore = {
   setSkipWebFetchPreflight: (enabled: boolean) => Promise<void>
   setDesktopNotificationsEnabled: (enabled: boolean) => Promise<void>
   setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
+  setWorkspaceLsp: (settings: WorkspaceLspSettings) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
@@ -186,6 +189,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   skipWebFetchPreflight: true,
   desktopNotificationsEnabled: false,
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
+  workspaceLsp: {},
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
@@ -247,6 +251,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         skipWebFetchPreflight: userSettings.skipWebFetchPreflight !== false,
         desktopNotificationsEnabled: userSettings.desktopNotificationsEnabled === true,
         desktopTerminal: normalizeDesktopTerminalSettings(userSettings.desktopTerminal),
+        workspaceLsp: normalizeWorkspaceLspSettings(userSettings.workspaceLsp),
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
@@ -443,6 +448,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ desktopTerminal: next })
     } catch (error) {
       set({ desktopTerminal: prev })
+      throw error
+    }
+  },
+
+  setWorkspaceLsp: async (settings) => {
+    const prev = get().workspaceLsp
+    const next = normalizeWorkspaceLspSettings(settings)
+    set({ workspaceLsp: next })
+    try {
+      await settingsApi.updateUser({ workspaceLsp: next })
+    } catch (error) {
+      set({ workspaceLsp: prev })
       throw error
     }
   },
@@ -693,6 +710,54 @@ function normalizeDesktopTerminalSettings(
       ? settings.customShellPath
       : DEFAULT_DESKTOP_TERMINAL_SETTINGS.customShellPath,
   }
+}
+
+function normalizeWorkspaceLspSettings(
+  settings: WorkspaceLspSettings | undefined,
+): WorkspaceLspSettings {
+  const server = settings?.server
+  if (!server || typeof server !== 'object') return {}
+
+  const normalizedServer: NonNullable<WorkspaceLspSettings['server']> = {}
+  const name = typeof server.name === 'string' ? server.name.trim() : ''
+  if (name) normalizedServer.name = name
+
+  const pathValue = typeof server.path === 'string' ? server.path.trim() : ''
+  const commandValue = typeof server.command === 'string' ? server.command.trim() : ''
+  if (pathValue) normalizedServer.path = pathValue
+  if (!pathValue && commandValue && isBareWorkspaceLspCommand(commandValue)) {
+    normalizedServer.command = commandValue
+  }
+
+  if (Array.isArray(server.args)) {
+    normalizedServer.args = server.args.filter((arg): arg is string => typeof arg === 'string')
+  }
+
+  const extensionToLanguage = normalizeWorkspaceLspExtensionMap(server.extensionToLanguage)
+  if (extensionToLanguage) normalizedServer.extensionToLanguage = extensionToLanguage
+
+  return normalizedServer.path || normalizedServer.command || normalizedServer.extensionToLanguage
+    ? { server: normalizedServer }
+    : {}
+}
+
+function isBareWorkspaceLspCommand(command: string): boolean {
+  return !/[\s"'`$&|;<>()]/.test(command)
+}
+
+function normalizeWorkspaceLspExtensionMap(
+  mapping: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return undefined
+  const normalized: Record<string, string> = {}
+  for (const [rawExt, rawLanguage] of Object.entries(mapping)) {
+    if (typeof rawLanguage !== 'string') continue
+    const ext = rawExt.startsWith('.') ? rawExt.toLowerCase() : `.${rawExt.toLowerCase()}`
+    const language = rawLanguage.trim()
+    if (!/^\.[A-Za-z0-9_+-]+$/.test(ext) || !language) continue
+    normalized[ext] = language
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 function normalizeH5AccessSettings(settings: H5AccessSettings | undefined): H5AccessSettings {

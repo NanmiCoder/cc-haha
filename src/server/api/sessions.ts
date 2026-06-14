@@ -25,7 +25,7 @@ import { closeSessionConnection, getSlashCommands } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService } from '../services/workspaceService.js'
 import { WorkspaceFileService } from '../services/workspaceFileService.js'
-import { LspManager } from '../services/lspManager.js'
+import { WorkspaceLspService, type WorkspaceLspConfigInput, type WorkspaceLspSyncInput } from '../services/workspaceLspService.js'
 import { isLspFeatureEnabled } from '../services/lspFeatureFlag.js'
 import {
   getRepositoryContext,
@@ -67,7 +67,7 @@ const workspaceFileService = new WorkspaceFileService(
   ),
 )
 
-const lspManager = new LspManager()
+const workspaceLspService = new WorkspaceLspService()
 
 export async function handleSessionsApi(
   req: Request,
@@ -218,13 +218,13 @@ export async function handleSessionsApi(
     }
 
     if (subResource === 'lsp') {
-      if (req.method !== 'GET') {
+      if (!['GET', 'POST'].includes(req.method)) {
         return Response.json(
           { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
           { status: 405 }
         )
       }
-      return await handleSessionLspRoute(sessionId, segments[4])
+      return await handleSessionLspRoute(req, url, sessionId, segments[4])
     }
 
     if (subResource === 'summary') {
@@ -404,6 +404,8 @@ async function handleSessionWorkspaceRoute(
 }
 
 async function handleSessionLspRoute(
+  req: Request,
+  url: URL,
   sessionId: string,
   lspResource?: string,
 ): Promise<Response> {
@@ -413,17 +415,68 @@ async function handleSessionLspRoute(
       { status: 404 },
     )
   }
-  if (lspResource !== 'state') {
-    return Response.json(
-      { error: 'NOT_FOUND', message: `Unknown lsp resource: ${lspResource ?? ''}` },
-      { status: 404 },
-    )
+
+  const workspaceRoot = await requireSessionWorkspace(sessionId)
+
+  try {
+    switch (lspResource) {
+      case 'state': {
+        if (!['GET', 'POST'].includes(req.method)) return methodNotAllowed(req.method)
+        const config = req.method === 'POST'
+          ? await readJsonBody() as WorkspaceLspConfigInput
+          : undefined
+        const state = config?.server
+          ? await workspaceLspService.restart(sessionId, workspaceRoot, url.searchParams.get('path') || undefined, config)
+          : await workspaceLspService.getState(sessionId, workspaceRoot, url.searchParams.get('path') || undefined)
+        return Response.json({ state })
+      }
+      case 'diagnostics': {
+        if (!['GET', 'POST'].includes(req.method)) return methodNotAllowed(req.method)
+        const requestedPath = url.searchParams.get('path')
+        if (!requestedPath) throw ApiError.badRequest('path query parameter is required for lsp diagnostics')
+        const refresh = url.searchParams.get('refresh') === '1'
+        const config = req.method === 'POST'
+          ? await readJsonBody() as WorkspaceLspConfigInput
+          : undefined
+        return Response.json(await workspaceLspService.getDiagnostics(sessionId, workspaceRoot, requestedPath, { refresh, config }))
+      }
+      case 'sync': {
+        if (req.method !== 'POST') return methodNotAllowed(req.method)
+        const body = await readJsonBody() as WorkspaceLspSyncInput & WorkspaceLspConfigInput
+        return Response.json({ state: await workspaceLspService.sync(sessionId, workspaceRoot, body, body) })
+      }
+      case 'restart': {
+        if (req.method !== 'POST') return methodNotAllowed(req.method)
+        const body = await readJsonBody() as { path?: string } & WorkspaceLspConfigInput
+        return Response.json({ state: await workspaceLspService.restart(sessionId, workspaceRoot, body.path, body) })
+      }
+      default:
+        return Response.json(
+          { error: 'NOT_FOUND', message: `Unknown lsp resource: ${lspResource ?? ''}` },
+          { status: 404 },
+        )
+    }
+  } catch (error) {
+    if (isOutsideWorkspaceError(error)) {
+      throw new ApiError(403, error.message, 'FORBIDDEN')
+    }
+    throw error
   }
-  // sessionId is currently used as the workspace identity; if a future PR
-  // introduces a separate workspace concept (multiple sessions sharing one
-  // workspace), this is the seam where we'd map it.
-  const state = lspManager.getState(sessionId)
-  return Response.json({ state })
+
+  async function readJsonBody(): Promise<unknown> {
+    try {
+      return await req.json()
+    } catch {
+      throw ApiError.badRequest('Request body must be valid JSON')
+    }
+  }
+}
+
+function methodNotAllowed(method: string): Response {
+  return Response.json(
+    { error: 'METHOD_NOT_ALLOWED', message: `Method ${method} not allowed` },
+    { status: 405 },
+  )
 }
 
 async function handleSessionWorkspacePost(

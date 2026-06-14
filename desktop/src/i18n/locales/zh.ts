@@ -133,6 +133,8 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.closeTab': '关闭标签',
   'workspace.preview': '预览',
   'workspace.previewEmpty': '选择一个文件进行预览。',
+  'workspace.lspState': 'LSP {state}',
+  'workspace.lspDiagnostics': '{count} 条诊断',
   'workspace.notGitRepo': '当前目录不是 Git 仓库。',
   'workspace.missingWorkdir': '工作目录不存在。',
   'workspace.loadError': '工作区数据加载失败。',

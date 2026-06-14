@@ -340,6 +340,8 @@ describe('TabBar', () => {
 
     const scrollRegion = screen.getByTestId('tab-bar').querySelector('.overflow-x-auto')
     expect(scrollRegion).toBeInTheDocument()
+    expect(scrollRegion).toHaveClass('min-w-0')
+    expect(scrollRegion).toHaveClass('flex-1')
 
     Object.defineProperty(scrollRegion!, 'clientWidth', {
       configurable: true,

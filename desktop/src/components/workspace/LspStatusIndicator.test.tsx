@@ -2,18 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 
 import { LspStatusIndicator } from './LspStatusIndicator'
-import type { LspDiagnostic, WorkspaceLspState } from '../../types/lsp'
+import type { LspDiagnostic, LegacyWorkspaceLspState } from '../../types/lsp'
 
-const READY: WorkspaceLspState = { state: 'ready', workspaceId: 'w1', errorCount: 0 }
-const READY_ERRORS: WorkspaceLspState = { state: 'ready', workspaceId: 'w1', errorCount: 3 }
-const STARTING: WorkspaceLspState = { state: 'starting', workspaceId: 'w1', errorCount: 0 }
-const UNAVAILABLE_PREREQ: WorkspaceLspState = {
+const READY: LegacyWorkspaceLspState = { state: 'ready', workspaceId: 'w1', errorCount: 0 }
+const READY_ERRORS: LegacyWorkspaceLspState = { state: 'ready', workspaceId: 'w1', errorCount: 3 }
+const STARTING: LegacyWorkspaceLspState = { state: 'starting', workspaceId: 'w1', errorCount: 0 }
+const UNAVAILABLE_PREREQ: LegacyWorkspaceLspState = {
   state: 'unavailable',
   workspaceId: 'w1',
   reason: 'prereq-missing',
   errorCount: 0,
 }
-const UNAVAILABLE_CRASHED: WorkspaceLspState = {
+const UNAVAILABLE_CRASHED: LegacyWorkspaceLspState = {
   state: 'unavailable',
   workspaceId: 'w1',
   reason: 'crashed',

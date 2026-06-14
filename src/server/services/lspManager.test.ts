@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-const probeMock = vi.fn<(...args: unknown[]) => Promise<unknown>>()
-
-vi.mock('./prerequisitesService.js', () => ({
-  probeHostCommand: probeMock,
-}))
+import * as prerequisitesService from './prerequisitesService.js'
 
 import {
   DIAGNOSTICS_DISTINCT_FILE_CAP,
@@ -20,6 +15,7 @@ import {
 
 const installedProbe = { command: 'typescript-language-server', installed: true, resolvedPath: '/bin/tls' }
 const missingProbe = { command: 'typescript-language-server', installed: false, resolvedPath: null }
+let probeMock: ReturnType<typeof vi.spyOn>
 
 function makeFakeClient(diagnostics: LspDiagnostic[] = []): LspClient & { shutdownCalls: number; killed: boolean } {
   const fake = {
@@ -35,8 +31,9 @@ function makeFakeClient(diagnostics: LspDiagnostic[] = []): LspClient & { shutdo
 }
 
 beforeEach(() => {
-  probeMock.mockReset()
-  probeMock.mockResolvedValue(installedProbe)
+  probeMock = vi
+    .spyOn(prerequisitesService, 'probeHostCommand')
+    .mockResolvedValue(installedProbe)
 })
 
 afterEach(() => {

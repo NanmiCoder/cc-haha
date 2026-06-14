@@ -2,10 +2,15 @@ import { create } from 'zustand'
 import {
   sessionsApi,
   type WorkspaceDiffResult,
+  type WorkspaceLspConfigInput,
   type WorkspaceReadFileResult,
+  type WorkspaceLspDiagnosticsResult,
+  type WorkspaceLspSyncInput,
   type WorkspaceStatusResult,
   type WorkspaceTreeResult,
 } from '../api/sessions'
+import type { WorkspaceLspState } from '../types/lsp'
+import { useSettingsStore } from './settingsStore'
 
 export const WORKSPACE_PANEL_DEFAULT_WIDTH = 860
 export const WORKSPACE_PANEL_MIN_WIDTH = 640
@@ -110,6 +115,8 @@ type WorkspacePanelStore = {
   previewTabsBySession: Record<string, WorkspacePreviewTab[] | undefined>
   activePreviewTabIdBySession: Record<string, string | null | undefined>
   bufferStateByTabId: Record<string, WorkspaceBufferState | undefined>
+  lspStateBySession: Record<string, WorkspaceLspState | undefined>
+  lspDiagnosticsBySessionPath: Record<string, WorkspaceLspDiagnosticsResult | undefined>
   loading: WorkspacePanelLoadingState
   errors: WorkspacePanelErrorState
 
@@ -132,6 +139,9 @@ type WorkspacePanelStore = {
   setBufferState: (tabId: string, content: string) => void
   applyExternalSave: (tabId: string, event: WorkspaceExternalSavePayload) => void
   acknowledgeConflict: (tabId: string, action: 'reload' | 'keepMine' | 'openConflict') => void
+  syncLsp: (sessionId: string, input: WorkspaceLspSyncInput) => Promise<void>
+  loadLspState: (sessionId: string, path?: string) => Promise<void>
+  loadLspDiagnostics: (sessionId: string, path: string, refresh?: boolean) => Promise<void>
   /**
    * React to an agent (CLI) file edit observed via the chat tool stream.
    * Unlike `applyExternalSave`, no content hash is available — the agent
@@ -156,6 +166,7 @@ const DEFAULT_WORKBENCH_MODE: WorkbenchMode = 'workspace'
 const statusRequestIds = new Map<string, number>()
 const treeRequestIds = new Map<string, number>()
 const previewRequestIds = new Map<string, number>()
+const lspRequestIds = new Map<string, number>()
 
 function nextRequestId(store: Map<string, number>, key: string) {
   const requestId = (store.get(key) ?? 0) + 1
@@ -223,6 +234,10 @@ function makePreviewKey(sessionId: string, tabId: string) {
   return `${sessionId}::${tabId}`
 }
 
+function makeLspPathKey(sessionId: string, path: string) {
+  return `${sessionId}::${path}`
+}
+
 function getPathTitle(path: string) {
   if (!path) return 'Workspace'
   const segments = path.split('/').filter(Boolean)
@@ -274,6 +289,15 @@ function upsertPreviewTab(
   return nextTabs
 }
 
+function resolveWorkspaceLspConfig(): WorkspaceLspConfigInput | undefined {
+  try {
+    const config = useSettingsStore.getState().workspaceLsp
+    return config.server ? config : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => ({
   panelBySession: {},
   modeBySession: {},
@@ -284,6 +308,8 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
   previewTabsBySession: {},
   activePreviewTabIdBySession: {},
   bufferStateByTabId: {},
+  lspStateBySession: {},
+  lspDiagnosticsBySessionPath: {},
   loading: {
     statusBySession: {},
     treeBySessionPath: {},
@@ -899,11 +925,100 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
       }
     }),
 
+  loadLspDiagnostics: async (sessionId, path, refresh = false) => {
+    const lspKey = makeLspPathKey(sessionId, path)
+    const requestId = nextRequestId(lspRequestIds, lspKey)
+    try {
+      const result = await sessionsApi.getWorkspaceLspDiagnostics(sessionId, path, {
+        refresh,
+        config: resolveWorkspaceLspConfig(),
+      })
+      if (!isLatestRequest(lspRequestIds, lspKey, requestId)) return
+      set((state) => ({
+        lspDiagnosticsBySessionPath: {
+          ...state.lspDiagnosticsBySessionPath,
+          [lspKey]: result,
+        },
+      }))
+    } catch (error) {
+      if (!isLatestRequest(lspRequestIds, lspKey, requestId)) return
+      set((state) => ({
+        lspDiagnosticsBySessionPath: {
+          ...state.lspDiagnosticsBySessionPath,
+          [lspKey]: {
+            state: 'unavailable',
+            diagnostics: [],
+            diagnosticsTotal: 0,
+            diagnosticsTruncated: false,
+            error: error instanceof Error ? error.message : 'Failed to load LSP diagnostics',
+          },
+        },
+      }))
+    }
+  },
+
+  loadLspState: async (sessionId, path) => {
+    try {
+      const result = await sessionsApi.getWorkspaceLspState(sessionId, path, resolveWorkspaceLspConfig())
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: result.state,
+        },
+      }))
+    } catch (error) {
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: {
+            state: 'unavailable',
+            path: path ?? null,
+            serverName: null,
+            command: null,
+            error: error instanceof Error ? error.message : 'Failed to load LSP state',
+          },
+        },
+      }))
+    }
+  },
+
+  syncLsp: async (sessionId, input) => {
+    try {
+      const result = await sessionsApi.syncWorkspaceLsp(sessionId, {
+        ...input,
+        ...resolveWorkspaceLspConfig(),
+      })
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: result.state,
+        },
+      }))
+      if (input.path) {
+        void get().loadLspDiagnostics(sessionId, input.path, false)
+      }
+    } catch (error) {
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: {
+            state: 'unavailable',
+            path: input.path,
+            serverName: null,
+            command: null,
+            error: error instanceof Error ? error.message : 'Failed to sync LSP document',
+          },
+        },
+      }))
+    }
+  },
+
   notifyAgentFileEdit: (sessionId, absolutePath) => {
     // Refresh status/diagnostics for the session regardless of whether the
     // edited file is open — the file tree + changed set may have moved.
     if (get().isPanelOpen(sessionId)) {
       void get().loadStatus(sessionId)
+      void get().syncLsp(sessionId, { path: absolutePath, event: 'change' })
     }
 
     // Flag any open buffer for the same path with an agent-source conflict.
@@ -962,6 +1077,8 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
         previewTabsBySession: removeRecordKey(state.previewTabsBySession, sessionId),
         activePreviewTabIdBySession: removeRecordKey(state.activePreviewTabIdBySession, sessionId),
         bufferStateByTabId: nextBufferStateByTabId,
+        lspStateBySession: removeRecordKey(state.lspStateBySession, sessionId),
+        lspDiagnosticsBySessionPath: stripSessionKeys(state.lspDiagnosticsBySessionPath, sessionId),
         loading: {
           statusBySession: removeRecordKey(state.loading.statusBySession, sessionId),
           treeBySessionPath: stripSessionKeys(state.loading.treeBySessionPath, sessionId),

@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.5.11",
+  "version": "0.5.12",
   "description": "Desktop coding agent workbench for Code Council.",
   "homepage": "https://github.com/706412584/cc-haha",
   "author": {

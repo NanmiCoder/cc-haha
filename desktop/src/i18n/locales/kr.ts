@@ -133,6 +133,8 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.closeTab': '탭 닫기',
   'workspace.preview': '미리 보기',
   'workspace.previewEmpty': '미리 볼 파일을 선택하세요.',
+  'workspace.lspState': 'LSP {state}',
+  'workspace.lspDiagnostics': '진단 {count}개',
   'workspace.notGitRepo': 'Git 저장소가 아닙니다.',
   'workspace.missingWorkdir': '작업 디렉터리가 없습니다.',
   'workspace.loadError': '작업 공간 데이터를 불러오지 못했습니다.',

@@ -90,6 +90,18 @@ export type DesktopTerminalSettings = {
   customShellPath: string
 }
 
+export type WorkspaceLspCustomServerSettings = {
+  name?: string
+  path?: string
+  command?: string
+  args?: string[]
+  extensionToLanguage?: Record<string, string>
+}
+
+export type WorkspaceLspSettings = {
+  server?: WorkspaceLspCustomServerSettings
+}
+
 export type ModelInfo = {
   id: string
   name: string
@@ -116,6 +128,7 @@ export type UserSettings = {
   }
   language?: string
   desktopTerminal?: Partial<DesktopTerminalSettings>
+  workspaceLsp?: WorkspaceLspSettings
   [key: string]: unknown
 }
 

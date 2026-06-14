@@ -34,6 +34,8 @@ type WorkspaceApiMocks = {
   getWorkspaceFileMock: ReturnType<typeof vi.fn>
   getWorkspaceDiffMock: ReturnType<typeof vi.fn>
   saveWorkspaceFileMock: ReturnType<typeof vi.fn>
+  syncWorkspaceLspMock: ReturnType<typeof vi.fn>
+  getWorkspaceLspDiagnosticsMock: ReturnType<typeof vi.fn>
 }
 
 var mocks: WorkspaceApiMocks | undefined
@@ -162,6 +164,8 @@ vi.mock('../../api/sessions', () => ({
         getWorkspaceFileMock: vi.fn(),
         getWorkspaceDiffMock: vi.fn(),
         saveWorkspaceFileMock: vi.fn(),
+        syncWorkspaceLspMock: vi.fn(),
+        getWorkspaceLspDiagnosticsMock: vi.fn(),
       }
     }
 
@@ -171,6 +175,8 @@ vi.mock('../../api/sessions', () => ({
       getWorkspaceFile: mocks.getWorkspaceFileMock,
       getWorkspaceDiff: mocks.getWorkspaceDiffMock,
       saveWorkspaceFile: mocks.saveWorkspaceFileMock,
+      syncWorkspaceLsp: mocks.syncWorkspaceLspMock,
+      getWorkspaceLspDiagnostics: mocks.getWorkspaceLspDiagnosticsMock,
     }
   })(),
 }))
@@ -226,6 +232,15 @@ describe('WorkspacePanel', () => {
       hash: 'a'.repeat(64),
       bytes: 0,
       timestamp: Date.now(),
+    })
+    getMocks().syncWorkspaceLspMock.mockResolvedValue({
+      state: { state: 'ready', path: 'src/app.ts', serverName: 'custom:lsp', command: 'example-lsp' },
+    })
+    getMocks().getWorkspaceLspDiagnosticsMock.mockResolvedValue({
+      state: 'ready',
+      diagnostics: [],
+      diagnosticsTotal: 0,
+      diagnosticsTruncated: false,
     })
   })
 
@@ -1220,6 +1235,11 @@ describe('WorkspacePanel', () => {
         content: 'edited',
       }))
       expect(useWorkspacePanelStore.getState().previewTabsBySession['session-dirty-save-close']).toBeUndefined()
+      expect(getMocks().syncWorkspaceLspMock).toHaveBeenCalledWith('session-dirty-save-close', {
+        path: 'src/app.ts',
+        content: 'edited',
+        event: 'save',
+      })
       expect(getMocks().getWorkspaceStatusMock).toHaveBeenCalled()
     })
   })
