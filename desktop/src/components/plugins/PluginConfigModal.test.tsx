@@ -12,11 +12,14 @@ vi.mock('../../api/plugins', () => ({
   },
 }))
 
-// Mock useUIStore
+// Mock useUIStore — zustand store with selector pattern
 const mockAddToast = vi.fn()
-vi.mock('../../stores/uiStore', () => ({
-  useUIStore: { getState: () => ({ addToast: mockAddToast }) },
-}))
+vi.mock('../../stores/uiStore', () => {
+  const store = { addToast: mockAddToast }
+  const useUIStore = (selector: (s: typeof store) => unknown) => selector(store)
+  useUIStore.getState = () => store
+  return { useUIStore }
+})
 
 const testSchema = {
   API_KEY: {
