@@ -478,6 +478,24 @@ describe('ProviderService', () => {
       expect(updated.apiKey).toBe('sk-test-key-123')
     })
 
+    test('bumps the revision counter monotonically on every update so runtime overrides can detect stale snapshots', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      // New providers don't pre-populate revision (treated as 0 by readers).
+      expect(added.revision).toBeUndefined()
+
+      const r1 = await svc.updateProvider(added.id, { apiKey: 'rotated-once' })
+      expect(r1.revision).toBe(1)
+
+      const r2 = await svc.updateProvider(added.id, { baseUrl: 'https://new.example.com' })
+      expect(r2.revision).toBe(2)
+
+      // Edits that touch nothing useful still bump — the contract is
+      // "user clicked save, force any in-flight session to re-snapshot".
+      const r3 = await svc.updateProvider(added.id, { notes: 'note' })
+      expect(r3.revision).toBe(3)
+    })
+
     test('should throw 404 for non-existent provider', async () => {
       const svc = new ProviderService()
 

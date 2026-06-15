@@ -81,11 +81,23 @@ const sessionTitleState = new Map<string, {
   generationSeq: number
 }>()
 
-type RuntimeOverride = {
+export type RuntimeOverride = {
   providerId: string | null
   modelId: string
   effort?: string
   thinkingEnabled?: boolean
+  /**
+   * Snapshot of the provider's `revision` at the moment this override was
+   * captured. Compared on the next `set_runtime_config` to detect that the
+   * underlying provider config (baseUrl / apiKey / apiFormat / model
+   * mapping) has changed even when the override tuple is the same — which
+   * would otherwise silently keep the running CLI on a stale env snapshot.
+   *
+   * Absent for runtime overrides loaded from older session JSONL metadata
+   * that pre-date this field; treated as 0 so any subsequent
+   * provider.update bumps it past the captured value.
+   */
+  providerRevision?: number
 }
 
 type ActiveUserTurnState = {
@@ -894,20 +906,18 @@ async function handleSetRuntimeConfig(
   const thinkingEnabled =
     typeof message.thinkingEnabled === 'boolean' ? message.thinkingEnabled : undefined
 
-  const nextOverride = {
-    providerId: message.providerId ?? null,
+  const providerId = message.providerId ?? null
+  const providerRevision = await resolveProviderRevision(providerId)
+
+  const nextOverride: RuntimeOverride = {
+    providerId,
     modelId,
     ...(effortLevel ? { effort: effortLevel } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(providerRevision > 0 ? { providerRevision } : {}),
   }
   const prevOverride = runtimeOverrides.get(sessionId)
-  if (
-    prevOverride &&
-    prevOverride.providerId === nextOverride.providerId &&
-    prevOverride.modelId === nextOverride.modelId &&
-    prevOverride.effort === nextOverride.effort &&
-    prevOverride.thinkingEnabled === nextOverride.thinkingEnabled
-  ) {
+  if (runtimeOverridesMatch(prevOverride, nextOverride)) {
     return
   }
 
@@ -945,10 +955,7 @@ async function handleSetRuntimeConfig(
       await pendingStartup.catch(() => undefined)
       const currentOverride = runtimeOverrides.get(sessionId)
       if (
-        currentOverride?.providerId !== nextOverride.providerId ||
-        currentOverride.modelId !== nextOverride.modelId ||
-        currentOverride.effort !== nextOverride.effort ||
-        currentOverride.thinkingEnabled !== nextOverride.thinkingEnabled ||
+        !runtimeOverridesMatch(currentOverride, nextOverride) ||
         !conversationService.hasSession(sessionId)
       ) {
         return
@@ -2576,6 +2583,52 @@ function isKnownRuntimeProviderId(
   )
 }
 
+/**
+ * Look up the current revision of a saved provider for use in
+ * {@link RuntimeOverride.providerRevision}. Returns 0 for the OpenAI Official
+ * built-in (it has no provider config to mutate), 0 for unknown / null ids,
+ * and never throws — a stale providerId is handled by the existing
+ * stale-providerId guard in {@link getRuntimeSettings}.
+ */
+async function resolveProviderRevision(
+  providerId: string | null,
+): Promise<number> {
+  if (!providerId) return 0
+  if (isOpenAIOfficialProviderId(providerId)) return 0
+  try {
+    const provider = await providerService.getProvider(providerId)
+    return provider.revision ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Pure equality check used by `handleSetRuntimeConfig`'s short-circuit.
+ * Exported for unit testing — kept here (not in a separate module) because
+ * it depends on the locally-defined RuntimeOverride shape.
+ *
+ * Returns true when the two overrides describe the same effective CLI
+ * runtime — i.e. respawning the CLI would be a no-op. Critically this
+ * includes `providerRevision`: when the user edits provider config without
+ * touching modelId/effort, the tuple appears unchanged but the spawn-time
+ * env (baseUrl / apiKey / model mapping) is stale, so we must consider
+ * that a difference and force a restart.
+ */
+export function runtimeOverridesMatch(
+  prev: RuntimeOverride | undefined,
+  next: RuntimeOverride,
+): boolean {
+  if (!prev) return false
+  return (
+    prev.providerId === next.providerId &&
+    prev.modelId === next.modelId &&
+    prev.effort === next.effort &&
+    prev.thinkingEnabled === next.thinkingEnabled &&
+    (prev.providerRevision ?? 0) === (next.providerRevision ?? 0)
+  )
+}
+
 async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> {
   const coordinatorMode = sessionId ? coordinatorModeSessions.has(sessionId) : false
   const soloPipelineMode = sessionId ? soloPipelineModeSessions.has(sessionId) : false
@@ -2606,6 +2659,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
     ? runtimeOverrides.get(sessionId) ?? persistedRuntimeOverride
     : undefined
   if (runtimeOverride) {
+    let resolvedModelId = runtimeOverride.modelId
     if (typeof runtimeOverride.providerId === 'string') {
       const { providers } = await providerService.listProviders()
       const providerExists = isKnownRuntimeProviderId(runtimeOverride.providerId, providers)
@@ -2623,6 +2677,36 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
           ...(handoffSystemPrompt ? { handoffSystemPrompt } : {}),
         }
       }
+
+      // Stale-modelId guard: when the persisted runtime modelId is no longer
+      // present in any of the active provider's four model slots
+      // (main / haiku / sonnet / opus), the upstream will return 404 and we
+      // surface "There's an issue with the selected model (...)" — which is
+      // exactly the cycle a user hits when they rename a model in Settings
+      // and resume an old session. Fall back to the provider's main model
+      // instead of letting `--model <unknown>` reach the wire.
+      // Skipped for the OpenAI Official built-in (no editable mapping).
+      if (!isOpenAIOfficialProviderId(runtimeOverride.providerId)) {
+        const provider = providers.find((p) => p.id === runtimeOverride.providerId)
+        if (provider) {
+          const knownModels = new Set(
+            [
+              provider.models.main,
+              provider.models.haiku,
+              provider.models.sonnet,
+              provider.models.opus,
+            ]
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
+              .filter(Boolean),
+          )
+          if (knownModels.size > 0 && !knownModels.has(runtimeOverride.modelId)) {
+            console.warn(
+              `[WS] Persisted runtime modelId '${runtimeOverride.modelId}' is no longer in provider ${provider.id}'s model map; falling back to ${provider.models.main}`,
+            )
+            resolvedModelId = provider.models.main
+          }
+        }
+      }
     }
 
     const userSettings = await settingsService.getUserSettings()
@@ -2630,7 +2714,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
 
     return {
       permissionMode: sessionPermissionMode ?? await settingsService.getPermissionMode().catch(() => undefined),
-      model: runtimeOverride.modelId,
+      model: resolvedModelId,
       effort: runtimeOverride.effort,
       thinking,
       providerId: runtimeOverride.providerId,

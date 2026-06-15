@@ -198,6 +198,12 @@ export class ProviderService {
     delete updated.thinkingIncompatible
     delete updated.thinkingIncompatibleReason
 
+    // Bump the revision counter so any in-flight `runtimeOverride` snapshot
+    // for this provider is recognised as stale by handleSetRuntimeConfig
+    // and forces a CLI restart even when the (providerId, modelId, effort)
+    // tuple is unchanged. See SavedProviderSchema.revision docstring.
+    updated.revision = (existing.revision ?? 0) + 1
+
     index.providers[idx] = updated
     await this.writeIndex(index)
 

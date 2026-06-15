@@ -75,6 +75,23 @@ export const SavedProviderSchema = z.object({
    * providers.json file.
    */
   thinkingIncompatibleReason: z.string().max(500).optional(),
+  /**
+   * Monotonically-increasing counter bumped on every {@link updateProvider}.
+   * The runtime layer captures this value alongside the per-session
+   * `runtimeOverride` at session start, and the next `set_runtime_config`
+   * compares revisions to decide whether to force a CLI restart even when
+   * the (providerId, modelId, effort, thinkingEnabled) tuple is unchanged.
+   *
+   * This catches "user changed baseUrl / apiKey / apiFormat / model mapping
+   * but the override tuple still matches" — without it, the CLI keeps its
+   * spawn-time `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env until the
+   * subprocess is killed for some other reason, which makes provider
+   * config edits feel "stuck".
+   *
+   * Optional for backwards compatibility with providers.json files written
+   * before this field existed; absent reads as 0.
+   */
+  revision: z.number().int().nonnegative().optional(),
 })
 
 export const ProvidersIndexSchema = z.object({
