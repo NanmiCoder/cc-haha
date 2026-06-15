@@ -1044,6 +1044,33 @@ describe('MessageList nested tool calls', () => {
     expect(container.querySelectorAll('[data-message-shell="assistant"]')).toHaveLength(0)
   })
 
+  it('renders stopped tool calls as terminal instead of still generating content', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'idle',
+          messages: [
+            {
+              id: 'tool-write',
+              type: 'tool_use',
+              toolName: 'Write',
+              toolUseId: 'write-1',
+              input: { file_path: '/tmp/story.md' },
+              timestamp: 1,
+              isPending: false,
+              status: 'stopped',
+            } as UIMessage,
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText('Stopped')).toBeTruthy()
+    expect(screen.queryByText('Generating content')).toBeNull()
+  })
+
   it('renders saved memory events with an entrypoint to memory settings', () => {
     useChatStore.setState({
       sessions: {

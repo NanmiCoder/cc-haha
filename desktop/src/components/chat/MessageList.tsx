@@ -1151,7 +1151,7 @@ function getMessageMetricSignature(message: UIMessage): string {
     case 'system':
       return `${message.type}:${message.content.length}`
     case 'tool_use':
-      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}`
+      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}:${message.status ?? ''}`
     case 'tool_result':
       return `${message.type}:${message.toolUseId}:${message.isError ? 1 : 0}`
     case 'compact_summary':
@@ -2141,6 +2141,7 @@ export const MessageBlock = memo(function MessageBlock({
           input={message.input}
           result={toolResult}
           isPending={message.isPending}
+          status={message.status}
           partialInput={message.partialInput}
           agentTaskNotification={
             message.toolName === 'Agent'

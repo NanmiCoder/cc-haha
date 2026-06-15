@@ -1418,6 +1418,7 @@ export const zh: Record<TranslationKey, string> = {
   'tool.generatingContent': '正在生成内容',
   'tool.preparingEdit': '正在准备编辑',
   'tool.preparingTool': '正在准备工具',
+  'tool.stopped': '已停止',
   'tool.readFileContents': '读取文件内容',
   'tool.createFile': '创建文件',
   'tool.updateFileContents': '更新文件内容',

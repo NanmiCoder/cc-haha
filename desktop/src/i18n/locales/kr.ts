@@ -1418,6 +1418,7 @@ export const kr: Record<TranslationKey, string> = {
   'tool.generatingContent': '콘텐츠 생성 중',
   'tool.preparingEdit': '편집 준비 중',
   'tool.preparingTool': '도구 준비 중',
+  'tool.stopped': '중지됨',
   'tool.readFileContents': '파일 내용 읽기',
   'tool.createFile': '파일 만들기',
   'tool.updateFileContents': '파일 내용 업데이트',

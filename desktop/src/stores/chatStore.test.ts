@@ -1896,6 +1896,45 @@ describe('chatStore history mapping', () => {
     vi.useRealTimers()
   })
 
+  it('marks pending tool input as stopped when generation is stopped', () => {
+    vi.useFakeTimers()
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'tool_executing' }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'Write',
+      toolUseId: 'write-1',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      toolInput: '{"file_path":"/private/tmp/story.md","content":"第一章',
+    })
+    vi.advanceTimersByTime(60)
+
+    useChatStore.getState().stopGeneration(TEST_SESSION_ID)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.chatState).toBe('idle')
+    expect(session?.activeToolUseId).toBeNull()
+    expect(session?.activeToolName).toBeNull()
+    expect(session?.streamingToolInput).toBe('')
+    expect(session?.messages[0]).toMatchObject({
+      type: 'tool_use',
+      toolUseId: 'write-1',
+      isPending: false,
+      status: 'stopped',
+    })
+
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
   it('refreshes merged slash commands when a live CLI update omits project commands', async () => {
     const cliCommand = { name: 'builtin-help', description: 'Built-in command' }
     const projectCommand = { name: 'project-probe', description: 'Project custom command' }
@@ -3652,7 +3691,10 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().stopGeneration('session-a')
 
-    expect(useChatStore.getState().sessions['session-a']?.streamingText).toBe('A-only response')
+    expect(useChatStore.getState().sessions['session-a']?.streamingText).toBe('')
+    expect(useChatStore.getState().sessions['session-a']?.messages).toMatchObject([
+      { type: 'assistant_text', content: 'A-only response' },
+    ])
     expect(useChatStore.getState().sessions['session-b']?.streamingText).toBe('')
 
     useChatStore.getState().handleServerMessage('session-b', {

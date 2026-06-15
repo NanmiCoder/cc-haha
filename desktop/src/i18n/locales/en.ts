@@ -1416,6 +1416,7 @@ export const en = {
   'tool.generatingContent': 'Generating content',
   'tool.preparingEdit': 'Preparing edit',
   'tool.preparingTool': 'Preparing tool',
+  'tool.stopped': 'Stopped',
   'tool.readFileContents': 'Read file contents',
   'tool.createFile': 'Create file',
   'tool.updateFileContents': 'Update file contents',

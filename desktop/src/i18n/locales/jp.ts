@@ -1418,6 +1418,7 @@ export const jp: Record<TranslationKey, string> = {
   'tool.generatingContent': 'コンテンツを生成中',
   'tool.preparingEdit': '編集を準備中',
   'tool.preparingTool': 'ツールを準備中',
+  'tool.stopped': '停止済み',
   'tool.readFileContents': 'ファイルの内容を読み取り',
   'tool.createFile': 'ファイルを作成',
   'tool.updateFileContents': 'ファイルの内容を更新',

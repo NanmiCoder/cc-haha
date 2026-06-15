@@ -356,6 +356,20 @@ function upsertToolUseMessage(
   return next
 }
 
+function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
+  let changed = false
+  const stoppedMessages = messages.map((message) => {
+    if (message.type !== 'tool_use' || !message.isPending) return message
+    changed = true
+    return {
+      ...message,
+      isPending: false,
+      status: 'stopped' as const,
+    }
+  })
+  return changed ? stoppedMessages : messages
+}
+
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
@@ -1087,21 +1101,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   stopGeneration: (sessionId) => {
     wsManager.send(sessionId, { type: 'stop_generation' })
-    if (pendingDeltaBySession.has(sessionId)) {
-      const text = consumePendingDelta(sessionId)
-      set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
-    }
+    const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
+    clearPendingTaskToolUseIds(sessionId)
+    clearPendingToolParentUseIds(sessionId)
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) return s
       if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+      const pendingAssistantText = `${session.streamingText}${bufferedText}`
+      const messagesWithFlushedText = pendingAssistantText.trim()
+        ? appendAssistantTextMessage(session.messages, pendingAssistantText, Date.now())
+        : session.messages
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...session,
+            messages: markPendingToolUseMessagesStopped(messagesWithFlushedText),
             chatState: 'idle',
+            activeToolUseId: null,
+            activeToolName: null,
+            activeThinkingId: null,
+            streamingText: '',
+            streamingToolInput: '',
+            statusVerb: '',
             pendingPermission: null,
             pendingComputerUsePermission: null,
             apiRetry: null,
@@ -1111,6 +1135,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       }
     })
+    useTabStore.getState().updateTabStatus(sessionId, 'idle')
   },
 
   loadHistory: async (sessionId) => {
