@@ -57,4 +57,31 @@ describe('MermaidRenderer Mermaid integration', () => {
     expect(surface.innerHTML).not.toContain('<script')
     expect(surface.innerHTML).not.toContain('onerror')
   })
+
+  it('renders generated flowchart labels with HTML breaks and structural characters', async () => {
+    render(
+      <MermaidRenderer
+        code={[
+          'graph LR',
+          '    subgraph "Yjs CRDT 核心"',
+          '        Y[Yjs Document]',
+          '        A[嵌入类型<br/>Text / Map / Array]',
+          '        I[插入操作<br/>{content, position, clock, clientID}]',
+          '        D[删除操作<br/>{position, length, clock, clientID}]',
+          '        RM[Room Manager<br/>map[string]*Room]',
+          '    end',
+          '    I --> Y',
+          '    D --> Y',
+          '    RM --> Y',
+        ].join('\n')}
+      />,
+    )
+
+    const surface = await screen.findByTestId('mermaid-diagram-surface')
+
+    expect(surface).toHaveTextContent('插入操作')
+    expect(surface).toHaveTextContent('{content, position, clock, clientID}')
+    expect(surface).toHaveTextContent('map[string]*Room')
+    expect(screen.queryByText('Mermaid Error')).not.toBeInTheDocument()
+  })
 })

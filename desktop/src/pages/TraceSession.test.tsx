@@ -6,7 +6,7 @@ import { sessionsApi } from '../api/sessions'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { clearTraceCallCache } from '../lib/trace/callCache'
-import { resetTraceSectionState } from '../components/trace/detail/Section'
+import { Section, resetTraceSectionState } from '../components/trace/detail/Section'
 import type { MessageEntry } from '../types/session'
 import type { TraceCallRecord, TraceSession as TraceSessionData } from '../types/trace'
 
@@ -200,6 +200,12 @@ describe('TraceSession', () => {
     const detail = within(screen.getByTestId('trace-detail'))
     expect(detail.getByTestId('trace-overview')).toBeInTheDocument()
     expect(detail.getByText('LLM calls')).toBeInTheDocument()
+    expect(detail.getAllByText('Wall time').length).toBeGreaterThan(0)
+    expect(detail.getAllByText('6.00s').length).toBeGreaterThan(0)
+    expect(detail.getAllByText('Model time').length).toBeGreaterThan(0)
+    expect(detail.getAllByText('2.00s').length).toBeGreaterThan(0)
+    expect(detail.getByText('Tool time')).toBeInTheDocument()
+    expect(detail.getAllByText('1.00s').length).toBeGreaterThan(0)
 
     // Timeline rows for messages, the model call, and the tool call.
     const tree = within(screen.getByTestId('trace-tree'))
@@ -238,6 +244,9 @@ describe('TraceSession', () => {
 
     const detail = within(screen.getByTestId('trace-detail'))
     expect(detail.getByRole('heading', { level: 2, name: 'Bash' })).toBeInTheDocument()
+    expect(detail.getByText('Duration')).toBeInTheDocument()
+    expect(detail.getByText('1.00s')).toBeInTheDocument()
+    expect(detail.getAllByText('Completed').length).toBeGreaterThan(0)
     expect(detail.getByTestId('trace-tool-detail')).toBeInTheDocument()
     expect(detail.getByText('Input')).toBeInTheDocument()
     expect(detail.getByText('Result')).toBeInTheDocument()
@@ -303,6 +312,49 @@ describe('TraceSession', () => {
     expect(detail.getByText('1.2k → 847')).toBeInTheDocument()
   })
 
+  it('shows the aborted badge and abort guidance for an aborted call', async () => {
+    const abortedCall = makeCall({
+      id: 'call-aborted',
+      status: 'error',
+      completedAt: '2026-06-09T10:04:01.000Z',
+      durationMs: 240_000,
+      metadata: { phase: 'api_call_aborted', aborted: true },
+      error: { name: 'AbortError', message: 'Stream idle timeout: no chunks received for 240s' },
+      response: {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+        body: {
+          contentType: 'text',
+          bytes: 30,
+          sha256: 'c'.repeat(64),
+          preview: 'data: {"type":"message_start"}',
+          truncated: true,
+        },
+      },
+    })
+    vi.mocked(sessionsApi.getTrace).mockResolvedValue({
+      ...baseTrace,
+      summary: { ...baseTrace.summary, failedCalls: 1 },
+      calls: [abortedCall],
+    })
+    vi.mocked(sessionsApi.getTraceCall).mockResolvedValue({ call: abortedCall })
+    await renderReady()
+
+    fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
+
+    const detail = within(screen.getByTestId('trace-detail'))
+    expect(await detail.findByTestId('trace-call-error')).toBeInTheDocument()
+    expect(detail.getByTestId('trace-call-aborted-badge')).toHaveTextContent('Aborted')
+    expect(detail.getByText('AbortError')).toBeInTheDocument()
+    expect(detail.getByText('Stream idle timeout: no chunks received for 240s')).toBeInTheDocument()
+    expect(
+      detail.getByText('The request was aborted before the response completed (timeout or cancellation).'),
+    ).toBeInTheDocument()
+    // The header pill shows the terminal error state, not pending.
+    expect(detail.getByText('error')).toBeInTheDocument()
+    expect(detail.queryByText('pending')).not.toBeInTheDocument()
+  })
+
   it('falls back to Raw with a legacy notice when the body cannot be parsed', async () => {
     const legacyCall = makeCall({
       request: {
@@ -348,17 +400,65 @@ describe('TraceSession', () => {
       })
     await renderReady(20)
 
-    // Select the model call; identical poll ticks must not reset the selection
-    // or re-trigger the on-demand detail fetch.
     fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
     await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(3))
 
-    // The grown snapshot lands and renders both calls.
     await screen.findByText('claude-sonnet-4-5 x2')
     expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1)
     const detail = within(screen.getByTestId('trace-detail'))
     expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
+  })
+
+  it('applies poll updates when a call changes without changing row counts', async () => {
+    const pendingTrace: TraceSessionData = {
+      ...baseTrace,
+      summary: {
+        ...baseTrace.summary,
+        failedCalls: 0,
+        updatedAt: '2026-06-09T10:00:01.000Z',
+      },
+      calls: [makeCall({ status: 'pending', completedAt: undefined, durationMs: undefined, response: undefined, usage: undefined })],
+    }
+    const completedTrace: TraceSessionData = {
+      ...baseTrace,
+      summary: {
+        ...baseTrace.summary,
+        failedCalls: 1,
+        updatedAt: '2026-06-09T10:00:01.000Z',
+      },
+      calls: [makeCall({ status: 'error', error: { name: 'Error', message: 'rate limited' }, response: undefined })],
+    }
+    vi.mocked(sessionsApi.getTrace)
+      .mockResolvedValueOnce(pendingTrace)
+      .mockResolvedValue(completedTrace)
+
+    await renderReady(20)
+
+    await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(2))
+    const diagnosis = within(screen.getByTestId('trace-diagnosis'))
+    expect(diagnosis.getByText('error')).toBeInTheDocument()
+    expect(diagnosis.getByText('Model call failed')).toBeInTheDocument()
+  })
+
+  it('keeps section collapse state scoped to each trace session instance', async () => {
+    const { rerender } = render(
+      <Section key="left" scopeId="left" sectionKey="llm.raw" title="Raw" defaultOpen>
+        left body
+      </Section>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Raw/ }))
+    expect(screen.queryByText('left body')).not.toBeInTheDocument()
+
+    rerender(
+      <Section key="right" scopeId="right" sectionKey="llm.raw" title="Raw" defaultOpen>
+        right body
+      </Section>,
+    )
+
+    expect(screen.getByRole('button', { name: /Raw/ })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('right body')).toBeInTheDocument()
   })
 
   it('supports keyboard navigation in the tree', async () => {

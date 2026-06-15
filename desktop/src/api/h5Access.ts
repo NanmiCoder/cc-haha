@@ -33,6 +33,8 @@ export const h5AccessApi = {
   update(input: {
     allowedOrigins?: string[]
     publicBaseUrl?: string | null
+    fixedPort?: number | null
+    disconnectGraceSeconds?: number | null
   }) {
     return api.put<H5AccessStatus>('/api/h5-access', input)
   },

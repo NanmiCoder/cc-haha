@@ -1,6 +1,11 @@
 import type { ModelInfo } from '../types/settings'
 
+export const CLAUDE_OFFICIAL_PROVIDER_ID = 'claude-official'
 export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
+export const BUILT_IN_PROVIDER_IDS = [
+  CLAUDE_OFFICIAL_PROVIDER_ID,
+  OPENAI_OFFICIAL_PROVIDER_ID,
+] as const
 export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-5.3-codex'
 export const OPENAI_OFFICIAL_PROVIDER_NAME = 'ChatGPT Official'
 

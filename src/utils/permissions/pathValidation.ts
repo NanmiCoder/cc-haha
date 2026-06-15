@@ -175,6 +175,12 @@ export function isPathAllowed(
     }
   }
 
+  const isInWorkingDir = pathInAllowedWorkingPath(
+    resolvedPath,
+    context,
+    precomputedPathsToCheck,
+  )
+
   // 2.5. For write/create operations, check comprehensive safety validations
   // This MUST come before checking working directory to prevent bypass via acceptEdits mode
   // Checks: Windows patterns, Claude config files, dangerous files (on original + symlink paths)
@@ -182,6 +188,9 @@ export function isPathAllowed(
     const safetyCheck = checkPathSafetyForAutoEdit(
       resolvedPath,
       precomputedPathsToCheck,
+      {
+        allowUncPath: getPlatform() === 'windows' && isInWorkingDir,
+      },
     )
     if (!safetyCheck.safe) {
       return {
@@ -198,11 +207,6 @@ export function isPathAllowed(
   // 3. Check if path is in allowed working directory
   // For write/create operations, require acceptEdits mode to auto-allow
   // This is consistent with checkWritePermissionForTool in filesystem.ts
-  const isInWorkingDir = pathInAllowedWorkingPath(
-    resolvedPath,
-    context,
-    precomputedPathsToCheck,
-  )
   if (isInWorkingDir) {
     if (operationType === 'read' || context.mode === 'acceptEdits') {
       return { allowed: true }

@@ -5,6 +5,8 @@
  */
 
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
+import { openaiUsageToAnthropic } from '../transform/usage.js'
+import type { OpenAICompatibleUsage } from '../transform/types.js'
 
 type StreamState = {
   nextContentIndex: number
@@ -257,7 +259,7 @@ function processEvent(
     case 'response.completed': {
       const response = data.response as Record<string, unknown> | undefined
       const status = (response?.status as string) || 'completed'
-      const usage = response?.usage as Record<string, number> | undefined
+      const usage = response?.usage as OpenAICompatibleUsage | undefined
       const hasToolUse = state.toolIndexByItemId.size > 0
 
       const stopReason = status === 'completed'
@@ -267,10 +269,7 @@ function processEvent(
       controller.enqueue(encoder.encode(formatSse('message_delta', {
         type: 'message_delta',
         delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: {
-          input_tokens: usage?.input_tokens ?? 0,
-          output_tokens: usage?.output_tokens ?? 0,
-        },
+        usage: openaiUsageToAnthropic(usage),
       })))
       if (!state.messageStopped) {
         state.messageStopped = true

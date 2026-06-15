@@ -11,6 +11,8 @@ import type { SessionListItem } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
 
+const SESSION_LIST_LIMIT = 400
+
 type CreateSessionOptions = {
   repository?: CreateSessionRepositoryOptions
   permissionMode?: PermissionMode
@@ -61,22 +63,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const requestId = ++fetchSessionsRequestId
     set({ isLoading: true, error: null })
     try {
-      const { sessions: raw } = await sessionsApi.list({ project, limit: 100 })
+      const { sessions: raw } = await sessionsApi.list(buildSessionListParams(project))
       if (requestId !== fetchSessionsRequestId) return
       let syncedSessions: SessionListItem[] = []
       set((state) => {
-        const currentById = new Map(state.sessions.map((session) => [session.id, session]))
-        // Deduplicate by session ID - keep the most recently modified entry.
-        const byId = new Map<string, SessionListItem>()
-        for (const s of raw) {
-          const current = currentById.get(s.id)
-          const candidate = preserveLocalTitle(current, s)
-          const existing = byId.get(s.id)
-          if (!existing || new Date(candidate.modifiedAt) > new Date(existing.modifiedAt)) {
-            byId.set(s.id, candidate)
-          }
-        }
-        const sessions = [...byId.values()]
+        const sessions = mergeSessionList(raw, state.sessions)
         syncedSessions = sessions
         return { sessions, isLoading: false }
       })
@@ -235,6 +226,36 @@ function removeIdsFromSet(selected: Set<string>, ids: string[]): Set<string> {
   const next = new Set(selected)
   for (const id of ids) next.delete(id)
   return next
+}
+
+function buildSessionListParams(project: string | undefined) {
+  return project
+    ? { project, limit: SESSION_LIST_LIMIT }
+    : { limit: SESSION_LIST_LIMIT }
+}
+
+function mergeSessionList(
+  incoming: SessionListItem[],
+  currentForTitle: SessionListItem[],
+): SessionListItem[] {
+  const currentById = new Map(currentForTitle.map((session) => [session.id, session]))
+  const byId = new Map<string, SessionListItem>()
+
+  for (const item of incoming) {
+    const current = currentById.get(item.id)
+    const candidate = preserveLocalTitle(current, item)
+    const existing = byId.get(candidate.id)
+    if (!existing || sessionModifiedTime(candidate) > sessionModifiedTime(existing)) {
+      byId.set(candidate.id, candidate)
+    }
+  }
+
+  return [...byId.values()].sort((a, b) => sessionModifiedTime(b) - sessionModifiedTime(a))
+}
+
+function sessionModifiedTime(session: SessionListItem): number {
+  const timestamp = new Date(session.modifiedAt).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 function preserveLocalTitle(

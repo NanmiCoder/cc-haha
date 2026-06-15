@@ -46,10 +46,29 @@ export type OpenAIChatRequest = {
   top_p?: number
   stop?: string | string[]
   stream?: boolean
+  stream_options?: { include_usage: boolean }
   tools?: OpenAITool[]
   tool_choice?: unknown
   reasoning_effort?: 'low' | 'medium' | 'high'
   thinking?: { type: string }
+}
+
+/**
+ * Usage shape accepted from OpenAI-compatible upstreams.
+ * Responses API uses input_tokens/input_tokens_details, Chat Completions uses
+ * prompt_tokens/prompt_tokens_details, and some compatible servers return
+ * Anthropic-style cache fields directly.
+ */
+export type OpenAICompatibleUsage = {
+  input_tokens?: number
+  output_tokens?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+  input_tokens_details?: { cached_tokens?: number }
+  prompt_tokens_details?: { cached_tokens?: number }
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
 }
 
 export type OpenAIChatResponse = {
@@ -66,14 +85,7 @@ export type OpenAIChatResponse = {
     }
     finish_reason: string | null
   }>
-  usage?: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
-    prompt_tokens_details?: {
-      cached_tokens?: number
-    }
-  }
+  usage?: OpenAICompatibleUsage
 }
 
 export type OpenAIChatStreamChunk = {
@@ -125,6 +137,7 @@ export type OpenAIResponsesRequest = {
   }>
   tool_choice?: unknown
   reasoning?: { effort?: 'low' | 'medium' | 'high' }
+  prompt_cache_key?: string
 }
 
 export type OpenAIResponsesOutputItem =
@@ -139,11 +152,7 @@ export type OpenAIResponsesResponse = {
   model: string
   status: string
   output: OpenAIResponsesOutputItem[]
-  usage?: {
-    input_tokens: number
-    output_tokens: number
-    total_tokens: number
-  }
+  usage?: OpenAICompatibleUsage
 }
 
 // ─── Anthropic Types (subset used by transforms) ───────────
@@ -164,6 +173,7 @@ export type AnthropicRequest = {
   model: string
   system?: string | Array<{ type: 'text'; text: string; cache_control?: unknown }>
   messages: AnthropicMessage[]
+  metadata?: { user_id?: string; session_id?: string }
   max_tokens: number
   temperature?: number
   top_p?: number

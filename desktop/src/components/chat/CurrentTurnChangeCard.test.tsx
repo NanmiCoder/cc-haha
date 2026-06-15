@@ -84,6 +84,7 @@ vi.mock('../../i18n', () => ({
 // Import after mocks
 // ──────────────────────────────────────────────────────────────────────────────
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
+import { localFileUrl } from '../../lib/handlePreviewLink'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -201,6 +202,24 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
     expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'diff')
   })
 
+  it('clicking an outside-workspace html changed file opens the in-app browser via local-file', () => {
+    // The file lives outside the workdir (absolute displayPath) — no diff baseline,
+    // so html renders directly in the in-app browser via the /local-file route.
+    renderCard(['/other/place/todo.html'])
+    const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
+    fireEvent.click(row)
+    expect(browserOpenSpy).toHaveBeenCalledWith('s1', localFileUrl('http://127.0.0.1:4321', '/other/place/todo.html'))
+    expect(openPreviewSpy).not.toHaveBeenCalled()
+  })
+
+  it('clicking an outside-workspace non-html changed file opens a file preview (not a diff)', () => {
+    renderCard(['/other/place/notes.txt'])
+    const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
+    fireEvent.click(row)
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', '/other/place/notes.txt', 'file')
+    expect(browserOpenSpy).not.toHaveBeenCalled()
+  })
+
   it('does NOT render an inline diff surface after clicking a row', () => {
     renderCard(['/w/proj/src/main.ts'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
@@ -280,8 +299,25 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'file')
   })
 
-  it('clicking project index.html open-with opens menu with workspace preview item', async () => {
+  it('clicking a standalone index.html (no manifest in change-set) offers both workspace preview and in-app browser', async () => {
+    // A hand-authored single-page index.html is statically previewable, so the
+    // menu offers the in-app browser alongside the workspace source view.
     renderCard(['/w/proj/index.html'])
+    const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
+
+    await act(async () => {
+      fireEvent.click(openWithBtn!)
+    })
+
+    expect(await screen.findByText('openWith.workspacePreview')).toBeInTheDocument()
+    expect(screen.queryByText('openWith.inAppBrowser')).toBeInTheDocument()
+  })
+
+  it('clicking a framework-template index.html (manifest in same change-set) hides the in-app browser', async () => {
+    // With a package.json in the same turn, the root index.html is a build
+    // template that needs a dev server — static preview would render blank — so
+    // only the workspace source view is offered.
+    renderCard(['/w/proj/index.html', '/w/proj/package.json', '/w/proj/vite.config.ts'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {

@@ -5,7 +5,7 @@ import { useMemo, useRef } from 'react';
 import { stringWidth } from '../../ink/stringWidth.js';
 import { Box, Text, useAnimationFrame } from '../../ink.js';
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js';
-import { formatDuration, formatNumber } from '../../utils/format.js';
+import { formatDuration, formatTokens } from '../../utils/format.js';
 import { toInkColor } from '../../utils/ink.js';
 import type { Theme } from '../../utils/theme.js';
 import { Byline } from '../design-system/Byline.js';
@@ -164,7 +164,7 @@ export function SpinnerAnimationRow({
 
   // === Token count (leader + teammates, or foregrounded teammate) ===
   const totalTokens = foregroundedTeammate && !foregroundedTeammate.isIdle ? foregroundedTeammate.progress?.tokenCount ?? 0 : leaderTokens + teammateTokens;
-  const tokenCount = formatNumber(totalTokens);
+  const tokenCount = formatTokens(totalTokens);
   const tokensText = hasRunningTeammates ? `${tokenCount} tokens` : `${figures.arrowDown} ${tokenCount} tokens`;
   const tokensWidth = stringWidth(tokensText);
 

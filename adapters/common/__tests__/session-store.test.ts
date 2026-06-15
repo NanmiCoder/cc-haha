@@ -88,6 +88,25 @@ describe('SessionStore', () => {
     expect(store2.get('anything')).toBeNull()
   })
 
+  it('uses CLAUDE_CONFIG_DIR for the default session store path', () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const defaultStore = new SessionStore()
+      defaultStore.set('chat-default', 'uuid-default', '/default-project')
+
+      const savedPath = path.join(tmpDir, 'adapter-sessions.json')
+      expect(fs.existsSync(savedPath)).toBe(true)
+      expect(JSON.parse(fs.readFileSync(savedPath, 'utf8'))['chat-default'].sessionId).toBe('uuid-default')
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+    }
+  })
+
   it('lists all entries', () => {
     store.set('chat-1', 'uuid-1', '/a')
     store.set('chat-2', 'uuid-2', '/b')

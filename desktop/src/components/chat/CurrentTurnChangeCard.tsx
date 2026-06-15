@@ -6,6 +6,8 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { OpenWithMenu } from '../common/OpenWithMenu'
 import { buildOpenWithItems, describeFileType, isPreviewableChangedFile, type OpenWithItem } from '../../lib/openWithItems'
 import { openWithContextForWorkspaceFile } from '../../lib/openWithContextForHref'
+import { isAbsoluteLocalPath, localFileUrl } from '../../lib/handlePreviewLink'
+import { shouldOfferStaticHtmlPreview } from '../../lib/htmlPreviewPolicy'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
@@ -57,12 +59,24 @@ export function CurrentTurnChangeCard({
     ? files.slice(0, COLLAPSED_COUNT)
     : files
 
-  const openDiffInWorkspace = useCallback((fileEntry: ChangedFileEntry) => {
+  const openChangedFile = useCallback((fileEntry: ChangedFileEntry) => {
+    // A changed file outside the workdir (absolute displayPath — e.g. another
+    // drive) has no checkpoint baseline, so a diff is meaningless. Render html in
+    // the in-app browser and everything else as a file preview (served by its
+    // absolute path). In-workdir files keep the diff view.
+    if (isAbsoluteLocalPath(fileEntry.displayPath)) {
+      if (shouldOfferStaticHtmlPreview(fileEntry.displayPath, { siblingFiles: files.map((entry) => entry.displayPath) })) {
+        useBrowserPanelStore.getState().open(sessionId, localFileUrl(getServerBaseUrl(), fileEntry.apiPath))
+        return
+      }
+      void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'file')
+      return
+    }
     // Jump to the right-side workspace and open a diff tab. We pass the workDir-relative
     // path (same format the workspace file tree passes to openPreview), so the diff tab
     // is keyed/fetched identically to the tree-driven one.
     void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'diff')
-  }, [sessionId])
+  }, [sessionId, files])
 
   const handleOpenWith = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     event.stopPropagation()
@@ -81,6 +95,7 @@ export function CurrentTurnChangeCard({
       const ctx = openWithContextForWorkspaceFile(fileEntry.displayPath, fileEntry.apiPath, {
         sessionId,
         serverBaseUrl: getServerBaseUrl(),
+        siblingFiles: files.map((entry) => entry.displayPath),
       })
       const items = buildOpenWithItems(ctx, targets, {
         openInAppBrowser: (url) => useBrowserPanelStore.getState().open(sessionId, url),
@@ -91,7 +106,7 @@ export function CurrentTurnChangeCard({
       })
       setOpenWith({ items, anchor: rect, triggerEl })
     })()
-  }, [openWith, sessionId, t])
+  }, [openWith, sessionId, t, files])
 
   const cardLabel = isLatest
     ? t('chat.turnChangesLatestCardLabel')
@@ -150,7 +165,7 @@ export function CurrentTurnChangeCard({
             <div key={fileEntry.apiPath} className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => openDiffInWorkspace(fileEntry)}
+                onClick={() => openChangedFile(fileEntry)}
                 aria-label={t('chat.turnChangesOpenInWorkspaceAria', { path: fileEntry.displayPath })}
                 title={fileEntry.displayPath}
                 className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-md)] px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35"

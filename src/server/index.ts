@@ -28,6 +28,7 @@ import { handleStaticH5Request } from './staticH5.js'
 import { classifyH5Request, shouldBlockDisabledH5Access, shouldRequireH5Token } from './h5AccessPolicy.js'
 import { H5AccessService } from './services/h5AccessService.js'
 import { registerSeedMarketplaces } from '../utils/plugins/marketplaceManager.js'
+import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -126,6 +127,9 @@ function originFromUrl(value: string | null): string | null {
 
 export function startServer(port = PORT, host = HOST) {
   enableConfigs()
+  // Warm the synchronous disconnect-grace cache from managed settings so the
+  // first client disconnect honors the configured value (issue #764).
+  void refreshDisconnectGraceMs()
   // Don't hijack the global console / process handlers under `bun test`:
   // a test that boots the server would otherwise route every test-side
   // console.error/warn into the user's real diagnostics file.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { signClaudeCodeCCHInString, signClaudeCodeCCHInTransformedString, xxHash64Seeded } from './claudeCodeCch.js'
+import { signClaudeCodeCCHInString, xxHash64Seeded } from './claudeCodeCch.js'
 
 const encoder = new TextEncoder()
 
@@ -33,10 +33,5 @@ describe('signClaudeCodeCCHInString', () => {
   test('does not partially sign when user text also contains a placeholder', () => {
     const body = '{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.92.abc; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":"literal x-anthropic-billing-header: cc_version=2.1.92.user; cc_entrypoint=cli; cch=00000;"}]}'
     expect(signClaudeCodeCCHInString(body)).toBe(body)
-  })
-
-  test('does not partially sign transformed body when user text also contains a placeholder', () => {
-    const body = '{"messages":[{"role":"system","content":"x-anthropic-billing-header: cc_version=2.1.92.abc; cc_entrypoint=cli; cch=00000;"},{"role":"user","content":"literal x-anthropic-billing-header: cc_version=2.1.92.user; cc_entrypoint=cli; cch=00000;"}]}'
-    expect(signClaudeCodeCCHInTransformedString(body)).toBe(body)
   })
 })

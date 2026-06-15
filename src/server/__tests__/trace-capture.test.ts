@@ -5,6 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { handleApiRequest } from '../router.js'
 import {
+  captureResponseTraceSnapshot,
   clearTraceCaptureStateForTests,
   createTraceCallId,
   createTraceBodySnapshot,
@@ -638,6 +639,300 @@ describe('trace capture service', () => {
       else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceEnv
     }
   })
+
+  test('records an aborted error call when the request is aborted mid-stream', async () => {
+    const originalFetch = globalThis.fetch
+    const originalTraceEnv = process.env.CC_HAHA_TRACE_API_CALLS
+    process.env.CC_HAHA_TRACE_API_CALLS = '1'
+    try {
+      // A stream that sends one chunk then goes silent forever, like the
+      // wedged upstream in #766. The mock ignores the abort signal, so the
+      // trace capture must end the read itself.
+      globalThis.fetch = (async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"type":"message_start"}\n\n'))
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }) as typeof fetch
+
+      const abortController = new AbortController()
+      const traceFetch = createDumpPromptsFetch('agent-direct-abort', {
+        traceSessionId: 'session-direct-abort',
+        querySource: 'test_query',
+      })
+      await traceFetch('https://sub2api.example.test/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'gpt-5.5', messages: [{ role: 'user', content: 'abort me' }] }),
+        signal: abortController.signal,
+      })
+
+      // Let the capture loop start reading, then abort like the stream idle
+      // watchdog (stream.controller.abort()) or SDK client timeout would.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      abortController.abort(new Error('Stream idle timeout: no chunks received for 240s'))
+
+      const trace = await waitForTrace(
+        'session-direct-abort',
+        (snapshot) => snapshot.calls[0]?.status === 'error'
+          && snapshot.events.some((event) => event.phase === 'api_call_aborted'),
+      )
+      expect(trace.summary.apiCalls).toBe(1)
+      expect(trace.summary.failedCalls).toBe(1)
+      expect(trace.calls[0]).toMatchObject({
+        source: 'anthropic',
+        model: 'gpt-5.5',
+        status: 'error',
+        metadata: { phase: 'api_call_aborted', aborted: true },
+      })
+      expect(trace.calls[0].error?.message).toContain('Stream idle timeout')
+      expect(typeof trace.calls[0].durationMs).toBe('number')
+      expect(trace.calls[0].response?.status).toBe(200)
+      expect(trace.calls[0].response?.body.preview).toContain('message_start')
+      expect(trace.calls[0].response?.body.truncated).toBe(true)
+      expect(trace.events.map((event) => event.phase)).toEqual(['api_call_started', 'api_call_aborted'])
+      expect(trace.events.at(-1)?.severity).toBe('error')
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalTraceEnv === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS
+      else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceEnv
+    }
+  })
+
+  test('synthesizes an AbortError when the abort signal carries no reason', async () => {
+    const originalFetch = globalThis.fetch
+    const originalTraceEnv = process.env.CC_HAHA_TRACE_API_CALLS
+    process.env.CC_HAHA_TRACE_API_CALLS = '1'
+    try {
+      globalThis.fetch = (async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          start() {
+            // No chunks at all: headers arrived, body never produces bytes.
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }) as typeof fetch
+
+      const abortController = new AbortController()
+      const traceFetch = createDumpPromptsFetch('agent-direct-abort-bare', {
+        traceSessionId: 'session-direct-abort-bare',
+        querySource: 'test_query',
+      })
+      await traceFetch('https://sub2api.example.test/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'gpt-5.5', messages: [{ role: 'user', content: 'abort bare' }] }),
+        signal: abortController.signal,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      abortController.abort()
+
+      const trace = await waitForTrace(
+        'session-direct-abort-bare',
+        (snapshot) => snapshot.calls[0]?.status === 'error',
+      )
+      expect(trace.calls[0].status).toBe('error')
+      expect(trace.calls[0].error?.name).toBe('AbortError')
+      expect(trace.calls[0].metadata).toMatchObject({ phase: 'api_call_aborted', aborted: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalTraceEnv === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS
+      else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceEnv
+    }
+  })
+
+  test('keeps a completed call ok when the signal aborts after the response finished', async () => {
+    const originalFetch = globalThis.fetch
+    const originalTraceEnv = process.env.CC_HAHA_TRACE_API_CALLS
+    process.env.CC_HAHA_TRACE_API_CALLS = '1'
+    try {
+      globalThis.fetch = (async () => new Response(
+        JSON.stringify({ id: 'msg-late-abort', content: [{ type: 'text', text: 'ok' }] }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )) as typeof fetch
+
+      const abortController = new AbortController()
+      const traceFetch = createDumpPromptsFetch('agent-late-abort', {
+        traceSessionId: 'session-late-abort',
+        querySource: 'test_query',
+      })
+      await traceFetch('https://sub2api.example.test/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'gpt-5.5', messages: [{ role: 'user', content: 'late abort' }] }),
+        signal: abortController.signal,
+      })
+
+      const completed = await waitForTrace(
+        'session-late-abort',
+        (snapshot) => snapshot.events.some((event) => event.phase === 'api_call_completed'),
+      )
+      expect(completed.calls[0].status).not.toBe('error')
+
+      // Aborting after completion (e.g. the user cancels the next tool step)
+      // must not rewrite the finished call into an error.
+      abortController.abort()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const trace = await traceCaptureService.getSessionTrace('session-late-abort')
+      expect(trace.calls).toHaveLength(1)
+      expect(trace.calls[0].status).not.toBe('error')
+      expect(trace.calls[0].error).toBeUndefined()
+      expect(trace.summary.failedCalls).toBe(0)
+      expect(trace.events.map((event) => event.phase)).toEqual(['api_call_started', 'api_call_completed'])
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalTraceEnv === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS
+      else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceEnv
+    }
+  })
+
+  test('marks fetch rejections from an aborted signal with abort metadata', async () => {
+    const originalFetch = globalThis.fetch
+    const originalTraceEnv = process.env.CC_HAHA_TRACE_API_CALLS
+    process.env.CC_HAHA_TRACE_API_CALLS = '1'
+    try {
+      const abortController = new AbortController()
+      globalThis.fetch = (async () => {
+        // Mirror undici: reject with an AbortError once the signal aborts
+        // before headers arrive (SDK client timeout during prefill).
+        abortController.abort()
+        const error = new Error('This operation was aborted')
+        error.name = 'AbortError'
+        throw error
+      }) as typeof fetch
+
+      const traceFetch = createDumpPromptsFetch('agent-fetch-abort', {
+        traceSessionId: 'session-fetch-abort',
+        querySource: 'test_query',
+      })
+      await expect(traceFetch('https://sub2api.example.test/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'gpt-5.5', messages: [{ role: 'user', content: 'pre-headers abort' }] }),
+        signal: abortController.signal,
+      })).rejects.toThrow('This operation was aborted')
+
+      const trace = await waitForTrace(
+        'session-fetch-abort',
+        (snapshot) => snapshot.calls[0]?.status === 'error'
+          && snapshot.events.some((event) => event.phase === 'api_call_failed'),
+      )
+      expect(trace.calls[0]).toMatchObject({
+        status: 'error',
+        error: { name: 'AbortError' },
+        metadata: { phase: 'api_call_failed', aborted: true },
+      })
+      expect(trace.events.map((event) => event.phase)).toEqual(['api_call_started', 'api_call_failed'])
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalTraceEnv === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS
+      else process.env.CC_HAHA_TRACE_API_CALLS = originalTraceEnv
+    }
+  })
+})
+
+describe('captureResponseTraceSnapshot', () => {
+  test('returns the full body without abort involvement', async () => {
+    const response = new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const capture = await captureResponseTraceSnapshot(response, { signal: new AbortController().signal })
+    expect(capture.aborted).toBe(false)
+    expect(capture.snapshot.preview).toContain('"ok"')
+    expect(capture.snapshot.truncated).toBe(false)
+  })
+
+  test('finishes with partial data when aborted mid-stream', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('partial sse data'))
+      },
+    })
+    const response = new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+
+    const controller = new AbortController()
+    const capturePromise = captureResponseTraceSnapshot(response, { signal: controller.signal })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort(new Error('client timeout'))
+
+    const capture = await capturePromise
+    expect(capture.aborted).toBe(true)
+    expect((capture.abortReason as Error).message).toBe('client timeout')
+    expect(capture.snapshot.preview).toContain('partial sse data')
+    expect(capture.snapshot.truncated).toBe(true)
+  })
+
+  test('force-finishes after the grace period when cancel cannot wake a hung read', async () => {
+    const encoder = new TextEncoder()
+    let reads = 0
+    let cancelled = false
+    const fakeReader = {
+      read() {
+        reads += 1
+        if (reads === 1) {
+          return Promise.resolve({ done: false, value: encoder.encode('stuck partial body') })
+        }
+        // Hangs forever even after cancel(): models a runtime where
+        // reader.cancel() does not settle a pending read.
+        return new Promise(() => {})
+      },
+      cancel() {
+        cancelled = true
+        return Promise.resolve()
+      },
+      releaseLock() {},
+    }
+    const fakeResponse = {
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: { getReader: () => fakeReader },
+    } as unknown as Response
+
+    const controller = new AbortController()
+    const capturePromise = captureResponseTraceSnapshot(fakeResponse, {
+      signal: controller.signal,
+      abortGraceMs: 20,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+
+    const capture = await capturePromise
+    expect(cancelled).toBe(true)
+    expect(capture.aborted).toBe(true)
+    expect(capture.snapshot.preview).toContain('stuck partial body')
+    expect(capture.snapshot.truncated).toBe(true)
+  })
+
+  test('treats an already-aborted signal as an immediate abort', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start() {
+        // Never produces data.
+      },
+    })
+    const response = new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    const capture = await captureResponseTraceSnapshot(response, {
+      signal: controller.signal,
+      abortGraceMs: 50,
+    })
+    expect(capture.aborted).toBe(true)
+    expect(capture.snapshot.preview).toBe('')
+  })
 })
 
 describe('session trace API', () => {
@@ -918,12 +1213,12 @@ describe('session trace API', () => {
 })
 
 describe('trace read cache', () => {
-  function buildTraceCallLine(id: string): string {
+  function buildTraceCallLine(id: string, sessionId = 'session-cache-hit', payload = 'ok'): string {
     return `${JSON.stringify({
       type: 'call',
       record: {
         id,
-        sessionId: 'session-cache-hit',
+        sessionId,
         source: 'proxy',
         status: 'ok',
         startedAt: '2026-06-09T08:00:00.000Z',
@@ -933,7 +1228,7 @@ describe('trace read cache', () => {
           method: 'POST',
           url: 'https://api.example.test/v1/chat/completions',
           headers: {},
-          body: createTraceBodySnapshot({ model: 'gpt-5.5' }),
+          body: createTraceBodySnapshot({ model: 'gpt-5.5', payload }),
         },
         response: {
           status: 200,
@@ -972,6 +1267,22 @@ describe('trace read cache', () => {
 
     const third = await traceCaptureService.getSessionTrace('session-cache-hit')
     expect(third.calls.map((call) => call.id)).toEqual(['call-bbb'])
+  })
+
+  test('stores trimmed records in the list cache and keeps full records for detail reads', async () => {
+    const traceDir = path.join(tmpDir, 'cc-haha', 'traces')
+    const filePath = path.join(traceDir, 'session-cache-list.jsonl')
+    await fs.mkdir(traceDir, { recursive: true })
+    await fs.writeFile(filePath, buildTraceCallLine('call-list-cache', 'session-cache-list', 'x'.repeat(10_000)))
+
+    const list = await traceCaptureService.listSessionTraces({ sessionIds: ['session-cache-list'] })
+    expect(list.traces).toHaveLength(1)
+
+    const trace = await traceCaptureService.getSessionTrace('session-cache-list')
+    const detail = await traceCaptureService.getSessionTraceCall('session-cache-list', 'call-list-cache')
+
+    expect(trace.calls[0].request.body.preview.length).toBeGreaterThan(2048)
+    expect(detail?.request.body.preview.length).toBeGreaterThan(2048)
   })
 
   test('invalidates the cache when new entries are appended in process', async () => {

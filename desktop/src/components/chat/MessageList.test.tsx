@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MessageList, buildRenderModel } from './MessageList'
+import { MessageList, buildRenderModel, shouldVirtualizeRenderItems } from './MessageList'
+import type { VirtualRenderItemMetric } from './virtualHeightCache'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
 import { sessionsApi } from '../../api/sessions'
 import { useChatStore } from '../../stores/chatStore'
@@ -36,6 +37,7 @@ function makeSessionState(overrides: Partial<PerSessionState> = {}): PerSessionS
     pendingPermission: null,
     pendingComputerUsePermission: null,
     tokenUsage: { input_tokens: 0, output_tokens: 0 },
+    streamingResponseChars: 0,
     elapsedSeconds: 0,
     statusVerb: '',
     apiRetry: null,
@@ -580,7 +582,7 @@ describe('MessageList nested tool calls', () => {
     expect(card.textContent).toContain('Background command')
     expect(card.textContent).toContain('running')
     expect(card.textContent).toContain('Running Playwright checks')
-    expect(card.textContent).toContain('1,200 tokens')
+    expect(card.textContent).toContain('1.2k tokens')
     expect(card.textContent).toContain('45s')
   })
 
@@ -893,6 +895,25 @@ describe('MessageList nested tool calls', () => {
     expect(screen.getByText('retry 2/10')).toBeTruthy()
     expect(screen.getByText('HTTP 503')).toBeTruthy()
     expect(screen.getByText(/waiting \d+s/)).toBeTruthy()
+  })
+
+  it('shows the non-streaming fallback notice in the active turn indicator', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'thinking',
+          streamingFallback: {
+            cause: 'watchdog',
+            receivedAt: Date.now(),
+          },
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByTestId('streaming-fallback-indicator')).toBeTruthy()
+    expect(screen.getByText(/switched to non-streaming mode/)).toBeTruthy()
   })
 
   it('renders compact completion as an expandable timeline divider', () => {
@@ -4060,5 +4081,39 @@ describe('MessageList nested tool calls', () => {
       ),
     ).toBeTruthy()
     expect(screen.queryByText(/This model does not support images/)).toBeNull()
+  })
+})
+
+describe('shouldVirtualizeRenderItems', () => {
+  const metric = (contentWeight: number): VirtualRenderItemMetric => ({
+    signature: 'sig',
+    contentWeight,
+    estimatedHeight: 100,
+  })
+
+  it('virtualizes at the desktop thresholds (120 items / 120k chars)', () => {
+    expect(shouldVirtualizeRenderItems(Array.from({ length: 119 }, () => metric(10)), false)).toBe(false)
+    expect(shouldVirtualizeRenderItems(Array.from({ length: 120 }, () => metric(10)), false)).toBe(true)
+    expect(shouldVirtualizeRenderItems([metric(119_999)], false)).toBe(false)
+    expect(shouldVirtualizeRenderItems([metric(120_000)], false)).toBe(true)
+  })
+
+  it('virtualizes at half the thresholds on touch-H5, where content-visibility is disabled', () => {
+    expect(shouldVirtualizeRenderItems(Array.from({ length: 59 }, () => metric(10)), true)).toBe(false)
+    expect(shouldVirtualizeRenderItems(Array.from({ length: 60 }, () => metric(10)), true)).toBe(true)
+    expect(shouldVirtualizeRenderItems([metric(59_999)], true)).toBe(false)
+    expect(shouldVirtualizeRenderItems([metric(60_000)], true)).toBe(true)
+  })
+
+  it('defaults the touch flag from the document marker', () => {
+    const metrics = Array.from({ length: 60 }, () => metric(10))
+    expect(shouldVirtualizeRenderItems(metrics)).toBe(false)
+
+    document.documentElement.setAttribute('data-touch-h5', 'true')
+    try {
+      expect(shouldVirtualizeRenderItems(metrics)).toBe(true)
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
   })
 })

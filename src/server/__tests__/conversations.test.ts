@@ -187,6 +187,97 @@ describe('ConversationService', () => {
     })
   })
 
+  it('should forward explicit permission updates from desktop plan approval', () => {
+    const svc = new ConversationService()
+    const sent: unknown[] = []
+    const permissionUpdates = [
+      {
+        type: 'addRules',
+        rules: [{ toolName: 'Bash', ruleContent: 'prompt: run tests' }],
+        behavior: 'allow',
+        destination: 'session',
+      },
+    ]
+
+    ;(svc as any).sessions.set('session-1', {
+      proc: null,
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      pendingPermissionRequests: new Map(),
+    })
+
+    const result = svc.respondToPermission(
+      'session-1',
+      'req-1',
+      true,
+      undefined,
+      undefined,
+      undefined,
+      permissionUpdates,
+    )
+
+    expect(result).toBe(true)
+    expect(sent[0]).toMatchObject({
+      type: 'control_response',
+      response: {
+        response: {
+          behavior: 'allow',
+          updatedPermissions: permissionUpdates,
+        },
+      },
+    })
+  })
+
+  it('should forward explicit denial feedback from desktop plan rejection', () => {
+    const svc = new ConversationService()
+    const sent: unknown[] = []
+
+    ;(svc as any).sessions.set('session-1', {
+      proc: null,
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      pendingPermissionRequests: new Map(),
+    })
+
+    const result = svc.respondToPermission(
+      'session-1',
+      'req-1',
+      false,
+      undefined,
+      undefined,
+      'Add rollback steps before implementation.',
+    )
+
+    expect(result).toBe(true)
+    expect(sent[0]).toMatchObject({
+      type: 'control_response',
+      response: {
+        response: {
+          behavior: 'deny',
+          message: 'Add rollback steps before implementation.',
+        },
+      },
+    })
+  })
+
   it('should send set_permission_mode requests to active sessions', () => {
     const svc = new ConversationService()
     const sent: unknown[] = []

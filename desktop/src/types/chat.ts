@@ -14,6 +14,8 @@ export type ClientMessage =
       allowed: boolean
       rule?: string
       updatedInput?: Record<string, unknown>
+      denyMessage?: string
+      permissionUpdates?: PermissionUpdate[]
     }
   | {
       type: 'computer_use_permission_response'
@@ -45,6 +47,24 @@ export type DisplayAttachmentRef = AttachmentRef & {
   /** UI-only preview URL. Never send to the websocket/server/model payload. */
   previewUrl?: string
 }
+
+export type PermissionUpdate =
+  | {
+      type: 'addRules' | 'replaceRules' | 'removeRules'
+      rules: Array<{ toolName: string; ruleContent?: string }>
+      behavior: 'allow' | 'deny' | 'ask'
+      destination: 'userSettings' | 'projectSettings' | 'localSettings' | 'session' | 'cliArg'
+    }
+  | {
+      type: 'setMode'
+      mode: PermissionMode
+      destination: 'userSettings' | 'projectSettings' | 'localSettings' | 'session' | 'cliArg'
+    }
+  | {
+      type: 'addDirectories' | 'removeDirectories'
+      directories: string[]
+      destination: 'userSettings' | 'projectSettings' | 'localSettings' | 'session' | 'cliArg'
+    }
 
 export type UIAttachment = {
   type: 'file' | 'image'
@@ -81,9 +101,10 @@ export type ServerMessage =
       requestId: string
       request: ComputerUsePermissionRequest
     }
+  | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage }
   | { type: 'thinking'; text: string }
-  | { type: 'status'; state: ChatState; verb?: string; elapsed?: number; tokens?: number }
+  | { type: 'status'; state: ChatState; verb?: string }
   // CLI 回传的权限模式变化（如 ExitPlanMode 退出 plan 后恢复、Shift+Tab）。
   // 桌面端据此把选择器校正回 CLI 的真实权限，避免本地影子值漂移。
   | { type: 'permission_mode_changed'; mode: PermissionMode }
@@ -96,6 +117,8 @@ export type ServerMessage =
       errorType?: string
       errorMessage?: string
     }
+  // 流式请求失败、CLI 已降级为非流式重试：完整响应一次性返回，期间无增量输出。
+  | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
@@ -136,6 +159,14 @@ export type ApiRetryState = {
   errorStatus: number | null
   errorType?: string
   errorMessage?: string
+  receivedAt: number
+}
+
+export type StreamingFallbackCause = 'watchdog' | 'stream_error' | '404_stream_creation' | 'unknown'
+
+// 活动回合状态（与 apiRetry 同生命周期），不进消息历史。
+export type StreamingFallbackState = {
+  cause: StreamingFallbackCause
   receivedAt: number
 }
 
@@ -258,7 +289,7 @@ export type TaskSummaryItem = {
 }
 
 export type UIMessage =
-  | { id: string; type: 'user_text'; content: string; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean }
+  | { id: string; type: 'user_text'; content: string; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean }
   | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
   | { id: string; type: 'thinking'; content: string; timestamp: number }
   | {

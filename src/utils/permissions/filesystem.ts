@@ -430,16 +430,27 @@ function isScratchpadPath(absolutePath: string): boolean {
  * - Files in .vscode directories (to prevent VS Code settings manipulation and potential code execution)
  * - Files in .idea directories (to prevent JetBrains IDE settings manipulation)
  * - Shell configuration files (to prevent shell startup script manipulation)
- * - UNC paths (to prevent network file access and WebDAV attacks)
+ * - UNC paths outside the trusted working directory (to prevent network file access and WebDAV attacks)
  */
-function isDangerousFilePathToAutoEdit(path: string): boolean {
+type PathSafetyOptions = {
+  allowUncPath?: boolean
+}
+
+function isUncPath(path: string): boolean {
+  return path.startsWith('\\\\') || path.startsWith('//')
+}
+
+function isDangerousFilePathToAutoEdit(
+  path: string,
+  options: PathSafetyOptions = {},
+): boolean {
   const absolutePath = expandPath(path)
   const pathSegments = absolutePath.split(sep)
   const fileName = pathSegments.at(-1)
 
   // Check for UNC paths (defense-in-depth to catch any patterns that might not be caught by containsVulnerableUncPath)
   // Block anything starting with \\ or // as these are potentially UNC paths that could access network resources
-  if (path.startsWith('\\\\') || path.startsWith('//')) {
+  if (isUncPath(path) && !options.allowUncPath) {
     return true
   }
 
@@ -534,7 +545,10 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
  * @param path The path to check for suspicious patterns
  * @returns true if suspicious Windows path patterns are detected
  */
-function hasSuspiciousWindowsPathPattern(path: string): boolean {
+function hasSuspiciousWindowsPathPattern(
+  path: string,
+  options: PathSafetyOptions = {},
+): boolean {
   // Check for NTFS Alternate Data Streams
   // Look for ':' after position 2 to skip drive letters (e.g., C:\)
   // Examples: file.txt::$DATA, .bashrc:hidden, settings.json:stream
@@ -594,7 +608,7 @@ function hasSuspiciousWindowsPathPattern(path: string): boolean {
   // Check for UNC paths (on all platforms for defense-in-depth)
   // Examples: \\server\share, \\foo.com\file, //server/share, \\192.168.1.1\share
   // UNC paths can access remote resources, leak credentials, and bypass working directory restrictions
-  if (containsVulnerableUncPath(path)) {
+  if (!options.allowUncPath && containsVulnerableUncPath(path)) {
     return true
   }
 
@@ -620,6 +634,7 @@ function hasSuspiciousWindowsPathPattern(path: string): boolean {
 export function checkPathSafetyForAutoEdit(
   path: string,
   precomputedPathsToCheck?: readonly string[],
+  options: PathSafetyOptions = {},
 ):
   | { safe: true }
   | { safe: false; message: string; classifierApprovable: boolean } {
@@ -629,7 +644,7 @@ export function checkPathSafetyForAutoEdit(
 
   // Check for suspicious Windows path patterns on all paths
   for (const pathToCheck of pathsToCheck) {
-    if (hasSuspiciousWindowsPathPattern(pathToCheck)) {
+    if (hasSuspiciousWindowsPathPattern(pathToCheck, options)) {
       return {
         safe: false,
         message: `Claude requested permissions to write to ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
@@ -651,7 +666,7 @@ export function checkPathSafetyForAutoEdit(
 
   // Check for dangerous files on all paths
   for (const pathToCheck of pathsToCheck) {
-    if (isDangerousFilePathToAutoEdit(pathToCheck)) {
+    if (isDangerousFilePathToAutoEdit(pathToCheck, options)) {
       return {
         safe: false,
         message: `Claude requested permissions to edit ${path} which is a sensitive file.`,
@@ -1046,12 +1061,18 @@ export function checkReadPermissionForTool(
   // existsSync/lstatSync/realpathSync syscalls on the same path (previously
   // 6× = 30 syscalls per Read permission check).
   const pathsToCheck = getPathsForPermissionCheck(path)
+  const isInWorkingDir = pathInAllowedWorkingPath(
+    path,
+    toolPermissionContext,
+    pathsToCheck,
+  )
+  const allowWorkspaceUncPath = getPlatform() === 'windows' && isInWorkingDir
 
   // 1. Defense-in-depth: Block UNC paths early (before other checks)
   // This catches paths starting with \\ or // that could access network resources
   // This may catch some UNC patterns not detected by containsVulnerableUncPath
   for (const pathToCheck of pathsToCheck) {
-    if (pathToCheck.startsWith('\\\\') || pathToCheck.startsWith('//')) {
+    if (isUncPath(pathToCheck) && !allowWorkspaceUncPath) {
       return {
         behavior: 'ask',
         message: `Claude requested permissions to read from ${path}, which appears to be a UNC path that could access network resources.`,
@@ -1065,7 +1086,11 @@ export function checkReadPermissionForTool(
 
   // 2. Check for suspicious Windows path patterns (defense in depth)
   for (const pathToCheck of pathsToCheck) {
-    if (hasSuspiciousWindowsPathPattern(pathToCheck)) {
+    if (
+      hasSuspiciousWindowsPathPattern(pathToCheck, {
+        allowUncPath: allowWorkspaceUncPath,
+      })
+    ) {
       return {
         behavior: 'ask',
         message: `Claude requested permissions to read from ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
@@ -1134,11 +1159,6 @@ export function checkReadPermissionForTool(
   }
 
   // 6. Allow reads in working directories
-  const isInWorkingDir = pathInAllowedWorkingPath(
-    path,
-    toolPermissionContext,
-    pathsToCheck,
-  )
   if (isInWorkingDir) {
     return {
       behavior: 'allow',
@@ -1219,6 +1239,12 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   // 1. Check for deny rules - check both the original path and resolved symlink path
   const pathsToCheck =
     precomputedPathsToCheck ?? getPathsForPermissionCheck(path)
+  const isInWorkingDir = pathInAllowedWorkingPath(
+    path,
+    toolPermissionContext,
+    pathsToCheck,
+  )
+  const allowWorkspaceUncPath = getPlatform() === 'windows' && isInWorkingDir
   for (const pathToCheck of pathsToCheck) {
     const denyRule = matchingRuleForInput(
       pathToCheck,
@@ -1302,7 +1328,9 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   // 1.7. Check comprehensive safety validations (Windows patterns, Claude config, dangerous files)
   // This MUST come before checking allow rules to prevent users from accidentally granting
   // permission to edit protected files
-  const safetyCheck = checkPathSafetyForAutoEdit(path, pathsToCheck)
+  const safetyCheck = checkPathSafetyForAutoEdit(path, pathsToCheck, {
+    allowUncPath: allowWorkspaceUncPath,
+  })
   if (!safetyCheck.safe) {
     // SDK suggestion: if under .claude/skills/{name}/, emit the narrowed
     // session-scoped addRules that step 1.6 will honor on the next call.
@@ -1358,11 +1386,6 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   }
 
   // 3. If in acceptEdits or sandboxBashMode mode, allow all writes in original cwd
-  const isInWorkingDir = pathInAllowedWorkingPath(
-    path,
-    toolPermissionContext,
-    pathsToCheck,
-  )
   if (toolPermissionContext.mode === 'acceptEdits' && isInWorkingDir) {
     return {
       behavior: 'allow',

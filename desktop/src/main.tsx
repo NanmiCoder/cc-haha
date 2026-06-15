@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import './theme/globals.css'
 import { initializeAppZoom } from './lib/appZoom'
+import { initializeTouchH5 } from './lib/touchH5'
 import { runDesktopPersistenceMigrations } from './lib/persistenceMigrations'
 
 declare global {
@@ -61,6 +62,7 @@ export async function bootstrapDesktopApp(
 }
 
 runDesktopPersistenceMigrations()
+initializeTouchH5()
 void initializeAppZoom()
 
 void bootstrapDesktopApp()

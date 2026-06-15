@@ -4,6 +4,10 @@ import { execFileSync } from 'node:child_process'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { WorkspaceService } from '../services/workspaceService.js'
+import {
+  clearFilesystemAccessRootsForTests,
+  registerFilesystemAccessRoot,
+} from '../services/filesystemAccessRoots.js'
 
 const cleanupDirs = new Set<string>()
 const ONE_MIB = 1024 * 1024
@@ -74,6 +78,56 @@ afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true })
   }
   cleanupDirs.clear()
+})
+
+describe('WorkspaceService outside-workspace preview', () => {
+  afterEach(() => {
+    clearFilesystemAccessRootsForTests()
+  })
+
+  it('rejects a file outside the workdir until its dir is a registered access root, then reads it', async () => {
+    const workDir = await makeTempDir('workspace-service-work-')
+    const outsideDir = await makeTempDir('workspace-service-outside-')
+    const outsideFile = path.join(outsideDir, 'todo.html')
+    await fs.writeFile(outsideFile, '<h1>hi</h1>\n')
+
+    const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? workDir : null)
+
+    // Not registered yet → treated as a sandbox escape.
+    await expect(service.readFile('session-1', outsideFile)).rejects.toThrow(/outside workspace/)
+
+    // Registered (as the turn-checkpoint flow does for changed files) → readable.
+    registerFilesystemAccessRoot(outsideDir)
+    const allowed = await service.readFile('session-1', outsideFile)
+    expect(allowed.state).toBe('ok')
+    expect(allowed.content).toContain('<h1>hi</h1>')
+  })
+
+  it('still rejects an unrelated path even when another outside dir is registered', async () => {
+    const workDir = await makeTempDir('workspace-service-work-')
+    const registeredDir = await makeTempDir('workspace-service-reg-')
+    const unrelatedDir = await makeTempDir('workspace-service-unrelated-')
+    const unrelatedFile = path.join(unrelatedDir, 'secret.txt')
+    await fs.writeFile(unrelatedFile, 'nope\n')
+    registerFilesystemAccessRoot(registeredDir)
+
+    const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? workDir : null)
+
+    await expect(service.readFile('session-1', unrelatedFile)).rejects.toThrow(/outside workspace/)
+  })
+
+  it('does not allow relative traversal through a registered outside dir', async () => {
+    const baseDir = await makeTempDir('workspace-service-base-')
+    const workDir = path.join(baseDir, 'work')
+    const outsideFile = path.join(baseDir, 'outside.txt')
+    await fs.mkdir(workDir)
+    await fs.writeFile(outsideFile, 'secret\n')
+    registerFilesystemAccessRoot(baseDir)
+
+    const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? workDir : null)
+
+    await expect(service.readFile('session-1', '../outside.txt')).rejects.toThrow(/outside workspace/)
+  })
 })
 
 describe('WorkspaceService', () => {

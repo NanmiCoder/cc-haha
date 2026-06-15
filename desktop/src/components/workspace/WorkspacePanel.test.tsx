@@ -155,6 +155,34 @@ async function selectRenderedText(container: Element, text: string, target?: Ele
   await flushReactWork()
 }
 
+type SvgMeasurementPrototype = SVGElement & {
+  getBBox?: () => { x: number; y: number; width: number; height: number }
+  getComputedTextLength?: () => number
+}
+
+function ensureMermaidSvgMeasurementStubs() {
+  const svgPrototype = SVGElement.prototype as SvgMeasurementPrototype
+
+  if (!svgPrototype.getBBox) {
+    Object.defineProperty(svgPrototype, 'getBBox', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 24,
+      }),
+    })
+  }
+
+  if (!svgPrototype.getComputedTextLength) {
+    Object.defineProperty(svgPrototype, 'getComputedTextLength', {
+      configurable: true,
+      value: () => 96,
+    })
+  }
+}
+
 vi.mock('../../api/sessions', () => ({
   sessionsApi: (() => {
     if (!mocks) {
@@ -205,6 +233,7 @@ describe('WorkspacePanel', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    ensureMermaidSvgMeasurementStubs()
     await setWorkspaceState(workspaceInitialState)
     useChatStore.setState(chatInitialState, true)
     useWorkspaceChatContextStore.setState(workspaceChatInitialState, true)
@@ -1244,6 +1273,72 @@ describe('WorkspacePanel', () => {
     })
   })
 
+  it('renders Mermaid diagrams in markdown file previews when labels contain HTML breaks and braces', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-markdown-mermaid-preview': {
+          isOpen: true,
+          activeView: 'all',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-markdown-mermaid-preview': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-markdown-mermaid-preview': [{
+          id: 'file:architecture.md',
+          path: 'architecture.md',
+          kind: 'file',
+          title: 'architecture.md',
+          language: 'markdown',
+          content: [
+            '# Architecture',
+            '',
+            '```mermaid',
+            'graph LR',
+            '    subgraph "Yjs CRDT 核心"',
+            '        Y[Yjs Document]',
+            '        A[嵌入类型<br/>Text / Map / Array]',
+            '        I[插入操作<br/>{content, position, clock, clientID}]',
+            '        D[删除操作<br/>{position, length, clock, clientID}]',
+            '        RM[Room Manager<br/>map[string]*Room]',
+            '    end',
+            '    I --> Y',
+            '    D --> Y',
+            '    RM --> Y',
+            '```',
+          ].join('\n'),
+          state: 'ok',
+          size: 256,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-markdown-mermaid-preview': 'file:architecture.md',
+      },
+    }))
+
+    const view = await renderPanel('session-markdown-mermaid-preview')
+
+    const surface = await view.findByTestId('mermaid-diagram-surface')
+    expect(surface.textContent).toContain('插入操作')
+    expect(surface.textContent).toContain('{content, position, clock, clientID}')
+    expect(surface.textContent).toContain('map[string]*Room')
+    expect(view.queryByText('Mermaid Error')).toBeNull()
+    expect(view.queryByTestId('workspace-code')).toBeNull()
+  })
+
   it('opens a context menu for preview tabs and closes tabs to the right', async () => {
     await setWorkspaceState((state) => ({
       ...state,
@@ -1449,6 +1544,7 @@ describe('WorkspacePanel', () => {
           pendingPermission: null,
           pendingComputerUsePermission: null,
           tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
           elapsedSeconds: 0,
           statusVerb: '',
           slashCommands: [],

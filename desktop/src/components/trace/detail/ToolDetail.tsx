@@ -1,7 +1,7 @@
 import { useTranslation } from '../../../i18n'
 import type { TraceSpan } from '../../../lib/traceViewModel'
 import { formatTraceJson } from '../../../lib/traceViewModel'
-import { formatClockTime } from '../../../lib/trace/formatters'
+import { formatClockTime, formatDurationMs } from '../../../lib/trace/formatters'
 import { CodeViewer } from '../../chat/CodeViewer'
 import { Section } from './Section'
 
@@ -44,6 +44,15 @@ export function ToolDetail({ span }: { span: TraceSpan }) {
             value={span.status === 'error' ? t('trace.status.error') : span.status === 'pending' ? t('trace.status.pending') : t('trace.status.ok')}
           />
           <MetaRow label={t('trace.started')} value={formatClockTime(span.timestamp)} />
+          {span.completedAt ? (
+            <MetaRow label={t('trace.completed')} value={formatClockTime(span.completedAt)} />
+          ) : null}
+          {span.durationMs !== undefined ? (
+            <MetaRow
+              label={span.status === 'pending' ? t('trace.elapsed') : t('trace.duration')}
+              value={formatDurationMs(span.durationMs)}
+            />
+          ) : null}
         </dl>
       </Section>
     </div>

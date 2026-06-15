@@ -50,6 +50,10 @@ export type SessionStats = {
   timestamp: string
 }
 
+export type ToolUsageMap = { [toolName: string]: number }
+
+export type SkillUsageMap = { [skillName: string]: number }
+
 export type ClaudeCodeStats = {
   // Activity overview
   totalSessions: number
@@ -72,6 +76,10 @@ export type ClaudeCodeStats = {
   // Model usage aggregated
   modelUsage: { [modelName: string]: ModelUsage }
 
+  // Tool and skill usage aggregated from assistant tool_use blocks
+  toolUsage: ToolUsageMap
+  skillUsage: SkillUsageMap
+
   // Time stats
   firstSessionDate: string | null
   lastSessionDate: string | null
@@ -93,6 +101,8 @@ type ProcessedStats = {
   dailyActivity: DailyActivity[]
   dailyModelTokens: DailyModelTokens[]
   modelUsage: { [modelName: string]: ModelUsage }
+  toolUsage: ToolUsageMap
+  skillUsage: SkillUsageMap
   sessionStats: SessionStats[]
   hourCounts: { [hour: number]: number }
   totalMessages: number
@@ -124,6 +134,38 @@ function getTotalUsageTokens(usage: UsageLike): number {
     (usage.cache_read_input_tokens || 0) +
     (usage.cache_creation_input_tokens || 0)
   )
+}
+
+function incrementUsageCount(counts: Map<string, number>, name: string) {
+  const normalizedName = name.trim()
+  if (!normalizedName) return
+  counts.set(normalizedName, (counts.get(normalizedName) || 0) + 1)
+}
+
+function mergeUsageCounts(
+  ...sources: Array<Record<string, number> | undefined>
+): Record<string, number> {
+  const merged: Record<string, number> = {}
+  for (const source of sources) {
+    for (const [name, count] of Object.entries(source ?? {})) {
+      if (typeof count !== 'number' || count <= 0) continue
+      merged[name] = (merged[name] || 0) + count
+    }
+  }
+  return merged
+}
+
+function getSkillNameFromToolInput(toolName: string, input: unknown) {
+  if (toolName !== 'Skill') return null
+  if (
+    typeof input === 'object' &&
+    input !== null &&
+    'skill' in input &&
+    typeof (input as { skill: unknown }).skill === 'string'
+  ) {
+    return (input as { skill: string }).skill
+  }
+  return null
 }
 
 function isDateInRange(
@@ -163,6 +205,8 @@ async function processSessionFiles(
   let totalMessages = 0
   let totalSpeculationTimeSavedMs = 0
   const modelUsageAgg: { [modelName: string]: ModelUsage } = {}
+  const toolUsageMap = new Map<string, number>()
+  const skillUsageMap = new Map<string, number>()
   const shotDistributionMap = feature('SHOT_STATS')
     ? new Map<number, number>()
     : undefined
@@ -340,6 +384,16 @@ async function processSessionFiles(
             for (const block of content) {
               if (block.type === 'tool_use') {
                 getDailyActivity(messageDateKey).toolCallCount++
+                if (typeof block.name === 'string') {
+                  incrementUsageCount(toolUsageMap, block.name)
+                  const skillName = getSkillNameFromToolInput(
+                    block.name,
+                    block.input,
+                  )
+                  if (skillName) {
+                    incrementUsageCount(skillUsageMap, skillName)
+                  }
+                }
               }
             }
           }
@@ -404,6 +458,8 @@ async function processSessionFiles(
       .map(([date, tokensByModel]) => ({ date, tokensByModel }))
       .sort((a, b) => a.date.localeCompare(b.date)),
     modelUsage: modelUsageAgg,
+    toolUsage: Object.fromEntries(toolUsageMap),
+    skillUsage: Object.fromEntries(skillUsageMap),
     sessionStats: sessions,
     hourCounts: Object.fromEntries(hourCounts),
     totalMessages,
@@ -555,6 +611,9 @@ function cacheToStats(
     }
   }
 
+  const toolUsage = mergeUsageCounts(cache.toolUsage, todayStats?.toolUsage)
+  const skillUsage = mergeUsageCounts(cache.skillUsage, todayStats?.skillUsage)
+
   // Merge hour counts
   const hourCountsMap = new Map<number, number>()
   for (const [hour, count] of Object.entries(cache.hourCounts)) {
@@ -647,6 +706,8 @@ function cacheToStats(
     dailyModelTokens,
     longestSession,
     modelUsage,
+    toolUsage,
+    skillUsage,
     firstSessionDate,
     lastSessionDate,
     peakActivityDay,
@@ -868,6 +929,8 @@ function processedStatsToClaudeCodeStats(
     dailyModelTokens: dailyModelTokensSorted,
     longestSession,
     modelUsage: stats.modelUsage,
+    toolUsage: stats.toolUsage,
+    skillUsage: stats.skillUsage,
     firstSessionDate,
     lastSessionDate,
     peakActivityDay,
@@ -1101,6 +1164,8 @@ function getEmptyStats(): ClaudeCodeStats {
     dailyModelTokens: [],
     longestSession: null,
     modelUsage: {},
+    toolUsage: {},
+    skillUsage: {},
     firstSessionDate: null,
     lastSessionDate: null,
     peakActivityDay: null,

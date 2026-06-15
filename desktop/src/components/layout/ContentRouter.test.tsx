@@ -1,6 +1,14 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const { previewBridgeMock } = vi.hoisted(() => ({
+  previewBridgeMock: {
+    close: vi.fn().mockResolvedValue(undefined),
+  },
+}))
+
+vi.mock('../../lib/previewBridge', () => ({ previewBridge: previewBridgeMock }))
 
 vi.mock('../../pages/EmptySession', () => ({
   EmptySession: () => <div data-testid="empty-session" />,
@@ -40,6 +48,7 @@ import { useTabStore } from '../../stores/tabStore'
 describe('ContentRouter terminal tabs', () => {
   afterEach(() => {
     cleanup()
+    previewBridgeMock.close.mockClear()
     useTabStore.setState({ tabs: [], activeTabId: null })
   })
 
@@ -137,5 +146,28 @@ describe('ContentRouter terminal tabs', () => {
 
     expect(screen.getByTestId('trace-list')).toBeInTheDocument()
     expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
+  })
+
+  it('closes the native preview when switching from a chat session to settings', async () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: '__settings__', title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: 'session-1',
+    })
+
+    render(<ContentRouter />)
+    expect(screen.getByTestId('active-session')).toBeInTheDocument()
+    previewBridgeMock.close.mockClear()
+
+    act(() => {
+      useTabStore.setState({ activeTabId: '__settings__' })
+    })
+
+    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(previewBridgeMock.close).toHaveBeenCalledTimes(1)
+    })
   })
 })

@@ -57,6 +57,10 @@ function detectPlatform(): 'darwin' | 'win32' | 'linux' | 'unknown' {
   return 'unknown'
 }
 
+export function getDesktopNotificationPlatform(): 'darwin' | 'win32' | 'linux' | 'unknown' {
+  return detectPlatform()
+}
+
 function getNotificationSettingsUrl(): string | null {
   switch (detectPlatform()) {
     case 'darwin':

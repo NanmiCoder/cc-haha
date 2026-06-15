@@ -46,15 +46,18 @@ describe('H5AccessService', () => {
 
     await expect(service.getSettings()).resolves.toEqual({
       enabled: false,
+      token: null,
       tokenPreview: null,
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
 
     await expect(service.validateToken('missing-token')).resolves.toBe(false)
   })
 
-  test('enable generates a token and persists only hash plus preview', async () => {
+  test('enable persists a recoverable token alongside hash and preview', async () => {
     const service = new H5AccessService()
 
     const result = await service.enable()
@@ -62,6 +65,7 @@ describe('H5AccessService', () => {
     const saved = JSON.parse(raw) as {
       h5Access: {
         enabled: boolean
+        token: string
         tokenHash: string
         tokenPreview: string
       }
@@ -70,17 +74,141 @@ describe('H5AccessService', () => {
     expect(result.token).toMatch(/^h5_[A-Za-z0-9_-]{43}$/)
     expect(result.settings).toEqual({
       enabled: true,
+      token: result.token,
       tokenPreview: saved.h5Access.tokenPreview,
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     expect(saved.h5Access.enabled).toBe(true)
+    // Plaintext is persisted on purpose (issue #767): the desktop app must be
+    // able to re-display the QR code / token after a restart.
+    expect(saved.h5Access.token).toBe(result.token)
     expect(saved.h5Access.tokenHash).toHaveLength(64)
     expect(saved.h5Access.tokenPreview).toBe(
       `${result.token.slice(0, 7)}...${result.token.slice(-4)}`,
     )
-    expect(raw).not.toContain(result.token)
     expect(await service.validateToken(result.token)).toBe(true)
+  })
+
+  test('enable reuses the existing token instead of rotating it', async () => {
+    const service = new H5AccessService()
+
+    const first = await service.enable()
+    const second = await service.enable()
+
+    expect(second.token).toBe(first.token)
+    expect(await service.validateToken(first.token)).toBe(true)
+  })
+
+  test('disable keeps the token so re-enable restores paired devices', async () => {
+    const service = new H5AccessService()
+
+    const first = await service.enable()
+    const disabled = await service.disable()
+
+    expect(disabled.enabled).toBe(false)
+    expect(disabled.token).toBe(first.token)
+    // Disabled state rejects every token even though it is still stored.
+    expect(await service.validateToken(first.token)).toBe(false)
+
+    const reEnabled = await service.enable()
+    expect(reEnabled.token).toBe(first.token)
+    expect(await service.validateToken(first.token)).toBe(true)
+  })
+
+  test('hand-edited plaintext token becomes the source of truth', async () => {
+    await fs.mkdir(path.dirname(getManagedSettingsPath()), { recursive: true })
+    await fs.writeFile(
+      getManagedSettingsPath(),
+      JSON.stringify({
+        h5Access: {
+          enabled: true,
+          token: 'my-custom-pinned-token',
+          tokenHash: 'f'.repeat(64),
+          tokenPreview: 'stale-preview',
+        },
+      }),
+      'utf-8',
+    )
+
+    const service = new H5AccessService()
+
+    expect(await service.validateToken('my-custom-pinned-token')).toBe(true)
+    const settings = await service.getSettings()
+    expect(settings.enabled).toBe(true)
+    expect(settings.token).toBe('my-custom-pinned-token')
+    expect(settings.tokenPreview).toBe('my-cust...oken')
+  })
+
+  test('legacy hash-only settings stay enabled and validate by hash', async () => {
+    const service = new H5AccessService()
+    const result = await service.enable()
+
+    // Simulate pre-#767 data: hash + preview persisted, plaintext missing.
+    const saved = JSON.parse(await fs.readFile(getManagedSettingsPath(), 'utf-8')) as {
+      h5Access: Record<string, unknown>
+    }
+    delete saved.h5Access.token
+    await fs.writeFile(getManagedSettingsPath(), JSON.stringify(saved), 'utf-8')
+
+    const legacyService = new H5AccessService()
+    const settings = await legacyService.getSettings()
+    expect(settings.enabled).toBe(true)
+    expect(settings.token).toBeNull()
+    expect(settings.tokenPreview).toBe(result.settings.tokenPreview)
+    expect(await legacyService.validateToken(result.token)).toBe(true)
+  })
+
+  test('updateSettings manages fixedPort within the allowed range', async () => {
+    const service = new H5AccessService()
+
+    const updated = await service.updateSettings({ fixedPort: 28670 })
+    expect(updated.fixedPort).toBe(28670)
+
+    const saved = JSON.parse(await fs.readFile(getManagedSettingsPath(), 'utf-8')) as {
+      h5Access: { fixedPort: number }
+    }
+    expect(saved.h5Access.fixedPort).toBe(28670)
+
+    const cleared = await service.updateSettings({ fixedPort: null })
+    expect(cleared.fixedPort).toBeNull()
+
+    await expect(service.updateSettings({ fixedPort: 80 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    await expect(service.updateSettings({ fixedPort: 70000 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    await expect(service.updateSettings({ fixedPort: 3456.5 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
+  })
+
+  test('updateSettings manages the disconnect grace period within range', async () => {
+    const service = new H5AccessService()
+
+    // Default: no stored value falls back to the built-in 30s grace.
+    await expect(service.getDisconnectGraceMs()).resolves.toBe(30_000)
+
+    const updated = await service.updateSettings({ disconnectGraceSeconds: 600 })
+    expect(updated.disconnectGraceSeconds).toBe(600)
+    await expect(service.getDisconnectGraceMs()).resolves.toBe(600_000)
+
+    const cleared = await service.updateSettings({ disconnectGraceSeconds: null })
+    expect(cleared.disconnectGraceSeconds).toBeNull()
+    await expect(service.getDisconnectGraceMs()).resolves.toBe(30_000)
+
+    await expect(service.updateSettings({ disconnectGraceSeconds: 1 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    await expect(service.updateSettings({ disconnectGraceSeconds: 90_000 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    await expect(service.updateSettings({ disconnectGraceSeconds: 12.5 })).rejects.toMatchObject({
+      statusCode: 400,
+    })
   })
 
   test('enabled public settings use the packaged app LAN URL when provided', async () => {
@@ -243,9 +371,12 @@ describe('H5AccessService', () => {
       }),
     ).resolves.toEqual({
       enabled: false,
+      token: null,
       tokenPreview: null,
       allowedOrigins: ['https://example.com', 'http://localhost:3000'],
       publicBaseUrl: 'https://public.example.com/app',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
 
     await expect(
@@ -291,9 +422,12 @@ describe('H5AccessService', () => {
 
     await expect(service.getSettings()).resolves.toEqual({
       enabled: false,
+      token: null,
       tokenPreview: null,
       allowedOrigins: ['https://example.com'],
       publicBaseUrl: 'https://public.example.com',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     await expect(service.validateToken('anything')).resolves.toBe(false)
     await expect(service.isOriginAllowed('https://example.com')).resolves.toBe(false)

@@ -449,10 +449,33 @@ class TraceCaptureService {
 
 export const traceCaptureService = new TraceCaptureService()
 
+export type TraceResponseCapture = {
+  snapshot: TraceBodySnapshot
+  aborted: boolean
+  abortReason?: unknown
+}
+
+export const TRACE_ABORT_CAPTURE_GRACE_MS = 2000
+
 export async function readResponseTraceSnapshot(response: Response): Promise<TraceBodySnapshot> {
+  return (await captureResponseTraceSnapshot(response)).snapshot
+}
+
+/**
+ * Reads a response body into a trace snapshot, ending promptly when `signal`
+ * aborts (SDK client timeout, stream idle watchdog, user cancellation).
+ * Without this, an aborted upstream stream can leave the read pending forever
+ * and the trace call stuck in `pending` (#766). On abort the partial body is
+ * returned with `aborted: true` so callers can record an error-state call.
+ */
+export async function captureResponseTraceSnapshot(
+  response: Response,
+  options?: { signal?: AbortSignal; abortGraceMs?: number },
+): Promise<TraceResponseCapture> {
+  const signal = options?.signal
   const contentType = response.headers.get('content-type') ?? ''
   if (!response.body) {
-    return createTraceBodySnapshot(null)
+    return { snapshot: createTraceBodySnapshot(null), aborted: false }
   }
 
   const reader = response.body.getReader()
@@ -460,11 +483,18 @@ export async function readResponseTraceSnapshot(response: Response): Promise<Tra
   let text = ''
   let bytes = 0
   let truncated = false
+  let completed = false
+  let interrupted = false
+  let onAbort: (() => void) | undefined
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
 
-  try {
+  const readAll = async (): Promise<'done'> => {
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        completed = true
+        break
+      }
       bytes += value.byteLength
       if (text.length < TRACE_STREAM_CAPTURE_BYTES) {
         text += decoder.decode(value, { stream: true })
@@ -475,15 +505,54 @@ export async function readResponseTraceSnapshot(response: Response): Promise<Tra
         truncated = true
       }
     }
-    text += decoder.decode()
-  } finally {
-    reader.releaseLock()
+    return 'done'
   }
 
-  return createTraceBodySnapshot(
+  // Resolves only when the abort grace period expires with the read still
+  // hung. Spec-compliant runtimes resolve the pending read() with done after
+  // reader.cancel(), letting readAll() win the race; the timer is the
+  // backstop for runtimes where cancel() does not wake a pending read.
+  const forcedAbort = new Promise<'forced'>((resolve) => {
+    if (!signal) return
+    onAbort = () => {
+      if (completed) return
+      interrupted = true
+      void reader.cancel().catch(() => {})
+      graceTimer = setTimeout(() => resolve('forced'), options?.abortGraceMs ?? TRACE_ABORT_CAPTURE_GRACE_MS)
+      graceTimer.unref?.()
+    }
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+
+  try {
+    await Promise.race([readAll(), forcedAbort])
+  } catch (err) {
+    // Some runtimes reject the pending read() on abort instead of resolving
+    // it after cancel(); fold that into the aborted outcome. Genuine read
+    // failures (no abort in flight) propagate to the caller.
+    if (!interrupted && !signal?.aborted) throw err
+    interrupted = true
+  } finally {
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+    if (graceTimer) clearTimeout(graceTimer)
+    try {
+      reader.releaseLock()
+    } catch {
+      // A still-pending read keeps the lock; the reader is abandoned with it.
+    }
+  }
+
+  text += decoder.decode()
+  const snapshot = createTraceBodySnapshot(
     contentType.includes('application/json') ? parseJsonOrText(text) : text,
-    { alreadyTruncated: truncated },
+    { alreadyTruncated: truncated || interrupted },
   )
+  return {
+    snapshot,
+    aborted: interrupted,
+    ...(interrupted && signal?.reason !== undefined ? { abortReason: signal.reason } : {}),
+  }
 }
 
 function serializeTraceBody(body: unknown): { serialized: string; contentType: TraceBodySnapshot['contentType'] } {

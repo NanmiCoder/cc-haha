@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { normalizeExternalUrl, normalizeOpenPath, normalizeSystemSettingsUrl } from './shell'
+import { expandTildePath, normalizeExternalUrl, normalizeOpenPath, normalizeSystemSettingsUrl } from './shell'
 
 describe('Electron shell service', () => {
   it('allows only explicit external URL schemes', () => {
@@ -34,6 +34,20 @@ describe('Electron shell service', () => {
       rmSync(rootDir, { recursive: true, force: true })
     }
     expect(() => normalizeOpenPath('relative/report.md')).toThrow('absolute')
+  })
+
+  it('expands tilde paths per platform', () => {
+    expect(expandTildePath('~', 'darwin')).toBe(homedir())
+    expect(expandTildePath('~/reports/a.html', 'linux')).toBe(`${homedir()}/reports/a.html`)
+    expect(expandTildePath('~\\reports\\a.html', 'win32')).toBe(`${homedir()}\\reports\\a.html`)
+    // On POSIX "~\..." is a regular file name; "~user" expansion is unsupported.
+    expect(expandTildePath('~\\reports\\a.html', 'darwin')).toBe('~\\reports\\a.html')
+    expect(expandTildePath('~user/file.md', 'linux')).toBe('~user/file.md')
+    expect(expandTildePath('a/~/b.md', 'linux')).toBe('a/~/b.md')
+  })
+
+  it('expands tilde paths before the absolute-path check in openPath', () => {
+    expect(normalizeOpenPath('~')).toBe(realpathSync(homedir()))
   })
 
   it('allows only explicit system settings URLs', () => {

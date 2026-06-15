@@ -6,13 +6,13 @@ import { getSessionId } from 'src/bootstrap/state.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import {
+  captureResponseTraceSnapshot,
   createTraceCallId,
   createTraceBodySnapshot,
-  readResponseTraceSnapshot,
   shouldCaptureApiTrace,
   traceCaptureService,
 } from './traceCapture.js'
-import type { TraceBodySnapshot, TraceProviderInfo } from './traceCapture.js'
+import type { TraceBodySnapshot, TraceProviderInfo, TraceResponseCapture } from './traceCapture.js'
 
 const TRACE_SESSION_HEADER = 'x-claude-code-session-id'
 
@@ -194,6 +194,29 @@ function createRequestPendingSnapshot(body: unknown): TraceBodySnapshot {
   })
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
+
+/**
+ * Builds the error recorded for an aborted call. The fetch layer cannot see
+ * which mechanism aborted the request (SDK client timeout surfaces upstream
+ * as APIConnectionTimeoutError, the stream idle watchdog calls
+ * stream.controller.abort(), user cancellation aborts the query signal), so
+ * prefer the signal's abort reason when one was provided and otherwise name
+ * the likely candidates.
+ */
+function normalizeAbortError(abortReason: unknown, fallback?: unknown): Error {
+  if (abortReason instanceof Error) return abortReason
+  if (abortReason !== undefined) return new Error(String(abortReason))
+  if (fallback instanceof Error && isAbortLikeError(fallback)) return fallback
+  const error = new Error(
+    'Request aborted before the response completed (client timeout, stream idle watchdog, or user cancellation)',
+  )
+  error.name = 'AbortError'
+  return error
+}
+
 export function createDumpPromptsFetch(
   agentIdOrSessionId: string,
   options?: {
@@ -292,6 +315,7 @@ export function createDumpPromptsFetch(
     } catch (err) {
       if (timestamp && traceCallId) {
         const completedAt = new Date().toISOString()
+        const aborted = Boolean(init?.signal?.aborted) || isAbortLikeError(err)
         void traceCaptureService.recordCall({
           id: traceCallId,
           sessionId: traceSessionId,
@@ -312,6 +336,7 @@ export function createDumpPromptsFetch(
           error: err,
           metadata: {
             phase: 'api_call_failed',
+            ...(aborted ? { aborted: true } : {}),
           },
         })
         void traceCaptureService.recordEvent({
@@ -327,6 +352,7 @@ export function createDumpPromptsFetch(
           message: err instanceof Error ? err.message : String(err),
           metadata: {
             url: requestUrl,
+            ...(aborted ? { aborted: true } : {}),
           },
         })
       }
@@ -335,40 +361,60 @@ export function createDumpPromptsFetch(
 
     if (timestamp && traceCallId) {
       const cloned = response.clone()
+      const abortSignal = init?.signal ?? undefined
       void (async () => {
+        const callBase = {
+          id: traceCallId,
+          sessionId: traceSessionId,
+          source: 'anthropic' as const,
+          querySource: options?.querySource,
+          provider: traceProvider,
+          model: traceModel,
+          startedAt: timestamp,
+          request: {
+            method: init?.method ?? 'POST',
+            url: requestUrl,
+            headers: requestInit?.headers as Headers | Record<string, string> | undefined,
+            body: traceRequestBody,
+          },
+        }
+        const eventBase = {
+          sessionId: traceSessionId,
+          callId: traceCallId,
+          source: 'anthropic' as const,
+          provider: traceProvider,
+          model: traceModel,
+        }
+
+        // captureResponseTraceSnapshot ends promptly when the request is
+        // aborted mid-body (SDK client timeout, stream idle watchdog,
+        // non-streaming fallback timeout). Waiting on the clone alone could
+        // hang forever on a wedged stream, leaving this call pending in the
+        // trace panel with no completion or error record (#766).
+        let capture: TraceResponseCapture | undefined
+        let captureFailure: unknown
         try {
-          const bodySnapshot = await readResponseTraceSnapshot(cloned)
+          capture = await captureResponseTraceSnapshot(cloned, { signal: abortSignal })
+        } catch (err) {
+          captureFailure = err
+        }
+
+        if (capture && !capture.aborted) {
           await traceCaptureService.recordCall({
-            id: traceCallId,
-            sessionId: traceSessionId,
-            source: 'anthropic',
-            querySource: options?.querySource,
-            provider: traceProvider,
-            model: traceModel,
-            startedAt: timestamp,
+            ...callBase,
             completedAt: new Date().toISOString(),
             durationMs: Date.now() - traceStartedAtMs,
-            request: {
-              method: init?.method ?? 'POST',
-              url: requestUrl,
-              headers: requestInit?.headers as Headers | Record<string, string> | undefined,
-              body: traceRequestBody,
-            },
             response: {
               status: response.status,
               headers: response.headers,
-              bodySnapshot,
+              bodySnapshot: capture.snapshot,
             },
             metadata: {
               phase: 'api_call_completed',
             },
           })
           await traceCaptureService.recordEvent({
-            sessionId: traceSessionId,
-            callId: traceCallId,
-            source: 'anthropic',
-            provider: traceProvider,
-            model: traceModel,
+            ...eventBase,
             phase: 'api_call_completed',
             severity: response.ok ? 'info' : 'warning',
             title: 'API call completed',
@@ -377,48 +423,76 @@ export function createDumpPromptsFetch(
               url: requestUrl,
             },
           })
-        } catch (err) {
-          await traceCaptureService.recordEvent({
-            sessionId: traceSessionId,
-            callId: traceCallId,
-            source: 'anthropic',
-            provider: traceProvider,
-            model: traceModel,
-            phase: 'response_capture_failed',
-            severity: 'warning',
-            title: 'Response capture failed',
-            message: err instanceof Error ? err.message : String(err),
-            metadata: {
-              status: response.status,
-              url: requestUrl,
-            },
-          })
+          return
+        }
+
+        const completedAt = new Date().toISOString()
+        const durationMs = Date.now() - traceStartedAtMs
+        if (capture?.aborted) {
+          const abortError = normalizeAbortError(capture.abortReason, captureFailure)
           await traceCaptureService.recordCall({
-            id: traceCallId,
-            sessionId: traceSessionId,
-            source: 'anthropic',
-            querySource: options?.querySource,
-            provider: traceProvider,
-            model: traceModel,
-            startedAt: timestamp,
-            completedAt: new Date().toISOString(),
-            durationMs: Date.now() - traceStartedAtMs,
-            request: {
-              method: init?.method ?? 'POST',
-              url: requestUrl,
-              headers: requestInit?.headers as Headers | Record<string, string> | undefined,
-              body: traceRequestBody,
-            },
+            ...callBase,
+            status: 'error',
+            completedAt,
+            durationMs,
             response: {
               status: response.status,
               headers: response.headers,
+              bodySnapshot: capture.snapshot,
             },
+            error: abortError,
             metadata: {
-              phase: 'api_call_completed',
-              responseCaptureFailed: true,
+              phase: 'api_call_aborted',
+              aborted: true,
             },
           })
+          await traceCaptureService.recordEvent({
+            ...eventBase,
+            timestamp: completedAt,
+            phase: 'api_call_aborted',
+            severity: 'error',
+            title: 'API call aborted',
+            message: abortError.message,
+            metadata: {
+              status: response.status,
+              url: requestUrl,
+              durationMs,
+              aborted: true,
+            },
+          })
+          return
         }
+
+        await traceCaptureService.recordEvent({
+          ...eventBase,
+          timestamp: completedAt,
+          phase: 'response_capture_failed',
+          severity: 'warning',
+          title: 'Response capture failed',
+          message: captureFailure instanceof Error ? captureFailure.message : String(captureFailure),
+          metadata: {
+            status: response.status,
+            url: requestUrl,
+          },
+        })
+        // The clone shares the upstream source with the SDK's branch, so a
+        // read failure here almost certainly failed the real request too.
+        // Record an error state instead of letting the call sit pending.
+        await traceCaptureService.recordCall({
+          ...callBase,
+          status: 'error',
+          completedAt,
+          durationMs,
+          response: {
+            status: response.status,
+            headers: response.headers,
+          },
+          error: captureFailure,
+          metadata: {
+            phase: 'response_capture_failed',
+            responseCaptureFailed: true,
+          },
+        })
       })()
     }
 

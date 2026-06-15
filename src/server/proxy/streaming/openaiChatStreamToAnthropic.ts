@@ -22,6 +22,7 @@
 
 import type { OpenAIChatStreamChunk } from '../transform/types.js'
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
+import { openaiUsageToAnthropic } from '../transform/usage.js'
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -471,7 +472,7 @@ function handleFinishReason(
 
   const stopReason = mapFinishReason(finishReason)
   const usage = chunk.usage
-    ? { output_tokens: chunk.usage.completion_tokens || 0 }
+    ? openaiUsageToAnthropic(chunk.usage)
     : { output_tokens: 0 }
 
   const messageDelta: SseEvent = {
@@ -500,7 +501,7 @@ function mergeUsageIntoHeldDelta(
   if (!state.heldMessageDelta) return
 
   const data = state.heldMessageDelta.data as Record<string, unknown>
-  data.usage = { output_tokens: usage.completion_tokens || 0 }
+  data.usage = openaiUsageToAnthropic(usage)
   state.messageDeltaSent = true
   state.queue.push(state.heldMessageDelta)
   state.heldMessageDelta = null

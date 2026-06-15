@@ -64,9 +64,12 @@ describe('/api/h5-access', () => {
     }
     expect(body.settings).toEqual({
       enabled: false,
+      token: null,
       tokenPreview: null,
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     expect(body.diagnostics).toBeDefined()
     expect(body.diagnostics?.storedHostStaleness).toBe('unset')
@@ -74,7 +77,7 @@ describe('/api/h5-access', () => {
     expect(Array.isArray(body.diagnostics?.localInterfaceHosts)).toBe(true)
   })
 
-  test('enable returns raw token once and status stays sanitized', async () => {
+  test('enable returns the token and GET keeps it recoverable', async () => {
     const enableResponse = await api('POST', '/api/h5-access/enable')
     expect(enableResponse.status).toBe(200)
 
@@ -89,19 +92,21 @@ describe('/api/h5-access', () => {
     expect(enablePayload.settings.enabled).toBe(true)
     expect(enablePayload.token).toMatch(/^h5_/)
 
+    // GET /api/h5-access is local-trusted-only (remote callers are rejected
+    // upstream), so the desktop app can recover the full token at any time.
     const statusResponse = await api('GET', '/api/h5-access')
     expect(statusResponse.status).toBe(200)
     const statusPayload = await statusResponse.json() as {
       settings: {
         enabled: boolean
+        token: string | null
         tokenPreview: string | null
       }
-      token?: string
     }
 
     expect(statusPayload.settings.enabled).toBe(true)
     expect(statusPayload.settings.tokenPreview).toBe(enablePayload.settings.tokenPreview)
-    expect(statusPayload.token).toBeUndefined()
+    expect(statusPayload.settings.token).toBe(enablePayload.token)
   })
 
   test('verify accepts a good bearer token and rejects missing or bad tokens', async () => {
@@ -141,24 +146,37 @@ describe('/api/h5-access', () => {
     ).toMatchObject({ status: 200 })
   })
 
-  test('disable clears access and causes the old token to fail verification', async () => {
+  test('disable blocks access but keeps the token for a later re-enable', async () => {
     const enableResponse = await api('POST', '/api/h5-access/enable')
-    const enablePayload = await enableResponse.json() as { token: string }
+    const enablePayload = await enableResponse.json() as {
+      settings: { tokenPreview: string }
+      token: string
+    }
 
     const disableResponse = await api('POST', '/api/h5-access/disable')
     expect(disableResponse.status).toBe(200)
     await expect(disableResponse.json()).resolves.toEqual({
       settings: {
         enabled: false,
-        tokenPreview: null,
+        token: enablePayload.token,
+        tokenPreview: enablePayload.settings.tokenPreview,
         allowedOrigins: [],
         publicBaseUrl: null,
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
 
     expect(
       await api('POST', '/api/h5-access/verify', { bearerToken: enablePayload.token }),
     ).toMatchObject({ status: 401 })
+
+    const reEnableResponse = await api('POST', '/api/h5-access/enable')
+    const reEnablePayload = await reEnableResponse.json() as { token: string }
+    expect(reEnablePayload.token).toBe(enablePayload.token)
+    expect(
+      await api('POST', '/api/h5-access/verify', { bearerToken: enablePayload.token }),
+    ).toMatchObject({ status: 200 })
   })
 
   test('PUT updates sanitized settings', async () => {
@@ -166,6 +184,8 @@ describe('/api/h5-access', () => {
       body: {
         allowedOrigins: ['https://example.com/path'],
         publicBaseUrl: 'https://public.example.com/app/',
+        fixedPort: 28670,
+        disconnectGraceSeconds: null,
       },
     })
 
@@ -173,10 +193,21 @@ describe('/api/h5-access', () => {
     await expect(response.json()).resolves.toEqual({
       settings: {
         enabled: false,
+        token: null,
         tokenPreview: null,
         allowedOrigins: ['https://example.com'],
         publicBaseUrl: 'https://public.example.com/app',
+        fixedPort: 28670,
+        disconnectGraceSeconds: null,
       },
     })
+  })
+
+  test('PUT rejects out-of-range fixedPort', async () => {
+    const response = await api('PUT', '/api/h5-access', {
+      body: { fixedPort: 80 },
+    })
+
+    expect(response.status).toBe(400)
   })
 })

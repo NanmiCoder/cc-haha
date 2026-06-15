@@ -89,18 +89,15 @@ describe('desktop theme tokens', () => {
     expect(css).toContain('box-shadow: var(--shadow-activity-cell-hover);')
   })
 
-  it('uses container queries for the activity summary grid', () => {
+  it('uses container queries for the compact activity summary strip', () => {
     const activitySummaryCss = getCssBetween('.activity-summary-panel {', '.activity-heat-cell {')
-    const mediumStart = activitySummaryCss.indexOf('@container (min-width: 620px)')
-    const wideStart = activitySummaryCss.indexOf('@container (min-width: 860px)')
-    const mediumSummaryCss = activitySummaryCss.slice(mediumStart, wideStart)
 
     expect(activitySummaryCss).toContain('container-type: inline-size;')
     expect(activitySummaryCss).toContain('@container (min-width: 360px)')
-    expect(activitySummaryCss).toContain('@container (min-width: 620px)')
-    expect(activitySummaryCss).toContain('@container (min-width: 860px)')
+    expect(activitySummaryCss).toContain('@container (min-width: 560px)')
     expect(activitySummaryCss).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));')
-    expect(mediumSummaryCss).toContain('grid-column: span 2;')
+    expect(activitySummaryCss).toContain('grid-column: auto;')
+    expect(activitySummaryCss).not.toContain('grid-column: span 2;')
   })
 
   it('avoids color-mix in the startup-critical UI zoom shell chrome for Safari 15 WebView support', () => {

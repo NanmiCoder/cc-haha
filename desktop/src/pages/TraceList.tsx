@@ -20,11 +20,6 @@ const PAGE_SIZE = 50
 const SEARCH_DEBOUNCE_MS = 250
 const MAX_MODEL_CHIPS = 2
 
-/** Skip off-screen row rendering without virtualization (WebKit-friendly). */
-const ROW_CV_STYLE = {
-  contentVisibility: 'auto',
-  containIntrinsicSize: 'auto 56px',
-} as const
 
 export function TraceList() {
   const t = useTranslation()
@@ -221,7 +216,7 @@ function TraceRows({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="divide-y divide-[var(--color-border)]">
+      <div className="divide-y divide-[var(--color-border)]" role="list">
         {traces.map((trace) => (
           <TraceRow key={trace.sessionId} trace={trace} onOpenWindow={onOpenWindow} />
         ))}
@@ -254,7 +249,7 @@ function TraceRow({
   const totalTokens = trace.summary.totalInputTokens + trace.summary.totalOutputTokens
 
   const open = () => openTrace(trace.sessionId, title, t)
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
     open()
@@ -262,54 +257,58 @@ function TraceRow({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={open}
-      onKeyDown={onKeyDown}
-      className="group flex h-14 cursor-pointer items-center gap-4 px-5 transition-colors hover:bg-[var(--color-surface-hover)]"
-      style={ROW_CV_STYLE}
+      role="listitem"
+      aria-label={title}
+      className="trace-list-row-cv group flex h-14 cursor-pointer items-center gap-4 px-5 transition-colors hover:bg-[var(--color-surface-hover)]"
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm font-semibold text-[var(--color-text-primary)]">{title}</span>
-          {visibleModels.map((model) => (
-            <span
-              key={model.model}
-              title={`${model.model} x${model.calls}`}
-              className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-brand)]/10 px-1.5 py-0.5 font-mono text-[10px] leading-4 text-[var(--color-brand)]"
-            >
-              {shortModelName(model.model)}
-            </span>
-          ))}
-          {hiddenModels > 0 && (
-            <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-              +{hiddenModels}
-            </span>
-          )}
-          {failedCalls > 0 && (
-            <span title={t('trace.failedCalls')} className="flex shrink-0 items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-error)]" aria-hidden="true" />
-              <span className="font-mono text-[10px] text-[var(--color-error)]">{failedCalls}</span>
-            </span>
-          )}
+      <button
+        type="button"
+        onClick={open}
+        onKeyDown={onKeyDown}
+        className="flex min-w-0 flex-1 items-center gap-4 self-stretch bg-transparent p-0 text-left"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-sm font-semibold text-[var(--color-text-primary)]">{title}</span>
+            {visibleModels.map((model) => (
+              <span
+                key={model.model}
+                title={`${model.model} x${model.calls}`}
+                className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-brand)]/10 px-1.5 py-0.5 font-mono text-[10px] leading-4 text-[var(--color-brand)]"
+              >
+                {shortModelName(model.model)}
+              </span>
+            ))}
+            {hiddenModels > 0 && (
+              <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                +{hiddenModels}
+              </span>
+            )}
+            {failedCalls > 0 && (
+              <span title={t('trace.failedCalls')} className="flex shrink-0 items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-error)]" aria-hidden="true" />
+                <span className="font-mono text-[10px] text-[var(--color-error)]">{failedCalls}</span>
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-[var(--color-text-tertiary)]">
+            <span className="shrink-0 font-mono">{trace.sessionId.slice(0, 8)}</span>
+            {trace.session?.projectPath && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="truncate" title={trace.session.projectPath}>{trace.session.projectPath}</span>
+              </>
+            )}
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0 font-mono">{formatUpdatedAt(updatedAt)}</span>
+          </div>
         </div>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-[var(--color-text-tertiary)]">
-          <span className="shrink-0 font-mono">{trace.sessionId.slice(0, 8)}</span>
-          {trace.session?.projectPath && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="truncate" title={trace.session.projectPath}>{trace.session.projectPath}</span>
-            </>
-          )}
-          <span aria-hidden="true">·</span>
-          <span className="shrink-0 font-mono">{formatUpdatedAt(updatedAt)}</span>
+        <div className="grid shrink-0 grid-cols-[3.5rem_4rem_4rem] items-center gap-3">
+          <MetricCell label={t('trace.apiCalls')} value={String(trace.summary.apiCalls)} />
+          <MetricCell label={t('trace.modelTime')} value={formatDuration(trace.summary.totalDurationMs)} />
+          <MetricCell label={t('trace.tokens')} value={formatCompact(totalTokens)} />
         </div>
-      </div>
-      <div className="grid shrink-0 grid-cols-[3.5rem_4rem_4rem] items-center gap-3">
-        <MetricCell label={t('trace.apiCalls')} value={String(trace.summary.apiCalls)} />
-        <MetricCell label={t('trace.duration')} value={formatDuration(trace.summary.totalDurationMs)} />
-        <MetricCell label={t('trace.tokens')} value={formatCompact(totalTokens)} />
-      </div>
+      </button>
       <div className="flex w-[60px] shrink-0 items-center justify-end gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
         <RowAction
           label={t('trace.open')}

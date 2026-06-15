@@ -339,6 +339,40 @@ describe('McpSettings', () => {
     expect(deleteServer).toHaveBeenCalledWith(server, '/workspace/project')
   })
 
+  it('uses a neutral title when configuring an editable MCP server', async () => {
+    const server = {
+      name: 'filesystem',
+      scope: 'user',
+      transport: 'stdio',
+      enabled: true,
+      status: 'connected',
+      statusLabel: 'Connected',
+      configLocation: '/tmp/config',
+      summary: 'npx @modelcontextprotocol/server-filesystem',
+      canEdit: true,
+      canRemove: true,
+      canReconnect: true,
+      canToggle: true,
+      config: {
+        type: 'stdio',
+        command: 'npx',
+        args: ['@modelcontextprotocol/server-filesystem'],
+        env: {},
+      },
+    } as const
+
+    useMcpStore.setState({ servers: [server] })
+
+    await renderLoadedMcpSettings()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open filesystem' }))
+    })
+
+    expect(screen.getByRole('heading', { name: 'Configure filesystem MCP' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Update filesystem MCP' })).not.toBeInTheDocument()
+  })
+
   it('uses the active cwd when toggling a server', async () => {
     const toggleServer = vi.fn().mockResolvedValue(undefined)
     const server = {

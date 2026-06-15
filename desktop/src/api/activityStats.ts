@@ -29,6 +29,13 @@ export type SessionStats = {
   timestamp: string
 }
 
+export type ModelUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
+}
+
 export type ActivityStats = {
   totalSessions: number
   totalMessages: number
@@ -38,7 +45,9 @@ export type ActivityStats = {
   dailyActivity: DailyActivity[]
   dailyModelTokens: DailyModelTokens[]
   longestSession: SessionStats | null
-  modelUsage: Record<string, unknown>
+  modelUsage: Record<string, ModelUsage>
+  toolUsage: Record<string, number>
+  skillUsage: Record<string, number>
   firstSessionDate: string | null
   lastSessionDate: string | null
   peakActivityDay: string | null

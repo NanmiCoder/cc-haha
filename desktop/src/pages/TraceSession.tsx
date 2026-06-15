@@ -19,6 +19,7 @@ import { CopyButton } from '../components/shared/CopyButton'
 import { TraceSplitLayout } from '../components/trace/TraceSplitLayout'
 import { TraceTree } from '../components/trace/TraceTree'
 import { TraceDetail } from '../components/trace/TraceDetail'
+import { TraceSectionStateProvider } from '../components/trace/detail/Section'
 import { LiveBadge, MetaChip, StatusPill, TypeIcon, spanDisplayTitle } from '../components/trace/TraceBadges'
 import {
   buildTraceViewModel,
@@ -51,6 +52,7 @@ export function TraceSession({
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now())
   const snapshotSignatureRef = useRef<string | null>(null)
   const lastSpanIdRef = useRef<string | null>(null)
 
@@ -62,22 +64,19 @@ export function TraceSession({
       if (!silent) setState({ status: 'loading' })
       if (silent) setRefreshing(true)
       try {
-        const trace = await sessionsApi.getTrace(sessionId)
+        const [trace, messageResponse] = await Promise.all([
+          sessionsApi.getTrace(sessionId),
+          sessionsApi.getMessages(sessionId).catch(() => ({ messages: [] })),
+        ])
         if (!isTraceSessionData(trace)) {
           throw new Error(t('trace.snapshotEmpty'))
         }
-        const messageResponse = await sessionsApi.getMessages(sessionId).catch(() => ({ messages: [] }))
         if (cancelled) return
-        const signature = [
-          trace.summary.updatedAt ?? '',
-          trace.calls.length,
-          trace.events?.length ?? 0,
-          messageResponse.messages.length,
-        ].join('|')
-        // Poll short-circuit: identical snapshot, skip the viewModel rebuild.
+        const signature = traceSnapshotSignature(trace, messageResponse.messages)
         if (silent && snapshotSignatureRef.current === signature) return
         snapshotSignatureRef.current = signature
         setState({ status: 'ready', trace, messages: messageResponse.messages })
+        setClockNowMs(Date.now())
         setLastLoadedAt(new Date().toISOString())
       } catch (error) {
         if (cancelled) return
@@ -115,9 +114,18 @@ export function TraceSession({
 
   const readyState = state.status === 'ready' ? state : null
   const viewModel = useMemo(
-    () => readyState ? buildTraceViewModel(readyState.trace, readyState.messages) : null,
-    [readyState],
+    () => readyState
+      ? buildTraceViewModel(readyState.trace, readyState.messages, { now: new Date(clockNowMs).toISOString() })
+      : null,
+    [readyState, clockNowMs],
   )
+
+  useEffect(() => {
+    if (!viewModel) return
+    if (viewModel.diagnosis.pendingModelCalls === 0 && viewModel.diagnosis.pendingToolCalls === 0) return
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [viewModel?.diagnosis.pendingModelCalls, viewModel?.diagnosis.pendingToolCalls])
 
   useEffect(() => {
     if (!viewModel) return
@@ -210,23 +218,25 @@ export function TraceSession({
       <DiagnosisBanner viewModel={viewModel} onSelect={setSelectedId} />
       {hasTraceContent && activeSpan ? (
         <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
-          <TraceSplitLayout
-            tree={
-              <TraceTree
-                viewModel={viewModel}
-                selectedId={activeSpan.id}
-                onSelect={setSelectedId}
-              />
-            }
-            detail={
-              <TraceDetail
-                span={activeSpan}
-                viewModel={viewModel}
-                sessionId={sessionId}
-                onSelect={setSelectedId}
-              />
-            }
-          />
+          <TraceSectionStateProvider scopeId={sessionId}>
+            <TraceSplitLayout
+              tree={
+                <TraceTree
+                  viewModel={viewModel}
+                  selectedId={activeSpan.id}
+                  onSelect={setSelectedId}
+                />
+              }
+              detail={
+                <TraceDetail
+                  span={activeSpan}
+                  viewModel={viewModel}
+                  sessionId={sessionId}
+                  onSelect={setSelectedId}
+                />
+              }
+            />
+          </TraceSectionStateProvider>
         </div>
       ) : (
         <TraceEmpty />
@@ -285,7 +295,7 @@ function TraceHeader({
             {summary.failedCalls > 0 ? (
               <MetaChip label={t('trace.failedCalls')} value={String(summary.failedCalls)} tone="danger" />
             ) : null}
-            <MetaChip label={t('trace.duration')} value={formatDurationMs(summary.totalDurationMs)} />
+            <MetaChip label={t('trace.modelTime')} value={formatDurationMs(summary.totalDurationMs)} />
             <MetaChip
               label={t('trace.tokens')}
               value={formatTokenCount(summary.totalInputTokens + summary.totalOutputTokens)}
@@ -444,6 +454,37 @@ function TraceEmpty() {
       </div>
     </div>
   )
+}
+
+function traceSnapshotSignature(trace: TraceSessionData, messages: MessageEntry[]): string {
+  return JSON.stringify({
+    summary: trace.summary,
+    calls: trace.calls.map((call) => ({
+      id: call.id,
+      status: call.status,
+      completedAt: call.completedAt,
+      durationMs: call.durationMs,
+      usage: call.usage,
+      responseStatus: call.response?.status,
+      requestSha256: call.request.body.sha256,
+      responseSha256: call.response?.body.sha256,
+      error: call.error ? { name: call.error.name, message: call.error.message, code: call.error.code } : null,
+    })),
+    events: (trace.events ?? []).map((event) => ({
+      id: event.id,
+      timestamp: event.timestamp,
+      phase: event.phase,
+      severity: event.severity,
+      callId: event.callId,
+      message: event.message,
+    })),
+    messages: messages.map((message) => ({
+      id: message.id,
+      type: message.type,
+      timestamp: message.timestamp,
+      content: message.content,
+    })),
+  })
 }
 
 function isTraceSessionData(value: unknown): value is TraceSessionData {

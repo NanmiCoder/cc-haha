@@ -82,7 +82,7 @@ const secondTraceList: TraceSessionList = {
 }
 
 async function findTraceRow(title: RegExp) {
-  return await screen.findByRole('button', { name: title })
+  return await screen.findByRole('listitem', { name: title })
 }
 
 describe('TraceList', () => {
@@ -139,7 +139,7 @@ describe('TraceList', () => {
     expect(useTabStore.getState().tabs.find((tab) => tab.type === 'trace')?.traceSessionId).toBe('session-trace-list')
 
     useTabStore.setState({ tabs: [], activeTabId: null })
-    fireEvent.keyDown(await findTraceRow(/Debug stuck agent/), { key: 'Enter' })
+    fireEvent.keyDown(within(await findTraceRow(/Debug stuck agent/)).getByRole('button', { name: /Debug stuck agent/ }), { key: 'Enter' })
 
     expect(useTabStore.getState().activeTabId).toBe('__trace__session-trace-list')
   })
@@ -148,6 +148,7 @@ describe('TraceList', () => {
     render(<TraceList />)
 
     const row = await findTraceRow(/Debug stuck agent/)
+    expect(row).not.toHaveAttribute('role', 'button')
     fireEvent.click(within(row).getByRole('button', { name: 'Open in separate window' }))
 
     expect(openTraceWindowMock).toHaveBeenCalledWith('session-trace-list')

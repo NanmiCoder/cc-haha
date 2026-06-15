@@ -6,9 +6,34 @@ import { ProviderService } from './providerService.js'
 
 export type H5AccessSettings = {
   enabled: boolean
+  /**
+   * Full access token. Persisted so it can be recovered at any time from the
+   * desktop app (issue #767: tokens used to be shown once and lost on
+   * restart, forcing regeneration that invalidated every connected phone).
+   * Only ever served to local-trusted requests — the `/api/h5-access` route
+   * (except `verify`) is rejected for remote callers before reaching this
+   * service.
+   */
+  token: string | null
   tokenPreview: string | null
   allowedOrigins: string[]
   publicBaseUrl: string | null
+  /**
+   * Preferred fixed TCP port for the desktop server. The desktop launchers
+   * (Electron and Tauri) read this before spawning the sidecar so reverse
+   * proxies and phone bookmarks keep working across app restarts. Applied on
+   * next launch.
+   */
+  fixedPort: number | null
+  /**
+   * Idle grace period (seconds) before an unobserved session's CLI subprocess
+   * is stopped after the last client disconnects (issue #764). A turn that is
+   * actively running is never interrupted regardless of this value — the grace
+   * timer only starts once the session is idle with no clients attached, so a
+   * phone that locks its screen mid-task lets the task finish in the
+   * background and shows the result on reconnect. null = built-in 30s default.
+   */
+  disconnectGraceSeconds: number | null
 }
 
 export type H5AccessEnableResult = {
@@ -24,6 +49,8 @@ export type H5AccessDiagnostics = {
   effectivePublicBaseUrl: string | null
   suggestedHost: string | null
   localInterfaceHosts: string[]
+  /** Port the running server is actually bound to. Lets the UI flag a fixedPort that has not taken effect yet. */
+  activePort: number
 }
 
 export type H5PublicBaseUrlClassification = 'plain-lan' | 'proxy'
@@ -38,13 +65,28 @@ type StoredH5AccessSettings = H5AccessSettings & {
 
 const DEFAULT_STORED_SETTINGS: StoredH5AccessSettings = {
   enabled: false,
+  token: null,
   tokenHash: null,
   tokenPreview: null,
   allowedOrigins: [],
   publicBaseUrl: null,
+  fixedPort: null,
+  disconnectGraceSeconds: null,
 }
 
 const TOKEN_HASH_RE = /^[a-f0-9]{64}$/
+// Tokens must survive URL query params and Authorization headers, so restrict
+// to visible ASCII. The 16-char floor keeps hand-edited tokens from being
+// trivially guessable while still allowing users to pin their own value.
+const TOKEN_RE = /^[\x21-\x7e]{16,512}$/
+const MIN_FIXED_PORT = 1024
+const MAX_FIXED_PORT = 65535
+// Disconnect grace bounds. Floor at 5s so a transient renderer reconnect is
+// always tolerated; ceiling at 24h so a stuck phone cannot pin a subprocess
+// forever. Mirrored in the desktop UI validator.
+const MIN_DISCONNECT_GRACE_SECONDS = 5
+const MAX_DISCONNECT_GRACE_SECONDS = 86_400
+export const DEFAULT_DISCONNECT_GRACE_MS = 30_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -53,8 +95,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function toPublicSettings(settings: StoredH5AccessSettings): H5AccessSettings {
   return {
     enabled: settings.enabled,
+    token: settings.token,
     tokenPreview: settings.tokenPreview,
     allowedOrigins: settings.allowedOrigins,
+    fixedPort: settings.fixedPort,
+    disconnectGraceSeconds: settings.disconnectGraceSeconds,
     publicBaseUrl: resolveEffectiveH5PublicBaseUrl({
       enabled: settings.enabled,
       storedPublicBaseUrl: settings.publicBaseUrl,
@@ -101,6 +146,7 @@ function describeH5AccessDiagnostics(stored: StoredH5AccessSettings): H5AccessDi
     effectivePublicBaseUrl,
     suggestedHost,
     localInterfaceHosts,
+    activePort: ProviderService.getServerPort(),
   }
 }
 
@@ -479,6 +525,26 @@ function is172PrivateIPv4(address: string): boolean {
   return a === 172 && b >= 16 && b <= 31
 }
 
+function normalizeFixedPort(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return null
+  }
+  if (value < MIN_FIXED_PORT || value > MAX_FIXED_PORT) {
+    return null
+  }
+  return value
+}
+
+function normalizeDisconnectGraceSeconds(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return null
+  }
+  if (value < MIN_DISCONNECT_GRACE_SECONDS || value > MAX_DISCONNECT_GRACE_SECONDS) {
+    return null
+  }
+  return value
+}
+
 function normalizeStoredSettings(value: unknown): StoredH5AccessSettings {
   if (!isRecord(value)) {
     return { ...DEFAULT_STORED_SETTINGS }
@@ -507,16 +573,29 @@ function normalizeStoredSettings(value: unknown): StoredH5AccessSettings {
     }
   }
 
-  const tokenHash = typeof value.tokenHash === 'string' && TOKEN_HASH_RE.test(value.tokenHash)
+  // The plaintext token is the source of truth: hash and preview are derived
+  // from it, so hand-editing `token` in settings.json pins a custom token.
+  // The stored hash only matters for pre-#767 data that never kept plaintext.
+  const token = typeof value.token === 'string' && TOKEN_RE.test(value.token)
+    ? value.token
+    : null
+  const storedTokenHash = typeof value.tokenHash === 'string' && TOKEN_HASH_RE.test(value.tokenHash)
     ? value.tokenHash
     : null
+  const tokenHash = token ? hashToken(token) : storedTokenHash
+  const tokenPreview = token
+    ? createTokenPreview(token)
+    : tokenHash && typeof value.tokenPreview === 'string' ? value.tokenPreview : null
 
   return {
     enabled: value.enabled === true && tokenHash !== null,
+    token,
     tokenHash,
-    tokenPreview: tokenHash && typeof value.tokenPreview === 'string' ? value.tokenPreview : null,
+    tokenPreview,
     allowedOrigins,
     publicBaseUrl,
+    fixedPort: normalizeFixedPort(value.fixedPort),
+    disconnectGraceSeconds: normalizeDisconnectGraceSeconds(value.disconnectGraceSeconds),
   }
 }
 
@@ -537,14 +616,16 @@ export class H5AccessService {
   private async setToken(
     managedSettings: Record<string, unknown>,
     current: StoredH5AccessSettings,
+    { reuseExistingToken }: { reuseExistingToken: boolean },
   ): Promise<{
     settings: Record<string, unknown>
     result: H5AccessEnableResult
   }> {
-    const token = createToken()
+    const token = reuseExistingToken && current.token ? current.token : createToken()
     const nextSettings: StoredH5AccessSettings = {
       ...current,
       enabled: true,
+      token,
       tokenHash: hashToken(token),
       tokenPreview: createTokenPreview(token),
     }
@@ -567,19 +648,23 @@ export class H5AccessService {
   }
 
   async enable(): Promise<H5AccessEnableResult> {
+    // Re-enabling keeps the existing token (issue #767: a stable token means
+    // phones that already paired keep working). Use regenerateToken to rotate.
     return this.managedSettingsService.updateSettings(async (current) => {
-      return this.setToken(current, normalizeStoredSettings(current.h5Access))
+      return this.setToken(current, normalizeStoredSettings(current.h5Access), {
+        reuseExistingToken: true,
+      })
     })
   }
 
   async disable(): Promise<H5AccessSettings> {
+    // Keep the token so a later re-enable restores access for already-paired
+    // phones. While disabled, validateToken rejects everything regardless.
     return this.managedSettingsService.updateSettings(async (current) => {
       const h5Access = normalizeStoredSettings(current.h5Access)
       const nextSettings: StoredH5AccessSettings = {
         ...h5Access,
         enabled: false,
-        tokenHash: null,
-        tokenPreview: null,
       }
 
       return {
@@ -594,13 +679,17 @@ export class H5AccessService {
 
   async regenerateToken(): Promise<H5AccessEnableResult> {
     return this.managedSettingsService.updateSettings(async (current) => {
-      return this.setToken(current, normalizeStoredSettings(current.h5Access))
+      return this.setToken(current, normalizeStoredSettings(current.h5Access), {
+        reuseExistingToken: false,
+      })
     })
   }
 
   async updateSettings(input: {
     allowedOrigins?: string[]
     publicBaseUrl?: string | null
+    fixedPort?: number | null
+    disconnectGraceSeconds?: number | null
   }): Promise<H5AccessSettings> {
     return this.managedSettingsService.updateSettings(async (current) => {
       const h5Access = normalizeStoredSettings(current.h5Access)
@@ -617,12 +706,42 @@ export class H5AccessService {
         }
       }
 
+      let nextFixedPort: number | null
+      if (input.fixedPort === undefined) {
+        nextFixedPort = h5Access.fixedPort
+      } else if (input.fixedPort === null) {
+        nextFixedPort = null
+      } else {
+        nextFixedPort = normalizeFixedPort(input.fixedPort)
+        if (nextFixedPort === null) {
+          throw ApiError.badRequest(
+            `fixedPort must be an integer between ${MIN_FIXED_PORT} and ${MAX_FIXED_PORT}`,
+          )
+        }
+      }
+
+      let nextDisconnectGraceSeconds: number | null
+      if (input.disconnectGraceSeconds === undefined) {
+        nextDisconnectGraceSeconds = h5Access.disconnectGraceSeconds
+      } else if (input.disconnectGraceSeconds === null) {
+        nextDisconnectGraceSeconds = null
+      } else {
+        nextDisconnectGraceSeconds = normalizeDisconnectGraceSeconds(input.disconnectGraceSeconds)
+        if (nextDisconnectGraceSeconds === null) {
+          throw ApiError.badRequest(
+            `disconnectGraceSeconds must be an integer between ${MIN_DISCONNECT_GRACE_SECONDS} and ${MAX_DISCONNECT_GRACE_SECONDS}`,
+          )
+        }
+      }
+
       const nextSettings: StoredH5AccessSettings = {
         ...h5Access,
         allowedOrigins: input.allowedOrigins === undefined
           ? h5Access.allowedOrigins
           : normalizeAllowedOrigins(input.allowedOrigins),
         publicBaseUrl: nextPublicBaseUrl,
+        fixedPort: nextFixedPort,
+        disconnectGraceSeconds: nextDisconnectGraceSeconds,
       }
 
       return {
@@ -638,6 +757,18 @@ export class H5AccessService {
   async getDiagnostics(): Promise<H5AccessDiagnostics> {
     const { h5Access } = await this.readStoredSettings()
     return describeH5AccessDiagnostics(h5Access)
+  }
+
+  /**
+   * Idle grace period (ms) before an unobserved session is stopped after the
+   * last client disconnects. Reads the configured value, falling back to the
+   * built-in default. Used by the WebSocket handler's disconnect cleanup.
+   */
+  async getDisconnectGraceMs(): Promise<number> {
+    const { h5Access } = await this.readStoredSettings()
+    return h5Access.disconnectGraceSeconds !== null
+      ? h5Access.disconnectGraceSeconds * 1000
+      : DEFAULT_DISCONNECT_GRACE_MS
   }
 
   async validateToken(token: string | null | undefined): Promise<boolean> {

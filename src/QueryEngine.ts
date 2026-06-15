@@ -985,6 +985,15 @@ export class QueryEngine {
               uuid: message.uuid,
             }
           }
+          if (message.subtype === 'streaming_fallback') {
+            yield {
+              type: 'system',
+              subtype: 'streaming_fallback' as const,
+              cause: message.cause,
+              session_id: getSessionId(),
+              uuid: message.uuid,
+            }
+          }
           // Don't yield other system messages in headless mode
           break
         }

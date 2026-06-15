@@ -174,7 +174,7 @@ describe('settingsStore network persistence', () => {
     window.localStorage.clear()
   })
 
-  it('defaults old user settings to 120s system network settings', async () => {
+  it('defaults old user settings to 600s system network settings', async () => {
     vi.doMock('../api/settings', () => ({
       settingsApi: {
         getUser: vi.fn().mockResolvedValue({}),
@@ -215,7 +215,7 @@ describe('settingsStore network persistence', () => {
     await useSettingsStore.getState().fetchAll()
 
     expect(useSettingsStore.getState().network).toEqual({
-      aiRequestTimeoutMs: 120_000,
+      aiRequestTimeoutMs: 600_000,
       proxy: {
         mode: 'system',
         url: '',
@@ -256,7 +256,7 @@ describe('settingsStore network persistence', () => {
     const { useSettingsStore } = await import('./settingsStore')
 
     await useSettingsStore.getState().setNetwork({
-      aiRequestTimeoutMs: 999_999,
+      aiRequestTimeoutMs: 9_999_999,
       proxy: {
         mode: 'manual',
         url: '  http://127.0.0.1:7890  ',
@@ -264,7 +264,7 @@ describe('settingsStore network persistence', () => {
     })
 
     expect(useSettingsStore.getState().network).toEqual({
-      aiRequestTimeoutMs: 600_000,
+      aiRequestTimeoutMs: 1_800_000,
       proxy: {
         mode: 'manual',
         url: 'http://127.0.0.1:7890',
@@ -272,7 +272,7 @@ describe('settingsStore network persistence', () => {
     })
     expect(updateUser).toHaveBeenCalledWith({
       network: {
-        aiRequestTimeoutMs: 600_000,
+        aiRequestTimeoutMs: 1_800_000,
         proxy: {
           mode: 'manual',
           url: 'http://127.0.0.1:7890',
@@ -878,6 +878,106 @@ describe('settingsStore thinking persistence', () => {
   })
 })
 
+describe('settingsStore Auto-dream persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('keeps Auto-dream off unless user settings opt in', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({}),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    expect(useSettingsStore.getState().autoDreamEnabled).toBe(false)
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().autoDreamEnabled).toBe(false)
+  })
+
+  it('hydrates and persists Auto-dream explicitly', async () => {
+    const updateUser = vi.fn().mockResolvedValue({})
+
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({ autoDreamEnabled: true }),
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().autoDreamEnabled).toBe(true)
+
+    await useSettingsStore.getState().setAutoDreamEnabled(false)
+
+    expect(updateUser).toHaveBeenCalledWith({ autoDreamEnabled: false })
+    expect(useSettingsStore.getState().autoDreamEnabled).toBe(false)
+  })
+})
+
 describe('settingsStore desktop terminal shell persistence', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -1143,9 +1243,12 @@ describe('settingsStore H5 access behavior', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5_prev',
         allowedOrigins: ['https://prev.example'],
         publicBaseUrl: 'https://prev.example/app',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
 
@@ -1153,9 +1256,12 @@ describe('settingsStore H5 access behavior', () => {
 
     expect(useSettingsStore.getState().h5Access).toEqual({
       enabled: false,
+      token: null,
       tokenPreview: null,
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
   })
@@ -1193,9 +1299,12 @@ describe('settingsStore H5 access behavior', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5_prev',
         allowedOrigins: ['https://prev.example'],
         publicBaseUrl: 'https://prev.example/app',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
 
@@ -1203,14 +1312,20 @@ describe('settingsStore H5 access behavior', () => {
 
     expect(useSettingsStore.getState().h5Access).toEqual({
       enabled: true,
+      token: null,
       tokenPreview: 'h5_prev',
       allowedOrigins: ['https://prev.example'],
       publicBaseUrl: 'https://prev.example/app',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     expect(useSettingsStore.getState().h5AccessError).toBe('H5 unavailable')
   })
 
-  it('handles H5 enable, regenerate, and disable transitions without persisting a raw token in store state', async () => {
+  // Since issue #767 the server persists the token and returns it inside
+  // settings for local-trusted callers, so the store keeps it too — that is
+  // what lets the QR code survive desktop restarts.
+  it('handles H5 enable, regenerate, and disable transitions and mirrors the persisted token', async () => {
     vi.doMock('../api/settings', () => ({
       settingsApi: {
         getUser: vi.fn(),
@@ -1235,26 +1350,35 @@ describe('settingsStore H5 access behavior', () => {
         enable: vi.fn().mockResolvedValue({
           settings: {
             enabled: true,
+            token: 'raw-enable-token',
             tokenPreview: 'h5_first',
             allowedOrigins: [],
             publicBaseUrl: null,
+            fixedPort: null,
+            disconnectGraceSeconds: null,
           },
           token: 'raw-enable-token',
         }),
         disable: vi.fn().mockResolvedValue({
           settings: {
             enabled: false,
-            tokenPreview: null,
+            token: 'raw-regenerated-token',
+            tokenPreview: 'h5_second',
             allowedOrigins: [],
             publicBaseUrl: null,
+            fixedPort: null,
+            disconnectGraceSeconds: null,
           },
         }),
         regenerate: vi.fn().mockResolvedValue({
           settings: {
             enabled: true,
+            token: 'raw-regenerated-token',
             tokenPreview: 'h5_second',
             allowedOrigins: ['https://phone.example'],
             publicBaseUrl: 'https://phone.example/app',
+            fixedPort: null,
+            disconnectGraceSeconds: null,
           },
           token: 'raw-regenerated-token',
         }),
@@ -1267,25 +1391,35 @@ describe('settingsStore H5 access behavior', () => {
     await expect(useSettingsStore.getState().enableH5Access()).resolves.toBe('raw-enable-token')
     expect(useSettingsStore.getState().h5Access).toEqual({
       enabled: true,
+      token: 'raw-enable-token',
       tokenPreview: 'h5_first',
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
 
     await expect(useSettingsStore.getState().regenerateH5AccessToken()).resolves.toBe('raw-regenerated-token')
     expect(useSettingsStore.getState().h5Access).toEqual({
       enabled: true,
+      token: 'raw-regenerated-token',
       tokenPreview: 'h5_second',
       allowedOrigins: ['https://phone.example'],
       publicBaseUrl: 'https://phone.example/app',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
 
+    // Disable keeps the token so a later re-enable restores paired devices.
     await expect(useSettingsStore.getState().disableH5Access()).resolves.toBeUndefined()
     expect(useSettingsStore.getState().h5Access).toEqual({
       enabled: false,
-      tokenPreview: null,
+      token: 'raw-regenerated-token',
+      tokenPreview: 'h5_second',
       allowedOrigins: [],
       publicBaseUrl: null,
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
     expect('h5AccessGeneratedToken' in useSettingsStore.getState()).toBe(false)

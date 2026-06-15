@@ -12,11 +12,21 @@ type Props = {
   fallbackModelLabel?: string
   draft?: boolean
   compact?: boolean
+  /**
+   * Bump to force an immediate refresh that bypasses the auto-refresh
+   * throttle and any in-flight (possibly pre-compact) request. Used after
+   * context compaction so the meter recovers right away (#743).
+   */
+  refreshNonce?: number
 }
 
 const ACTIVE_REFRESH_MS = 30_000
 const CONTEXT_REQUEST_TIMEOUT_MS = 20_000
 const AUTO_REFRESH_MIN_INTERVAL_MS = 10_000
+// Right after a compaction the CLI may still be busy finishing the turn, so
+// the forced refresh can time out — retry once instead of keeping the stale
+// pre-compact percentage on screen.
+const FORCED_REFRESH_RETRY_MS = 5_000
 
 function formatNumber(value: number | undefined) {
   return new Intl.NumberFormat().format(value ?? 0)
@@ -67,6 +77,7 @@ export function ContextUsageIndicator({
   fallbackModelLabel,
   draft = false,
   compact = false,
+  refreshNonce = 0,
 }: Props) {
   const t = useTranslation()
   const [context, setContext] = useState<SessionContextSnapshot | null>(null)
@@ -78,29 +89,31 @@ export function ContextUsageIndicator({
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false)
   const requestSeq = useRef(0)
   const contextIdentityRef = useRef('')
-  const inFlightRequestRef = useRef<Promise<void> | null>(null)
+  const inFlightRequestRef = useRef<Promise<boolean> | null>(null)
   const inFlightIdentityRef = useRef<string | null>(null)
   const lastAutoRefreshAtRef = useRef(0)
 
-  const refresh = useCallback(async (mode: 'auto' | 'manual' = 'manual') => {
+  const refresh = useCallback(async (mode: 'auto' | 'manual' | 'force' = 'manual'): Promise<boolean> => {
     if (!sessionId || draft) {
       setLoading(false)
-      return
+      return false
     }
     if (mode === 'auto' && !isDocumentVisible()) {
       setLoading(false)
-      return
+      return false
     }
     if (mode === 'auto' && Date.now() - lastAutoRefreshAtRef.current < AUTO_REFRESH_MIN_INTERVAL_MS) {
-      return inFlightRequestRef.current ?? undefined
+      return inFlightRequestRef.current ?? false
     }
     if (typeof sessionsApi.getInspection !== 'function') {
       setLoading(false)
-      return
+      return false
     }
     const activeSessionId = sessionId
     const activeContextIdentity = `${activeSessionId}:${runtimeSelectionKey}`
-    if (inFlightRequestRef.current && inFlightIdentityRef.current === activeContextIdentity) {
+    // 'force' must not reuse an in-flight request: one started just before a
+    // compact boundary would resolve with the pre-compact context.
+    if (mode !== 'force' && inFlightRequestRef.current && inFlightIdentityRef.current === activeContextIdentity) {
       return inFlightRequestRef.current
     }
     const seq = requestSeq.current + 1
@@ -114,7 +127,7 @@ export function ContextUsageIndicator({
       timeout: CONTEXT_REQUEST_TIMEOUT_MS,
     })
       .then((inspection) => {
-        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return
+        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return false
         const nextContext = inspection.context ?? inspection.contextEstimate ?? null
         const nextSource = inspection.context ? 'live' : inspection.contextEstimate ? 'estimate' : null
         const usageModel = inspection.usage?.models.find((model) => firstNonEmpty(model.displayName, model.model)) ?? null
@@ -129,10 +142,12 @@ export function ContextUsageIndicator({
         ) ?? null)
         setError(nextContext ? null : inspection.errors?.context ?? null)
         setUpdatedAt(Date.now())
+        return nextContext !== null
       })
       .catch((err) => {
-        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return
+        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return false
         setError(err instanceof Error ? err.message : String(err))
+        return false
       })
       .finally(() => {
         if (inFlightRequestRef.current === request) {
@@ -145,6 +160,28 @@ export function ContextUsageIndicator({
     inFlightIdentityRef.current = activeContextIdentity
     return request
   }, [draft, runtimeSelectionKey, sessionId])
+
+  // After a compaction the context shrinks server-side but nothing else
+  // re-reads it promptly (auto refreshes are throttled and stop once the
+  // session goes idle), leaving the pre-compact percentage on screen (#743).
+  // Force a fresh request, and retry once if the CLI was still busy.
+  const lastRefreshNonceRef = useRef(refreshNonce)
+  useEffect(() => {
+    if (refreshNonce === lastRefreshNonceRef.current) return
+    lastRefreshNonceRef.current = refreshNonce
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    void refresh('force').then((ok) => {
+      if (ok || cancelled) return
+      retryTimer = setTimeout(() => {
+        void refresh('force')
+      }, FORCED_REFRESH_RETRY_MS)
+    })
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [refresh, refreshNonce])
 
   useEffect(() => {
     const contextIdentity = `${sessionId}:${runtimeSelectionKey}`

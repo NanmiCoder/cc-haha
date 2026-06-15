@@ -69,6 +69,13 @@ describe('OpenWithMenu', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('scrolling the viewport calls onClose', () => {
+    const onClose = vi.fn()
+    render(<OpenWithMenu items={makeItems()} anchor={anchor} onClose={onClose} />)
+    fireEvent.scroll(window)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   describe('triggerEl exclusion (re-click-trigger toggle support)', () => {
     it('does NOT call onClose when mousedown lands inside triggerEl', () => {
       // Set up a trigger element + a child within it in the document.

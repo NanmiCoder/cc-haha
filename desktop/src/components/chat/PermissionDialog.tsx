@@ -5,6 +5,12 @@ import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { Button } from '../shared/Button'
 import { DiffViewer } from './DiffViewer'
+import {
+  PlanPreviewCard,
+  buildPromptPermissionUpdates,
+  extractPlanPreview,
+  isExitPlanModeTool,
+} from './PlanModePreview'
 
 type Props = {
   sessionId?: string | null
@@ -120,6 +126,18 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const t = useTranslation()
   const isPending = pendingPermission?.requestId === requestId
   const [showRaw, setShowRaw] = useState(false)
+
+  if (isExitPlanModeTool(toolName)) {
+    return (
+      <ExitPlanModePermissionDialog
+        sessionId={targetSessionId}
+        requestId={requestId}
+        input={input}
+        description={description}
+        isPending={isPending}
+      />
+    )
+  }
 
   const meta = TOOL_META[toolName] || { icon: 'shield', label: toolName, color: 'var(--color-text-tertiary)' }
   const details = extractToolDetails(toolName, input, t)
@@ -259,6 +277,107 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+function ExitPlanModePermissionDialog({
+  sessionId,
+  requestId,
+  input,
+  description,
+  isPending,
+}: {
+  sessionId?: string | null
+  requestId: string
+  input: unknown
+  description?: string
+  isPending: boolean
+}) {
+  const { respondToPermission } = useChatStore()
+  const t = useTranslation()
+  const [feedback, setFeedback] = useState('')
+  const preview = extractPlanPreview(input)
+  const permissionUpdates = buildPromptPermissionUpdates(preview.allowedPrompts)
+  const trimmedFeedback = feedback.trim()
+
+  return (
+    <div className={`mb-4 overflow-hidden rounded-[var(--radius-lg)] border ${
+      isPending
+        ? 'border-[var(--color-brand)]/60 bg-[var(--color-surface-container-lowest)]'
+        : 'border-[var(--color-outline-variant)]/40 bg-[var(--color-surface-container-low)] opacity-70'
+    }`}>
+      <div className={`flex items-center gap-3 px-4 py-3 ${
+        isPending
+          ? 'bg-[var(--color-surface-container)]'
+          : 'bg-[var(--color-surface-container-low)]'
+      }`}>
+        <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-brand)]/15">
+          <span className="material-symbols-outlined text-[18px] text-[var(--color-brand)]">architecture</span>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-[var(--color-text-primary)]">
+              {t('permission.planReadyTitle')}
+            </span>
+            {isPending ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-brand)]/15 px-2 py-0.5 text-[10px] font-bold uppercase text-[var(--color-brand)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-brand)] animate-pulse-dot" />
+                {t('permission.awaitingApproval')}
+              </span>
+            ) : (
+              <span className="inline-flex items-center rounded-full bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[10px] font-bold uppercase text-[var(--color-text-tertiary)]">
+                {t('permission.responded')}
+              </span>
+            )}
+          </div>
+          {description ? (
+            <p className="mt-0.5 truncate text-xs text-[var(--color-text-secondary)]">{description}</p>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="space-y-3 border-t border-[var(--color-outline-variant)]/20 px-4 py-3">
+        <PlanPreviewCard
+          title={t('permission.planPreviewTitle')}
+          plan={preview.plan}
+          filePath={preview.filePath}
+          allowedPrompts={preview.allowedPrompts}
+          requestedPermissionsTitle={t('permission.planRequestedPermissions')}
+          emptyLabel={t('permission.planEmpty')}
+        />
+        {isPending ? (
+          <textarea
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            placeholder={t('permission.planFeedbackPlaceholder')}
+            rows={3}
+            className="min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand)]/60 focus:ring-2 focus:ring-[var(--color-brand)]/15"
+          />
+        ) : null}
+      </div>
+
+      {isPending ? (
+        <div className="flex items-center gap-2 border-t border-[var(--color-outline-variant)]/20 bg-[var(--color-surface-container-low)] px-4 py-3">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => sessionId && respondToPermission(sessionId, requestId, true, permissionUpdates.length ? { permissionUpdates } : undefined)}
+            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">check</span>}
+          >
+            {t('permission.planApprove')}
+          </Button>
+          <div className="flex-1" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => sessionId && respondToPermission(sessionId, requestId, false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)}
+            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">edit_note</span>}
+          >
+            {t('permission.planKeepPlanning')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

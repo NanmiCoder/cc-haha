@@ -896,11 +896,20 @@ function isPathAllowed(
     }
   }
 
+  const isInWorkingDir = pathInAllowedWorkingPath(
+    resolvedPath,
+    context,
+    precomputedPathsToCheck,
+  )
+
   // 2.5. For write/create operations, check safety validations
   if (operationType !== 'read') {
     const safetyCheck = checkPathSafetyForAutoEdit(
       resolvedPath,
       precomputedPathsToCheck,
+      {
+        allowUncPath: getPlatform() === 'windows' && isInWorkingDir,
+      },
     )
     if (!safetyCheck.safe) {
       return {
@@ -915,11 +924,6 @@ function isPathAllowed(
   }
 
   // 3. Check if path is in allowed working directory
-  const isInWorkingDir = pathInAllowedWorkingPath(
-    resolvedPath,
-    context,
-    precomputedPathsToCheck,
-  )
   if (isInWorkingDir) {
     if (operationType === 'read' || context.mode === 'acceptEdits') {
       return { allowed: true }

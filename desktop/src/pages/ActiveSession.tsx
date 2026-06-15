@@ -35,6 +35,7 @@ import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState } from '../types/chat'
 import { useMobileViewport } from '../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
+import { formatTokenCount } from '../lib/formatTokenCount'
 import { publicAssetPath } from '../lib/publicAsset'
 import {
   COMPOSER_PREFILL_EVENT,
@@ -605,7 +606,9 @@ export function ActiveSession() {
                       {totalTokens > 0 && (
                         <>
                           <span className="text-[var(--color-outline)]">·</span>
-                          <span>{totalTokens.toLocaleString()} t</span>
+                          <span title={t('common.tokens', { count: totalTokens.toLocaleString() })}>
+                            {t('common.tokens', { count: formatTokenCount(totalTokens) })}
+                          </span>
                         </>
                       )}
                       {lastUpdated && (

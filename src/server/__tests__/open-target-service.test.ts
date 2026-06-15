@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { createOpenTargetService } from '../services/openTargetService.js'
 
 async function makeDir(prefix = 'cc-haha-open-target-') {
@@ -325,6 +325,42 @@ describe('openTargetService', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('expands a tilde path to the home directory before validation', async () => {
+    const { service, launched } = createService('darwin')
+
+    await expect(service.openTarget({ targetId: 'finder', path: '~' }))
+      .resolves.toMatchObject({ ok: true, path: homedir() })
+
+    expect(launched).toEqual([{ command: 'open', args: [homedir()] }])
+  })
+
+  it('reports missing tilde paths with the expanded home path', async () => {
+    const { service } = createService('darwin')
+    const missing = `~/cc-haha-missing-${Date.now()}/report.html`
+
+    const rejection = expect(service.openTarget({ targetId: 'finder', path: missing })).rejects
+    await rejection.toMatchObject({ code: 'OPEN_TARGET_PATH_MISSING' })
+    await rejection.toThrow(join(homedir(), missing.slice(2)))
+  })
+
+  it('expands Windows backslash tilde paths on win32', async () => {
+    const { service } = createService('win32')
+    const missing = `~\\cc-haha-missing-${Date.now()}\\report.html`
+
+    const rejection = expect(service.openTarget({ targetId: 'explorer', path: missing })).rejects
+    await rejection.toMatchObject({ code: 'OPEN_TARGET_PATH_MISSING' })
+    await rejection.toThrow(homedir() + missing.slice(1))
+  })
+
+  it('keeps backslash tilde names untouched on POSIX platforms', async () => {
+    const { service } = createService('darwin')
+
+    // On POSIX "~\..." is a regular (if odd) file name, not a tilde path.
+    const rejection = expect(service.openTarget({ targetId: 'finder', path: '~\\report.html' })).rejects
+    await rejection.toMatchObject({ code: 'OPEN_TARGET_PATH_MISSING' })
+    await rejection.toThrow('~\\report.html')
   })
 
   it('reports launch failures instead of returning success', async () => {

@@ -8,6 +8,7 @@ import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { InlineImageGallery } from './InlineImageGallery'
 import type { AgentTaskNotification } from '../../types/chat'
+import { PlanPreviewCard, extractPlanPreview, isExitPlanModeTool } from './PlanModePreview'
 
 type Props = {
   toolName: string
@@ -37,7 +38,8 @@ const WRITER_PREVIEW_MAX_LINES = 120
 const WRITER_PREVIEW_MAX_CHARS = 30000
 
 export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, isPending = false, partialInput }: Props) {
-  const [expanded, setExpanded] = useState(false)
+  const isPlanTool = isExitPlanModeTool(toolName)
+  const [expanded, setExpanded] = useState(isPlanTool)
   const t = useTranslation()
   const obj = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
   const icon = TOOL_ICONS[toolName] || 'build'
@@ -59,6 +61,19 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   const hasEditPreview = toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string'
   const hasWritePreview = toolName === 'Write' && typeof obj.content === 'string'
   const expandable = hasEditPreview || hasWritePreview || hasResultDetails || Boolean(isPending && partialInput)
+
+  if (isPlanTool) {
+    return (
+      <PlanToolCallBlock
+        input={input}
+        result={result}
+        compact={compact}
+        isPending={isPending}
+        expanded={expanded}
+        onToggle={() => setExpanded((value) => !value)}
+      />
+    )
+  }
 
   return (
     <div className={`overflow-hidden rounded-lg border border-[var(--color-border)]/50 bg-[var(--color-surface-container-lowest)] ${
@@ -123,6 +138,78 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     </div>
   )
 })
+
+function PlanToolCallBlock({
+  input,
+  result,
+  compact,
+  isPending,
+  expanded,
+  onToggle,
+}: {
+  input: unknown
+  result?: { content: unknown; isError: boolean } | null
+  compact: boolean
+  isPending: boolean
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const t = useTranslation()
+  const preview = extractPlanPreview(input, result?.content)
+  const title = result?.isError
+    ? t('permission.planRejected')
+    : result
+      ? t('permission.planApproved')
+      : t('permission.planReadyTitle')
+  const hasRawResult = Boolean(result && extractTextContent(result.content))
+
+  return (
+    <div className={`overflow-hidden rounded-lg border border-[var(--color-brand)]/35 bg-[var(--color-surface-container-lowest)] ${
+      compact ? 'mb-0' : 'mb-2'
+    }`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]/50"
+      >
+        <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)]">architecture</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+          {title}
+        </span>
+        {preview.filePath ? (
+          <span className="hidden max-w-[40%] truncate font-[var(--font-mono)] text-[11px] text-[var(--color-text-tertiary)] sm:inline">
+            {preview.filePath}
+          </span>
+        ) : null}
+        {isPending ? (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
+            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+            {t('tool.preparingTool')}
+          </span>
+        ) : null}
+        <span className="material-symbols-outlined text-[14px] text-[var(--color-outline)]">
+          {expanded ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="space-y-2.5 border-t border-[var(--color-border)]/60 px-3 py-3">
+          <PlanPreviewCard
+            title={t('permission.planPreviewTitle')}
+            plan={preview.plan}
+            filePath={preview.filePath}
+            allowedPrompts={preview.allowedPrompts}
+            requestedPermissionsTitle={t('permission.planRequestedPermissions')}
+            emptyLabel={t('permission.planEmpty')}
+          />
+          {result?.isError && hasRawResult ? (
+            renderResultOutput(result, extractTextContent(result.content) ?? '', t)
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 function renderPreview(
   toolName: string,

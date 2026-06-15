@@ -1,17 +1,29 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 
-/**
- * Collapse state is remembered per section key at module level so that
- * switching the selected span keeps the user's reading layout intact.
- */
 const sectionOpenState = new Map<string, boolean>()
+const TraceSectionScopeContext = createContext('default')
 
 export function resetTraceSectionState(): void {
   sectionOpenState.clear()
 }
 
+export function TraceSectionStateProvider({
+  scopeId,
+  children,
+}: {
+  scopeId: string
+  children: ReactNode
+}) {
+  return (
+    <TraceSectionScopeContext.Provider value={scopeId}>
+      {children}
+    </TraceSectionScopeContext.Provider>
+  )
+}
+
 export function Section({
+  scopeId,
   sectionKey,
   title,
   badge,
@@ -19,6 +31,7 @@ export function Section({
   defaultOpen = false,
   children,
 }: {
+  scopeId?: string
   sectionKey: string
   title: string
   badge?: string | number
@@ -26,17 +39,18 @@ export function Section({
   defaultOpen?: boolean
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(() => sectionOpenState.get(sectionKey) ?? defaultOpen)
+  const contextScopeId = useContext(TraceSectionScopeContext)
+  const resolvedScopeId = scopeId ?? contextScopeId
+  const stateKey = useMemo(() => `${resolvedScopeId}:${sectionKey}`, [resolvedScopeId, sectionKey])
+  const [open, setOpen] = useState(() => sectionOpenState.get(stateKey) ?? defaultOpen)
 
-  // defaultOpen can flip after async detail loads (e.g. legacy fallback opens
-  // Raw). Follow it until the user toggles this section explicitly.
   useEffect(() => {
-    if (!sectionOpenState.has(sectionKey)) setOpen(defaultOpen)
-  }, [sectionKey, defaultOpen])
+    setOpen(sectionOpenState.get(stateKey) ?? defaultOpen)
+  }, [stateKey, defaultOpen])
 
   const toggle = () => {
     setOpen((previous) => {
-      sectionOpenState.set(sectionKey, !previous)
+      sectionOpenState.set(stateKey, !previous)
       return !previous
     })
   }

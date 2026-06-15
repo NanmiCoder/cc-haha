@@ -10,6 +10,7 @@ import {
 
 describe('api diagnostics reporting', () => {
   afterEach(() => {
+    vi.useRealTimers()
     setAuthToken(null)
     setBaseUrl(getDefaultBaseUrl())
     vi.restoreAllMocks()
@@ -112,6 +113,36 @@ describe('api diagnostics reporting', () => {
     await expect(api.get('/api/diagnostics/status')).rejects.toThrow('diagnostics down')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('defaults local API requests to a 120 second timeout', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/api/slow')) {
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          })
+        })
+      }
+
+      return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    })
+
+    const request = expect(api.get('/api/slow')).rejects.toThrow('Request timed out after 120s')
+
+    await vi.advanceTimersByTimeAsync(120_000)
+    await request
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [, diagnosticInit] = fetchMock.mock.calls[1]!
+    const body = JSON.parse(String((diagnosticInit as RequestInit).body))
+    expect(body.type).toBe('client_api_request_failed')
+    expect(body.details.message).toBe('Request timed out after 120s')
   })
 
   it('can report raw client exceptions', async () => {

@@ -142,6 +142,12 @@ export function LlmCallDetail({ sessionId, span }: { sessionId: string; span: Tr
   )
 }
 
+export function isAbortedTraceCall(call: TraceCallRecord): boolean {
+  if (call.metadata?.aborted === true) return true
+  const name = call.error?.name
+  return name === 'AbortError' || name === 'TimeoutError'
+}
+
 function ResponseContent({
   call,
   pending,
@@ -155,10 +161,29 @@ function ResponseContent({
 }) {
   const t = useTranslation()
   if (call.error) {
+    const aborted = isAbortedTraceCall(call)
     return (
-      <div className="rounded-[var(--radius-md)] border border-[var(--color-error)]/25 bg-[var(--color-error-container)]/40 px-3 py-2">
-        <div className="text-xs font-semibold text-[var(--color-error)]">{call.error.name}</div>
+      <div
+        className="rounded-[var(--radius-md)] border border-[var(--color-error)]/25 bg-[var(--color-error-container)]/40 px-3 py-2"
+        data-testid="trace-call-error"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="text-xs font-semibold text-[var(--color-error)]">{call.error.name}</div>
+          {aborted ? (
+            <span
+              className="inline-flex shrink-0 items-center rounded-[var(--radius-sm)] bg-[var(--color-error)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-error)]"
+              data-testid="trace-call-aborted-badge"
+            >
+              {t('trace.status.aborted')}
+            </span>
+          ) : null}
+        </div>
         <div className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{call.error.message}</div>
+        {aborted ? (
+          <div className="mt-1 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+            {t('trace.detail.aborted')}
+          </div>
+        ) : null}
         {call.error.stack ? (
           <details className="mt-1.5">
             <summary className="cursor-pointer text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">

@@ -10,6 +10,7 @@ const DEFAULT_BASE_URL = ENV_BASE_URL || 'http://127.0.0.1:3456'
 let baseUrl = DEFAULT_BASE_URL
 let authToken: string | null = null
 const DIAGNOSTICS_PATH = '/api/diagnostics/events'
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
 function getErrorMessage(status: number, body: unknown) {
   if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string') {
@@ -72,7 +73,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   const headers = buildHeaders()
 
   const controller = new AbortController()
-  const timeoutMs = options?.timeout ?? 30_000
+  const timeoutMs = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(url, {

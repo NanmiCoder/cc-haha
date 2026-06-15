@@ -323,6 +323,38 @@ export type RecompactionInfo = {
 }
 
 /**
+ * Strip provider-reported usage off preserved assistant messages. After a
+ * compaction the last pre-compact API usage no longer describes the active
+ * context, but getCurrentUsage() walks backwards for the newest non-zero
+ * usage and calculateCurrentContextTokenTotal() takes
+ * max(local estimate, API usage) — so a stale anchor pins the context meter
+ * at the pre-compact level until the next API response arrives (#743).
+ * Zeroed usage is the established "stale/unavailable" placeholder that
+ * getCurrentUsage() skips. Copies, never mutates: the originals stay intact
+ * for transcript/cost accounting.
+ */
+function stripStaleUsageFromPreservedMessages(messages: Message[]): Message[] {
+  return messages.map(message => {
+    if (message.type !== 'assistant') return message
+    const usage = message.message?.usage
+    if (!usage) return message
+    return {
+      ...message,
+      message: {
+        ...message.message,
+        usage: {
+          ...usage,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    }
+  })
+}
+
+/**
  * Build the base post-compact messages array from a CompactionResult.
  * This ensures consistent ordering across all compaction paths.
  * Order: boundaryMarker, summaryMessages, messagesToKeep, attachments, hookResults
@@ -331,7 +363,7 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
   return [
     result.boundaryMarker,
     ...result.summaryMessages,
-    ...(result.messagesToKeep ?? []),
+    ...stripStaleUsageFromPreservedMessages(result.messagesToKeep ?? []),
     ...result.attachments,
     ...result.hookResults,
   ]

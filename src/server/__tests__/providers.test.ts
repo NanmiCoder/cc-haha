@@ -95,7 +95,11 @@ describe('ProviderService', () => {
     test('should return empty array when no providers exist', async () => {
       const svc = new ProviderService()
       const result = await svc.listProviders()
-      expect(result).toEqual({ providers: [], activeId: null })
+      expect(result).toEqual({
+        providers: [],
+        activeId: null,
+        providerOrder: ['claude-official', 'openai-official'],
+      })
     })
 
     test('should recover from a malformed providers index after an upgrade', async () => {
@@ -106,7 +110,11 @@ describe('ProviderService', () => {
       const result = await svc.listProviders()
       const files = await fs.readdir(path.join(tmpDir, 'cc-haha'))
 
-      expect(result).toEqual({ providers: [], activeId: null })
+      expect(result).toEqual({
+        providers: [],
+        activeId: null,
+        providerOrder: ['claude-official', 'openai-official'],
+      })
       expect(files.some((name) => name.startsWith('providers.json.invalid-'))).toBe(true)
     })
 
@@ -699,6 +707,98 @@ describe('ProviderService', () => {
     })
   })
 
+  // ─── reorderProviders ────────────────────────────────────────────────────
+
+  describe('reorderProviders', () => {
+    test('should reorder providers to match the given id order and persist it', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      const b = await svc.addProvider(sampleInput({ name: 'B' }))
+      const c = await svc.addProvider(sampleInput({ name: 'C' }))
+
+      const result = await svc.reorderProviders([c.id, a.id, b.id])
+      expect(result.providers.map((p) => p.name)).toEqual(['C', 'A', 'B'])
+
+      // Persisted order survives a fresh read
+      const { providers } = await svc.listProviders()
+      expect(providers.map((p) => p.name)).toEqual(['C', 'A', 'B'])
+
+      const config = await readProvidersConfig()
+      expect((config.providers as Array<{ name: string }>).map((p) => p.name)).toEqual(['C', 'A', 'B'])
+    })
+
+    test('should persist display order including built-in official providers', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      const b = await svc.addProvider(sampleInput({ name: 'B' }))
+
+      const result = await svc.reorderProviders(['openai-official', b.id, 'claude-official', a.id])
+
+      expect(result.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+      expect(result.providers.map((p) => p.id)).toEqual([b.id, a.id])
+
+      const listed = await svc.listProviders()
+      expect(listed.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+
+      const config = await readProvidersConfig()
+      expect(config.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+    })
+
+    test('should not change activeId when reordering', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      const b = await svc.addProvider(sampleInput({ name: 'B' }))
+      await svc.activateProvider(a.id)
+
+      await svc.reorderProviders([b.id, a.id])
+
+      const { activeId } = await svc.listProviders()
+      expect(activeId).toBe(a.id)
+    })
+
+    test('should throw 400 when orderedIds is missing a provider', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      await svc.addProvider(sampleInput({ name: 'B' }))
+
+      try {
+        await svc.reorderProviders([a.id])
+        expect(true).toBe(false)
+      } catch (err: unknown) {
+        const apiErr = err as { statusCode: number }
+        expect(apiErr.statusCode).toBe(400)
+      }
+    })
+
+    test('should throw 400 when orderedIds contains an unknown id', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      const b = await svc.addProvider(sampleInput({ name: 'B' }))
+
+      try {
+        await svc.reorderProviders([a.id, b.id, 'ghost-id'])
+        expect(true).toBe(false)
+      } catch (err: unknown) {
+        const apiErr = err as { statusCode: number }
+        expect(apiErr.statusCode).toBe(400)
+      }
+    })
+
+    test('should throw 400 when orderedIds contains duplicates', async () => {
+      const svc = new ProviderService()
+      const a = await svc.addProvider(sampleInput({ name: 'A' }))
+      await svc.addProvider(sampleInput({ name: 'B' }))
+
+      try {
+        await svc.reorderProviders([a.id, a.id])
+        expect(true).toBe(false)
+      } catch (err: unknown) {
+        const apiErr = err as { statusCode: number }
+        expect(apiErr.statusCode).toBe(400)
+      }
+    })
+  })
+
   // ─── activateProvider ────────────────────────────────────────────────────
 
   describe('activateProvider', () => {
@@ -1076,10 +1176,8 @@ describe('ProviderService', () => {
       }
     })
 
-    test('injects Claude Code billing attribution with compat version and signed CCH', async () => {
+    test('strips leading billing attribution instead of injecting it for OpenAI-compatible upstreams', async () => {
       const originalFetch = globalThis.fetch
-      const originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
-      delete process.env.CLAUDE_CODE_ENTRYPOINT
       const calls: Array<{ body: Record<string, unknown> }> = []
       globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
         calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
@@ -1107,6 +1205,10 @@ describe('ProviderService', () => {
           body: JSON.stringify({
             model: 'gpt-4',
             max_tokens: 64,
+            system: [
+              { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.92.693; cc_entrypoint=cli; cch=00000;' },
+              { type: 'text', text: 'You are a helpful assistant.' },
+            ],
             messages: [{ role: 'user', content: 'hello from proxy' }],
           }),
         })
@@ -1114,15 +1216,57 @@ describe('ProviderService', () => {
         const res = await handleProxyRequest(req, new URL(req.url))
         expect(res.status).toBe(200)
 
-        const system = calls[0].body.messages as Array<Record<string, string>>
-        expect(system[0].role).toBe('system')
-        expect(system[0].content).toMatch(
-          /^x-anthropic-billing-header: cc_version=2\.1\.92\.693; cc_entrypoint=unknown; cch=[0-9a-f]{5};$/,
-        )
+        // The rotating billing header would change the prompt prefix on every
+        // request and defeat upstream prefix caching — it must not be forwarded.
+        const messages = calls[0].body.messages as Array<Record<string, string>>
+        expect(messages[0].role).toBe('system')
+        expect(messages[0].content).toBe('You are a helpful assistant.')
+        expect(JSON.stringify(calls[0].body)).not.toContain('x-anthropic-billing-header')
       } finally {
         globalThis.fetch = originalFetch
-        if (originalEntrypoint === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT
-        else process.env.CLAUDE_CODE_ENTRYPOINT = originalEntrypoint
+      }
+    })
+
+    test('forwards a stable prompt_cache_key from client session metadata for OpenAI Responses upstreams', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({
+          id: 'resp-1',
+          object: 'response',
+          created_at: 0,
+          model: 'gpt-5.4',
+          status: 'completed',
+          output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_responses' }))
+        await svc.activateProvider(provider.id)
+
+        const req = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gpt-5.4',
+            max_tokens: 64,
+            metadata: { user_id: 'user_3f7a_account_9b2c_session_sess-42aa' },
+            messages: [{ role: 'user', content: 'hello from proxy' }],
+          }),
+        })
+
+        const res = await handleProxyRequest(req, new URL(req.url))
+        expect(res.status).toBe(200)
+        expect(calls[0].body.prompt_cache_key).toBe('sess-42aa')
+      } finally {
+        globalThis.fetch = originalFetch
       }
     })
 
@@ -1712,6 +1856,55 @@ describe('Providers API', () => {
     const res = await handleProvidersApi(req, url, segments)
 
     expect(res.status).toBe(400)
+  })
+
+  // ─── PUT /api/providers/reorder ──────────────────────────────────────────
+
+  test('PUT /api/providers/reorder should reorder providers', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    const b = await svc.addProvider(sampleInput({ name: 'B' }))
+
+    const { req, url, segments } = makeRequest('PUT', '/api/providers/reorder', {
+      orderedIds: [b.id, a.id],
+    })
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { providers: { name: string }[]; providerOrder: string[] }
+    expect(body.providers.map((p) => p.name)).toEqual(['B', 'A'])
+    expect(body.providerOrder).toEqual([b.id, a.id, 'claude-official', 'openai-official'])
+  })
+
+  test('PUT /api/providers/reorder should return 400 for a non-permutation', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    await svc.addProvider(sampleInput({ name: 'B' }))
+
+    const { req, url, segments } = makeRequest('PUT', '/api/providers/reorder', {
+      orderedIds: [a.id], // missing B
+    })
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(400)
+  })
+
+  test('PUT /api/providers/reorder should return 400 for empty orderedIds', async () => {
+    const { req, url, segments } = makeRequest('PUT', '/api/providers/reorder', {
+      orderedIds: [],
+    })
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(400)
+  })
+
+  test('POST /api/providers/reorder should be method-not-allowed', async () => {
+    const { req, url, segments } = makeRequest('POST', '/api/providers/reorder', {
+      orderedIds: [],
+    })
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(405)
   })
 
   test('POST /api/providers should return 400 for invalid auto compact window', async () => {
