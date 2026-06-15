@@ -11,6 +11,7 @@ import type {
   AnthropicContentBlock,
 } from './types.js'
 import { parseOpenAIToolArguments } from './toolArguments.js'
+import { openaiUsageToAnthropic } from './usage.js'
 
 /**
  * Convert OpenAI Responses API response to Anthropic Messages response.
@@ -37,10 +38,7 @@ export function openaiResponsesToAnthropic(response: OpenAIResponsesResponse, mo
     model: response.model || model,
     stop_reason: mapStatus(response.status, hasToolUse),
     stop_sequence: null,
-    usage: {
-      input_tokens: response.usage?.input_tokens ?? response.usage?.prompt_tokens ?? 0,
-      output_tokens: response.usage?.output_tokens ?? response.usage?.completion_tokens ?? 0,
-    },
+    usage: openaiUsageToAnthropic(response.usage),
   }
 }
 

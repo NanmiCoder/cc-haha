@@ -41,6 +41,20 @@ export type TaskRun = {
   sessionId?: string // links to a session for rich output rendering
 }
 
+export function buildCronTaskSpawnOptions(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+) {
+  return {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    cwd,
+    env,
+    windowsHide: true,
+  } as const
+}
+
 // ─── Output extraction ────────────────────────────────────────────────────────
 
 /**
@@ -518,13 +532,7 @@ export class CronScheduler {
     const childEnv = await this.buildTaskChildEnv(workDir, task)
     const proc = Bun.spawn(
       cliArgs,
-      {
-        stdin: 'pipe',
-        stdout: 'pipe',
-        stderr: 'pipe',
-        cwd: workDir,
-        env: childEnv,
-      },
+      buildCronTaskSpawnOptions(workDir, childEnv),
     )
 
     this.runningTasks.set(task.id, { proc, startedAt: Date.now(), runId })

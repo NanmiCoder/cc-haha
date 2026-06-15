@@ -11,12 +11,12 @@ describe('feature quality contract', () => {
     expect(agents).toContain('`~/.claude/settings.json` is user-owned shared state')
     expect(agents).toContain('persistence upgrade gate')
     expect(agents).toContain('Production code changes under `desktop/src`, `src/server`, `src/tools`, `src/utils`, or `adapters` must include a same-area test file')
-    expect(agents).toContain('Coverage is part of the feature, not an afterthought.')
+    expect(agents).toContain('Coverage is part of PR readiness, not an afterthought.')
     expect(agents).toContain('changed executable production line must meet the changed-line coverage gate')
     expect(agents).toContain('E2E is required when the feature crosses process boundaries')
     expect(agents).toContain('AI agents must include this evidence')
     expect(agents).toContain('Unified local entrypoint: `bun run verify`')
-    expect(agents).toContain('If `bun run verify` fails, do not stop at reporting the failure')
+    expect(agents).toContain('If `bun run verify` is intentionally run and fails, do not stop at reporting the failure')
   })
 
   test('keeps PR authors accountable for tests, coverage, E2E, and risk', () => {

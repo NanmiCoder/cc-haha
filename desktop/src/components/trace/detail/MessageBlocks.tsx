@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useState } from 'react'
 import { Wrench } from 'lucide-react'
 import { useTranslation } from '../../../i18n'
 import type { NormalizedBlock, NormalizedMessage } from '../../../lib/trace/types'
@@ -7,12 +7,6 @@ import { CopyButton } from '../../shared/CopyButton'
 import { CodeViewer } from '../../chat/CodeViewer'
 
 const LONG_TEXT_CHARS = 2000
-
-/** Skip off-screen paint without virtualization (WebKit-friendly). */
-const MESSAGE_CV_STYLE = {
-  contentVisibility: 'auto',
-  containIntrinsicSize: 'auto 120px',
-} as const satisfies CSSProperties
 
 const ROLE_STYLES: Record<NormalizedMessage['role'], { badge: string; container: string }> = {
   user: {
@@ -37,8 +31,7 @@ export function MessageBlocks({ message }: { message: NormalizedMessage }) {
   const styles = ROLE_STYLES[message.role]
   return (
     <div
-      className={`rounded-[var(--radius-md)] border-l-2 px-3 py-2 ${styles.container}`}
-      style={MESSAGE_CV_STYLE}
+      className={`trace-message-cv rounded-[var(--radius-md)] border-l-2 px-3 py-2 ${styles.container}`}
       data-testid={`trace-message-${message.role}`}
     >
       <div className={`text-[10px] font-semibold uppercase tracking-[0.12em] ${styles.badge}`}>

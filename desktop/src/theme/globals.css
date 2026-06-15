@@ -130,6 +130,21 @@
   outline: none;
 }
 
+.settings-checkbox-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.settings-checkbox-input:disabled {
+  cursor: not-allowed;
+}
+
 .settings-zoom-kbd {
   min-width: 18px;
   height: 18px;
@@ -959,13 +974,9 @@ html, body, #root {
 }
 
 /* Desktop drag region */
-html:not([data-desktop-drag-mode="manual"]) [data-desktop-drag-region] {
+[data-desktop-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
-}
-html[data-desktop-drag-mode="manual"] [data-desktop-drag-region] {
-  app-region: no-drag;
-  -webkit-app-region: no-drag;
 }
 button, input, textarea, select, a, [role="button"] {
   app-region: no-drag;
@@ -1358,23 +1369,9 @@ button, input, textarea, select, a, [role="button"] {
   .activity-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .activity-summary-metric-primary {
-    grid-column: span 2;
-  }
 }
 
-@container (min-width: 620px) {
-  .activity-summary-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .activity-summary-metric-primary {
-    grid-column: span 2;
-  }
-}
-
-@container (min-width: 860px) {
+@container (min-width: 560px) {
   .activity-summary-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -1496,4 +1493,85 @@ button, input, textarea, select, a, [role="button"] {
 .trace-row-cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 34px;
+}
+
+/* Trace-window variants of the same trick (kept as classes — not inline styles —
+   so the touch-H5 override below can reach them). */
+.trace-message-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+.trace-list-row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+
+/* ============================================================================
+   Touch-H5 (phone browser) scoped fixes.
+
+   `html[data-touch-h5]` is set before first paint by src/lib/touchH5.ts only
+   when the bundle runs in a browser (no Electron host) on a coarse-pointer
+   device — WeChat scan-to-open, mobile Safari, etc. Desktop shells and
+   desktop browsers never match, so nothing here can regress desktop chat.
+   ========================================================================== */
+
+/* iOS WKWebView zooms the whole page (and never zooms back) when a focused
+   form control renders below 16px. 16px controls remove the trigger at the
+   root; the JS side additionally caps the viewport scale on iOS. Android has
+   no focus-zoom but 16px inputs are the native size there too. */
+html[data-touch-h5] input,
+html[data-touch-h5] textarea,
+html[data-touch-h5] select {
+  font-size: 16px;
+}
+
+/* Long-press text selection on iOS WebKit fights content-visibility: auto —
+   extending a selection into a skipped row forces synchronous layout, which
+   makes the selection handles jump or drops the selection entirely. The paint
+   savings were measured for the desktop WKWebView's 860px canvas; a phone
+   viewport paints far less per row, so correct selection wins here. */
+html[data-touch-h5] .chat-render-item--cv,
+html[data-touch-h5] .trace-row-cv,
+html[data-touch-h5] .trace-message-cv,
+html[data-touch-h5] .trace-list-row-cv {
+  content-visibility: visible;
+}
+
+/* Size the shell to the *visual* viewport so the composer rides the soft
+   keyboard instead of the keyboard covering it (variable published by
+   touchH5.ts; falls back to 100dvh before the first sync). The safe-area
+   padding pairs with viewport-fit=cover on iOS: keep the composer above the
+   home indicator and the header out of the notch, but drop the bottom inset
+   while the keyboard is up — the keyboard covers that strip anyway. */
+html[data-touch-h5] .app-shell-viewport {
+  min-height: var(--touch-h5-viewport-height, 100dvh);
+  height: var(--touch-h5-viewport-height, 100dvh);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+html[data-touch-h5][data-touch-h5-keyboard] .app-shell-viewport {
+  padding-bottom: 0px;
+}
+
+/* Message action bars (copy / branch) are hover-revealed on desktop; touch
+   devices have no hover, so keep them always visible there. */
+html[data-touch-h5] [data-message-actions] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Kill the gray flash WKWebView paints over any tapped interactive element;
+   components carry their own pressed/hover styling. */
+html[data-touch-h5],
+html[data-touch-h5] * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The app shell is a fixed 100dvh layout with inner scroll areas; the body
+   itself never scrolls. Stop edge overscroll from rubber-banding the whole
+   shell (and WeChat from revealing its pull-down domain banner mid-chat). */
+html[data-touch-h5] body {
+  overscroll-behavior-y: none;
 }

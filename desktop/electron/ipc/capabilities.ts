@@ -56,17 +56,6 @@ const boundsPayload: Validator = value =>
   && typeof value.width === 'number'
   && typeof value.height === 'number'
 
-const windowDragMovePayload: Validator = value =>
-  value === undefined
-  || (
-    isRecord(value)
-    && hasOnlyKeys(value, ['deltaX', 'deltaY'])
-    && typeof value.deltaX === 'number'
-    && Number.isFinite(value.deltaX)
-    && typeof value.deltaY === 'number'
-    && Number.isFinite(value.deltaY)
-  )
-
 const urlWithOptionalBounds: Validator = value =>
   isRecord(value)
   && typeof value.url === 'string'
@@ -102,7 +91,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.windowMinimize]: noPayload,
   [ELECTRON_IPC_CHANNELS.windowToggleMaximize]: noPayload,
   [ELECTRON_IPC_CHANNELS.windowClose]: noPayload,
-  [ELECTRON_IPC_CHANNELS.windowStartDragging]: windowDragMovePayload,
+  [ELECTRON_IPC_CHANNELS.windowStartDragging]: noPayload,
   [ELECTRON_IPC_CHANNELS.windowRequestAttention]: noPayload,
   [ELECTRON_IPC_CHANNELS.windowFocus]: noPayload,
   [ELECTRON_IPC_CHANNELS.windowIsMaximized]: noPayload,

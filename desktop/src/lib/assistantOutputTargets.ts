@@ -24,6 +24,15 @@ export type AssistantOutputTarget = {
 export type ExtractAssistantOutputTargetOptions = {
   workDir?: string | null
   limit?: number
+  /**
+   * The turn's REAL changed files (absolute paths from the turn checkpoint). When
+   * provided, file chips are reconciled against this ground truth: a mentioned
+   * file is corrected to the actual changed path (so `index.html` resolves to the
+   * `todo-app/index.html` that was really written), and a mentioned file that the
+   * turn never changed is dropped instead of pointing at a non-existent path.
+   * Localhost URLs are unaffected. Omitted/empty → fall back to text-only behavior.
+   */
+  changedFiles?: string[]
 }
 
 type FileTargetMatch = {
@@ -217,7 +226,94 @@ export function extractAssistantOutputTargets(
     results.push(candidate.target)
   }
 
+  if (options.changedFiles && options.changedFiles.length > 0) {
+    return reconcileTargetsWithChangedFiles(results, options.changedFiles, workDir)
+  }
+
   return results
+}
+
+/**
+ * Re-anchor file chips onto the turn's real changed files. A mentioned file that
+ * matches a changed file (by exact relative-path suffix, else by basename) is
+ * rewritten to that real path; a mentioned file with no match is dropped so we
+ * never render a chip that opens "file does not exist". Localhost URLs pass
+ * through untouched.
+ */
+function reconcileTargetsWithChangedFiles(
+  targets: AssistantOutputTarget[],
+  changedFiles: string[],
+  workDir: string | null,
+): AssistantOutputTarget[] {
+  const out: AssistantOutputTarget[] = []
+  const seen = new Set<string>()
+
+  for (const target of targets) {
+    if (target.kind === 'localhost-url') {
+      out.push(target)
+      continue
+    }
+
+    const mentioned = target.normalizedPath ?? target.href
+    const match = matchChangedFile(mentioned, changedFiles)
+    if (!match) {
+      continue
+    }
+
+    const resolvedMatch = resolveFilePath(match)
+    const corrected = workDir && isWithinWorkDir(resolvedMatch, workDir)
+      ? relativeFilePath(workDir, resolvedMatch)
+      : toPosixPath(match)
+
+    const key = `${target.kind}:${corrected}`
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+
+    out.push({
+      ...target,
+      href: corrected,
+      normalizedPath: corrected,
+      subtitle: corrected,
+    })
+  }
+
+  return out
+}
+
+/**
+ * Resolve a mentioned (often relative or bare) path against the turn's absolute
+ * changed-file list. Prefer an unambiguous relative-suffix match, then fall back
+ * to an unambiguous basename match. Ambiguous matches return null (we'd rather
+ * keep the original text path than guess wrong).
+ */
+function matchChangedFile(mentioned: string, changedFiles: string[]): string | null {
+  const normalized = toPosixPath(mentioned).replace(/^\.?\//, '').toLowerCase()
+  if (!normalized) {
+    return null
+  }
+  const basename = normalized.split('/').pop() ?? normalized
+
+  const suffixMatches = changedFiles.filter((file) => {
+    const normalizedFile = toPosixPath(file).toLowerCase()
+    return normalizedFile === normalized || normalizedFile.endsWith(`/${normalized}`)
+  })
+  if (suffixMatches.length === 1) {
+    return suffixMatches[0]!
+  }
+  if (suffixMatches.length > 1) {
+    return null
+  }
+
+  const basenameMatches = changedFiles.filter(
+    (file) => getBasename(file).toLowerCase() === basename,
+  )
+  if (basenameMatches.length === 1) {
+    return basenameMatches[0]!
+  }
+
+  return null
 }
 
 function toWorkspaceFileTarget(candidate: string, workDir: string | null): FileTargetMatch | null {

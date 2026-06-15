@@ -379,10 +379,20 @@ describe('E2E: Full Flow', () => {
   // 10. CORS
   // =============================================
 
-  it('should block browser CORS preflight while H5 access is disabled', async () => {
+  // Loopback browser origins (local dev servers) are trusted without a token
+  // since 9238481e; only remote origins stay blocked while H5 is disabled.
+  it('should allow loopback browser CORS preflight while H5 access is disabled', async () => {
     const res = await fetch(`${baseUrl}/api/status`, {
       method: 'OPTIONS',
       headers: { 'Origin': 'http://localhost:3000' },
+    })
+    expect(res.status).toBe(204)
+  })
+
+  it('should block remote browser CORS preflight while H5 access is disabled', async () => {
+    const res = await fetch(`${baseUrl}/api/status`, {
+      method: 'OPTIONS',
+      headers: { 'Origin': 'https://phone.example' },
     })
     expect(res.status).toBe(403)
   })

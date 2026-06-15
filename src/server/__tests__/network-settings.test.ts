@@ -37,7 +37,7 @@ describe('network settings', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  it('normalizes missing settings to the 120s system-proxy default', () => {
+  it('normalizes missing settings to the 600s system-proxy default', () => {
     expect(normalizeNetworkSettings({})).toEqual({
       aiRequestTimeoutMs: DEFAULT_AI_REQUEST_TIMEOUT_MS,
       proxy: {
@@ -50,7 +50,7 @@ describe('network settings', () => {
   it('clamps AI request timeouts and trims manual proxy URLs', () => {
     expect(normalizeNetworkSettings({
       network: {
-        aiRequestTimeoutMs: 999_999,
+        aiRequestTimeoutMs: 9_999_999,
         proxy: {
           mode: 'manual',
           url: '  http://127.0.0.1:7890  ',

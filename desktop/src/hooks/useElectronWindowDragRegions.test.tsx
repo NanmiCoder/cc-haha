@@ -56,15 +56,15 @@ describe('useElectronWindowDragRegions', () => {
     delete document.documentElement.dataset.desktopDragMode
   })
 
-  it('uses the manual drag fallback on Windows only', () => {
-    expect(shouldUseManualWindowDrag('Win32')).toBe(true)
+  it('uses native app-region dragging on every platform', () => {
+    expect(shouldUseManualWindowDrag('Win32')).toBe(false)
     expect(shouldUseManualWindowDrag('MacIntel')).toBe(false)
     expect(shouldUseManualWindowDrag('Linux x86_64')).toBe(false)
   })
 
-  it('moves the native window while dragging a desktop drag region', async () => {
+  it('leaves Windows drag regions on the native app-region path', async () => {
     render(<Harness />)
-    expect(document.documentElement.dataset.desktopDragMode).toBe('manual')
+    expect(document.documentElement.dataset.desktopDragMode).toBeUndefined()
 
     fireEvent.mouseDown(screen.getByTestId('blank-space'), {
       button: 0,
@@ -77,10 +77,7 @@ describe('useElectronWindowDragRegions', () => {
     })
 
     await waitFor(() => {
-      expect(desktopHostMock.host.window.startDragging).toHaveBeenCalledWith({
-        deltaX: 30,
-        deltaY: 30,
-      })
+      expect(desktopHostMock.host.window.startDragging).not.toHaveBeenCalled()
     })
 
     fireEvent.mouseUp(window)
@@ -89,10 +86,10 @@ describe('useElectronWindowDragRegions', () => {
       screenY: 210,
     })
 
-    expect(desktopHostMock.host.window.startDragging).toHaveBeenCalledTimes(1)
+    expect(desktopHostMock.host.window.startDragging).not.toHaveBeenCalled()
   })
 
-  it('keeps buttons and tab reorder targets out of the window drag fallback', () => {
+  it('does not route buttons or tab reorder targets through legacy drag IPC', () => {
     render(<Harness />)
 
     fireEvent.mouseDown(screen.getByRole('button', { name: 'Button' }), {

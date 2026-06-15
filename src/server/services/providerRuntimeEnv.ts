@@ -10,6 +10,9 @@ import type {
   SavedProvider,
 } from '../types/provider.js'
 import {
+  BUILT_IN_PROVIDER_IDS,
+} from '../types/provider.js'
+import {
   ATTRIBUTION_HEADER_ENV_KEY,
   attributionHeaderEnvForModel,
 } from './attributionHeaderPolicy.js'
@@ -92,12 +95,50 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
   }
 }
 
+function defaultProviderOrder(providers: SavedProvider[]): string[] {
+  return [
+    ...providers.map((provider) => provider.id),
+    ...BUILT_IN_PROVIDER_IDS,
+  ]
+}
+
+function normalizeProviderOrder(value: unknown, providers: SavedProvider[]): string[] {
+  const providerIds = providers.map((provider) => provider.id)
+  const knownIds = new Set<string>([
+    ...providerIds,
+    ...BUILT_IN_PROVIDER_IDS,
+  ])
+  const source = Array.isArray(value)
+    ? value
+    : defaultProviderOrder(providers)
+  const seen = new Set<string>()
+  const order: string[] = []
+
+  for (const id of source) {
+    if (typeof id !== 'string' || !knownIds.has(id) || seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  for (const id of defaultProviderOrder(providers)) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  return order
+}
+
 export function normalizeProvidersIndex(value: unknown): ProvidersIndex | null {
   if (!isRecord(value) || !Array.isArray(value.providers)) {
     return null
   }
 
-  const { activeProviderId: legacyActiveProviderId, ...rest } = value
+  const {
+    activeProviderId: legacyActiveProviderId,
+    providerOrder: rawProviderOrder,
+    ...rest
+  } = value
   const providers = value.providers
     .filter(isSavedProvider)
     .map((provider) => normalizeSavedProvider(provider))
@@ -119,6 +160,7 @@ export function normalizeProvidersIndex(value: unknown): ProvidersIndex | null {
     schemaVersion: typeof value.schemaVersion === 'number' ? value.schemaVersion : 1,
     activeId,
     providers,
+    providerOrder: normalizeProviderOrder(rawProviderOrder, providers),
   }
 }
 

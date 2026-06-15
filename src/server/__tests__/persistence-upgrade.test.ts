@@ -62,11 +62,13 @@ describe('persistent storage upgrade migrations', () => {
       schemaVersion?: number
       activeId?: string | null
       activeProviderId?: string
+      providerOrder?: string[]
       rootFutureField?: unknown
       providers?: Array<Record<string, unknown>>
     }
     expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
     expect(migrated.activeId).toBe('provider-1')
+    expect(migrated.providerOrder).toEqual(['provider-1', 'claude-official', 'openai-official'])
     expect(migrated.activeProviderId).toBeUndefined()
     expect(migrated.rootFutureField).toEqual({ keep: true })
     expect(migrated.providers?.[0]?.extraFutureField).toBe('keep-me')
@@ -124,6 +126,7 @@ describe('persistent storage upgrade migrations', () => {
 
     const migrated = JSON.parse(await fs.readFile(path.join(tempDir, 'cc-haha', 'providers.json'), 'utf-8')) as {
       activeId?: string | null
+      providerOrder?: string[]
       providers?: Array<{
         id?: string
         presetId?: string
@@ -133,6 +136,7 @@ describe('persistent storage upgrade migrations', () => {
       }>
     }
     expect(migrated.activeId).toBe('legacy-provider')
+    expect(migrated.providerOrder).toEqual(['legacy-provider', 'claude-official', 'openai-official'])
     expect(migrated.providers?.[0]).toMatchObject({
       id: 'legacy-provider',
       presetId: 'custom',
@@ -196,9 +200,11 @@ describe('persistent storage upgrade migrations', () => {
     expect(report.migratedEntries).not.toContain('providers.json -> cc-haha/providers.json')
     const current = JSON.parse(await fs.readFile(path.join(ccHahaDir, 'providers.json'), 'utf-8')) as {
       activeId?: string | null
+      providerOrder?: string[]
       providers?: unknown[]
     }
     expect(current.activeId).toBeNull()
+    expect(current.providerOrder).toEqual(['claude-official', 'openai-official'])
     expect(current.providers).toEqual([])
   })
 

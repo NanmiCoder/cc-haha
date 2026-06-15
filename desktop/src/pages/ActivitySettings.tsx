@@ -28,6 +28,19 @@ type SummaryMetric = {
   detail?: string
 }
 
+type InsightMetric = {
+  label: string
+  value: string
+  detail?: string
+}
+
+type PluginRankItem = {
+  id: string
+  label: string
+  count: number
+  kind: 'plugin' | 'skill'
+}
+
 type HeatmapMode = 'daily' | 'weekly' | 'cumulative'
 
 const WEEK_COUNT = 52
@@ -102,6 +115,18 @@ function formatTokens(tokens: number) {
   return `${tokens}`
 }
 
+function formatInteger(value: number, locale: Locale) {
+  return new Intl.NumberFormat(DATE_LOCALES[locale], { maximumFractionDigits: 0 }).format(value)
+}
+
+function formatPercent(numerator: number, denominator: number, locale: Locale) {
+  if (denominator <= 0) return '0%'
+  return new Intl.NumberFormat(DATE_LOCALES[locale], {
+    maximumFractionDigits: 0,
+    style: 'percent',
+  }).format(numerator / denominator)
+}
+
 function formatDayCount(value: number, t: ReturnType<typeof useTranslation>) {
   return t(value === 1 ? 'settings.activity.count.dayOne' : 'settings.activity.count.dayOther', { count: value })
 }
@@ -129,6 +154,67 @@ function formatSessionCount(value: number, t: ReturnType<typeof useTranslation>)
 
 function formatMessageCount(value: number, t: ReturnType<typeof useTranslation>) {
   return `${value} ${t('settings.activity.messages')}`
+}
+
+function formatRunCount(value: number, t: ReturnType<typeof useTranslation>) {
+  return t(value === 1 ? 'settings.activity.count.runOne' : 'settings.activity.count.runOther', { count: value })
+}
+
+function getModelTokenTotal(usage: ActivityStatsResponse['modelUsage'][string] | undefined) {
+  if (!usage) return 0
+  return (
+    (usage.inputTokens ?? 0) +
+    (usage.outputTokens ?? 0) +
+    (usage.cacheReadInputTokens ?? 0) +
+    (usage.cacheCreationInputTokens ?? 0)
+  )
+}
+
+function formatModelName(model: string) {
+  return model
+    .replace(/^claude-/i, '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function getPluginNameFromToolName(toolName: string) {
+  if (!toolName.startsWith('mcp__')) return null
+  const parts = toolName.split('__').filter(Boolean)
+  const serverName = parts[1]
+  if (!serverName) return null
+  if (serverName === 'codex_apps' && parts[2]) return parts[2]
+  return serverName
+}
+
+function formatPluginName(pluginName: string) {
+  return pluginName.replace(/_/g, '-')
+}
+
+function buildPluginAndSkillRankItems(stats: ActivityStatsResponse | null) {
+  const skillItems = Object.entries(stats?.skillUsage ?? {}).map<PluginRankItem>(([skill, count]) => ({
+    id: `skill:${skill}`,
+    label: `$${skill}`,
+    count,
+    kind: 'skill',
+  }))
+
+  const pluginUsage = new Map<string, number>()
+  for (const [toolName, count] of Object.entries(stats?.toolUsage ?? {})) {
+    const pluginName = getPluginNameFromToolName(toolName)
+    if (!pluginName || count <= 0) continue
+    pluginUsage.set(pluginName, (pluginUsage.get(pluginName) || 0) + count)
+  }
+  const pluginItems = [...pluginUsage.entries()].map<PluginRankItem>(([pluginName, count]) => ({
+    id: `plugin:${pluginName}`,
+    label: `@${formatPluginName(pluginName)}`,
+    count,
+    kind: 'plugin',
+  }))
+
+  return [...skillItems, ...pluginItems]
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, 6)
 }
 
 function withProfileDefaults(profile: Partial<DesktopProfilePreferences> | null | undefined): DesktopProfilePreferences {
@@ -461,12 +547,31 @@ export function ActivitySettings() {
       sum + Object.values(day.tokensByModel).reduce((daySum, tokens) => daySum + tokens, 0)
     ), 0)
   }, [stats])
+  const totalToolCalls = useMemo(() => {
+    return (stats?.dailyActivity ?? []).reduce((sum, day) => sum + day.toolCallCount, 0)
+  }, [stats])
+  const totalSkillUses = useMemo(() => {
+    return Object.values(stats?.skillUsage ?? {}).reduce((sum, count) => sum + count, 0)
+  }, [stats])
+  const exploredSkillsCount = Object.keys(stats?.skillUsage ?? {}).length
+  const topModel = useMemo(() => {
+    return Object.entries(stats?.modelUsage ?? {}).reduce<{
+      model: string
+      tokens: number
+    } | null>((top, [model, usage]) => {
+      const tokens = getModelTokenTotal(usage)
+      if (tokens <= 0) return top
+      if (!top || tokens > top.tokens) return { model, tokens }
+      return top
+    }, null)
+  }, [stats])
   const peakTokens = useMemo(() => {
     return (stats?.dailyModelTokens ?? []).reduce((peak, day) => {
       const dayTotal = Object.values(day.tokensByModel).reduce((sum, tokens) => sum + tokens, 0)
       return Math.max(peak, dayTotal)
     }, 0)
   }, [stats])
+  const topPluginItems = useMemo(() => buildPluginAndSkillRankItems(stats), [stats])
   const metrics: SummaryMetric[] = [
     {
       label: t('settings.activity.totalTokens'),
@@ -492,6 +597,33 @@ export function ActivitySettings() {
       label: t('settings.activity.longestStreak'),
       value: formatDayCount(stats?.streaks.longestStreak ?? 0, t),
       detail: formatSessionCount(last30Usage.sessions, t),
+    },
+  ]
+  const insightMetrics: InsightMetric[] = [
+    {
+      label: t('settings.activity.activeRate'),
+      value: formatPercent(stats?.activeDays ?? 0, stats?.totalDays ?? 0, locale),
+    },
+    {
+      label: t('settings.activity.mostUsedModel'),
+      value: topModel ? formatModelName(topModel.model) : t('settings.activity.none'),
+      detail: topModel ? `${formatTokens(topModel.tokens)} ${t('settings.activity.tokens')}` : undefined,
+    },
+    {
+      label: t('settings.activity.exploredSkills'),
+      value: formatInteger(exploredSkillsCount, locale),
+    },
+    {
+      label: t('settings.activity.totalSkillUses'),
+      value: formatInteger(totalSkillUses, locale),
+    },
+    {
+      label: t('settings.activity.totalToolCalls'),
+      value: formatInteger(totalToolCalls, locale),
+    },
+    {
+      label: t('settings.activity.totalSessions'),
+      value: formatInteger(stats?.totalSessions ?? 0, locale),
     },
   ]
   const avatarSrc = profile.avatarFile ? getProfileAvatarUrl(profile.avatarUpdatedAt) : DEFAULT_AVATAR_SRC
@@ -565,9 +697,9 @@ export function ActivitySettings() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1160px] min-w-0 pb-12">
-      <section className="relative flex min-h-[245px] flex-col items-center justify-start pt-6 text-center">
-        <div className="relative h-[88px] w-[88px] overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[0_12px_34px_-24px_rgba(15,23,42,0.65)]">
+    <div className="mx-auto w-full max-w-[1060px] min-w-0 pb-12">
+      <section className="relative flex min-h-[176px] flex-col items-center justify-start pt-4 text-center">
+        <div className="relative h-16 w-16 overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[0_10px_28px_-22px_rgba(15,23,42,0.6)]">
           <img
             src={avatarSrc}
             alt={`${profile.displayName} avatar`}
@@ -578,8 +710,8 @@ export function ActivitySettings() {
             }}
           />
         </div>
-        <div className="group/activity-profile mt-6 flex max-w-full items-center justify-center gap-2">
-          <h1 className="max-w-[min(720px,calc(100%-2.25rem))] truncate text-4xl font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-[44px]">{profile.displayName}</h1>
+        <div className="group/activity-profile mt-4 flex max-w-full items-center justify-center gap-2">
+          <h1 className="max-w-[min(720px,calc(100%-2.25rem))] truncate text-[28px] font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-[34px]">{profile.displayName}</h1>
           <button
             type="button"
             aria-label={t('settings.activity.editProfile')}
@@ -600,30 +732,30 @@ export function ActivitySettings() {
             href={profileSubtitleHref}
             target="_blank"
             rel="noreferrer"
-            className="mt-3 inline-flex max-w-full items-center justify-center gap-2 truncate text-lg text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
+            className="mt-2 inline-flex max-w-full items-center justify-center gap-2 truncate text-base text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
           >
             <span>{profile.subtitle}</span>
           </a>
         ) : (
-          <div className="mt-3 max-w-full truncate text-lg text-[var(--color-text-tertiary)]">{profile.subtitle}</div>
+          <div className="mt-2 max-w-full truncate text-base text-[var(--color-text-tertiary)]">{profile.subtitle}</div>
         )}
         {profileStatus && <div className="mt-3 text-xs text-[var(--color-success)]">{profileStatus}</div>}
         {profileError && !isEditingProfile && <div className="mt-3 text-xs text-[var(--color-error)]">{profileError}</div>}
       </section>
 
-      <section className="activity-summary-panel mx-auto mt-8 overflow-hidden rounded-[18px] border border-[var(--color-border)] bg-[var(--color-border)] p-px shadow-[0_18px_45px_-38px_rgba(15,23,42,0.65)]">
+      <section className="activity-summary-panel mx-auto mt-7 w-full max-w-[900px] overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-border)] p-px shadow-[0_12px_34px_-32px_rgba(15,23,42,0.55)]">
         {isLoading ? (
           <div className="activity-summary-grid grid gap-px">
             {Array.from({ length: 5 }).map((_, index) => (
               <div
                 key={index}
-                className={`activity-summary-metric min-h-[112px] animate-pulse bg-[var(--color-surface)] px-5 py-4 ${
+                className={`activity-summary-metric min-h-[76px] animate-pulse bg-[var(--color-surface)] px-4 py-3 ${
                   index === 0 ? 'activity-summary-metric-primary' : ''
                 }`}
               >
-                <div className="h-3 w-20 rounded bg-[var(--color-surface-container)]" />
-                <div className="mt-6 h-7 w-24 rounded bg-[var(--color-surface-container)]" />
-                <div className="mt-3 h-3 w-16 rounded bg-[var(--color-surface-container)]" />
+                <div className="mx-auto h-5 w-16 rounded bg-[var(--color-surface-container)]" />
+                <div className="mx-auto mt-2 h-3 w-20 rounded bg-[var(--color-surface-container)]" />
+                <div className="mx-auto mt-2 h-2.5 w-14 rounded bg-[var(--color-surface-container)]" />
               </div>
             ))}
           </div>
@@ -634,31 +766,21 @@ export function ActivitySettings() {
               return (
                 <div
                   key={metric.label}
-                  className={`activity-summary-metric min-w-0 bg-[var(--color-surface-container-lowest)] px-5 py-4 text-left opacity-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.48)] [animation:activity-reveal_420ms_cubic-bezier(0.16,1,0.3,1)_forwards] ${
+                  className={`activity-summary-metric min-w-0 bg-[var(--color-surface-container-lowest)] px-4 py-3 text-center opacity-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.48)] [animation:activity-reveal_420ms_cubic-bezier(0.16,1,0.3,1)_forwards] ${
                     isPrimary ? 'activity-summary-metric-primary' : ''
                   }`}
                   style={{ animationDelay: `${index * 45}ms` }}
                 >
-                  <div className="flex min-h-[104px] flex-col justify-between gap-4">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                          isPrimary ? 'bg-[var(--color-primary)]' : 'bg-[var(--color-text-tertiary)] opacity-45'
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-secondary)]">
-                        {metric.label}
-                      </div>
+                  <div className="flex min-h-[68px] flex-col items-center justify-center gap-1.5">
+                    <div className={`activity-summary-value max-w-full truncate font-semibold leading-none tracking-tight text-[var(--color-text-primary)] tabular-nums ${
+                      isPrimary ? 'text-[23px]' : 'text-[22px]'
+                    }`}>
+                      {metric.value}
                     </div>
-                    <div className="min-w-0">
-                      <div className={`activity-summary-value max-w-full font-semibold leading-[1.08] tracking-tight text-[var(--color-text-primary)] tabular-nums ${
-                        isPrimary ? 'text-[32px] lg:text-[26px]' : 'text-[28px] lg:text-[26px]'
-                      }`}>
-                        {metric.value}
-                      </div>
-                      {metric.detail && <div className="mt-2 truncate text-sm text-[var(--color-text-tertiary)]">{metric.detail}</div>}
+                    <div className="min-w-0 truncate text-[13px] font-medium leading-tight text-[var(--color-text-secondary)]">
+                      {metric.label}
                     </div>
+                    {metric.detail && <div className="max-w-full truncate text-[11px] leading-tight text-[var(--color-text-tertiary)]">{metric.detail}</div>}
                   </div>
                 </div>
               )
@@ -776,8 +898,8 @@ export function ActivitySettings() {
         document.body,
       )}
 
-      <div className="mt-16">
-        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-10">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-[var(--color-text-primary)]">{t('settings.activity.tokenActivity')}</h2>
           </div>
@@ -833,7 +955,7 @@ export function ActivitySettings() {
             <div ref={heatmapMeasureRef} className="min-w-0 pb-2">
               <div className="relative" style={{ width: heatmapWidth, maxWidth: '100%' }}>
                 <div
-                  className="mb-4 grid h-5 text-[11px] leading-none text-[var(--color-text-tertiary)]"
+                  className="mb-3 grid h-5 text-[11px] leading-none text-[var(--color-text-tertiary)]"
                   style={{
                     marginLeft: HEAT_LABEL_WIDTH,
                     gridTemplateColumns: `repeat(${WEEK_COUNT}, ${heatCellSize}px)`,
@@ -931,6 +1053,48 @@ export function ActivitySettings() {
           </>
         )}
       </div>
+
+      {!isLoading && !error && hasUsage && (
+        <div className={`mt-12 grid gap-10 ${
+          topPluginItems.length > 0 ? 'lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]' : 'lg:max-w-[520px]'
+        }`}>
+          <section className="min-w-0">
+            <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">{t('settings.activity.activityInsights')}</h2>
+            <dl className="mt-5 grid gap-3">
+              {insightMetrics.map((metric) => (
+                <div key={metric.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-5">
+                  <dt className="min-w-0 truncate text-sm font-medium text-[var(--color-text-tertiary)]">{metric.label}</dt>
+                  <dd className="min-w-0 text-right text-sm font-semibold text-[var(--color-text-primary)]">
+                    <span className="tabular-nums">{metric.value}</span>
+                    {metric.detail && (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-text-tertiary)]">{metric.detail}</span>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          {topPluginItems.length > 0 && (
+            <section className="min-w-0">
+              <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">{t('settings.activity.mostUsedPluginsAndSkills')}</h2>
+              <div className="mt-5 grid gap-3">
+                {topPluginItems.map((item) => (
+                  <div key={item.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)]">
+                      <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                        {item.kind === 'skill' ? 'extension' : 'hub'}
+                      </span>
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)]">{item.label}</span>
+                    <span className="text-sm text-[var(--color-text-tertiary)] tabular-nums">{formatRunCount(item.count, t)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
     </div>
   )
 }

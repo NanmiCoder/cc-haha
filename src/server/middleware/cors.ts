@@ -40,7 +40,44 @@ function isLocalOrigin(origin?: string | null): boolean {
     return true
   }
 
-  return LOCAL_DESKTOP_ORIGINS.has(origin)
+  return LOCAL_DESKTOP_ORIGINS.has(origin) || isLoopbackBrowserOrigin(origin)
+}
+
+function isLoopbackBrowserOrigin(origin: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  } catch {
+    return false
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return false
+  }
+
+  const hostname = parsed.hostname
+    .trim()
+    .replace(/^\[/, '')
+    .replace(/\]$/, '')
+    .toLowerCase()
+
+  return hostname === 'localhost' || hostname === '::1' || isLoopbackIPv4(hostname)
+}
+
+function isLoopbackIPv4(hostname: string): boolean {
+  const parts = hostname.split('.')
+  if (parts.length !== 4 || parts[0] !== '127') {
+    return false
+  }
+
+  return parts.every((part) => {
+    if (!/^\d+$/.test(part)) {
+      return false
+    }
+
+    const value = Number(part)
+    return value >= 0 && value <= 255
+  })
 }
 
 export async function resolveCors(

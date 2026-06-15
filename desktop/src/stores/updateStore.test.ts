@@ -74,6 +74,43 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().shouldPrompt).toBe(true)
   })
 
+  it('treats same-version update metadata as already up to date', async () => {
+    const download = vi.fn().mockResolvedValue(undefined)
+    const close = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: {
+        ...browserHost.capabilities,
+        updates: true,
+      },
+      app: {
+        getVersion: vi.fn().mockResolvedValue('0.4.1'),
+      },
+      updates: {
+        ...browserHost.updates,
+        check: vi.fn().mockResolvedValue({
+          version: '0.4.1',
+          body: 'Already installed',
+          download,
+          close,
+        }),
+      },
+    }
+
+    vi.resetModules()
+    const { useUpdateStore } = await import('./updateStore')
+
+    await expect(useUpdateStore.getState().checkForUpdates()).resolves.toBeNull()
+
+    expect(download).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('up-to-date')
+    expect(useUpdateStore.getState().availableVersion).toBeNull()
+    expect(useUpdateStore.getState().shouldPrompt).toBe(false)
+  })
+
   it('checks, installs, and relaunches through an injected desktop host', async () => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
     const download = vi.fn(async (onEvent?: (event: unknown) => void) => {

@@ -78,8 +78,11 @@ function HeaderChips({ span }: { span: TraceSpan }) {
       <>
         {call.model ? <MetaChip label={t('trace.model')} value={call.model} /> : null}
         {call.provider?.name ? <MetaChip label={t('trace.provider')} value={call.provider.name} /> : null}
-        {call.durationMs !== undefined ? (
-          <MetaChip label={t('trace.duration')} value={formatDurationMs(call.durationMs)} />
+        {span.durationMs !== undefined ? (
+          <MetaChip
+            label={span.status === 'pending' ? t('trace.elapsed') : t('trace.duration')}
+            value={formatDurationMs(span.durationMs)}
+          />
         ) : null}
         {call.usage ? (
           <MetaChip
@@ -100,6 +103,7 @@ function HeaderChips({ span }: { span: TraceSpan }) {
           </>
         ) : null}
         <MetaChip label={t('trace.started')} value={formatClockTime(call.startedAt)} />
+        {span.completedAt ? <MetaChip label={t('trace.completed')} value={formatClockTime(span.completedAt)} /> : null}
       </>
     )
   }
@@ -107,11 +111,21 @@ function HeaderChips({ span }: { span: TraceSpan }) {
     <>
       {span.toolUseId ? <MetaChip label={t('trace.detail.toolUseId')} value={span.toolUseId} /> : null}
       {span.durationMs !== undefined ? (
-        <MetaChip label={t('trace.duration')} value={formatDurationMs(span.durationMs)} />
+        <MetaChip
+          label={durationLabelForSpan(span, t)}
+          value={formatDurationMs(span.durationMs)}
+        />
       ) : null}
       <MetaChip label={t('trace.started')} value={formatClockTime(span.timestamp)} />
+      {span.completedAt ? <MetaChip label={t('trace.completed')} value={formatClockTime(span.completedAt)} /> : null}
     </>
   )
+}
+
+function durationLabelForSpan(span: TraceSpan, t: ReturnType<typeof useTranslation>): string {
+  if (span.status === 'pending') return t('trace.elapsed')
+  if (span.kind === 'session' || span.kind === 'turn') return t('trace.wallTime')
+  return t('trace.duration')
 }
 
 function usageTooltip(usage: NonNullable<TraceSpan['tokenUsage']>): string {

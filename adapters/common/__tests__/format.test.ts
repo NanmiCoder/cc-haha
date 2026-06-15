@@ -112,6 +112,12 @@ describe('formatToolUse', () => {
     expect(result).toContain('🔧 Bash')
     expect(result).toContain('npm test')
   })
+
+  it('summarizes file tools with a shortened path', () => {
+    const result = formatToolUse('Read', { file_path: '/Users/test/project/src/index.ts' })
+
+    expect(result).toBe('🔧 Read  …/project/src/index.ts')
+  })
 })
 
 describe('formatPermissionRequest', () => {

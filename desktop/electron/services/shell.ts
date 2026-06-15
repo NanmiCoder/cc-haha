@@ -1,4 +1,5 @@
 import { realpathSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,8 +34,25 @@ export function normalizeExternalUrl(target: string): string {
   return url.toString()
 }
 
+/**
+ * Expands a leading tilde to the home directory. `~\` is only a tilde path on
+ * Windows — on POSIX the backslash is a valid filename character.
+ */
+export function expandTildePath(target: string, platform: NodeJS.Platform = process.platform): string {
+  if (
+    target === '~' ||
+    target.startsWith('~/') ||
+    (platform === 'win32' && target.startsWith('~\\'))
+  ) {
+    return homedir() + target.slice(1)
+  }
+  return target
+}
+
 export function normalizeOpenPath(target: string): string {
-  const filePath = target.startsWith('file://') ? fileURLToPath(target) : target
+  const filePath = expandTildePath(
+    target.startsWith('file://') ? fileURLToPath(target) : target,
+  )
   if (!path.isAbsolute(filePath)) {
     throw new Error('System file paths must be absolute')
   }

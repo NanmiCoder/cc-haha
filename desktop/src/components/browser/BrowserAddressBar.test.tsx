@@ -48,6 +48,20 @@ describe('BrowserAddressBar', () => {
     expect(onNavigate).toHaveBeenNthCalledWith(2, 'https://example.com')
   })
 
+  it('preserves typed local html paths for the browser surface to route', () => {
+    const onNavigate = vi.fn()
+    render(<BrowserAddressBar {...baseProps} url="" onNavigate={onNavigate} />)
+    const input = screen.getByRole('textbox')
+
+    fireEvent.change(input, { target: { value: '/private/tmp/report.html' } })
+    fireEvent.submit(input.closest('form')!)
+    fireEvent.change(input, { target: { value: 'out/index.html' } })
+    fireEvent.submit(input.closest('form')!)
+
+    expect(onNavigate).toHaveBeenNthCalledWith(1, '/private/tmp/report.html')
+    expect(onNavigate).toHaveBeenNthCalledWith(2, 'out/index.html')
+  })
+
   it('preserves explicit URL schemes', () => {
     const onNavigate = vi.fn()
     render(<BrowserAddressBar {...baseProps} url="" onNavigate={onNavigate} />)

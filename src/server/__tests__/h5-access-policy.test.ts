@@ -17,7 +17,10 @@ describe('h5AccessPolicy', () => {
   test('recognizes loopback hosts as local trusted requests', () => {
     expect(isLoopbackHost('localhost')).toBe(true)
     expect(isLoopbackHost('127.0.0.1')).toBe(true)
+    expect(isLoopbackHost('127.0.1.1')).toBe(true)
     expect(isLoopbackHost('[::1]')).toBe(true)
+    expect(isLoopbackHost('127.example.com')).toBe(false)
+    expect(isLoopbackHost('127.bad.0.1')).toBe(false)
     expect(isLoopbackHost('192.168.0.20')).toBe(false)
   })
 
@@ -59,32 +62,40 @@ describe('h5AccessPolicy', () => {
     expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
   })
 
-  test('does not trust loopback browser origins for H5 capability routes', () => {
+  test('keeps loopback browser origins tokenless for local dev capability routes', () => {
     for (const pathname of [
       '/api/status',
+      '/api/adapters',
       '/proxy/openai/v1/chat/completions',
       '/ws/session-1',
       '/local-file/Users/alice/report.html',
       '/preview-fs/session-1/index.html',
     ]) {
-      const request = req(`http://127.0.0.1:3456${pathname}`, {
-        headers: { Origin: 'http://localhost:5173' },
-      })
-      expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('h5-browser')
-      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(true)
-      expect(shouldBlockDisabledH5Access({
-        request,
-        url: new URL(request.url),
-        h5Enabled: false,
-        explicitAuthRequired: false,
-        context: localContext,
-      })).toBe(true)
+      for (const origin of [
+        'http://localhost:5173',
+        'http://127.0.0.1:2024',
+        'http://127.0.1.1:2024',
+        'http://[::1]:5173',
+      ]) {
+        const request = req(`http://127.0.0.1:3456${pathname}`, {
+          headers: { Origin: origin },
+        })
+        expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
+        expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+        expect(shouldBlockDisabledH5Access({
+          request,
+          url: new URL(request.url),
+          h5Enabled: false,
+          explicitAuthRequired: false,
+          context: localContext,
+        })).toBe(false)
+      }
     }
   })
 
-  test('does not trust adapter requests from browser origins', () => {
+  test('does not trust adapter requests from non-loopback browser origins', () => {
     const request = req('http://127.0.0.1:3456/api/adapters', {
-      headers: { Origin: 'http://localhost:5173' },
+      headers: { Origin: 'https://phone.example' },
     })
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('h5-browser')
     expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(true)

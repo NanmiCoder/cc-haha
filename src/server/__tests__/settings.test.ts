@@ -982,6 +982,8 @@ describe('Activity Stats API', () => {
     const body = await res.json()
     expect(body.range).toBe('all')
     expect(body.stats.totalSessions).toBe(0)
+    expect(body.stats.toolUsage).toEqual({})
+    expect(body.stats.skillUsage).toEqual({})
     expect(new Date(body.generatedAt).toString()).not.toBe('Invalid Date')
   })
 

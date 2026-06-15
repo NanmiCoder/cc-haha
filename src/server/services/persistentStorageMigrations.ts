@@ -4,8 +4,9 @@ import * as path from 'path'
 import { randomBytes } from 'node:crypto'
 import { normalizeLegacyDeepSeekManagedEnv } from '../../utils/providerManagedEnvCompat.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
+import { BUILT_IN_PROVIDER_IDS } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 1
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 2
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -76,6 +77,36 @@ function isLegacyRootProvider(value: unknown): value is LegacyRootProvider {
   )
 }
 
+function defaultProviderOrder(providers: JsonObject[]): string[] {
+  return [
+    ...providers
+      .map((provider) => provider.id)
+      .filter((id): id is string => typeof id === 'string'),
+    ...BUILT_IN_PROVIDER_IDS,
+  ]
+}
+
+function normalizeProviderOrder(value: unknown, providers: JsonObject[]): string[] {
+  const knownIds = new Set<string>(defaultProviderOrder(providers))
+  const source = Array.isArray(value) ? value : defaultProviderOrder(providers)
+  const seen = new Set<string>()
+  const order: string[] = []
+
+  for (const id of source) {
+    if (typeof id !== 'string' || !knownIds.has(id) || seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  for (const id of defaultProviderOrder(providers)) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  return order
+}
+
 function errnoCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
     ? error.code
@@ -126,10 +157,15 @@ function migrateProvidersIndex(value: unknown): JsonObject {
       schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
       activeId: null,
       providers: [],
+      providerOrder: [...BUILT_IN_PROVIDER_IDS],
     }
   }
 
-  const { activeProviderId: _legacyActiveProviderId, ...rest } = value
+  const {
+    activeProviderId: _legacyActiveProviderId,
+    providerOrder: rawProviderOrder,
+    ...rest
+  } = value
   const providers = value.providers.filter(isSavedProvider)
   const rawActiveId =
     typeof value.activeId === 'string'
@@ -149,6 +185,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
     activeId,
     providers,
+    providerOrder: normalizeProviderOrder(rawProviderOrder, providers),
   }
 }
 
@@ -257,6 +294,7 @@ function migrateLegacyRootProvidersConfig(value: unknown): JsonObject | null {
     schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
     activeId,
     providers,
+    providerOrder: normalizeProviderOrder(undefined, providers),
   }
 }
 

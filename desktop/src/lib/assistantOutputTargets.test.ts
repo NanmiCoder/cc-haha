@@ -251,3 +251,81 @@ describe('extractAssistantOutputTargets', () => {
     expect(targets.map((target) => target.href)).toEqual(['one.html', 'two.html'])
   })
 })
+
+describe('extractAssistantOutputTargets with changedFiles reconciliation', () => {
+  it('corrects a bare mention to the real changed path in a subfolder', () => {
+    // The reported bug: the model writes /private/tmp/todo-app/index.html but the
+    // prose only says `index.html`, so the chip used to point at the (missing)
+    // workdir-root index.html. With the turn's real changed files it is corrected.
+    const targets = extractAssistantOutputTargets('已创建 `index.html`，直接用浏览器打开。', {
+      workDir: '/private/tmp',
+      changedFiles: [
+        '/private/tmp/todo-app/index.html',
+        '/private/tmp/todo-app/style.css',
+        '/private/tmp/todo-app/app.js',
+      ],
+    })
+
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      kind: 'local-html',
+      href: 'todo-app/index.html',
+      normalizedPath: 'todo-app/index.html',
+      subtitle: 'todo-app/index.html',
+    })
+  })
+
+  it('drops a mentioned file that the turn never changed', () => {
+    const targets = extractAssistantOutputTargets('参考旧文件 old-report.html 和新结果 result.html', {
+      workDir: '/work',
+      changedFiles: ['/work/out/result.html'],
+    })
+
+    expect(targets.map((target) => target.normalizedPath)).toEqual(['out/result.html'])
+  })
+
+  it('keeps localhost url chips untouched while reconciling files', () => {
+    const targets = extractAssistantOutputTargets('启动后访问 http://localhost:5173/ ，源码见 index.html', {
+      workDir: '/work',
+      changedFiles: ['/work/app/index.html'],
+    })
+
+    const byKind = new Map(targets.map((target) => [target.kind, target]))
+    expect(byKind.get('localhost-url')?.href).toBe('http://localhost:5173/')
+    expect(byKind.get('local-html')?.normalizedPath).toBe('app/index.html')
+  })
+
+  it('rewrites a changed file outside the workdir to its absolute posix path', () => {
+    const targets = extractAssistantOutputTargets('已创建 todo.html', {
+      workDir: 'C:/Users/me/tmp/session',
+      changedFiles: ['D:\\workspace\\demo\\todo.html'],
+    })
+
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      kind: 'local-html',
+      href: 'D:/workspace/demo/todo.html',
+      normalizedPath: 'D:/workspace/demo/todo.html',
+    })
+  })
+
+  it('falls back to text-only behavior when changedFiles is empty', () => {
+    const targets = extractAssistantOutputTargets('已创建 `index.html`', {
+      workDir: '/private/tmp',
+      changedFiles: [],
+    })
+
+    // No reconciliation → original bare-path behavior (mention kept as-is).
+    expect(targets).toMatchObject([{ kind: 'local-html', normalizedPath: 'index.html' }])
+  })
+
+  it('does not correct when the basename is ambiguous across changed files', () => {
+    const targets = extractAssistantOutputTargets('见 index.html', {
+      workDir: '/work',
+      changedFiles: ['/work/a/index.html', '/work/b/index.html'],
+    })
+
+    // Ambiguous basename match → no unique target, mention dropped rather than guessed.
+    expect(targets).toHaveLength(0)
+  })
+})

@@ -7,6 +7,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { OFFICIAL_DEFAULT_MODEL_ID } from '../constants/modelCatalog'
 import {
+  BUILT_IN_PROVIDER_IDS,
   OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
 } from '../constants/openaiOfficialProvider'
@@ -22,6 +23,7 @@ import type { RuntimeSelection } from '../types/runtime'
 
 type ProviderStore = {
   providers: SavedProvider[]
+  providerOrder: string[]
   activeId: string | null
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
@@ -34,10 +36,68 @@ type ProviderStore = {
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
   updateProvider: (id: string, input: UpdateProviderInput) => Promise<SavedProvider>
   deleteProvider: (id: string) => Promise<void>
+  reorderProviders: (orderedIds: string[]) => Promise<void>
   activateProvider: (id: string) => Promise<void>
   activateOfficial: () => Promise<void>
   testProvider: (id: string, overrides?: { baseUrl?: string; modelId?: string; apiFormat?: string; authStrategy?: string }) => Promise<ProviderTestResult>
   testConfig: (input: TestProviderConfigInput) => Promise<ProviderTestResult>
+}
+
+function defaultProviderOrder(providers: SavedProvider[]): string[] {
+  return [
+    ...providers.map((provider) => provider.id),
+    ...BUILT_IN_PROVIDER_IDS,
+  ]
+}
+
+function normalizeProviderOrder(providerOrder: string[] | undefined, providers: SavedProvider[]): string[] {
+  const knownIds = new Set<string>(defaultProviderOrder(providers))
+  const source = providerOrder && providerOrder.length > 0
+    ? providerOrder
+    : defaultProviderOrder(providers)
+  const seen = new Set<string>()
+  const order: string[] = []
+
+  for (const id of source) {
+    if (!knownIds.has(id) || seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  for (const id of defaultProviderOrder(providers)) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+  }
+
+  return order
+}
+
+function isPermutation(candidateIds: string[], expectedIds: string[]): boolean {
+  const expectedSet = new Set(expectedIds)
+  const candidateSet = new Set(candidateIds)
+  return (
+    candidateIds.length === expectedIds.length &&
+    candidateSet.size === candidateIds.length &&
+    expectedIds.every((id) => candidateSet.has(id)) &&
+    candidateIds.every((id) => expectedSet.has(id))
+  )
+}
+
+function sortSavedProvidersByOrder(providers: SavedProvider[], providerOrder: string[]): SavedProvider[] {
+  const byId = new Map(providers.map((provider) => [provider.id, provider]))
+  return providerOrder
+    .map((id) => byId.get(id))
+    .filter((provider): provider is SavedProvider => provider !== undefined)
+}
+
+function mergeSavedOrderIntoProviderOrder(providerOrder: string[], savedOrder: string[]): string[] {
+  const savedSet = new Set(savedOrder)
+  const queue = [...savedOrder]
+  return providerOrder.map((id) => {
+    if (!savedSet.has(id)) return id
+    return queue.shift() ?? id
+  })
 }
 
 function providerModelIds(provider: SavedProvider): Set<string> {
@@ -97,6 +157,7 @@ function refreshConnectedSessionsForProvider(provider: SavedProvider, activeId: 
 
 export const useProviderStore = create<ProviderStore>((set, get) => ({
   providers: [],
+  providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
   hasLoadedProviders: false,
   presets: [],
@@ -107,8 +168,14 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   fetchProviders: async () => {
     set({ isLoading: true, error: null })
     try {
-      const { providers, activeId } = await providersApi.list()
-      set({ providers, activeId, hasLoadedProviders: true, isLoading: false })
+      const { providers, activeId, providerOrder } = await providersApi.list()
+      set({
+        providers,
+        providerOrder: normalizeProviderOrder(providerOrder, providers),
+        activeId,
+        hasLoadedProviders: true,
+        isLoading: false,
+      })
     } catch (err) {
       set({
         isLoading: false,
@@ -143,6 +210,42 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   deleteProvider: async (id) => {
     await providersApi.delete(id)
     await get().fetchProviders()
+  },
+
+  reorderProviders: async (orderedIds) => {
+    const previous = get().providers
+    const previousOrder = normalizeProviderOrder(get().providerOrder, previous)
+    const savedIds = previous.map((provider) => provider.id)
+    const nextOrder = isPermutation(orderedIds, previousOrder)
+      ? orderedIds
+      : isPermutation(orderedIds, savedIds)
+        ? mergeSavedOrderIntoProviderOrder(previousOrder, orderedIds)
+        : null
+
+    if (!nextOrder) {
+      await get().fetchProviders()
+      return
+    }
+
+    // Optimistically reorder locally so the drag feels instant.
+    set({
+      providers: sortSavedProvidersByOrder(previous, nextOrder),
+      providerOrder: nextOrder,
+    })
+    try {
+      const { providers, providerOrder } = await providersApi.reorder(orderedIds)
+      set({
+        providers,
+        providerOrder: normalizeProviderOrder(providerOrder, providers),
+      })
+    } catch (err) {
+      // Roll back to the server's last-known truth if persistence fails.
+      set({
+        providers: previous,
+        providerOrder: previousOrder,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   },
 
   activateProvider: async (id) => {

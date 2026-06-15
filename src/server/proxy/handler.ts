@@ -9,9 +9,8 @@
  * Original work by Jason Young, MIT License
  */
 
-import { signClaudeCodeCCHInTransformedString } from '../../utils/claudeCodeCch.js'
 import { ProviderService } from '../services/providerService.js'
-import { ensureClaudeCodeAttribution } from './claudeCodeAttribution.js'
+import { resolvePromptCacheKey } from './promptCacheKey.js'
 import { anthropicToOpenaiChat } from './transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from './transform/anthropicToOpenaiResponses.js'
 import { openaiChatToAnthropic } from './transform/openaiChatToAnthropic.js'
@@ -212,22 +211,23 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
     )
   }
 
-  body = ensureClaudeCodeAttribution({
+  body = {
     ...body,
     model: normalizeModelStringForAPI(body.model),
-  })
+  }
 
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
   const networkSettings = await loadNetworkSettings()
   const proxyUrl = getManualNetworkProxyUrl(networkSettings)
   const traceContext = buildProxyTraceContext(req, config, body)
+  const promptCacheKey = resolvePromptCacheKey(body, req.headers.get('x-claude-code-session-id'))
 
   try {
     if (config.apiFormat === 'openai_chat') {
       return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, networkSettings.aiRequestTimeoutMs, proxyUrl, traceContext)
     } else {
-      return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, networkSettings.aiRequestTimeoutMs, proxyUrl, traceContext)
+      return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, networkSettings.aiRequestTimeoutMs, proxyUrl, traceContext, promptCacheKey)
     }
   } catch (err) {
     if (traceContext && !wasTraceErrorRecorded(err)) {
@@ -292,7 +292,7 @@ async function handleOpenaiChat(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: signClaudeCodeCCHInTransformedString(JSON.stringify(transformed)),
+      body: JSON.stringify(transformed),
       ...proxyOptions,
     }, aiRequestTimeoutMs, isStream)
   } catch (err) {
@@ -430,8 +430,9 @@ async function handleOpenaiResponses(
   aiRequestTimeoutMs: number,
   proxyUrl: string | undefined,
   traceContext: ProxyTraceContext | null,
+  promptCacheKey?: string,
 ): Promise<Response> {
-  const transformed = anthropicToOpenaiResponses(body)
+  const transformed = anthropicToOpenaiResponses(body, { cacheKey: promptCacheKey })
   const url = `${baseUrl}/v1/responses`
   const proxyOptions = getProxyFetchOptions({ proxyUrl })
   const startedAtMs = Date.now()
@@ -454,7 +455,7 @@ async function handleOpenaiResponses(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: signClaudeCodeCCHInTransformedString(JSON.stringify(transformed)),
+      body: JSON.stringify(transformed),
       ...proxyOptions,
     }, aiRequestTimeoutMs, isStream)
   } catch (err) {

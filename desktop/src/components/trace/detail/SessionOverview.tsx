@@ -8,7 +8,9 @@ type OverviewStats = {
   llmCalls: number
   toolCalls: number
   errors: number
-  durationMs?: number
+  wallDurationMs?: number
+  modelDurationMs?: number
+  toolDurationMs?: number
   inputTokens: number
   outputTokens: number
   models: string[]
@@ -35,7 +37,9 @@ export function SessionOverview({
         <Stat label={t('trace.llmCalls')} value={String(stats.llmCalls)} />
         <Stat label={t('trace.toolCalls')} value={String(stats.toolCalls)} />
         <Stat label={t('trace.errors')} value={String(stats.errors)} tone={stats.errors > 0 ? 'danger' : 'default'} />
-        <Stat label={t('trace.duration')} value={formatDurationMs(stats.durationMs)} />
+        <Stat label={t('trace.wallTime')} value={formatDurationMs(stats.wallDurationMs)} />
+        <Stat label={t('trace.modelTime')} value={formatDurationMs(stats.modelDurationMs)} />
+        <Stat label={t('trace.toolTime')} value={formatDurationMs(stats.toolDurationMs)} />
         <Stat
           label={t('trace.tokens')}
           value={`${formatTokenCount(stats.inputTokens)} → ${formatTokenCount(stats.outputTokens)}`}
@@ -99,23 +103,28 @@ function computeStats(span: TraceSpan, viewModel: TraceViewModel): OverviewStats
     models: [],
   }
   const models = new Set<string>()
-  let llmDuration = 0
+  let modelDurationMs = 0
+  let toolDurationMs = 0
   for (const item of scoped) {
     if (item.kind === 'llm') {
       stats.llmCalls += 1
       if (item.call?.model) models.add(item.call.model)
-      if (item.durationMs !== undefined) llmDuration += item.durationMs
+      if (item.durationMs !== undefined) modelDurationMs += item.durationMs
       if (item.tokenUsage) {
         stats.inputTokens += item.tokenUsage.inputTokens
         stats.outputTokens += item.tokenUsage.outputTokens
       }
     }
-    if (item.kind === 'tool') stats.toolCalls += 1
+    if (item.kind === 'tool') {
+      stats.toolCalls += 1
+      if (item.durationMs !== undefined) toolDurationMs += item.durationMs
+    }
     if (item.status === 'error') stats.errors += 1
   }
   stats.models = [...models]
-  const durationMs = span.kind === 'session' ? span.durationMs ?? llmDuration : llmDuration
-  if (durationMs > 0) stats.durationMs = durationMs
+  if (span.durationMs !== undefined && span.durationMs > 0) stats.wallDurationMs = span.durationMs
+  if (modelDurationMs > 0) stats.modelDurationMs = modelDurationMs
+  if (toolDurationMs > 0) stats.toolDurationMs = toolDurationMs
   return stats
 }
 

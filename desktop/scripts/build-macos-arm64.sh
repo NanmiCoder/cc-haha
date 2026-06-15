@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "${DESKTOP_DIR}/.." && pwd)"
 TARGET_TRIPLE="aarch64-apple-darwin"
 CANONICAL_OUTPUT_DIR="${DESKTOP_DIR}/build-artifacts/macos-arm64"
 ELECTRON_OUTPUT_DIR="${DESKTOP_DIR}/build-artifacts/electron"
+ELECTRON_BUILDER_CLI="${DESKTOP_DIR}/node_modules/electron-builder/out/cli/cli.js"
 
 usage() {
   cat <<'EOF'
@@ -45,7 +46,7 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-for command in bun codesign hdiutil; do
+for command in bun node codesign hdiutil; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "[build-macos-arm64] Missing required command: ${command}" >&2
     exit 1
@@ -103,14 +104,14 @@ echo "[build-macos-arm64] Building renderer and Electron main/preload bundles...
 
 if [[ "${REBUILD_NATIVE:-0}" == "1" ]]; then
   echo "[build-macos-arm64] Rebuilding native dependencies for Electron ABI..."
-  (cd "${DESKTOP_DIR}" && bunx electron-builder install-app-deps)
+  (cd "${DESKTOP_DIR}" && node "${ELECTRON_BUILDER_CLI}" install-app-deps)
   (cd "${DESKTOP_DIR}" && bun run prepare:node-pty)
 fi
 
 echo "[build-macos-arm64] Cleaning empty dmg-builder cache directories..."
 (cd "${DESKTOP_DIR}" && bash ./scripts/clean-dmg-builder-cache.sh)
 
-BUILDER_ARGS=(bunx electron-builder --mac "${MAC_TARGET_ARRAY[@]}" --arm64 --publish never)
+BUILDER_ARGS=(node "${ELECTRON_BUILDER_CLI}" --mac "${MAC_TARGET_ARRAY[@]}" --arm64 --publish never)
 if [[ "${SIGN_BUILD:-0}" != "1" ]]; then
   export CSC_IDENTITY_AUTO_DISCOVERY=false
   # package.json sets mac.notarize=true for the signed CI release path. A local

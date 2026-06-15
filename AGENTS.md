@@ -46,25 +46,28 @@ Install root dependencies with `bun install`. Install desktop dependencies in `d
 - `bun run check:impact`: print the changed-area impact report and recommended local checks.
 
 ## Verification Routing
-Use the narrowest meaningful verification while iterating, then run the correct gate before claiming readiness. Do not run long gates after every small edit; reserve them for handoff, push/PR readiness, release readiness, or when the changed surface demands them.
+Use the narrowest meaningful verification while iterating, then run the correct gate for the actual handoff level. Do not run long gates after every small edit. In normal local-development handoff, prefer focused regression tests plus the single affected surface gate. Reserve `bun run verify`, `bun run check:coverage`, and other full quality gates for PR-ready, push/merge, release, explicitly requested full validation, or genuinely high-risk changes.
+
+If a user asks for a small fix, local explanation, or quick iteration, do not silently escalate to full PR verification. State the targeted checks you ran and, if relevant, say that full `verify`/coverage was intentionally not run because the change is not being called PR-ready. If a full gate was started and the user asks to stop or says it is too expensive, stop it and continue with scoped verification.
 
 | Situation | Command | Notes |
 | --- | --- | --- |
 | Fast inner loop for pure logic | Focused `bun test <file>` or nearest package test | Add/update the regression test first when behavior changes. |
+| Small scoped bugfix or local dev-flow fix | Focused regression test(s), then the narrowest affected surface gate if needed | Example: a CORS helper plus desktop bootstrap test should run those focused tests; add `check:server`/`check:desktop` only when the touched surface or handoff needs broader confidence. Do not run `verify`/coverage by default. |
 | Desktop UI/store/API work | `bun run check:desktop` | Runs desktop lint, Vitest, and production build. For visible UI flows, also use browser/agent-browser smoke when unit tests cannot prove the workflow. |
 | Server/API/provider/runtime/MCP/OAuth/WebSocket work | `bun run check:server` | Covers `src/server`, `src/tools`, provider/runtime, MCP, OAuth, WebSocket, and API behavior. |
 | IM adapter work | `bun run check:adapters` | On a fresh checkout, run `cd adapters && bun install` first if dependencies are missing. |
 | Electron/native/sidecar/packaging/version changes | `bun run check:native` | Runs sidecar build, Electron host checks, Electron `--dir` packaging, and current-platform package-smoke. |
 | Docs, README, release notes, or docs workflow changes | `bun run check:docs` | This runs `npm ci`; run it sequentially, not in parallel with commands that depend on root `node_modules`. |
 | Persistence shape changes | `bun run check:persistence-upgrade` | Required for local JSON, `localStorage`, app config migrations, and old-fixture upgrade behavior. |
-| Coverage during handoff | `bun run check:coverage` or `bun run verify` | Changed executable production lines must meet the changed-line threshold. |
+| PR-ready coverage | `bun run check:coverage` or `bun run verify` | Required before calling a change PR-ready, push-ready, mergeable, or release-ready. Not required for ordinary local handoff unless the user asks for PR-level proof or the changed surface is high-risk. |
 | Optional fast local check | `bun run quality:push` | Path-aware PR mode with coverage skipped by default; run manually when useful, not as a push-time blocker or substitute for PR-ready verification. |
-| PR-ready / final agent handoff for code changes | `bun run verify` | Unified local entrypoint: `bun run verify` is equivalent to `bun run quality:pr` and is the default non-live quality gate. |
+| PR-ready / push-ready / full validation handoff for code changes | `bun run verify` | Unified local entrypoint: `bun run verify` is equivalent to `bun run quality:pr`. Run it only when claiming PR-ready, push-ready, mergeable, or when the user explicitly asks for full validation. |
 | Live agent/provider confidence | `bun run quality:providers`, then `bun run quality:smoke --provider-model <provider:model[:label]>` | Quick live provider/proxy and desktop agent-browser smoke when provider access exists. |
 | High-risk pre-merge confidence | `bun run quality:gate --mode baseline --allow-live --provider-model <provider:model[:label]>` | Use for agent-loop, provider routing, model selection, tool execution, session resume, desktop chat, or other core Coding Agent paths. |
 | Release readiness | `bun run quality:gate --mode release --allow-live --provider-model <provider:model[:label]>` | Required before calling a release ready when provider credentials/quota are available. If blocked, report the exact live-provider blocker. |
 
-If `bun run verify` fails, do not stop at reporting the failure. Read the latest quality report, identify the failed lane in the Result Matrix, open the lane log under `artifacts/quality-runs/<timestamp>/logs/<lane>.log`, fix the concrete issue, rerun the narrow check, then rerun `bun run verify`.
+If `bun run verify` is intentionally run and fails, do not stop at reporting the failure. Read the latest quality report, identify the failed lane in the Result Matrix, open the lane log under `artifacts/quality-runs/<timestamp>/logs/<lane>.log`, fix the concrete issue, rerun the narrow check, then rerun `bun run verify` only when the user still wants PR-level validation.
 
 ## Feature Quality Contract
 Every feature, bugfix, and behavior change must ship with proof that matches the changed surface. Treat this as the implementation contract for both human authors and AI coding agents.
@@ -73,10 +76,10 @@ Every feature, bugfix, and behavior change must ship with proof that matches the
 - Production code changes under `desktop/src`, `src/server`, `src/tools`, `src/utils`, or `adapters` must include a same-area test file in the same PR unless a maintainer explicitly approves `allow-missing-tests`.
 - Pure logic requires unit tests. Server/API/provider/runtime changes require server or request-shape tests. Desktop UI/store/API changes require Vitest or Testing Library coverage. User-facing desktop flows require browser/agent-browser smoke when the flow cannot be trusted through unit tests alone.
 - Agent loop, tool execution, provider routing, model selection, file editing, permissions, session resume, and desktop chat changes require mock/fixture tests in PR plus live smoke or baseline evidence from a maintainer machine when provider access exists.
-- Coverage is part of the feature, not an afterthought. Generated/build output is excluded, maintained product areas should move toward 75-80%+, and every changed executable production line must meet the changed-line coverage gate in `scripts/quality-gate/coverage-thresholds.json` before push/PR readiness.
+- Coverage is part of PR readiness, not an afterthought. Generated/build output is excluded, maintained product areas should move toward 75-80%+, and every changed executable production line must meet the changed-line coverage gate in `scripts/quality-gate/coverage-thresholds.json` before push/PR readiness. For local non-PR handoff, focused regression tests are acceptable; record that coverage was not run instead of running it by default.
 - Do not lower `scripts/quality-gate/coverage-baseline.json` or `coverage-thresholds.json` unless the PR carries maintainer approval via `allow-coverage-baseline-change` and explains why. Legacy areas below target are debt; new work must leave the touched area higher than it found it.
 - E2E is required when the feature crosses process boundaries, browser UI, WebSocket/session state, provider proxying, native sidecars, or release packaging. Use the narrowest meaningful E2E lane first, then `quality:baseline` or `quality:release` for core Coding Agent paths.
-- A PR is not ready until the author records changed files, tests added, coverage report path, E2E/live evidence or explicit blocker, and remaining risk. AI agents must include this evidence before saying "complete", "ready", or "mergeable".
+- A PR is not ready until the author records changed files, tests added, coverage report path, E2E/live evidence or explicit blocker, and remaining risk. AI agents must include this evidence before saying "PR-ready", "push-ready", "mergeable", or "release-ready". For ordinary local handoff, include changed files, targeted tests/checks run, tests not run, and remaining risk without escalating to PR-level gates.
 
 ## Persistent Storage Compatibility
 - Any change to local JSON, `localStorage`, or app config persistence formats must ship with a forward migration, an old-fixture regression test, and a persistence upgrade gate.
@@ -126,4 +129,4 @@ Every feature, bugfix, and behavior change must ship with proof that matches the
   - `Directive:` for forward-looking warnings.
   - `Tested:` and `Not-tested:` for verification evidence and gaps.
 - PRs should explain user-visible impact, link related issues, list verification steps, include screenshots for desktop/docs UI changes, and call out follow-up work or known gaps.
-- The final agent handoff or PR description must include changed files, tests added or updated, coverage report path, E2E/live evidence or blocker, pass/fail/skip counts from the quality report when available, and remaining risk/rollback notes.
+- A PR description must include changed files, tests added or updated, coverage report path, E2E/live evidence or blocker, pass/fail/skip counts from the quality report when available, and remaining risk/rollback notes. A normal local agent handoff may be lighter: summarize changed files, focused tests/checks run, skipped full gates, and remaining risk/rollback notes.

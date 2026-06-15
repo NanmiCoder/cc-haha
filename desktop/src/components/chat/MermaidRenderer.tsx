@@ -38,6 +38,98 @@ type MermaidThemeColors = {
   isDark: boolean
 }
 
+const FLOWCHART_START = /^\s*(?:graph|flowchart)\b/i
+const FLOWCHART_NODE_START = /^([A-Za-z][\w-]*)\[/
+const UNQUOTED_FLOWCHART_LABEL_UNSAFE = /<br\s*\/?>|[{}[\]*]/i
+
+function isFlowchartDiagram(code: string) {
+  const firstMeaningfulLine = code
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean)
+
+  return firstMeaningfulLine ? FLOWCHART_START.test(firstMeaningfulLine) : false
+}
+
+function isQuotedFlowchartLabel(label: string) {
+  const trimmed = label.trim()
+  return (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('`') && trimmed.endsWith('`'))
+  )
+}
+
+function shouldQuoteFlowchartLabel(label: string) {
+  return !isQuotedFlowchartLabel(label) && UNQUOTED_FLOWCHART_LABEL_UNSAFE.test(label)
+}
+
+function escapeFlowchartLabel(label: string) {
+  return label.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+function isLikelyFlowchartLabelClose(line: string, closeIndex: number) {
+  const after = line.slice(closeIndex + 1).trimStart()
+  return (
+    after.length === 0 ||
+    after.startsWith('--') ||
+    after.startsWith('-.') ||
+    after.startsWith('==') ||
+    after.startsWith('~~~') ||
+    after.startsWith(':::') ||
+    after.startsWith('&') ||
+    after.startsWith('@') ||
+    /^[;,)]/.test(after)
+  )
+}
+
+function findFlowchartLabelClose(line: string, openIndex: number) {
+  for (let index = openIndex + 1; index < line.length; index += 1) {
+    if (line[index] === ']' && isLikelyFlowchartLabelClose(line, index)) {
+      return index
+    }
+  }
+  return -1
+}
+
+function normalizeFlowchartLine(line: string) {
+  let output = ''
+  let index = 0
+
+  while (index < line.length) {
+    const match = FLOWCHART_NODE_START.exec(line.slice(index))
+    if (!match) {
+      output += line[index]
+      index += 1
+      continue
+    }
+
+    const nodeId = match[1] ?? ''
+    const openIndex = index + nodeId.length
+    const closeIndex = findFlowchartLabelClose(line, openIndex)
+    if (closeIndex < 0) {
+      output += line[index]
+      index += 1
+      continue
+    }
+
+    const label = line.slice(openIndex + 1, closeIndex)
+    if (!shouldQuoteFlowchartLabel(label)) {
+      output += line.slice(index, closeIndex + 1)
+    } else {
+      output += `${nodeId}["${escapeFlowchartLabel(label)}"]`
+    }
+    index = closeIndex + 1
+  }
+
+  return output
+}
+
+function normalizeGeneratedFlowchartSyntax(code: string) {
+  if (!isFlowchartDiagram(code)) return code
+  return code.split('\n').map(normalizeFlowchartLine).join('\n')
+}
+
 function rgbToHex(color: string, fallback: string) {
   const trimmed = color.trim()
   if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed
@@ -329,8 +421,9 @@ export function MermaidRenderer({ code }: Props) {
     const { lineColor } = initMermaid(theme)
 
     const id = `mermaid-${++mermaidIdCounter}`
+    const renderCode = normalizeGeneratedFlowchartSyntax(code)
 
-    mermaid.render(id, code).then(
+    mermaid.render(id, renderCode).then(
       ({ svg: renderedSvg }) => {
         if (!cancelled) {
           setSvg(normalizeMermaidSvg(renderedSvg, lineColor))

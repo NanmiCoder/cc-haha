@@ -10,9 +10,15 @@ export type NetworkSettings = {
   }
 }
 
-export const DEFAULT_AI_REQUEST_TIMEOUT_MS = 120_000
-export const MIN_AI_REQUEST_TIMEOUT_MS = 5_000
-export const MAX_AI_REQUEST_TIMEOUT_MS = 600_000
+// API_TIMEOUT_MS is the CLI's *time-to-first-byte* budget for streaming
+// requests: third-party Anthropic-compatible gateways (sensenova, bailian,
+// zhipu, ...) often send no response bytes — not even headers or an SSE ping —
+// until prefill finishes, which can take minutes at large contexts. A short
+// default here aborts those healthy-but-slow requests dead at exactly this
+// timeout (#766), so the default matches the SDK's own 600s.
+export const DEFAULT_AI_REQUEST_TIMEOUT_MS = 600_000
+export const MIN_AI_REQUEST_TIMEOUT_MS = 30_000
+export const MAX_AI_REQUEST_TIMEOUT_MS = 1_800_000
 
 const DEFAULT_NETWORK_SETTINGS: NetworkSettings = {
   aiRequestTimeoutMs: DEFAULT_AI_REQUEST_TIMEOUT_MS,

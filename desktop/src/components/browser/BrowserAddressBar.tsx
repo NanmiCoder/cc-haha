@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Loader2, RotateCw } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { isHtmlFilePath } from '../../lib/htmlPreviewPolicy'
 
 type Props = {
   url: string
@@ -60,6 +61,7 @@ export function normalizeBrowserAddress(input: string): string {
   const value = input.trim()
   if (!value) return ''
   if (/^[a-z][a-z\d+\-.]*:\/\//i.test(value) || /^(about|data|file):/i.test(value)) return value
+  if (isHtmlFilePath(value)) return value
   if (/^(localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1)(?::\d+)?(?:[/?#].*)?$/i.test(value)) {
     return `http://${value}`
   }

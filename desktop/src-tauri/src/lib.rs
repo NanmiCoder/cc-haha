@@ -229,6 +229,7 @@ const TRAY_QUIT_ID: &str = "tray_quit";
 const WINDOW_STATE_FILE: &str = "window-state.json";
 const TERMINAL_CONFIG_FILE: &str = "terminal-config.json";
 const APP_MODE_FILE: &str = "app-mode.json";
+const SERVER_STATE_FILE: &str = "desktop-server-state.json";
 const MIN_WINDOW_WIDTH: u32 = 960;
 const MIN_WINDOW_HEIGHT: u32 = 640;
 const MIN_VISIBLE_PIXELS: i64 = 64;
@@ -404,6 +405,15 @@ struct StoredWindowState {
     width: u32,
     height: u32,
     maximized: bool,
+}
+
+/// 上一次 server sidecar 实际监听的端口。重启时优先复用同一端口，
+/// 这样手机书签 / 二维码 / 反向代理的 upstream 不会因为重启而失效
+/// （issue #767）。端口被占用时才回退到随机端口。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct StoredServerState {
+    #[serde(rename = "lastPort")]
+    last_port: u16,
 }
 
 /// 与 ServerState 平级的 adapter 子进程状态。
@@ -739,6 +749,69 @@ fn resolve_portable_state_path() -> Option<PathBuf> {
     std::env::var("CLAUDE_CONFIG_DIR")
         .ok()
         .map(|dir| PathBuf::from(&dir).join(WINDOW_STATE_FILE))
+}
+
+fn server_state_path() -> Option<PathBuf> {
+    // Lives next to cc-haha/settings.json (CLAUDE_CONFIG_DIR or ~/.claude) so
+    // the Tauri and Electron shells share the same sticky port across builds.
+    claude_config_dir().map(|dir| dir.join(SERVER_STATE_FILE))
+}
+
+fn read_stored_server_state() -> Option<StoredServerState> {
+    let path = server_state_path()?;
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == ErrorKind::NotFound => return None,
+        Err(err) => {
+            eprintln!(
+                "[desktop] failed to read server state {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+
+    match serde_json::from_str::<StoredServerState>(&data) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            eprintln!(
+                "[desktop] failed to parse server state {}: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+fn write_stored_server_state(state: &StoredServerState) {
+    let Some(path) = server_state_path() else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!(
+                "[desktop] failed to create server state directory {}: {err}",
+                parent.display()
+            );
+            return;
+        }
+    }
+
+    let data = match serde_json::to_string_pretty(state) {
+        Ok(data) => data,
+        Err(err) => {
+            eprintln!("[desktop] failed to serialize server state: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = fs::write(&path, data) {
+        eprintln!(
+            "[desktop] failed to write server state {}: {err}",
+            path.display()
+        );
+    }
 }
 
 fn read_stored_window_state(app: &AppHandle) -> Option<StoredWindowState> {
@@ -1370,6 +1443,24 @@ fn desktop_terminal_settings_path() -> Option<PathBuf> {
     claude_config_dir().map(|path| path.join("settings.json"))
 }
 
+/// 解析 cc-haha/settings.json 里的 h5Access.fixedPort。范围必须与
+/// 服务端 h5AccessService 的 MIN/MAX_FIXED_PORT 一致（1024..=65535）。
+fn parse_h5_fixed_port(contents: &str) -> Option<u16> {
+    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
+    let port = value.get("h5Access")?.get("fixedPort")?.as_u64()?;
+    if (1024..=65535).contains(&port) {
+        u16::try_from(port).ok()
+    } else {
+        None
+    }
+}
+
+fn read_h5_fixed_port() -> Option<u16> {
+    let path = claude_config_dir()?.join("cc-haha").join("settings.json");
+    let contents = fs::read_to_string(path).ok()?;
+    parse_h5_fixed_port(&contents)
+}
+
 fn read_desktop_terminal_config() -> Option<DesktopTerminalConfig> {
     let path = desktop_terminal_settings_path()?;
     let contents = fs::read_to_string(path).ok()?;
@@ -1526,6 +1617,23 @@ fn reserve_local_port(bind_host: &str) -> Result<u16, String> {
     Ok(port)
 }
 
+/// 按优先级尝试给定端口（h5Access.fixedPort > 上次使用的端口），
+/// 全部被占用时回退到 OS 随机分配。保证 app 总能启动。
+fn reserve_local_port_with_preference(bind_host: &str, preferred: &[u16]) -> Result<u16, String> {
+    for &port in preferred {
+        match TcpListener::bind(format!("{bind_host}:{port}")) {
+            Ok(listener) => {
+                drop(listener);
+                return Ok(port);
+            }
+            Err(err) => {
+                eprintln!("[desktop] preferred server port {port} unavailable: {err}");
+            }
+        }
+    }
+    reserve_local_port(bind_host)
+}
+
 fn wait_for_server(url_host: &str, port: u16) -> Result<(), String> {
     let addr: SocketAddr = format!("{url_host}:{port}")
         .parse()
@@ -1619,7 +1727,16 @@ fn resolve_h5_dist_dir(app: &AppHandle, app_root: &Path) -> PathBuf {
 fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     let bind_host = SERVER_BIND_HOST;
     let control_host = SERVER_CONTROL_HOST;
-    let port = reserve_local_port(bind_host)?;
+    let mut preferred_ports: Vec<u16> = Vec::new();
+    if let Some(port) = read_h5_fixed_port() {
+        preferred_ports.push(port);
+    }
+    if let Some(state) = read_stored_server_state() {
+        if !preferred_ports.contains(&state.last_port) {
+            preferred_ports.push(state.last_port);
+        }
+    }
+    let port = reserve_local_port_with_preference(bind_host, &preferred_ports)?;
     let url = format!("http://{control_host}:{port}");
     let app_root = resolve_app_root(app)?;
     let app_root_arg = app_root.to_string_lossy().to_string();
@@ -1706,6 +1823,8 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
         kill_sidecar_child(child);
         return Err(format_server_startup_error(&err, &startup_logs));
     }
+
+    write_stored_server_state(&StoredServerState { last_port: port });
 
     Ok(ServerRuntime { url, child })
 }
@@ -1968,11 +2087,13 @@ mod tests {
     use super::{
         decode_terminal_output, default_utf8_locale, dir_has_portable_data, ensure_utf8_locale,
         has_meaningful_intersection, is_persistable_window_state, normalize_terminal_bash_path,
-        parse_env_block, resolve_agent_powershell_path_override, resolve_desktop_terminal_shell,
+        parse_env_block, parse_h5_fixed_port, reserve_local_port_with_preference,
+        resolve_agent_powershell_path_override, resolve_desktop_terminal_shell,
         resolve_terminal_cwd, run_notification_bridge, select_h5_dist_dir, DesktopTerminalConfig,
-        StoredWindowState, TerminalHostPlatform, SERVER_BIND_HOST, SERVER_CONTROL_HOST,
+        StoredServerState, StoredWindowState, TerminalHostPlatform, SERVER_BIND_HOST,
+        SERVER_CONTROL_HOST,
     };
-    use std::{collections::HashMap, fs};
+    use std::{collections::HashMap, fs, net::TcpListener};
 
     #[test]
     fn window_state_rejects_too_small_sizes() {
@@ -2277,6 +2398,66 @@ mod tests {
     fn server_sidecar_binds_lan_but_reports_loopback_control_url() {
         assert_eq!(SERVER_BIND_HOST, "0.0.0.0");
         assert_eq!(SERVER_CONTROL_HOST, "127.0.0.1");
+    }
+
+    #[test]
+    fn h5_fixed_port_parses_only_valid_in_range_values() {
+        assert_eq!(
+            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":28670}}"#),
+            Some(28670)
+        );
+        // Out of range, wrong type, missing, or null all fall back to None.
+        assert_eq!(parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":80}}"#), None);
+        assert_eq!(
+            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":70000}}"#),
+            None
+        );
+        assert_eq!(
+            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":"3456"}}"#),
+            None
+        );
+        assert_eq!(
+            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":null}}"#),
+            None
+        );
+        assert_eq!(parse_h5_fixed_port(r#"{"h5Access":{}}"#), None);
+        assert_eq!(parse_h5_fixed_port("{}"), None);
+        assert_eq!(parse_h5_fixed_port("not json"), None);
+    }
+
+    #[test]
+    fn preferred_port_is_used_when_free_and_skipped_when_taken() {
+        // Find a port that is currently free, then verify preference picks it.
+        let probe = TcpListener::bind("127.0.0.1:0").expect("probe bind");
+        let free_port = probe.local_addr().expect("probe addr").port();
+        drop(probe);
+
+        let reserved = reserve_local_port_with_preference("127.0.0.1", &[free_port])
+            .expect("reserve preferred");
+        assert_eq!(reserved, free_port);
+
+        // Occupy a port and verify preference falls back to a random one.
+        let occupied = TcpListener::bind("127.0.0.1:0").expect("occupy bind");
+        let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+        let fallback = reserve_local_port_with_preference("127.0.0.1", &[occupied_port])
+            .expect("reserve fallback");
+        assert_ne!(fallback, occupied_port);
+        drop(occupied);
+
+        // Empty preference list behaves like the plain random reservation.
+        assert!(reserve_local_port_with_preference("127.0.0.1", &[]).is_ok());
+    }
+
+    #[test]
+    fn stored_server_state_round_trips_camel_case_json() {
+        let state = StoredServerState { last_port: 28670 };
+        let json = serde_json::to_string(&state).expect("serialize");
+        assert_eq!(json, r#"{"lastPort":28670}"#);
+        assert_eq!(
+            serde_json::from_str::<StoredServerState>(&json).expect("parse"),
+            state
+        );
     }
 
     #[test]

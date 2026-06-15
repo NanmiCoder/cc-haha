@@ -47,6 +47,7 @@ import type {
   Message,
   StreamEvent,
   SystemAPIErrorMessage,
+  SystemStreamingFallbackMessage,
   UserMessage,
 } from "../../types/message.js";
 import {
@@ -74,6 +75,7 @@ import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createAssistantAPIErrorMessage,
+  createSystemStreamingFallbackMessage,
   createUserMessage,
   ensureToolResultPairing,
   normalizeContentFromAPI,
@@ -767,7 +769,7 @@ export async function* queryModelWithStreaming({
   signal: AbortSignal;
   options: Options;
 }): AsyncGenerator<
-  StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+  StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemStreamingFallbackMessage,
   void
 > {
   return yield* withStreamingVCR(messages, async function* () {
@@ -1025,7 +1027,7 @@ async function* queryModel(
   signal: AbortSignal,
   options: Options,
 ): AsyncGenerator<
-  StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+  StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemStreamingFallbackMessage,
   void
 > {
   if (getAPIProvider() === "azureOpenAI") {
@@ -1942,11 +1944,22 @@ async function* queryModel(
     const STREAM_IDLE_TIMEOUT_MS =
       parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || "", 10) || 90_000;
     const STREAM_IDLE_WARNING_MS = STREAM_IDLE_TIMEOUT_MS / 2;
+    // Overall wall-clock cap for a single streaming response. UNLIKE the idle
+    // timer, this is NEVER reset by incoming chunks, so it catches upstreams that
+    // trickle content deltas (e.g. a large tool_use input_json_delta) just fast
+    // enough to keep resetting the idle timer but never send message_stop — the
+    // idle watchdog can then never fire and the request hangs forever (#766).
+    // 0 disables it (terminal CLI default); the desktop injects a value.
+    const STREAM_MAX_DURATION_MS =
+      parseInt(process.env.CLAUDE_STREAM_MAX_DURATION_MS || "", 10) || 0;
     let streamIdleAborted = false;
+    // Which watchdog tripped, so the thrown error message is accurate.
+    let streamAbortReason: "idle" | "max_duration" | null = null;
     // performance.now() snapshot when watchdog fires, for measuring abort propagation delay
     let streamWatchdogFiredAt: number | null = null;
     let streamIdleWarningTimer: ReturnType<typeof setTimeout> | null = null;
     let streamIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let streamMaxDurationTimer: ReturnType<typeof setTimeout> | null = null;
     function clearStreamIdleTimers(): void {
       if (streamIdleWarningTimer !== null) {
         clearTimeout(streamIdleWarningTimer);
@@ -1975,6 +1988,7 @@ async function* queryModel(
       );
       streamIdleTimer = setTimeout(() => {
         streamIdleAborted = true;
+        streamAbortReason = "idle";
         streamWatchdogFiredAt = performance.now();
         logForDebugging(
           `Streaming idle timeout: no chunks received for ${STREAM_IDLE_TIMEOUT_MS / 1000}s, aborting stream`,
@@ -1992,6 +2006,31 @@ async function* queryModel(
       }, STREAM_IDLE_TIMEOUT_MS);
     }
     resetStreamIdleTimer();
+    // Arm the overall-duration watchdog exactly once. It is intentionally NOT
+    // re-armed in resetStreamIdleTimer(), so a steady trickle of chunks cannot
+    // keep the request alive forever (#766).
+    if (streamWatchdogEnabled && STREAM_MAX_DURATION_MS > 0) {
+      streamMaxDurationTimer = setTimeout(() => {
+        streamIdleAborted = true;
+        streamAbortReason = "max_duration";
+        streamWatchdogFiredAt = performance.now();
+        logForDebugging(
+          `Streaming max duration exceeded: no completion after ${STREAM_MAX_DURATION_MS / 1000}s, aborting stream`,
+          { level: "error" },
+        );
+        logForDiagnosticsNoPII("error", "cli_streaming_max_duration_exceeded", {
+          timeoutMs: STREAM_MAX_DURATION_MS,
+        });
+        logEvent("tengu_streaming_idle_timeout", {
+          model:
+            options.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          request_id: (streamRequestId ??
+            "unknown") as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          timeout_ms: STREAM_MAX_DURATION_MS,
+        });
+        releaseStreamResources();
+      }, STREAM_MAX_DURATION_MS);
+    }
 
     startSessionActivity("api_call");
     try {
@@ -2369,6 +2408,10 @@ async function* queryModel(
       }
       // Clear the idle timeout watchdog now that the stream loop has exited
       clearStreamIdleTimers();
+      if (streamMaxDurationTimer !== null) {
+        clearTimeout(streamMaxDurationTimer);
+        streamMaxDurationTimer = null;
+      }
 
       // If the stream was aborted by our idle timeout watchdog, fall back to
       // non-streaming retry rather than treating it as a completed stream.
@@ -2396,7 +2439,11 @@ async function* queryModel(
         // Prevent double-emit: this throw lands in the catch block below,
         // whose exit_path='error' probe guards on streamWatchdogFiredAt.
         streamWatchdogFiredAt = null;
-        throw new Error("Stream idle timeout - no chunks received");
+        throw new Error(
+          streamAbortReason === "max_duration"
+            ? "Stream max duration exceeded - no completion received"
+            : "Stream idle timeout - no chunks received",
+        );
       }
 
       // Detect when the stream completed without producing any assistant messages.
@@ -2469,6 +2516,10 @@ async function* queryModel(
     } catch (streamingError) {
       // Clear the idle timeout watchdog on error path too
       clearStreamIdleTimers();
+      if (streamMaxDurationTimer !== null) {
+        clearTimeout(streamMaxDurationTimer);
+        streamMaxDurationTimer = null;
+      }
 
       // Instrumentation: if the watchdog had already fired and the for-await
       // threw (rather than exiting cleanly), record that the loop DID exit and
@@ -2574,6 +2625,13 @@ async function* queryModel(
       if (options.onStreamingFallback) {
         options.onStreamingFallback();
       }
+      // Surface the mode switch to consumers (SDK stream → desktop status
+      // bar): the non-streaming response arrives in one piece after a
+      // potentially long silent wait, so without this signal the UI shows a
+      // bare spinner the whole time.
+      yield createSystemStreamingFallbackMessage(
+        streamIdleAborted ? "watchdog" : "stream_error",
+      );
 
       logEvent("tengu_streaming_fallback_to_non_streaming", {
         model:
@@ -2695,6 +2753,7 @@ async function* queryModel(
       if (options.onStreamingFallback) {
         options.onStreamingFallback();
       }
+      yield createSystemStreamingFallbackMessage("404_stream_creation");
 
       logEvent("tengu_streaming_fallback_to_non_streaming", {
         model:

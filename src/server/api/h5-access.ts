@@ -1,5 +1,6 @@
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { H5AccessService } from '../services/h5AccessService.js'
+import { refreshDisconnectGraceMs } from '../ws/disconnectGraceConfig.js'
 
 const h5AccessService = new H5AccessService()
 
@@ -54,7 +55,11 @@ export async function handleH5AccessApi(
           const settings = await h5AccessService.updateSettings({
             allowedOrigins: body.allowedOrigins as string[] | undefined,
             publicBaseUrl: body.publicBaseUrl as string | null | undefined,
+            fixedPort: body.fixedPort as number | null | undefined,
+            disconnectGraceSeconds: body.disconnectGraceSeconds as number | null | undefined,
           })
+          // Keep the synchronous disconnect-cleanup cache in step with the new value.
+          await refreshDisconnectGraceMs()
           return Response.json({ settings })
         }
         throw methodNotAllowed(req.method, '/api/h5-access')

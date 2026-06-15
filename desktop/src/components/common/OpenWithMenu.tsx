@@ -61,9 +61,17 @@ export function OpenWithMenu({ items, anchor, onClose, triggerEl }: Props) {
       onClose()
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onViewportMove = () => onClose()
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+    window.addEventListener('scroll', onViewportMove, true)
+    window.addEventListener('resize', onViewportMove)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onViewportMove, true)
+      window.removeEventListener('resize', onViewportMove)
+    }
   }, [onClose, triggerEl])
 
   return createPortal(

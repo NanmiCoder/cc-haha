@@ -629,8 +629,29 @@ async function resolveLaunchPlan(
   return null
 }
 
-async function validateOpenPath(targetPath: string): Promise<ResolvedOpenPath> {
-  const resolvedPath = resolve(targetPath)
+/**
+ * Expands a leading tilde to the home directory. Models frequently emit
+ * `~/report.html` (and `~\report.html` on Windows) for generated files;
+ * without expansion those resolve against the server cwd and always miss.
+ * `~\` is only a tilde path on Windows — on POSIX the backslash is a valid
+ * filename character.
+ */
+function expandTildePath(targetPath: string, platform: OpenTargetPlatform): string {
+  if (
+    targetPath === '~' ||
+    targetPath.startsWith('~/') ||
+    (platform === 'win32' && targetPath.startsWith('~\\'))
+  ) {
+    return homedir() + targetPath.slice(1)
+  }
+  return targetPath
+}
+
+async function validateOpenPath(
+  targetPath: string,
+  platform: OpenTargetPlatform,
+): Promise<ResolvedOpenPath> {
+  const resolvedPath = resolve(expandTildePath(targetPath, platform))
   let entry
   try {
     entry = await stat(resolvedPath)
@@ -991,7 +1012,7 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
       )
     }
 
-    const resolvedPath = await validateOpenPath(input.path)
+    const resolvedPath = await validateOpenPath(input.path, runtime.platform)
     const launchPlan = await resolveLaunchPlan(definition, runtime, resolvedPath)
     if (!launchPlan) {
       throw openTargetError(

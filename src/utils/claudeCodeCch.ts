@@ -18,20 +18,7 @@ const PRIME64_5 = 2870177450012600261n
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
-type BillingFieldSelector = (parsed: unknown) => string[]
-
 export function signClaudeCodeCCHInString(body: string): string {
-  return signClaudeCodeCCHInStringWithSelector(body, selectAnthropicBillingFields)
-}
-
-export function signClaudeCodeCCHInTransformedString(body: string): string {
-  return signClaudeCodeCCHInStringWithSelector(body, selectTransformedBillingFields)
-}
-
-function signClaudeCodeCCHInStringWithSelector(
-  body: string,
-  selectBillingFields: BillingFieldSelector,
-): string {
   if (!body.includes(CLAUDE_CODE_BILLING_HEADER_PREFIX) || !body.includes(CCH_PLACEHOLDER)) return body
 
   let parsed: unknown
@@ -43,7 +30,7 @@ function signClaudeCodeCCHInStringWithSelector(
 
   if (countCCHPlaceholders(body) !== 1) return body
 
-  const billingFields = selectBillingFields(parsed)
+  const billingFields = selectAnthropicBillingFields(parsed)
   const placeholderCount = billingFields.reduce((count, value) => count + countCCHPlaceholders(value), 0)
   if (placeholderCount !== 1) return body
 
@@ -84,26 +71,6 @@ function selectAnthropicBillingFields(parsed: unknown): string[] {
   return system.flatMap(block => (
     isTextBlock(block) && isBillingHeader(block.text) ? [block.text] : []
   ))
-}
-
-function selectTransformedBillingFields(parsed: unknown): string[] {
-  if (!isRecord(parsed)) return []
-
-  const fields: string[] = []
-  if (typeof parsed.instructions === 'string' && isBillingHeader(parsed.instructions)) {
-    fields.push(parsed.instructions)
-  }
-
-  if (Array.isArray(parsed.messages)) {
-    for (const message of parsed.messages) {
-      if (!isRecord(message)) continue
-      if (message.role === 'system' && typeof message.content === 'string' && isBillingHeader(message.content)) {
-        fields.push(message.content)
-      }
-    }
-  }
-
-  return fields
 }
 
 function isBillingHeader(value: string): boolean {

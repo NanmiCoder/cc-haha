@@ -1,4 +1,5 @@
 export {
+  captureResponseTraceSnapshot,
   clearTraceCaptureStateForTests,
   createTraceCallId,
   createTraceBodySnapshot,
@@ -7,6 +8,7 @@ export {
   readTraceCaptureSettings,
   readResponseTraceSnapshot,
   shouldCaptureApiTrace,
+  TRACE_ABORT_CAPTURE_GRACE_MS,
   TRACE_LIST_PREVIEW_CHARS,
   TRACE_STREAM_CAPTURE_BYTES,
   traceCaptureService,
@@ -24,6 +26,7 @@ export type {
   TraceEventRecord,
   TraceEventSeverity,
   TraceProviderInfo,
+  TraceResponseCapture,
   TraceSession,
   TraceSessionFileItem,
   TraceSessionFileList,

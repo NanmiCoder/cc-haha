@@ -16,6 +16,7 @@ const MOCK_GET_SETTINGS = vi.fn()
 const MOCK_UPDATE_SETTINGS = vi.fn()
 const desktopNotificationsMock = vi.hoisted(() => ({
   getDesktopNotificationPermission: vi.fn(),
+  getDesktopNotificationPlatform: vi.fn(),
   notifyDesktop: vi.fn(),
   requestDesktopNotificationPermission: vi.fn(),
   openDesktopNotificationSettings: vi.fn(),
@@ -34,6 +35,7 @@ const tauriProcessMock = vi.hoisted(() => ({
 }))
 const providerStoreState = {
   providers: [] as SavedProvider[],
+  providerOrder: [] as string[],
   activeId: null as string | null,
   hasLoadedProviders: true,
   presets: [] as ProviderPreset[],
@@ -165,10 +167,12 @@ describe('Settings > General tab', () => {
     vi.useRealTimers()
     MOCK_DELETE_PROVIDER.mockReset()
     desktopNotificationsMock.getDesktopNotificationPermission.mockReset()
+    desktopNotificationsMock.getDesktopNotificationPlatform.mockReset()
     desktopNotificationsMock.notifyDesktop.mockReset()
     desktopNotificationsMock.requestDesktopNotificationPermission.mockReset()
     desktopNotificationsMock.openDesktopNotificationSettings.mockReset()
     desktopNotificationsMock.getDesktopNotificationPermission.mockResolvedValue('default')
+    desktopNotificationsMock.getDesktopNotificationPlatform.mockReturnValue('darwin')
     desktopNotificationsMock.notifyDesktop.mockResolvedValue(true)
     desktopNotificationsMock.requestDesktopNotificationPermission.mockResolvedValue('granted')
     desktopNotificationsMock.openDesktopNotificationSettings.mockResolvedValue(true)
@@ -186,6 +190,7 @@ describe('Settings > General tab', () => {
     MOCK_GET_SETTINGS.mockResolvedValue({})
     MOCK_UPDATE_SETTINGS.mockResolvedValue({})
     providerStoreState.providers = []
+    providerStoreState.providerOrder = []
     providerStoreState.activeId = null
     providerStoreState.hasLoadedProviders = true
     providerStoreState.presets = []
@@ -204,8 +209,10 @@ describe('Settings > General tab', () => {
       locale: 'en',
       theme: 'light',
       thinkingEnabled: true,
+      autoDreamEnabled: false,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
+      traceCapture: { enabled: true, storageDir: '/Users/test/.claude/cc-haha/traces' },
       chatSendBehavior: 'enter',
       responseLanguage: '',
       uiZoom: 1,
@@ -216,9 +223,12 @@ describe('Settings > General tab', () => {
       },
       h5Access: {
         enabled: false,
+        token: null,
         tokenPreview: null,
         allowedOrigins: [],
         publicBaseUrl: null,
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
       h5AccessDiagnostics: null,
       h5AccessError: null,
@@ -242,6 +252,9 @@ describe('Settings > General tab', () => {
       setThinkingEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ thinkingEnabled: enabled })
       }),
+      setAutoDreamEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
+        useSettingsStore.setState({ autoDreamEnabled: enabled })
+      }),
       setTheme: vi.fn().mockImplementation(async (theme: ThemeMode) => {
         useSettingsStore.setState({ theme })
       }),
@@ -250,6 +263,10 @@ describe('Settings > General tab', () => {
       }),
       setDesktopNotificationsEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ desktopNotificationsEnabled: enabled })
+      }),
+      setTraceCaptureEnabled: vi.fn().mockImplementation(async (enabled: boolean) => {
+        const current = useSettingsStore.getState().traceCapture
+        useSettingsStore.setState({ traceCapture: { ...current, enabled } })
       }),
       setChatSendBehavior: vi.fn().mockImplementation(async (chatSendBehavior: ChatSendBehavior) => {
         useSettingsStore.setState({ chatSendBehavior })
@@ -293,18 +310,20 @@ describe('Settings > General tab', () => {
           h5Access: {
             ...current,
             enabled: true,
+            token: 'h5_default_generated_token',
             tokenPreview: 'h5_default_generated_token'.slice(0, 8),
           },
         })
         return 'h5_default_generated_token'
       }),
       disableH5Access: vi.fn().mockImplementation(async () => {
+        // Mirrors the server: disabling keeps the stored token so a later
+        // re-enable restores access for already-paired phones.
         const current = useSettingsStore.getState().h5Access
         useSettingsStore.setState({
           h5Access: {
             ...current,
             enabled: false,
-            tokenPreview: null,
           },
         })
       }),
@@ -314,6 +333,7 @@ describe('Settings > General tab', () => {
           h5Access: {
             ...current,
             enabled: true,
+            token: 'h5_default_regenerated_token',
             tokenPreview: 'h5_default_regenerated_token'.slice(0, 8),
           },
         })
@@ -450,8 +470,8 @@ describe('Settings > General tab', () => {
     const timeoutInput = screen.getByLabelText('AI request timeout')
     const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
 
-    fireEvent.change(timeoutInput, { target: { value: '700' } })
-    expect(screen.getByText('Enter a whole number from 5 to 600 seconds.')).toBeInTheDocument()
+    fireEvent.change(timeoutInput, { target: { value: '2000' } })
+    expect(screen.getByText('Enter a whole number from 30 to 1800 seconds.')).toBeInTheDocument()
     expect(saveButton).toBeDisabled()
 
     fireEvent.change(timeoutInput, { target: { value: '90' } })
@@ -718,6 +738,78 @@ describe('Settings > General tab', () => {
     expect(useSettingsStore.getState().setThinkingEnabled).toHaveBeenCalledWith(false)
   })
 
+  it('keeps Auto-dream disabled by default and confirms before enabling it', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    const toggle = screen.getByLabelText('Enable Auto-dream')
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+
+    expect(useSettingsStore.getState().setAutoDreamEnabled).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'Enable Auto-dream?' })
+    expect(within(dialog).getByText(/Keep the desktop app running/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/uses additional model tokens/i)).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable Auto-dream' }))
+    })
+
+    expect(useSettingsStore.getState().setAutoDreamEnabled).toHaveBeenCalledWith(true)
+    expect(screen.getByLabelText('Enable Auto-dream')).toBeChecked()
+  })
+
+  it('lets the user disable Auto-dream without a confirmation dialog', async () => {
+    useSettingsStore.setState({ autoDreamEnabled: true })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Enable Auto-dream'))
+    })
+
+    expect(screen.queryByRole('dialog', { name: 'Enable Auto-dream?' })).not.toBeInTheDocument()
+    expect(useSettingsStore.getState().setAutoDreamEnabled).toHaveBeenCalledWith(false)
+  })
+
+  it('keeps General checkbox inputs anchored inside their visible rows', () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+
+    for (const label of [
+      'Enable thinking mode',
+      'Enable Auto-dream',
+      'Collect agent traces',
+      'Enable system notifications',
+      'Skip WebFetch domain preflight',
+    ]) {
+      const toggle = screen.getByLabelText(label)
+      const row = toggle.closest('label') as HTMLElement | null
+      expect(toggle).toHaveClass('settings-checkbox-input')
+      expect(toggle).not.toHaveClass('sr-only')
+      expect(row).not.toBeNull()
+      expect(row!).toHaveClass('relative')
+    }
+  })
+
+  it('lets the user disable Agent Trace collection without leaving General settings', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.getByLabelText('Collect agent traces')).toBeChecked()
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Collect agent traces'))
+    })
+
+    expect(useSettingsStore.getState().setTraceCaptureEnabled).toHaveBeenCalledWith(false)
+    expect(screen.getByLabelText('Collect agent traces')).not.toBeChecked()
+    expect(screen.getByText('Agent trace')).toBeInTheDocument()
+    expect(screen.getByText('Message Sending')).toBeInTheDocument()
+  })
+
   it('uses the shared dropdown for response language', () => {
     render(<Settings />)
 
@@ -766,7 +858,25 @@ describe('Settings > General tab', () => {
     })
   })
 
-  it('opens system settings when enabling notifications finds system denial', async () => {
+  it('does not fire the enable smoke notification on Windows Electron', async () => {
+    useSettingsStore.setState({ desktopNotificationsEnabled: false })
+    desktopNotificationsMock.getDesktopNotificationPlatform.mockReturnValue('win32')
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Enable system notifications'))
+    })
+
+    expect(useSettingsStore.getState().setDesktopNotificationsEnabled).toHaveBeenCalledWith(true)
+    await vi.waitFor(() => {
+      expect(desktopNotificationsMock.requestDesktopNotificationPermission).toHaveBeenCalledTimes(1)
+    })
+    expect(desktopNotificationsMock.notifyDesktop).not.toHaveBeenCalled()
+    expect(desktopNotificationsMock.openDesktopNotificationSettings).not.toHaveBeenCalled()
+  })
+
+  it('shows the system settings action when enabling notifications finds system denial', async () => {
     useSettingsStore.setState({ desktopNotificationsEnabled: false })
     desktopNotificationsMock.requestDesktopNotificationPermission.mockResolvedValue('denied')
     render(<Settings />)
@@ -777,8 +887,15 @@ describe('Settings > General tab', () => {
     })
 
     await vi.waitFor(() => {
-      expect(desktopNotificationsMock.openDesktopNotificationSettings).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('Permission: Blocked by system settings')).toBeInTheDocument()
     })
+    expect(desktopNotificationsMock.openDesktopNotificationSettings).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }))
+    })
+
+    expect(desktopNotificationsMock.openDesktopNotificationSettings).toHaveBeenCalledTimes(1)
   })
 
   it('moves H5 access out of General into its own Settings tab', () => {
@@ -804,9 +921,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: false,
+        token: null,
         tokenPreview: null,
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.0.102:3456',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -831,9 +951,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: false,
+        token: null,
         tokenPreview: null,
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.0.102:3456',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -864,9 +987,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5oldtok',
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.0.102:3456',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -886,13 +1012,184 @@ describe('Settings > General tab', () => {
     expect(await within(section).findByAltText('H5 access QR code')).toBeInTheDocument()
   })
 
+  it('renders the QR code and token from persisted settings without any action (issue #767)', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:3456',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+
+    // No enable/regenerate click this session: everything comes from the
+    // persisted token, so a desktop restart no longer loses the QR code.
+    expect(await within(section).findByAltText('H5 access QR code')).toBeInTheDocument()
+    expect(within(section).getByText('http://192.168.0.102:3456/?serverUrl=http%3A%2F%2F192.168.0.102%3A3456&h5Token=h5_persisted_token')).toBeInTheDocument()
+
+    fireEvent.click(within(section).getByRole('button', { name: 'Show token' }))
+    expect(within(section).getByText('h5_persisted_token')).toBeInTheDocument()
+  })
+
+  it('saves a fixed port together with the host', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Fixed port'), {
+      target: { value: '28670' },
+    })
+
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Save H5 settings' }))
+    })
+
+    expect(useSettingsStore.getState().updateH5AccessSettings).toHaveBeenCalledWith({
+      publicBaseUrl: 'http://192.168.0.102:54064',
+      fixedPort: 28670,
+      disconnectGraceSeconds: null,
+    })
+  })
+
+  it('rejects an out-of-range fixed port before saving', () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Fixed port'), {
+      target: { value: '99' },
+    })
+
+    expect(within(section).getByText('Port must be an integer between 1024 and 65535.')).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: 'Save H5 settings' })).toBeDisabled()
+    expect(useSettingsStore.getState().updateH5AccessSettings).not.toHaveBeenCalled()
+  })
+
+  it('saves a custom disconnect grace period (issue #764)', async () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
+      target: { value: '600' },
+    })
+
+    await act(async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'Save H5 settings' }))
+    })
+
+    expect(useSettingsStore.getState().updateH5AccessSettings).toHaveBeenCalledWith({
+      publicBaseUrl: 'http://192.168.0.102:54064',
+      fixedPort: null,
+      disconnectGraceSeconds: 600,
+    })
+  })
+
+  it('rejects an out-of-range disconnect grace period before saving', () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
+      target: { value: '2' },
+    })
+
+    expect(within(section).getByText('Must be an integer between 5 and 86400 seconds.')).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: 'Save H5 settings' })).toBeDisabled()
+    expect(useSettingsStore.getState().updateH5AccessSettings).not.toHaveBeenCalled()
+  })
+
+  it('shows a restart note while the saved fixed port is not active yet', () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: 28670,
+        disconnectGraceSeconds: null,
+      },
+      h5AccessDiagnostics: {
+        storedHostStaleness: 'ok',
+        storedPublicBaseUrl: 'http://192.168.0.102:54064',
+        effectivePublicBaseUrl: 'http://192.168.0.102:54064',
+        suggestedHost: null,
+        localInterfaceHosts: ['192.168.0.102'],
+        activePort: 54064,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+
+    const note = within(section).getByTestId('h5-access-fixed-port-restart-note')
+    expect(note.textContent).toContain('28670')
+    expect(note.textContent).toContain('54064')
+  })
+
   it('shows the generated H5 token as a fallback when requested', async () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: false,
+        token: null,
         tokenPreview: null,
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.0.102:3456',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -914,9 +1211,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5url123',
         allowedOrigins: ['https://phone.example'],
         publicBaseUrl: 'https://phone.example/app',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -950,9 +1250,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5a1b2c3',
         allowedOrigins: [],
         publicBaseUrl: 'http://172.20.16.1:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -971,6 +1274,8 @@ describe('Settings > General tab', () => {
 
     expect(useSettingsStore.getState().updateH5AccessSettings).toHaveBeenCalledWith({
       publicBaseUrl: 'http://192.168.1.100:54064',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
   })
 
@@ -978,9 +1283,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: false,
+        token: null,
         tokenPreview: 'h5a1b2c3',
         allowedOrigins: ['https://old.example'],
         publicBaseUrl: null,
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
     })
     render(<Settings />)
@@ -998,6 +1306,8 @@ describe('Settings > General tab', () => {
 
     expect(useSettingsStore.getState().updateH5AccessSettings).toHaveBeenCalledWith({
       publicBaseUrl: 'https://phone.example/app',
+      fixedPort: null,
+      disconnectGraceSeconds: null,
     })
   })
 
@@ -1005,9 +1315,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5a1b2c3',
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.1.207:55379',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
       h5AccessDiagnostics: {
         storedHostStaleness: 'unreachable',
@@ -1039,9 +1352,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5a1b2c3',
         allowedOrigins: [],
         publicBaseUrl: 'https://h5.mydomain.com',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
       h5AccessDiagnostics: {
         storedHostStaleness: 'proxy',
@@ -1063,9 +1379,12 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({
       h5Access: {
         enabled: true,
+        token: null,
         tokenPreview: 'h5a1b2c3',
         allowedOrigins: [],
         publicBaseUrl: 'http://192.168.0.105:55379',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
       },
       h5AccessDiagnostics: {
         storedHostStaleness: 'ok',
@@ -1165,6 +1484,7 @@ describe('Settings > Providers tab', () => {
         notes: '',
       },
     ]
+    providerStoreState.providerOrder = ['provider-1', 'claude-official', 'openai-official']
     providerStoreState.activeId = null
     providerStoreState.hasLoadedProviders = true
   })
@@ -1211,6 +1531,34 @@ describe('Settings > Providers tab', () => {
     expect(within(openAIProvider).getByText('Default')).toBeInTheDocument()
     expect(screen.getByTestId('chatgpt-official-login')).toBeInTheDocument()
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+  })
+
+  it('renders saved and official providers in the stored sortable order', () => {
+    providerStoreState.providerOrder = ['provider-1', 'openai-official', 'claude-official']
+
+    render(<Settings />)
+
+    const rows = screen.getAllByRole('button', { name: 'Drag to reorder' })
+      .map((handle) => handle.closest('[data-testid]')?.getAttribute('data-testid'))
+    expect(rows).toEqual([
+      'provider-provider-1',
+      'openai-official-provider',
+      'claude-official-provider',
+    ])
+  })
+
+  it('falls back to the default provider order when stored order is missing', () => {
+    providerStoreState.providerOrder = undefined as unknown as string[]
+
+    render(<Settings />)
+
+    const rows = screen.getAllByRole('button', { name: 'Drag to reorder' })
+      .map((handle) => handle.closest('[data-testid]')?.getAttribute('data-testid'))
+    expect(rows).toEqual([
+      'provider-provider-1',
+      'claude-official-provider',
+      'openai-official-provider',
+    ])
   })
 
   it('requires confirmation before deleting a provider', async () => {
@@ -1392,6 +1740,41 @@ describe('Settings > About tab', () => {
     expect(await screen.findByRole('heading', { name: 'Claude Code Haha v0.1.5' })).toBeInTheDocument()
     expect(screen.getByText('Fixed updater rendering')).toBeInTheDocument()
     expect(screen.getByText('Added markdown support')).toBeInTheDocument()
+  })
+
+  it('does not show a fake fallback app version when desktop version IPC fails', async () => {
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: {
+        ...browserHost.capabilities,
+        updates: true,
+      },
+      app: {
+        getVersion: vi.fn().mockRejectedValue(new Error('version IPC failed')),
+      },
+    }
+    useUpdateStore.setState({
+      status: 'up-to-date',
+      availableVersion: null,
+      releaseNotes: null,
+      progressPercent: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+      checkedAt: Date.now(),
+      shouldPrompt: false,
+      initialize: vi.fn().mockResolvedValue(undefined),
+      checkForUpdates: vi.fn().mockResolvedValue(null),
+      installUpdate: vi.fn().mockResolvedValue(undefined),
+      dismissPrompt: vi.fn(),
+    })
+
+    render(<Settings />)
+
+    expect(await screen.findByText('Unknown')).toBeInTheDocument()
+    expect(screen.queryByText('0.1.0')).not.toBeInTheDocument()
   })
 
   it('shows downloaded bytes instead of a fake zero percent when total size is unknown', async () => {

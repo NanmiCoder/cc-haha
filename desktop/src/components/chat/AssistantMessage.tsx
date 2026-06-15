@@ -23,11 +23,14 @@ type Props = {
   branchAction?: MessageBranchAction
   sessionId?: string
   timestamp?: number
+  /** This turn's real changed files (absolute), used to anchor output chips onto
+   *  files that were actually written instead of guessing from the prose. */
+  turnChangedFiles?: string[]
 }
 
 const MAX_CARDS = 3
 
-export const AssistantMessage = memo(function AssistantMessage({ content, isStreaming, branchAction, sessionId, timestamp }: Props) {
+export const AssistantMessage = memo(function AssistantMessage({ content, isStreaming, branchAction, sessionId, timestamp, turnChangedFiles }: Props) {
   const t = useTranslation()
   const workDir = useWorkspacePanelStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
   const activeProviderId = useProviderStore((s) => s.activeId)
@@ -85,10 +88,10 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
       isStreaming || !sessionId
         ? []
         : // Image/video targets render inline (InlineImageGallery/InlineVideoGallery); never also as a card.
-          extractAssistantOutputTargets(cleanContent, { workDir }).filter(
+          extractAssistantOutputTargets(cleanContent, { workDir, changedFiles: turnChangedFiles }).filter(
             (target) => target.kind !== 'image' && target.kind !== 'video',
           ),
-    [cleanContent, isStreaming, sessionId, workDir],
+    [cleanContent, isStreaming, sessionId, workDir, turnChangedFiles],
   )
 
   if (!cleanContent.trim() && fakeBlocks.length === 0) return null

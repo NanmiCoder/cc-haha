@@ -117,6 +117,45 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+function parseAppVersion(version: string | null | undefined) {
+  const match = version?.trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)/)
+  if (!match) return null
+  return match.slice(1).map(Number) as [number, number, number]
+}
+
+function compareAppVersions(left: string | null | undefined, right: string | null | undefined) {
+  const leftParts = parseAppVersion(left)
+  const rightParts = parseAppVersion(right)
+  if (!leftParts || !rightParts) return null
+
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const delta = leftParts[index]! - rightParts[index]!
+    if (delta !== 0) return delta
+  }
+  return 0
+}
+
+function isUpdateNewerThanCurrent(updateVersion: string, currentVersion: string | null) {
+  const comparison = compareAppVersions(updateVersion, currentVersion)
+  return comparison === null || comparison > 0
+}
+
+async function getCurrentAppVersion(host: DesktopHost) {
+  try {
+    return await host.app.getVersion()
+  } catch {
+    return null
+  }
+}
+
+async function closeIgnoredUpdate(update: DesktopUpdate) {
+  try {
+    await update.close()
+  } catch {
+    // Best effort: a stale same-version update should not keep the prompt alive.
+  }
+}
+
 export const useUpdateStore = create<UpdateStore>((set, get) => ({
   status: 'idle',
   availableVersion: null,
@@ -156,6 +195,28 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
     try {
       const updateProxyKey = getUpdateProxyKey()
       const update = await host.updates.check(getUpdateCheckOptions())
+
+      if (update && !isUpdateNewerThanCurrent(update.version, await getCurrentAppVersion(host))) {
+        await closeIgnoredUpdate(update)
+        await setPendingUpdate(null, null)
+
+        const checkedAt = Date.now()
+        writeDismissedUpdateVersion(null)
+        set((state) => ({
+          ...state,
+          status: 'up-to-date',
+          availableVersion: null,
+          releaseNotes: null,
+          progressPercent: 0,
+          downloadedBytes: 0,
+          totalBytes: null,
+          checkedAt,
+          error: null,
+          shouldPrompt: false,
+        }))
+        return null
+      }
+
       await setPendingUpdate(update, updateProxyKey)
 
       const checkedAt = Date.now()

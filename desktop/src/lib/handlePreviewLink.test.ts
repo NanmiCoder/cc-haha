@@ -64,12 +64,29 @@ describe('handlePreviewLink', () => {
     expect(deps.openFilePreview).not.toHaveBeenCalled()
   })
 
-  it('routes a frontend project index.html to workspace preview instead of static browser preview', () => {
+  it('routes generated *_files index.html to openBrowser with the preview-fs url', () => {
+    const deps = makeDeps()
+    const handled = handlePreviewLink('66estmutl_files/index.html', deps)
+    expect(handled).toBe(true)
+    expect(deps.openBrowser).toHaveBeenCalledWith(
+      's1',
+      'http://127.0.0.1:8787/preview-fs/s1/66estmutl_files/index.html',
+    )
+    expect(deps.openFilePreview).not.toHaveBeenCalled()
+  })
+
+  it('routes a hand-authored single-page index.html to the static browser preview', () => {
+    // Without change-set context a bare index.html is assumed to be a standalone
+    // static page (the common "make me a todo page" output), so it renders in the
+    // in-app browser rather than dropping the user into the source view.
     const deps = makeDeps()
     const handled = handlePreviewLink('todo-app/index.html', deps)
     expect(handled).toBe(true)
-    expect(deps.openFilePreview).toHaveBeenCalledWith('s1', 'todo-app/index.html')
-    expect(deps.openBrowser).not.toHaveBeenCalled()
+    expect(deps.openBrowser).toHaveBeenCalledWith(
+      's1',
+      'http://127.0.0.1:8787/preview-fs/s1/todo-app/index.html',
+    )
+    expect(deps.openFilePreview).not.toHaveBeenCalled()
   })
 
   it('routes relative previewable docs to openFilePreview with the relative path', () => {

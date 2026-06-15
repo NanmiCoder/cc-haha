@@ -14,6 +14,7 @@ import type {
   OpenAIToolCall,
   OpenAITool,
 } from './types.js'
+import { stripLeadingBillingHeader } from './billingHeader.js'
 
 type OpenAIChatImageContentMode = 'vision' | 'text_only'
 
@@ -34,12 +35,14 @@ export function anthropicToOpenaiChat(
 ): OpenAIChatRequest {
   const messages: OpenAIChatMessage[] = []
 
-  // Convert system prompt
+  // Convert system prompt, minus the leading billing attribution: its
+  // rotating cch= signature would change the prefix every turn and defeat
+  // upstream prompt caching.
   if (body.system) {
-    if (typeof body.system === 'string') {
-      messages.push({ role: 'system', content: body.system })
-    } else if (Array.isArray(body.system)) {
-      const text = body.system.map((b) => b.text).join('\n')
+    const text = typeof body.system === 'string'
+      ? stripLeadingBillingHeader(body.system)
+      : body.system.map((b) => stripLeadingBillingHeader(b.text)).filter(Boolean).join('\n')
+    if (text) {
       messages.push({ role: 'system', content: text })
     }
   }
@@ -54,6 +57,11 @@ export function anthropicToOpenaiChat(
     model: body.model,
     messages,
     stream: body.stream === true,
+  }
+
+  // Many OpenAI-compatible servers omit usage on streams unless asked.
+  if (result.stream) {
+    result.stream_options = { include_usage: true }
   }
 
   // max_tokens — omit to let upstream provider use its own default/max.

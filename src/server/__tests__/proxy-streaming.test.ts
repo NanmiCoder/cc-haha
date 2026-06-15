@@ -269,6 +269,40 @@ describe('openaiChatStreamToAnthropic', () => {
     )
     expect(firstBlockStop).toBeLessThan(toolBlockStart)
   })
+
+  test('maps cached tokens from a trailing usage-only chunk', async () => {
+    // stream_options.include_usage delivers usage in a final chunk with empty choices
+    const sseChunks = [
+      'data: {"id":"c8","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}\n\n',
+      'data: {"id":"c8","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: {"id":"c8","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":80}}}\n\n',
+      'data: [DONE]\n\n',
+    ]
+
+    const events = await collectSse(openaiChatStreamToAnthropic(makeStream(sseChunks), 'gpt-4'))
+    const msgDelta = events.find((e) => e.event === 'message_delta')!
+    expect(msgDelta.data.usage).toEqual({
+      input_tokens: 20,
+      output_tokens: 7,
+      cache_read_input_tokens: 80,
+    })
+  })
+
+  test('maps cached tokens when usage arrives with finish_reason', async () => {
+    const sseChunks = [
+      'data: {"id":"c9","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}\n\n',
+      'data: {"id":"c9","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":40}}}\n\n',
+      'data: [DONE]\n\n',
+    ]
+
+    const events = await collectSse(openaiChatStreamToAnthropic(makeStream(sseChunks), 'gpt-4'))
+    const msgDelta = events.find((e) => e.event === 'message_delta')!
+    expect(msgDelta.data.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 3,
+      cache_read_input_tokens: 40,
+    })
+  })
 })
 
 // ─── OpenAI Responses SSE → Anthropic SSE ──────────────────────
@@ -340,5 +374,24 @@ describe('openaiResponsesStreamToAnthropic', () => {
     // Stop reason should be tool_use
     const msgDelta = events.find((e) => e.event === 'message_delta')!
     expect((msgDelta.data.delta as Record<string, unknown>).stop_reason).toBe('tool_use')
+  })
+
+  test('maps cached tokens from response.completed usage', async () => {
+    const sseChunks = [
+      'event: response.created\ndata: {"id":"r3","model":"gpt-5.4","status":"in_progress"}\n\n',
+      'event: response.output_item.added\ndata: {"output_index":0,"item":{"type":"message","role":"assistant"}}\n\n',
+      'event: response.content_part.added\ndata: {"output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}\n\n',
+      'event: response.output_text.delta\ndata: {"output_index":0,"content_index":0,"delta":"Hi"}\n\n',
+      'event: response.output_text.done\ndata: {"output_index":0,"content_index":0,"text":"Hi"}\n\n',
+      'event: response.completed\ndata: {"response":{"id":"r3","model":"gpt-5.4","status":"completed","usage":{"input_tokens":1200,"output_tokens":40,"input_tokens_details":{"cached_tokens":1000}}}}\n\n',
+    ]
+
+    const events = await collectSse(openaiResponsesStreamToAnthropic(makeStream(sseChunks), 'gpt-5.4'))
+    const msgDelta = events.find((e) => e.event === 'message_delta')!
+    expect(msgDelta.data.usage).toEqual({
+      input_tokens: 200,
+      output_tokens: 40,
+      cache_read_input_tokens: 1000,
+    })
   })
 })

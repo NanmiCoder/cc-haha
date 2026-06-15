@@ -160,6 +160,7 @@ export function traceEventPhaseLabel(phase: string, t: TraceTranslator): string 
     case 'api_call_started': return t('trace.event.apiCallStarted')
     case 'api_call_completed': return t('trace.event.apiCallCompleted')
     case 'api_call_failed': return t('trace.event.apiCallFailed')
+    case 'api_call_aborted': return t('trace.event.apiCallAborted')
     case 'response_capture_failed': return t('trace.event.responseCaptureFailed')
     case 'upstream_fetch_started': return t('trace.event.upstreamFetchStarted')
     case 'upstream_fetch_completed': return t('trace.event.upstreamFetchCompleted')

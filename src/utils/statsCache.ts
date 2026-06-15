@@ -9,10 +9,16 @@ import { errorMessage } from './errors.js'
 import { getFsImplementation } from './fsOperations.js'
 import { logError } from './log.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
-import type { DailyActivity, DailyModelTokens, SessionStats } from './stats.js'
+import type {
+  DailyActivity,
+  DailyModelTokens,
+  SessionStats,
+  SkillUsageMap,
+  ToolUsageMap,
+} from './stats.js'
 
-export const STATS_CACHE_VERSION = 5
-const MIN_MIGRATABLE_VERSION = 5
+export const STATS_CACHE_VERSION = 6
+const MIN_MIGRATABLE_VERSION = 6
 const STATS_CACHE_FILENAME = 'stats-cache.json'
 
 /**
@@ -60,6 +66,9 @@ export type PersistedStatsCache = {
   dailyModelTokens: DailyModelTokens[]
   // Model usage aggregated (bounded by number of models)
   modelUsage: { [modelName: string]: ModelUsage }
+  // Tool and skill usage aggregated from assistant tool_use blocks
+  toolUsage: ToolUsageMap
+  skillUsage: SkillUsageMap
   // Session aggregates (replaces unbounded sessionStats array)
   totalSessions: number
   totalMessages: number
@@ -85,6 +94,8 @@ function getEmptyCache(): PersistedStatsCache {
     dailyActivity: [],
     dailyModelTokens: [],
     modelUsage: {},
+    toolUsage: {},
+    skillUsage: {},
     totalSessions: 0,
     totalMessages: 0,
     longestSession: null,
@@ -99,10 +110,10 @@ function getEmptyCache(): PersistedStatsCache {
  * Migrate an older cache to the current schema.
  * Returns null if the version is unknown or too old to migrate.
  *
- * Daily activity accounting changed in v5 to count per-day active parent
- * sessions from message timestamps instead of session-start dates. Older
- * caches are intentionally rejected so the next aggregation recomputes daily
- * session counts and token buckets with the same date semantics.
+ * Daily activity accounting changed in v5, and v6 added historical tool/skill
+ * usage. Older caches are intentionally rejected so the next aggregation
+ * recomputes fields that cannot be reconstructed from aggregate-only cache
+ * files without undercounting.
  */
 function migrateStatsCache(
   parsed: Partial<PersistedStatsCache> & { version: number },
@@ -117,6 +128,10 @@ function migrateStatsCache(
   if (
     !Array.isArray(parsed.dailyActivity) ||
     !Array.isArray(parsed.dailyModelTokens) ||
+    typeof parsed.toolUsage !== 'object' ||
+    parsed.toolUsage === null ||
+    typeof parsed.skillUsage !== 'object' ||
+    parsed.skillUsage === null ||
     typeof parsed.totalSessions !== 'number' ||
     typeof parsed.totalMessages !== 'number'
   ) {
@@ -128,6 +143,8 @@ function migrateStatsCache(
     dailyActivity: parsed.dailyActivity,
     dailyModelTokens: parsed.dailyModelTokens,
     modelUsage: parsed.modelUsage ?? {},
+    toolUsage: parsed.toolUsage,
+    skillUsage: parsed.skillUsage,
     totalSessions: parsed.totalSessions,
     totalMessages: parsed.totalMessages,
     longestSession: parsed.longestSession ?? null,
@@ -182,6 +199,10 @@ export async function loadStatsCache(): Promise<PersistedStatsCache> {
     if (
       !Array.isArray(parsed.dailyActivity) ||
       !Array.isArray(parsed.dailyModelTokens) ||
+      typeof parsed.toolUsage !== 'object' ||
+      parsed.toolUsage === null ||
+      typeof parsed.skillUsage !== 'object' ||
+      parsed.skillUsage === null ||
       typeof parsed.totalSessions !== 'number' ||
       typeof parsed.totalMessages !== 'number'
     ) {
@@ -263,6 +284,8 @@ export function mergeCacheWithNewStats(
     dailyActivity: DailyActivity[]
     dailyModelTokens: DailyModelTokens[]
     modelUsage: { [modelName: string]: ModelUsage }
+    toolUsage: ToolUsageMap
+    skillUsage: SkillUsageMap
     sessionStats: SessionStats[]
     hourCounts: { [hour: number]: number }
     totalSpeculationTimeSavedMs: number
@@ -270,6 +293,18 @@ export function mergeCacheWithNewStats(
   },
   newLastComputedDate: string,
 ): PersistedStatsCache {
+  const mergeUsageCounts = (
+    existingCounts: Record<string, number>,
+    nextCounts: Record<string, number>,
+  ) => {
+    const merged = { ...existingCounts }
+    for (const [name, count] of Object.entries(nextCounts)) {
+      if (typeof count !== 'number' || count <= 0) continue
+      merged[name] = (merged[name] || 0) + count
+    }
+    return merged
+  }
+
   // Merge daily activity - combine by date
   const dailyActivityMap = new Map<string, DailyActivity>()
   for (const day of existingCache.dailyActivity) {
@@ -331,6 +366,12 @@ export function mergeCacheWithNewStats(
     }
   }
 
+  const toolUsage = mergeUsageCounts(existingCache.toolUsage, newStats.toolUsage)
+  const skillUsage = mergeUsageCounts(
+    existingCache.skillUsage,
+    newStats.skillUsage,
+  )
+
   // Merge hour counts
   const hourCounts = { ...existingCache.hourCounts }
   for (const [hour, count] of Object.entries(newStats.hourCounts)) {
@@ -371,6 +412,8 @@ export function mergeCacheWithNewStats(
       .map(([date, tokensByModel]) => ({ date, tokensByModel }))
       .sort((a, b) => a.date.localeCompare(b.date)),
     modelUsage,
+    toolUsage,
+    skillUsage,
     totalSessions,
     totalMessages,
     longestSession,

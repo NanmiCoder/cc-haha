@@ -12,11 +12,20 @@ import type {
   OpenAIResponsesInputItem,
   OpenAIChatContentPart,
 } from './types.js'
+import { stripLeadingBillingHeader } from './billingHeader.js'
+
+export type OpenAIResponsesTransformOptions = {
+  /** Stable cache routing key, forwarded as `prompt_cache_key`. */
+  cacheKey?: string
+}
 
 /**
  * Convert Anthropic Messages request to OpenAI Responses API request.
  */
-export function anthropicToOpenaiResponses(body: AnthropicRequest): OpenAIResponsesRequest {
+export function anthropicToOpenaiResponses(
+  body: AnthropicRequest,
+  options: OpenAIResponsesTransformOptions = {},
+): OpenAIResponsesRequest {
   const input: OpenAIResponsesInputItem[] = []
 
   // Convert messages to input items
@@ -31,13 +40,20 @@ export function anthropicToOpenaiResponses(body: AnthropicRequest): OpenAIRespon
     store: false,
   }
 
-  // system → instructions
+  // system → instructions, minus the leading billing attribution: its
+  // rotating cch= signature would change the prefix every turn and defeat
+  // upstream prompt caching.
   if (body.system) {
-    if (typeof body.system === 'string') {
-      result.instructions = body.system
-    } else if (Array.isArray(body.system)) {
-      result.instructions = body.system.map((b) => b.text).join('\n')
+    const instructions = typeof body.system === 'string'
+      ? stripLeadingBillingHeader(body.system)
+      : body.system.map((b) => stripLeadingBillingHeader(b.text)).filter(Boolean).join('\n')
+    if (instructions) {
+      result.instructions = instructions
     }
+  }
+
+  if (options.cacheKey) {
+    result.prompt_cache_key = options.cacheKey
   }
 
   // max_tokens — omit to let upstream provider use its own default/max.

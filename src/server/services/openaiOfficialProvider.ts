@@ -8,9 +8,12 @@ import {
 } from '../../services/openaiAuth/models.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 import { getHahaOpenAIOAuthFilePath } from './hahaOpenAIOAuthService.js'
-import type { SavedProvider } from '../types/provider.js'
+import {
+  OPENAI_OFFICIAL_PROVIDER_ID,
+  type SavedProvider,
+} from '../types/provider.js'
 
-export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
+export { OPENAI_OFFICIAL_PROVIDER_ID }
 export const OPENAI_OFFICIAL_PROVIDER_NAME = 'ChatGPT Official'
 export const OPENAI_OAUTH_PROVIDER_ENV_KEY = 'CC_HAHA_OPENAI_OAUTH_PROVIDER'
 export const OPENAI_CODEX_OAUTH_FILE_ENV_KEY = 'OPENAI_CODEX_OAUTH_FILE'

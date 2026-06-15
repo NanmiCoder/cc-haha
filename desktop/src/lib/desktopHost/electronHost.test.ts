@@ -45,19 +45,16 @@ describe('electron desktop host', () => {
     expect(host.capabilities.windowControls).toBe(true)
   })
 
-  it('forwards drag-region fallback movement through the window dragging IPC channel', async () => {
+  it('keeps the legacy window dragging IPC channel payload-free', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     const host = createElectronHost({
       invoke,
       subscribe: vi.fn(),
     })
 
-    await host.window.startDragging({ deltaX: 12, deltaY: -8 })
+    await host.window.startDragging()
 
-    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.windowStartDragging, {
-      deltaX: 12,
-      deltaY: -8,
-    })
+    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.windowStartDragging, undefined)
   })
 
   it('opens dedicated trace windows through a narrow IPC channel', async () => {

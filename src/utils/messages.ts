@@ -71,6 +71,7 @@ import type {
   SystemPermissionRetryMessage,
   SystemScheduledTaskFireMessage,
   SystemStopHookSummaryMessage,
+  SystemStreamingFallbackMessage,
   SystemTurnDurationMessage,
   TombstoneMessage,
   ToolUseSummaryMessage,
@@ -4741,6 +4742,31 @@ export function createSystemAPIErrorMessage(
     retryInMs,
     retryAttempt,
     maxRetries,
+    timestamp: new Date().toISOString(),
+    uuid: randomUUID(),
+  }
+}
+
+export type StreamingFallbackCause =
+  | 'watchdog'
+  | 'stream_error'
+  | '404_stream_creation'
+
+/**
+ * Marks the switch from a failed streaming request to the non-streaming
+ * fallback. The fallback response arrives in one piece after a potentially
+ * long wait with zero incremental output, so UIs surface this as a lightweight
+ * active-turn status (level info — an expected state, not an error).
+ */
+export function createSystemStreamingFallbackMessage(
+  cause: StreamingFallbackCause,
+): SystemStreamingFallbackMessage {
+  return {
+    type: 'system',
+    subtype: 'streaming_fallback',
+    level: 'info',
+    content: `Streaming request failed (${cause.replace(/_/g, ' ')}); retrying in non-streaming mode`,
+    cause,
     timestamp: new Date().toISOString(),
     uuid: randomUUID(),
   }

@@ -10,7 +10,7 @@ import { stringWidth } from '../../ink/stringWidth.js';
 import { Box, Text } from '../../ink.js';
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js';
 import { summarizeRecentActivities } from '../../utils/collapseReadSearch.js';
-import { formatDuration, formatNumber, truncateToWidth } from '../../utils/format.js';
+import { formatDuration, formatTokens, truncateToWidth } from '../../utils/format.js';
 import { toInkColor } from '../../utils/ink.js';
 import { TEAMMATE_SELECT_HINT } from './teammateSelectHint.js';
 type Props = {
@@ -127,7 +127,7 @@ export function TeammateSpinnerLine({
   // Get stats from progress
   const toolUseCount = teammate.progress?.toolUseCount ?? 0;
   const tokenCount = teammate.progress?.tokenCount ?? 0;
-  const statsText = ` · ${toolUseCount} tool ${toolUseCount === 1 ? 'use' : 'uses'} · ${formatNumber(tokenCount)} tokens`;
+  const statsText = ` · ${toolUseCount} tool ${toolUseCount === 1 ? 'use' : 'uses'} · ${formatTokens(tokenCount)} tokens`;
   const statsWidth = stringWidth(statsText);
   const selectHintText = ` · ${TEAMMATE_SELECT_HINT}`;
   const selectHintWidth = stringWidth(selectHintText);
@@ -216,7 +216,7 @@ export function TeammateSpinnerLine({
         {showStats && <Text dimColor>
             {' '}
             · {toolUseCount} tool {toolUseCount === 1 ? 'use' : 'uses'} ·{' '}
-            {formatNumber(tokenCount)} tokens
+            {formatTokens(tokenCount)} tokens
           </Text>}
         {/* Hints: select hint when highlighted, view hint when selected but not foregrounded */}
         {showSelectHint && <Text dimColor> · {TEAMMATE_SELECT_HINT}</Text>}

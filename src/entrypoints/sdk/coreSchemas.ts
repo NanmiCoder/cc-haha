@@ -1587,6 +1587,20 @@ export const SDKAPIRetryMessageSchema = lazySchema(() =>
     ),
 )
 
+export const SDKStreamingFallbackMessageSchema = lazySchema(() =>
+  z
+    .object({
+      type: z.literal('system'),
+      subtype: z.literal('streaming_fallback'),
+      cause: z.enum(['watchdog', 'stream_error', '404_stream_creation']),
+      uuid: UUIDPlaceholder(),
+      session_id: z.string(),
+    })
+    .describe(
+      'Emitted when a streaming request fails and the query falls back to a non-streaming request. The fallback response arrives in one piece after a potentially long wait with no incremental output.',
+    ),
+)
+
 export const SDKLocalCommandOutputMessageSchema = lazySchema(() =>
   z
     .object({
@@ -1863,6 +1877,7 @@ export const SDKMessageSchema = lazySchema(() =>
     SDKCompactBoundaryMessageSchema(),
     SDKStatusMessageSchema(),
     SDKAPIRetryMessageSchema(),
+    SDKStreamingFallbackMessageSchema(),
     SDKLocalCommandOutputMessageSchema(),
     SDKHookStartedMessageSchema(),
     SDKHookProgressMessageSchema(),

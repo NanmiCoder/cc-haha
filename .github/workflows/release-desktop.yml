@@ -398,8 +398,10 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/release-assets/**/*.dmg
+            artifacts/release-assets/**/*.zip
             artifacts/release-assets/**/*.exe
             artifacts/release-assets/**/*.AppImage
             artifacts/release-assets/**/*.deb
+            artifacts/release-assets/**/*.blockmap
             artifacts/update-metadata-standard/*.yml
             desktop/scripts/install-macos-unsigned.sh

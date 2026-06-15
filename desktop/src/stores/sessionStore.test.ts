@@ -21,6 +21,20 @@ import { useTabStore } from './tabStore'
 
 const initialState = useSessionStore.getState()
 
+function makeSession(id: string, modifiedAt: string, title = id) {
+  return {
+    id,
+    title,
+    createdAt: modifiedAt,
+    modifiedAt,
+    messageCount: 1,
+    projectPath: '/workspace/project',
+    projectRoot: '/workspace/project',
+    workDir: '/workspace/project',
+    workDirExists: true,
+  }
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -134,6 +148,17 @@ describe('sessionStore', () => {
     await useSessionStore.getState().fetchSessions()
 
     expect(useTabStore.getState().tabs[0]?.title).toBe('使用bash写一个shell，随便写点什么东西')
+  })
+
+  it('requests a large default session page for noisy history directories', async () => {
+    listMock.mockResolvedValue({
+      sessions: [makeSession('session-newest', '2026-05-07T00:00:03.000Z')],
+      total: 474,
+    })
+
+    await useSessionStore.getState().fetchSessions()
+
+    expect(listMock).toHaveBeenCalledWith({ limit: 400 })
   })
 
   it('ignores stale session list responses when a newer refresh finishes first', async () => {

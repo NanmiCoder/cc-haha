@@ -265,4 +265,96 @@ describe('ContextUsageIndicator request behavior', () => {
     expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('90%')).not.toBeInTheDocument()
   })
+
+  it('forces a fresh inspection when refreshNonce bumps after a compaction (#743)', async () => {
+    // First request hangs — simulates an auto refresh that started just
+    // before the compact boundary and would resolve with pre-compact data.
+    const first = deferred<typeof baseInspection>()
+    sessionsApiMock.getInspection
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        ...baseInspection,
+        context: { ...baseInspection.context, totalTokens: 9_000, percentage: 5 },
+      })
+
+    const { rerender } = render(
+      <ContextUsageIndicator
+        sessionId="session-1"
+        chatState="idle"
+        messageCount={1}
+        refreshNonce={0}
+      />,
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <ContextUsageIndicator
+        sessionId="session-1"
+        chatState="idle"
+        messageCount={1}
+        refreshNonce={1}
+      />,
+    )
+
+    // The forced refresh bypasses both the auto-refresh throttle and the
+    // in-flight request reuse.
+    await waitFor(() => {
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('5%')
+    })
+  })
+
+  it('retries the forced refresh once when it fails right after compaction (#743)', async () => {
+    vi.useFakeTimers()
+    try {
+      sessionsApiMock.getInspection
+        .mockResolvedValueOnce(baseInspection)
+        .mockRejectedValueOnce(new Error('Request timed out after 30s'))
+        .mockResolvedValueOnce({
+          ...baseInspection,
+          context: { ...baseInspection.context, totalTokens: 9_000, percentage: 5 },
+        })
+
+      const { rerender } = render(
+        <ContextUsageIndicator
+          sessionId="session-1"
+          chatState="idle"
+          messageCount={1}
+          refreshNonce={0}
+        />,
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(1)
+
+      rerender(
+        <ContextUsageIndicator
+          sessionId="session-1"
+          chatState="idle"
+          messageCount={1}
+          refreshNonce={1}
+        />,
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+
+      // The CLI was still busy and the forced refresh failed — one delayed
+      // retry recovers the meter instead of leaving the stale percentage.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -62,7 +62,28 @@ const activityResponse = {
     { date: '2026-05-09', tokensByModel: { 'claude-sonnet': 128_000 } },
   ],
   longestSession: null,
-  modelUsage: {},
+  modelUsage: {
+    'claude-sonnet': {
+      inputTokens: 1_900_000,
+      outputTokens: 700_000,
+      cacheReadInputTokens: 230_000,
+      cacheCreationInputTokens: 34_000,
+    },
+  },
+  toolUsage: {
+    Bash: 180,
+    Read: 160,
+    Skill: 40,
+    mcp__github__get_pull_request: 14,
+    mcp__chrome_devtools__new_page: 8,
+    mcp__figma__get_screenshot: 7,
+    mcp__linear__create_issue: 2,
+  },
+  skillUsage: {
+    'frontend-design': 24,
+    'git-commit-pr': 16,
+    'code-review': 11,
+  },
   firstSessionDate: '2025-06-01T10:00:00.000Z',
   lastSessionDate: '2026-05-09T11:00:00.000Z',
   peakActivityDay: '2026-04-20',
@@ -195,6 +216,27 @@ describe('ActivitySettings', () => {
     expect(screen.getByText('0m')).toBeInTheDocument()
     expect(screen.getByText('9 days')).toBeInTheDocument()
     expect(screen.getByText('18 days')).toBeInTheDocument()
+    expect(screen.getByText('Activity insights')).toBeInTheDocument()
+    expect(screen.getByText('Active rate')).toBeInTheDocument()
+    expect(screen.getByText('Most used model')).toBeInTheDocument()
+    expect(screen.getByText('Skills explored')).toBeInTheDocument()
+    expect(screen.getByText('Skill uses')).toBeInTheDocument()
+    expect(screen.getByText('Tool calls')).toBeInTheDocument()
+    expect(screen.getByText('Total sessions')).toBeInTheDocument()
+    expect(screen.getByText('Most used plugins & skills')).toBeInTheDocument()
+    expect(screen.getByText('Sonnet')).toBeInTheDocument()
+    expect(screen.getByText('$frontend-design')).toBeInTheDocument()
+    expect(screen.getByText('$git-commit-pr')).toBeInTheDocument()
+    expect(screen.getByText('$code-review')).toBeInTheDocument()
+    expect(screen.getByText('@github')).toBeInTheDocument()
+    expect(screen.getByText('@chrome-devtools')).toBeInTheDocument()
+    expect(screen.getByText('@figma')).toBeInTheDocument()
+    expect(screen.getByText('24 runs')).toBeInTheDocument()
+    expect(screen.getByText('14 runs')).toBeInTheDocument()
+    expect(screen.getByText('7 runs')).toBeInTheDocument()
+    expect(screen.queryByText('@linear')).not.toBeInTheDocument()
+    expect(screen.queryByText('Bash')).not.toBeInTheDocument()
+    expect(screen.queryByText('Read')).not.toBeInTheDocument()
     expect(screen.getAllByText('May').length).toBeGreaterThan(0)
     expect(screen.queryByText('5月')).not.toBeInTheDocument()
 
@@ -239,13 +281,14 @@ describe('ActivitySettings', () => {
     expect(editButton.closest('div')).toHaveClass('group/activity-profile')
   })
 
-  it('uses a balanced responsive summary grid instead of the loose medium-width layout', async () => {
+  it('uses a compact summary strip instead of the loose card layout', async () => {
     render(<ActivitySettings />)
 
     await flushActivityLoad()
 
     const summaryPanel = screen.getByText('Total tokens').closest('section')
     expect(summaryPanel).toHaveClass('activity-summary-panel')
+    expect(summaryPanel).toHaveClass('max-w-[900px]')
 
     const summaryGrid = summaryPanel?.querySelector('.activity-summary-grid')
     expect(summaryGrid).not.toHaveClass('sm:grid-cols-2')
@@ -256,10 +299,11 @@ describe('ActivitySettings', () => {
     expect(primaryMetric).toHaveClass('activity-summary-metric-primary')
     expect(primaryMetric).not.toHaveClass('sm:col-span-2')
     expect(primaryMetric).not.toHaveClass('lg:col-span-1')
+    expect(primaryMetric).toHaveClass('text-center')
 
     const longestTaskValue = screen.getByText('0m')
     expect(longestTaskValue).toHaveClass('activity-summary-value')
-    expect(longestTaskValue).not.toHaveClass('truncate')
+    expect(longestTaskValue).toHaveClass('truncate')
     expect(longestTaskValue).not.toHaveClass('break-words')
   })
 
@@ -364,6 +408,8 @@ describe('ActivitySettings', () => {
       activeDays: 0,
       dailyActivity: [],
       dailyModelTokens: [],
+      toolUsage: {},
+      skillUsage: {},
       longestSession: {
         id: 'session-1',
         startedAt: '2026-05-09T08:00:00.000Z',
@@ -388,5 +434,6 @@ describe('ActivitySettings', () => {
     expect(screen.getByText('1 小时 30 分钟')).toBeInTheDocument()
     expect(screen.getByText('12 消息')).toBeInTheDocument()
     expect(screen.getByText('暂无本地用量')).toBeInTheDocument()
+    expect(screen.queryByText('活动洞察')).not.toBeInTheDocument()
   })
 })

@@ -1,16 +1,65 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { Camera, MousePointer2 } from 'lucide-react'
+import { Camera, Loader2, MousePointer2 } from 'lucide-react'
 import { BrowserAddressBar } from './BrowserAddressBar'
 import { computeWebviewBounds } from './computeWebviewBounds'
+import { getServerBaseUrl, isLoopbackHostname } from '../../lib/desktopRuntime'
+import { classifyPreviewLink } from '../../lib/previewLinkRouter'
+import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
 import { previewBridge } from '../../lib/previewBridge'
 import { subscribePreviewEvents } from '../../lib/previewEvents'
 import { useBrowserPanelStore } from '../../stores/browserPanelStore'
 import { useOverlayStore } from '../../stores/overlayStore'
 import { useTranslation } from '../../i18n'
 
+const LOCAL_PREVIEW_PATH_PREFIXES = ['/preview-fs/', '/local-file/']
+const LOCAL_PREVIEW_READY_TIMEOUT_MS = 2500
+
+function shouldWaitForLocalPreview(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return isLoopbackHostname(parsed.hostname) &&
+      LOCAL_PREVIEW_PATH_PREFIXES.some((prefix) => parsed.pathname.startsWith(prefix))
+  } catch {
+    return false
+  }
+}
+
+async function waitForLocalPreview(url: string): Promise<void> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), LOCAL_PREVIEW_READY_TIMEOUT_MS)
+  try {
+    await fetch(url, {
+      method: 'HEAD',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+  } catch {
+    // Best-effort warmup only. The native webview still navigates so users can
+    // see the server's own error page or use Reload if the first probe raced.
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function resolveBrowserNavigationUrl(input: string, sessionId: string): string {
+  const value = input.trim()
+  if (!value) return ''
+
+  const classified = classifyPreviewLink(value)
+  if (classified.kind === 'browser-file' && classified.path) {
+    const serverBaseUrl = getServerBaseUrl()
+    return isAbsoluteLocalPath(classified.path)
+      ? localFileUrl(serverBaseUrl, classified.path)
+      : previewFsUrl(serverBaseUrl, sessionId, classified.path)
+  }
+
+  return value
+}
+
 export function BrowserSurface({ sessionId }: { sessionId: string }) {
   const t = useTranslation()
   const hostRef = useRef<HTMLDivElement>(null)
+  const loadSeqRef = useRef(0)
   const session = useBrowserPanelStore((s) => s.bySession[sessionId])
   const store = useBrowserPanelStore.getState()
   const overlayCount = useOverlayStore((s) => s.count)
@@ -21,12 +70,36 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
     previewBridge.setBounds(computeWebviewBounds(el.getBoundingClientRect()))
   }
 
+  const loadNativePreview = (
+    url: string,
+    action: () => Promise<void>,
+  ) => {
+    const seq = loadSeqRef.current + 1
+    loadSeqRef.current = seq
+    void (async () => {
+      if (shouldWaitForLocalPreview(url)) {
+        await waitForLocalPreview(url)
+      }
+      if (loadSeqRef.current !== seq) return
+      await action()
+    })().catch(() => {
+      if (loadSeqRef.current === seq) {
+        useBrowserPanelStore.getState().setLoading(sessionId, false)
+      }
+    })
+  }
+
   useLayoutEffect(() => {
     const el = hostRef.current
     if (el && session?.url) {
-      previewBridge.open(session.url, computeWebviewBounds(el.getBoundingClientRect()))
+      const bounds = computeWebviewBounds(el.getBoundingClientRect())
+      const url = session.url
+      loadNativePreview(url, () => previewBridge.open(url, bounds))
     }
-    return () => { previewBridge.close() }
+    return () => {
+      loadSeqRef.current += 1
+      previewBridge.close()
+    }
     // The visibility-sync effect below owns setVisible() — including the
     // initial reveal — so it always factors in overlayCount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,19 +145,21 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
 
   if (!session) return null
 
-  const openOrNavigate = (url: string) => {
+  const openOrNavigate = (inputUrl: string) => {
+    const url = resolveBrowserNavigationUrl(inputUrl, sessionId)
     if (!url) return
     const current = useBrowserPanelStore.getState().bySession[sessionId]
     store.navigate(sessionId, url)
     if (current?.url) {
-      previewBridge.navigate(url)
+      loadNativePreview(url, () => previewBridge.navigate(url))
       return
     }
     const el = hostRef.current
     if (el) {
-      previewBridge.open(url, computeWebviewBounds(el.getBoundingClientRect()))
+      const bounds = computeWebviewBounds(el.getBoundingClientRect())
+      loadNativePreview(url, () => previewBridge.open(url, bounds))
     } else {
-      previewBridge.navigate(url)
+      loadNativePreview(url, () => previewBridge.navigate(url))
     }
   }
 
@@ -137,16 +212,32 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
         canGoForward={session.canGoForward}
         loading={session.loading}
         onNavigate={openOrNavigate}
-        onBack={() => { store.goBack(sessionId); store.setLoading(sessionId, true); previewBridge.navigate(useBrowserPanelStore.getState().bySession[sessionId]!.url) }}
-        onForward={() => { store.goForward(sessionId); store.setLoading(sessionId, true); previewBridge.navigate(useBrowserPanelStore.getState().bySession[sessionId]!.url) }}
+        onBack={() => {
+          store.goBack(sessionId)
+          store.setLoading(sessionId, true)
+          const url = useBrowserPanelStore.getState().bySession[sessionId]!.url
+          loadNativePreview(url, () => previewBridge.navigate(url))
+        }}
+        onForward={() => {
+          store.goForward(sessionId)
+          store.setLoading(sessionId, true)
+          const url = useBrowserPanelStore.getState().bySession[sessionId]!.url
+          loadNativePreview(url, () => previewBridge.navigate(url))
+        }}
         onReload={() => {
           if (!session.url) return
           store.setLoading(sessionId, true)
-          previewBridge.navigate(session.url)
+          loadNativePreview(session.url, () => previewBridge.navigate(session.url))
         }}
         rightActions={previewActions}
       />
-      <div ref={hostRef} className="flex-1" data-testid="preview-host" />
+      <div ref={hostRef} className="relative flex-1 overflow-hidden" data-testid="preview-host">
+        {session.loading && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[var(--color-surface)] text-[var(--color-text-tertiary)]">
+            <Loader2 size={18} className="animate-spin" aria-label="加载中" />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

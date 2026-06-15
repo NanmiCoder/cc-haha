@@ -84,8 +84,32 @@ describe('resolveCors', () => {
     }
   })
 
-  it('does not keep loopback browser origins allowed when H5 token mode is active', async () => {
-    for (const origin of ['http://localhost:5173', 'http://127.0.0.1:5179']) {
+  it('keeps loopback browser origins allowed when H5 token mode is active', async () => {
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:2024', 'http://127.0.1.1:2024', 'http://[::1]:5173']) {
+      const result = await resolveCors(origin, 'http://192.168.0.20:3456', {
+        h5Enabled: true,
+        isOriginAllowed: async () => false,
+      })
+
+      expect(result.allowed).toBe(true)
+      expect(result.rejected).toBe(false)
+      expect(result.headers['Access-Control-Allow-Origin']).toBe(origin)
+    }
+  })
+
+  it('keeps missing origins allowed when H5 token mode is active', async () => {
+    const result = await resolveCors(null, 'http://192.168.0.20:3456', {
+      h5Enabled: true,
+      isOriginAllowed: async () => false,
+    })
+
+    expect(result.allowed).toBe(true)
+    expect(result.rejected).toBe(false)
+    expect(result.headers['Access-Control-Allow-Origin']).toBe('http://localhost:3000')
+  })
+
+  it('does not keep LAN browser origins allowed when H5 token mode is active', async () => {
+    for (const origin of ['http://192.168.0.20:2024', 'http://10.0.0.5:5173', 'http://127.example.com:5173', 'http://127.bad.0.1:5173', 'not-a-url']) {
       const result = await resolveCors(origin, 'http://192.168.0.20:3456', {
         h5Enabled: true,
         isOriginAllowed: async () => false,

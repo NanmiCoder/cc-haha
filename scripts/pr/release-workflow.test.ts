@@ -195,8 +195,11 @@ describe('release desktop workflow', () => {
     expect(publishJob).toContain('Validate standard update metadata set')
     expect(publishJob).toContain('softprops/action-gh-release@v2')
     expect(publishJob).toContain('artifacts/release-assets/**/*.dmg')
+    expect(publishJob).toContain('artifacts/release-assets/**/*.zip')
     expect(publishJob).toContain('artifacts/release-assets/**/*.exe')
     expect(publishJob).toContain('artifacts/release-assets/**/*.AppImage')
+    expect(publishJob).toContain('artifacts/release-assets/**/*.deb')
+    expect(publishJob).toContain('artifacts/release-assets/**/*.blockmap')
     expect(publishJob).toContain('artifacts/update-metadata-standard/*.yml')
     expect(publishJob).toContain('desktop/scripts/install-macos-unsigned.sh')
     expect(publishJob).toContain('fail_on_unmatched_files: true')
@@ -324,5 +327,19 @@ describe('release desktop workflow', () => {
     expect(desktopPackage.build.mac?.publish).toBeUndefined()
     expect(desktopPackage.build.win?.publish).toBeUndefined()
     expect(desktopPackage.build.linux?.publish).toBeUndefined()
+  })
+
+  test('Windows NSIS installer lets users choose the install directory', () => {
+    const desktopPackage = JSON.parse(readFileSync('desktop/package.json', 'utf8')) as {
+      build: {
+        nsis?: {
+          oneClick?: boolean
+          allowToChangeInstallationDirectory?: boolean
+        }
+      }
+    }
+
+    expect(desktopPackage.build.nsis?.oneClick).toBe(false)
+    expect(desktopPackage.build.nsis?.allowToChangeInstallationDirectory).toBe(true)
   })
 })

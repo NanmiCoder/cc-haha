@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  buildConversationCliSpawnOptions,
   ConversationService,
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
@@ -199,6 +200,55 @@ describe('ConversationService', () => {
       `${path.join(tmpDir, 'projects', 'D--workspace-code-myself-code-cc-haha', 'memory')}${path.sep}`,
     )
     await expect(fs.stat(path.dirname(env.CLAUDE_CODE_DIAGNOSTICS_FILE))).resolves.toBeTruthy()
+  })
+
+  test('buildChildEnv injects stream watchdog + overall max-duration so a trickling provider stream cannot hang the desktop forever (#766)', async () => {
+    const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+
+      // Idle watchdog frees a fully-silent stream after 240s...
+      expect(env.CLAUDE_ENABLE_STREAM_WATCHDOG).toBe('1')
+      expect(env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe('240000')
+      // ...but the idle timer is reset by EVERY SSE event, so an upstream that
+      // trickles content deltas (a large tool_use input_json_delta) just under
+      // 240s apart keeps it alive forever. The overall-duration cap is NOT reset
+      // by chunks and is what actually frees that case (#766).
+      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('600000')
+      // Non-streaming fallback stays off — its retry loop also hangs the UI (#766).
+      expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('1')
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+      else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
+    }
+  })
+
+  test('buildChildEnv lets caller env override the stream max-duration cap (#766)', async () => {
+    const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    process.env.CLAUDE_STREAM_MAX_DURATION_MS = '120000'
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('120000')
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+      else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
+    }
+  })
+
+  test('builds hidden CLI spawn options for desktop session subprocesses', () => {
+    const env = { CLAUDECODE: '1' }
+
+    expect(buildConversationCliSpawnOptions('/workspace/project', env)).toEqual({
+      cwd: '/workspace/project',
+      env,
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      windowsHide: true,
+    })
   })
 
   test('buildChildEnv pins desktop memory to the current sanitized project directory', async () => {
@@ -731,6 +781,52 @@ describe('ConversationService', () => {
     )) as Record<string, string>
 
     expect(env.CLAUDE_ENABLE_STREAM_WATCHDOG).toBe('1')
+  })
+
+  test('buildChildEnv widens the stream idle window and disables the non-streaming fallback (#766)', async () => {
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+    )) as Record<string, string>
+
+    // 90s default kills healthy-but-silent third-party streams; 240s keeps the
+    // watchdog useful without aborting slow thinking/prefill phases.
+    expect(env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe('240000')
+    // Non-streaming fallback can never finish for slow providers (first byte
+    // only arrives after FULL generation), so retries must stay streaming.
+    expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('1')
+  })
+
+  test('buildChildEnv respects caller overrides for stream timeout tuning envs', async () => {
+    const service = new ConversationService() as any
+    const previous = {
+      watchdog: process.env.CLAUDE_ENABLE_STREAM_WATCHDOG,
+      idle: process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS,
+      fallback: process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK,
+    }
+    process.env.CLAUDE_ENABLE_STREAM_WATCHDOG = '0'
+    process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '90000'
+    process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK = '0'
+    try {
+      const env = (await service.buildChildEnv(
+        '/tmp',
+        'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+      )) as Record<string, string>
+
+      expect(env.CLAUDE_ENABLE_STREAM_WATCHDOG).toBe('0')
+      expect(env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe('90000')
+      expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('0')
+    } finally {
+      for (const [key, value] of [
+        ['CLAUDE_ENABLE_STREAM_WATCHDOG', previous.watchdog],
+        ['CLAUDE_STREAM_IDLE_TIMEOUT_MS', previous.idle],
+        ['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK', previous.fallback],
+      ] as const) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
   })
 
   test('buildSessionCliArgs forwards the selected runtime model and effort to the CLI process', () => {

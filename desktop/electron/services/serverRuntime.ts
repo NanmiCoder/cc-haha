@@ -6,14 +6,16 @@ import {
   killSidecar,
   mergeProxyEnv,
   POWERSHELL_PATH_OVERRIDE_ENV,
+  preferredServerPorts,
   proxyUrlFromElectronProxyRules,
   pushStartupLog,
-  reserveLocalPort,
+  reserveServerPort,
   SERVER_BIND_HOST,
   SERVER_CONTROL_HOST,
   spawnSidecar,
   waitForServer,
   windowsPowerShellOverride,
+  writeLastServerPort,
   type SidecarChild,
 } from './sidecarManager'
 import { readDesktopTerminalConfig, resolveDesktopTerminalShell } from './terminal'
@@ -76,7 +78,9 @@ export class ElectronServerRuntime {
   }
 
   private async startServerOnce(): Promise<string> {
-    const port = await reserveLocalPort(SERVER_BIND_HOST)
+    // Prefer the configured fixed port, then the previous run's port, so
+    // phone bookmarks / QR codes / reverse proxies survive restarts (#767).
+    const port = await reserveServerPort(SERVER_BIND_HOST, preferredServerPorts())
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
     const env = await this.resolveSidecarBaseEnv()
@@ -92,6 +96,7 @@ export class ElectronServerRuntime {
       const child = spawnSidecar(plan)
       this.captureLogs(child, 'claude-server', logs)
       await waitForServer(SERVER_CONTROL_HOST, port)
+      writeLastServerPort(port)
       this.server = { url, child }
       this.startupError = null
       await this.startAdaptersSidecars(url)

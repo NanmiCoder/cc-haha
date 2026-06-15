@@ -298,19 +298,7 @@ function registerIpcHandlers() {
     else window.maximize()
   })
   registerHandler(ELECTRON_IPC_CHANNELS.windowClose, event => currentWindow(event).close())
-  registerHandler(ELECTRON_IPC_CHANNELS.windowStartDragging, (event, payload) => {
-    if (!payload || typeof payload !== 'object') return undefined
-    const { deltaX, deltaY } = payload as { deltaX?: number, deltaY?: number }
-    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return undefined
-    const window = currentWindow(event)
-    if (window.isMaximized()) window.unmaximize()
-    const bounds = window.getBounds()
-    window.setPosition(
-      Math.round(bounds.x + deltaX!),
-      Math.round(bounds.y + deltaY!),
-    )
-    return undefined
-  })
+  registerHandler(ELECTRON_IPC_CHANNELS.windowStartDragging, () => undefined)
   registerHandler(ELECTRON_IPC_CHANNELS.windowRequestAttention, event => currentWindow(event).flashFrame(true))
   registerHandler(ELECTRON_IPC_CHANNELS.windowFocus, event => currentWindow(event).focus())
   registerHandler(ELECTRON_IPC_CHANNELS.windowIsMaximized, event => currentWindow(event).isMaximized())

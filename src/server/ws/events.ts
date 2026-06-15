@@ -17,6 +17,8 @@ export type ClientMessage =
       allowed: boolean
       rule?: string
       updatedInput?: Record<string, unknown>
+      denyMessage?: string
+      permissionUpdates?: unknown[]
     }
   | {
       type: 'computer_use_permission_response'
@@ -63,9 +65,10 @@ export type ServerMessage =
       requestId: string
       request: ComputerUsePermissionRequest
     }
+  | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage }
   | { type: 'thinking'; text: string }
-  | { type: 'status'; state: ChatState; verb?: string; elapsed?: number; tokens?: number }
+  | { type: 'status'; state: ChatState; verb?: string }
   // CLI 是权限模式的唯一真相来源。当 CLI 内部 mode 变化（如 ExitPlanMode 后
   // 恢复到进入 plan 前的模式、Shift+Tab 切换）时，把新模式回传给前端，让桌面端
   // 选择器与 CLI 保持同步，而不是停留在本地影子值上。
@@ -79,6 +82,9 @@ export type ServerMessage =
       errorType?: string
       errorMessage?: string
     }
+  // 流式请求失败、CLI 已降级为非流式重试。非流式响应要等完整生成才返回，
+  // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
+  | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
@@ -112,6 +118,10 @@ export type TokenUsage = {
 }
 
 export type ChatState = 'idle' | 'thinking' | 'compacting' | 'tool_executing' | 'streaming' | 'permission_pending'
+
+// 与 CLI 的 streaming_fallback cause 对齐；unknown 兜底未来新增的 cause 值，
+// 避免新 CLI + 旧 server 组合下丢消息。
+export type StreamingFallbackCause = 'watchdog' | 'stream_error' | '404_stream_creation' | 'unknown'
 
 export type TeamMemberStatus = {
   agentId: string

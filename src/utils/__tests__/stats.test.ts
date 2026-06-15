@@ -41,7 +41,12 @@ function assistantEntry(
     cache_read_input_tokens?: number
     cache_creation_input_tokens?: number
   },
-  options: { model?: string; isSidechain?: boolean; parentUuid?: string } = {},
+  options: {
+    model?: string
+    isSidechain?: boolean
+    parentUuid?: string
+    content?: unknown[]
+  } = {},
 ) {
   return {
     type: 'assistant',
@@ -52,7 +57,7 @@ function assistantEntry(
     message: {
       role: 'assistant',
       model: options.model ?? 'claude-test',
-      content: [],
+      content: options.content ?? [],
       usage,
     },
   }
@@ -189,6 +194,59 @@ describe('activity stats token accounting', () => {
     expect(totalForDate(stats.dailyModelTokens, today)).toBe(34)
   })
 
+  it('tracks tool and skill usage from main and subagent transcripts', async () => {
+    const today = dateKey(0)
+
+    await writeJsonl(projectFile('tool-session'), [
+      userEntry('tool-user', at(today, '10:00:00')),
+      assistantEntry(
+        'tool-assistant',
+        at(today, '10:01:00'),
+        { input_tokens: 1, output_tokens: 1 },
+        {
+          parentUuid: 'tool-user',
+          content: [
+            { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },
+            { type: 'tool_use', id: 'tool-2', name: 'Skill', input: { skill: 'frontend-design' } },
+            { type: 'tool_use', id: 'tool-3', name: 'mcp__figma__get_screenshot', input: {} },
+            { type: 'tool_use', id: 'tool-4', name: 'Skill', input: { skill: 42 } },
+          ],
+        },
+      ),
+    ])
+    await writeJsonl(subagentFile('tool-session', '001'), [
+      userEntry('agent-user', at(today, '10:02:00'), true),
+      assistantEntry(
+        'agent-assistant',
+        at(today, '10:03:00'),
+        { input_tokens: 2, output_tokens: 2 },
+        {
+          isSidechain: true,
+          parentUuid: 'agent-user',
+          content: [
+            { type: 'tool_use', id: 'tool-5', name: 'Skill', input: { skill: 'frontend-design' } },
+          ],
+        },
+      ),
+    ])
+
+    const stats = await aggregateClaudeCodeStatsForRange('all')
+
+    expect(stats.totalSessions).toBe(1)
+    expect(stats.dailyActivity.find(day => day.date === today)).toMatchObject({
+      sessionCount: 1,
+      toolCallCount: 5,
+    })
+    expect(stats.toolUsage).toMatchObject({
+      Bash: 1,
+      Skill: 3,
+      mcp__figma__get_screenshot: 1,
+    })
+    expect(stats.skillUsage).toEqual({
+      'frontend-design': 2,
+    })
+  })
+
   it('keeps resumed old sessions in range token totals with active daily session counts', async () => {
     const oldDate = dateKey(-50)
     const inRangeDate = dateKey(-1)
@@ -233,16 +291,18 @@ describe('activity stats token accounting', () => {
     expect(totalForDate(stats.dailyModelTokens, future)).toBe(0)
   })
 
-  it('invalidates pre-v5 stats caches because daily activity accounting changed', async () => {
+  it('invalidates pre-v6 stats caches because cached aggregates lack tool usage', async () => {
     await mkdir(tmpConfigDir, { recursive: true })
     await writeFile(
       join(tmpConfigDir, 'stats-cache.json'),
       JSON.stringify({
-        version: 3,
+        version: 5,
         lastComputedDate: dateKey(-1),
         dailyActivity: [{ date: dateKey(-1), messageCount: 1, sessionCount: 1, toolCallCount: 0 }],
         dailyModelTokens: [{ date: dateKey(-1), tokensByModel: { stale: 1 } }],
         modelUsage: {},
+        toolUsage: { stale: 1 },
+        skillUsage: { stale: 1 },
         totalSessions: 1,
         totalMessages: 1,
         longestSession: null,
@@ -255,8 +315,10 @@ describe('activity stats token accounting', () => {
 
     const cache = await loadStatsCache()
 
-    expect(STATS_CACHE_VERSION).toBe(5)
+    expect(STATS_CACHE_VERSION).toBe(6)
     expect(cache.dailyModelTokens).toEqual([])
+    expect(cache.toolUsage).toEqual({})
+    expect(cache.skillUsage).toEqual({})
     expect(cache.totalSessions).toBe(0)
   })
 })
