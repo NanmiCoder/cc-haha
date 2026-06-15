@@ -31,6 +31,9 @@ import {
 import { WorkspaceFileOpenWith } from './WorkspaceFileOpenWith'
 import { WorkspaceEditor, saveWorkspaceBuffer } from './WorkspaceEditor'
 import { UnsavedChangesModal } from './UnsavedChangesModal'
+import { LspStatusIndicator } from './LspStatusIndicator'
+import { errorCountFromDiagnostics, toLegacyLspState } from '../../lib/lspStateMap'
+import { sessionsApi } from '../../api/sessions'
 
 type WorkspacePanelProps = {
   sessionId: string
@@ -981,6 +984,7 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
   const closePreviewTabs = useWorkspacePanelStore((state) => state.closePreviewTabs)
   const initBuffer = useWorkspacePanelStore((state) => state.initBuffer)
   const syncLsp = useWorkspacePanelStore((state) => state.syncLsp)
+  const loadLspState = useWorkspacePanelStore((state) => state.loadLspState)
   const bufferStateByTabId = useWorkspacePanelStore((state) => state.bufferStateByTabId)
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const addWorkspaceReference = useWorkspaceChatContextStore((state) => state.addReference)
@@ -1354,17 +1358,26 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
           ))}
           <div className="ml-auto flex items-center gap-2">
             {activePreviewTab.kind === 'file' && (
-              <span
-                data-testid="workspace-lsp-summary"
-                className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[10px] font-medium ${
-                  activeLspDiagnostics?.diagnosticsTotal
-                    ? 'border-[var(--color-error)]/30 text-[var(--color-error)]'
-                    : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]'
-                }`}
-                title={lspState?.error ?? lspState?.command ?? undefined}
-              >
-                {t('workspace.lspState', { state: lspState?.state ?? 'idle' })} · {t('workspace.lspDiagnostics', { count: activeLspDiagnostics?.diagnosticsTotal ?? 0 })}
-              </span>
+              <LspStatusIndicator
+                state={toLegacyLspState(
+                  lspState,
+                  errorCountFromDiagnostics(activeLspDiagnostics?.diagnostics),
+                  sessionId,
+                )}
+                diagnostics={activeLspDiagnostics?.diagnostics ?? []}
+                onRetryClick={() => {
+                  // Server-side LspManager keeps `unavailable` workspaces
+                  // sticky until an explicit restart, so this round-trips
+                  // through /lsp/restart and then re-reads state.
+                  void sessionsApi
+                    .restartWorkspaceLsp(sessionId, { path: activePreviewTab.path })
+                    .catch(() => undefined)
+                    .then(() => loadLspState(sessionId, activePreviewTab.path))
+                }}
+                onDiagnosticOpen={(diagnostic) => {
+                  void openPreview(sessionId, diagnostic.path, 'file')
+                }}
+              />
             )}
             <button
               type="button"
