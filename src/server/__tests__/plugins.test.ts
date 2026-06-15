@@ -418,6 +418,40 @@ describe('Plugins catalog & install API', () => {
     expect(sp?.installed).toBe(false)
   })
 
+  it('GET /api/plugins/catalog includes the cc-haha-builtin plugins (image-gen, reverse-engineering)', async () => {
+    const { req, url, segments } = makeRequest('GET', '/api/plugins/catalog')
+    const res = await handlePluginsApi(req, url, segments)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      catalog: Array<{ id: string; marketplace: string; installed: boolean }>
+    }
+
+    const imageGen = body.catalog.find((e) => e.id === 'image-gen')
+    expect(imageGen).toBeDefined()
+    expect(imageGen?.marketplace).toBe('cc-haha-builtin')
+    expect(imageGen?.installed).toBe(false)
+
+    const re = body.catalog.find((e) => e.id === 'reverse-engineering')
+    expect(re).toBeDefined()
+    expect(re?.marketplace).toBe('cc-haha-builtin')
+    expect(re?.installed).toBe(false)
+  })
+
+  it('POST /api/plugins/install rejects cc-haha-builtin entries when the seed marketplace has not been registered', async () => {
+    // Clean config = no known_marketplaces.json entry for cc-haha-builtin.
+    // The catalog entry has no marketplaceSource, so the install path must
+    // refuse with a clear message instead of trying to clone a placeholder.
+    const { req, url, segments } = makeRequest('POST', '/api/plugins/install', {
+      id: 'image-gen',
+      marketplace: 'cc-haha-builtin',
+    })
+    const res = await handlePluginsApi(req, url, segments)
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { message: string }
+    expect(body.message).toMatch(/cc-haha-builtin/)
+    expect(body.message).toMatch(/not registered|seed/i)
+  })
+
   it('POST /api/plugins/marketplace registers a local directory marketplace from input', async () => {
     const marketplaceRoot = path.join(tmpDir, 'local-market')
     await fs.mkdir(path.join(marketplaceRoot, '.claude-plugin'), { recursive: true })

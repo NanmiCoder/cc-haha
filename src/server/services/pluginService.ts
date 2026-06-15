@@ -510,13 +510,29 @@ export class PluginService {
     }
 
     let marketplaceAdded = false
-    try {
-      const result = await addMarketplaceSource(entry.marketplaceSource)
-      marketplaceAdded = !result.alreadyMaterialized
-    } catch (err) {
-      throw ApiError.badRequest(
-        `Failed to register marketplace ${marketplace}: ${err instanceof Error ? err.message : String(err)}`,
-      )
+    if (entry.marketplaceSource) {
+      try {
+        const result = await addMarketplaceSource(entry.marketplaceSource)
+        marketplaceAdded = !result.alreadyMaterialized
+      } catch (err) {
+        throw ApiError.badRequest(
+          `Failed to register marketplace ${marketplace}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    } else {
+      // Built-in marketplaces (e.g. cc-haha-builtin) are registered out-of-band
+      // by registerSeedMarketplaces() at server startup. If the entry isn't in
+      // known_marketplaces.json yet, the seed mechanism hasn't run — give a
+      // clear error instead of trying to clone a placeholder source spec.
+      const known = await loadKnownMarketplacesConfig()
+      if (!known[marketplace]) {
+        throw ApiError.badRequest(
+          `Built-in marketplace '${marketplace}' is not registered. ` +
+            `This usually means the desktop seed marketplace hasn't been ` +
+            `loaded yet — restart the desktop app, or upgrade to v0.5.12 or ` +
+            `later if you're on an older build.`,
+        )
+      }
     }
 
     const pluginId = `${entry.id}@${entry.marketplace}`

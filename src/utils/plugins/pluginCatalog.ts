@@ -32,8 +32,16 @@ export type CatalogPlugin = {
   id: string
   /** Marketplace identifier the plugin lives in. */
   marketplace: string
-  /** Source spec used to register the marketplace if not yet registered. */
-  marketplaceSource: MarketplaceSource
+  /**
+   * Source spec used to register the marketplace if not yet registered.
+   *
+   * Optional: for built-in marketplaces shipped with the desktop package
+   * (`cc-haha-builtin`) the marketplace is already registered at startup
+   * by `registerSeedMarketplaces()`, so the catalog entry does not carry
+   * a source spec. {@link installCatalogPlugin} short-circuits to a
+   * "marketplace must already be registered" check in that case.
+   */
+  marketplaceSource?: MarketplaceSource
   /** Human-friendly label for the UI card. */
   displayName: string
   /** Default English description (i18n keys override per locale). */
@@ -156,6 +164,27 @@ export const PLUGIN_CATALOG: CatalogPlugin[] = [
     description:
       'Read Stripe data, build payment integrations, and inspect events.',
     category: 'payments',
+  },
+  // ── cc-haha built-in plugins (shipped with the desktop package via the
+  // CLAUDE_CODE_PLUGIN_SEED_DIR mechanism, registered automatically at
+  // server startup; see registerSeedMarketplaces). marketplaceSource is
+  // omitted because the marketplace is registered out-of-band — the install
+  // path checks the marketplace exists in known_marketplaces.json instead.
+  {
+    id: 'image-gen',
+    marketplace: 'cc-haha-builtin',
+    displayName: 'Image Generation',
+    description:
+      'Multi-provider image generation MCP with automatic fallback. Supports OpenAI-compatible APIs (Agnes, GPT-image-2, DALL-E, Gemini image, nano-banana, Flux, Stable Diffusion). Configure 3 priority slots; failed providers fall through.',
+    category: 'productivity',
+  },
+  {
+    id: 'reverse-engineering',
+    marketplace: 'cc-haha-builtin',
+    displayName: 'Reverse Engineering',
+    description:
+      'Multi-platform RE toolkit. Static (Ghidra / radare2 / JADX / apktool) + dynamic (Frida instrumentation, GDB cross-arch single-step, LLDB Apple platforms) for binaries (PE/ELF/Mach-O), Android (APK), iOS, embedded firmware, and CTF.',
+    category: 'productivity',
   },
 ]
 
