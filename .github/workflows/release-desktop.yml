@@ -161,7 +161,7 @@ jobs:
       - name: Build signed macOS Electron release artifacts
         if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'
         working-directory: desktop
-        timeout-minutes: 90
+        timeout-minutes: 80
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEBUG: 'electron-builder,electron-osx-sign,electron-notarize*'
@@ -184,10 +184,45 @@ jobs:
           security find-identity -v -p codesigning || true
           echo "::endgroup::"
           max_attempts=2
+          build_timeout_seconds=2100
+
+          run_signed_electron_builder() {
+            local timeout_seconds="$1"
+            shift
+            "$@" &
+            local build_pid=$!
+            local start_epoch
+            start_epoch=$(date +%s)
+
+            while true; do
+              if ! jobs -pr | grep -q "^${build_pid}$"; then
+                break
+              fi
+
+              local now_epoch elapsed_seconds
+              now_epoch=$(date +%s)
+              elapsed_seconds=$((now_epoch - start_epoch))
+              if [ "$elapsed_seconds" -ge "$timeout_seconds" ]; then
+                echo "::warning::Signed electron-builder timed out after ${elapsed_seconds}s; terminating process ${build_pid}"
+                pkill -TERM -P "$build_pid" 2>/dev/null || true
+                kill -TERM "$build_pid" 2>/dev/null || true
+                sleep 10
+                pkill -KILL -P "$build_pid" 2>/dev/null || true
+                kill -KILL "$build_pid" 2>/dev/null || true
+                wait "$build_pid" 2>/dev/null || true
+                return 124
+              fi
+
+              sleep 15
+            done
+
+            wait "$build_pid"
+          }
+
           for attempt in $(seq 1 "$max_attempts"); do
-            echo "Starting signed electron-builder attempt ${attempt}/${max_attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "Starting signed electron-builder attempt ${attempt}/${max_attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ') with ${build_timeout_seconds}s watchdog"
             rm -rf build-artifacts/electron
-            if node ./node_modules/electron-builder/out/cli/cli.js ${{ matrix.builder_args }} --publish never; then
+            if run_signed_electron_builder "$build_timeout_seconds" node ./node_modules/electron-builder/out/cli/cli.js ${{ matrix.builder_args }} --publish never; then
               echo "Finished signed electron-builder attempt ${attempt}/${max_attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
               exit 0
             fi
