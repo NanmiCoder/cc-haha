@@ -191,7 +191,10 @@ import {
   isDeferredToolsDeltaEnabled,
   isToolSearchEnabled,
 } from "src/utils/toolSearch.js";
-import { API_MAX_MEDIA_PER_REQUEST } from "../../constants/apiLimits.js";
+import {
+  API_MAX_MEDIA_BYTES_BUDGET,
+  API_MAX_MEDIA_PER_REQUEST,
+} from "../../constants/apiLimits.js";
 import { ADVISOR_BETA_HEADER } from "../../constants/betas.js";
 import {
   formatDeferredToolLine,
@@ -955,6 +958,154 @@ function isToolResult(
 }
 
 /**
+ * Returns the base64 payload size (in bytes) for a media block, or 0 if the
+ * block uses a URL/file source (which doesn't contribute to request body size).
+ */
+function getMediaBase64Size(
+  block: BetaImageBlockParam | BetaRequestDocumentBlock,
+): number {
+  const source = block.source;
+  if ("type" in source && source.type === "base64" && "data" in source) {
+    return (source as { data: string }).data.length;
+  }
+  return 0;
+}
+
+/**
+ * Tracked position of a media block in the message array, used to remove the
+ * oldest items first when over budget.
+ */
+interface MediaPosition {
+  msgIdx: number;
+  /** Index in the message's top-level content array */
+  blockIdx: number;
+  /** If inside a tool_result, index within tool_result.content; otherwise -1 */
+  nestedIdx: number;
+  size: number;
+}
+
+/**
+ * Shrinks total base64 media payload to fit within `budgetBytes`.
+ *
+ * When the conversation accumulates large base64 images (from Read tool or
+ * image-gen plugin), the total request can exceed the API's ~20 MB limit.
+ * This function removes the OLDEST base64 media blocks first (replacing them
+ * with a text placeholder) until total media size is within budget.
+ *
+ * URL-based images (size 0) are never removed — they don't affect request size.
+ */
+export function shrinkMediaToSizeBudget(
+  messages: (UserMessage | AssistantMessage)[],
+  budgetBytes: number,
+): (UserMessage | AssistantMessage)[] {
+  // Pass 1: collect all media positions and their sizes
+  const positions: MediaPosition[] = [];
+  let totalSize = 0;
+
+  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+    const content = messages[msgIdx].message.content;
+    if (!Array.isArray(content)) continue;
+
+    for (let blockIdx = 0; blockIdx < content.length; blockIdx++) {
+      const block = content[blockIdx];
+      if (isMedia(block)) {
+        const size = getMediaBase64Size(block);
+        if (size > 0) {
+          positions.push({ msgIdx, blockIdx, nestedIdx: -1, size });
+          totalSize += size;
+        }
+      }
+      if (isToolResult(block) && Array.isArray(block.content)) {
+        for (
+          let nestedIdx = 0;
+          nestedIdx < block.content.length;
+          nestedIdx++
+        ) {
+          const nested = block.content[nestedIdx];
+          if (isMedia(nested)) {
+            const size = getMediaBase64Size(nested);
+            if (size > 0) {
+              positions.push({ msgIdx, blockIdx, nestedIdx, size });
+              totalSize += size;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (totalSize <= budgetBytes) return messages;
+
+  // Pass 2: mark oldest positions for removal until within budget
+  const toRemove = new Set<MediaPosition>();
+  for (const pos of positions) {
+    if (totalSize <= budgetBytes) break;
+    toRemove.add(pos);
+    totalSize -= pos.size;
+  }
+
+  // Pass 3: rebuild messages, replacing removed media with text placeholders
+  return messages.map((msg, msgIdx) => {
+    const content = msg.message.content;
+    if (!Array.isArray(content)) return msg;
+
+    let changed = false;
+    const newContent = content.map((block, blockIdx) => {
+      // Check top-level media
+      if (isMedia(block)) {
+        for (const pos of toRemove) {
+          if (
+            pos.msgIdx === msgIdx &&
+            pos.blockIdx === blockIdx &&
+            pos.nestedIdx === -1
+          ) {
+            changed = true;
+            return {
+              type: "text" as const,
+              text: "[media removed: conversation media budget exceeded]",
+            };
+          }
+        }
+        return block;
+      }
+
+      // Check nested media inside tool_results
+      if (isToolResult(block) && Array.isArray(block.content)) {
+        let nestedChanged = false;
+        const newNested = block.content.map((nested, nestedIdx) => {
+          if (isMedia(nested)) {
+            for (const pos of toRemove) {
+              if (
+                pos.msgIdx === msgIdx &&
+                pos.blockIdx === blockIdx &&
+                pos.nestedIdx === nestedIdx
+              ) {
+                nestedChanged = true;
+                return {
+                  type: "text" as const,
+                  text: "[media removed: conversation media budget exceeded]",
+                };
+              }
+            }
+          }
+          return nested;
+        });
+        if (nestedChanged) {
+          changed = true;
+          return { ...block, content: newNested };
+        }
+      }
+
+      return block;
+    });
+
+    return changed
+      ? { ...msg, message: { ...msg.message, content: newContent } }
+      : msg;
+  }) as (UserMessage | AssistantMessage)[];
+}
+
+/**
  * Ensures messages contain at most `limit` media items (images + documents).
  * Strips oldest media first to preserve the most recent.
  */
@@ -1364,6 +1515,14 @@ async function* queryModel(
   messagesForAPI = stripExcessMediaItems(
     messagesForAPI,
     API_MAX_MEDIA_PER_REQUEST,
+  );
+
+  // Shrink total base64 media payload to stay under the API's ~20 MB request
+  // size limit. Images accumulate in conversations (Read tool + image-gen)
+  // and are never evicted by toolResultStorage; this is the safety net.
+  messagesForAPI = shrinkMediaToSizeBudget(
+    messagesForAPI,
+    API_MAX_MEDIA_BYTES_BUDGET,
   );
 
   // Instrumentation: Track message count after normalization

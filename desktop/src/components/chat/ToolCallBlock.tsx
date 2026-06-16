@@ -7,6 +7,7 @@ import { CopyButton } from '../shared/CopyButton'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { InlineImageGallery } from './InlineImageGallery'
+import { ImageGalleryModal } from './ImageGalleryModal'
 import type { AgentTaskNotification } from '../../types/chat'
 import { PlanPreviewCard, extractPlanPreview, isExitPlanModeTool } from './PlanModePreview'
 
@@ -274,6 +275,57 @@ function getVisibleResultText(
   return text
 }
 
+/** Renders extracted image blocks in a grid with click-to-fullscreen gallery. */
+export function ImageBlockGallery({ imageBlocks }: { imageBlocks: ImageBlock[] }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const galleryImages = useMemo(
+    () => imageBlocks.map((img, i) => ({ src: img.src, name: `Image ${i + 1}` })),
+    [imageBlocks],
+  )
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
+        <span className="material-symbols-outlined text-[12px]">image</span>
+        {imageBlocks.length === 1 ? '1 image' : `${imageBlocks.length} images`}
+      </div>
+      <div className={`grid gap-2 ${imageBlocks.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+        {imageBlocks.map((img, i) => (
+          <button
+            key={img.src}
+            type="button"
+            onClick={() => setActiveIndex(i)}
+            className="group/image relative overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-sm transition-all hover:shadow-md hover:border-[var(--color-brand)]/40"
+          >
+            <img
+              src={img.src}
+              alt={`Generated image ${i + 1}`}
+              loading="lazy"
+              className="w-full object-contain"
+              style={{ maxHeight: imageBlocks.length === 1 ? 400 : 240 }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
+              <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">
+                fullscreen
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {activeIndex !== null && activeIndex >= 0 && (
+        <ImageGalleryModal
+          open={activeIndex !== null}
+          images={galleryImages}
+          activeIndex={activeIndex}
+          onClose={() => setActiveIndex(null)}
+          onSelect={setActiveIndex}
+        />
+      )}
+    </div>
+  )
+}
+
 function renderResultOutput(
   result: { content: unknown; isError: boolean },
   text: string,
@@ -283,28 +335,7 @@ function renderResultOutput(
   return (
     <>
       {imageBlocks.length > 0 && (
-        <div className="mt-2 space-y-2">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
-            <span className="material-symbols-outlined text-[12px]">image</span>
-            {imageBlocks.length === 1 ? '1 image' : `${imageBlocks.length} images`}
-          </div>
-          <div className={`grid gap-2 ${imageBlocks.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-            {imageBlocks.map((img, i) => (
-              <div
-                key={i}
-                className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)]"
-              >
-                <img
-                  src={img.src}
-                  alt={`Generated image ${i + 1}`}
-                  loading="lazy"
-                  className="w-full object-contain"
-                  style={{ maxHeight: 400 }}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
+        <ImageBlockGallery imageBlocks={imageBlocks} />
       )}
       <InlineImageGallery text={text} />
       <div className={`overflow-hidden rounded-lg border ${
@@ -571,7 +602,7 @@ function extractTextContent(content: unknown): string | null {
   return null
 }
 
-type ImageBlock = { src: string; mimeType: string }
+export type ImageBlock = { src: string; mimeType: string }
 
 function extractImageBlocks(content: unknown): ImageBlock[] {
   if (!Array.isArray(content)) return []
