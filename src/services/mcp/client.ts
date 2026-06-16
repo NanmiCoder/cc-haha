@@ -2570,13 +2570,46 @@ export async function transformResultContent(
   serverName: string,
 ): Promise<Array<ContentBlockParam>> {
   switch (resultContent.type) {
-    case 'text':
+    case 'text': {
+      // Detect markdown image URLs in text blocks (e.g., from image-gen plugin)
+      // and convert them to Anthropic API's URL image source format. This avoids
+      // accumulating base64 data in conversation history — the API fetches the
+      // image from the URL server-side, keeping the request body small.
+      const mdImageRe = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g
+      const text = resultContent.text
+      const imageUrls: string[] = []
+      let match: RegExpExecArray | null
+      while ((match = mdImageRe.exec(text)) !== null) {
+        imageUrls.push(match[1]!)
+      }
+
+      if (imageUrls.length > 0) {
+        const blocks: Array<ContentBlockParam> = []
+        // Add image blocks using URL source (no base64 accumulation)
+        for (const url of imageUrls) {
+          blocks.push({
+            type: 'image',
+            source: {
+              type: 'url',
+              url,
+            },
+          } as ContentBlockParam)
+        }
+        // Keep the text (contains metadata like provider/model info)
+        const remainingText = text.replace(mdImageRe, '').trim()
+        if (remainingText) {
+          blocks.push({ type: 'text', text: remainingText })
+        }
+        return blocks
+      }
+
       return [
         {
           type: 'text',
-          text: resultContent.text,
+          text,
         },
       ]
+    }
     case 'audio': {
       const audioData = resultContent as {
         type: 'audio'

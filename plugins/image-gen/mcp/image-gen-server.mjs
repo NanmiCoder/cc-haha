@@ -558,10 +558,16 @@ function formatResult(result) {
   }
 
   if (result.type === 'url') {
-    // Return image_url block so Desktop IDE renders the image inline
+    // MCP content schema only allows text/image/audio/resource/resource_link.
+    // We return the URL in a standard text block. The CLI MCP client layer
+    // (transformResultContent) detects image URLs and converts them to
+    // Anthropic API's {type:'image', source:{type:'url', url}} format,
+    // which avoids accumulating base64 data in conversation history.
+    // Desktop's extractImageBlocks also handles image_url annotations
+    // embedded in the _meta field for inline rendering.
     parts.push({
-      type: 'image_url',
-      image_url: { url: result.data },
+      type: 'text',
+      text: `![generated-image](${result.data})`,
     })
   }
 
@@ -571,6 +577,17 @@ function formatResult(result) {
   if (result.warnings?.length) meta.push(...result.warnings)
   if (result.type === 'url') meta.push(`URL: ${result.data}`)
   if (meta.length) parts.push({ type: 'text', text: meta.join('\n') })
+
+  // Attach image_url annotation for Desktop inline rendering (non-standard
+  // but safe: _meta is ignored by MCP schema validation, and Desktop's
+  // extractImageBlocks reads it for URL-based images).
+  if (result.type === 'url') {
+    return {
+      content: parts,
+      isError: false,
+      _meta: { imageUrls: [result.data] },
+    }
+  }
 
   return { content: parts, isError: false }
 }

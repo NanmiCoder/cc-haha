@@ -576,6 +576,7 @@ type ImageBlock = { src: string; mimeType: string }
 function extractImageBlocks(content: unknown): ImageBlock[] {
   if (!Array.isArray(content)) return []
   const images: ImageBlock[] = []
+  const seen = new Set<string>()
   for (const block of content) {
     if (!block || typeof block !== 'object' || !('type' in block)) continue
     const typed = block as Record<string, unknown>
@@ -587,7 +588,16 @@ function extractImageBlocks(content: unknown): ImageBlock[] {
     if (typed.type === 'image_url' && typed.image_url && typeof typed.image_url === 'object') {
       const url = (typed.image_url as Record<string, unknown>).url
       if (typeof url === 'string' && /^(https?:|data:)/i.test(url)) {
-        images.push({ src: url, mimeType: 'image/png' })
+        if (!seen.has(url)) { seen.add(url); images.push({ src: url, mimeType: 'image/png' }) }
+      }
+    }
+    // Extract markdown image syntax ![...](url) from text blocks
+    if (typed.type === 'text' && typeof typed.text === 'string') {
+      const mdImageRe = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g
+      let match: RegExpExecArray | null
+      while ((match = mdImageRe.exec(typed.text)) !== null) {
+        const url = match[1]!
+        if (!seen.has(url)) { seen.add(url); images.push({ src: url, mimeType: 'image/png' }) }
       }
     }
   }
