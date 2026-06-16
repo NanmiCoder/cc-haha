@@ -186,6 +186,14 @@ export const PLUGIN_CATALOG: CatalogPlugin[] = [
       'Multi-platform RE toolkit. Static (Ghidra / radare2 / JADX / apktool) + dynamic (Frida instrumentation, GDB cross-arch single-step, LLDB Apple platforms) for binaries (PE/ELF/Mach-O), Android (APK), iOS, embedded firmware, and CTF.',
     category: 'productivity',
   },
+  {
+    id: 'spark2-gamedev',
+    marketplace: 'cc-haha-builtin',
+    displayName: 'Spark2 Game Dev',
+    description:
+      '星火 2.0 (WasiCore) 游戏开发工具包。SCE 编辑器 MCP 桥接（数据/触发器/调试）+ 11 个开发技能（3D 单位战斗、Canvas 2D、联机同步、UI 布局、服务端物理、运行时粒子）。',
+    category: 'productivity',
+  },
 ]
 
 /**

@@ -48,7 +48,7 @@ describe('PLUGIN_CATALOG shape', () => {
     }
   })
 
-  it('image-gen and reverse-engineering are present under cc-haha-builtin', () => {
+  it('image-gen, reverse-engineering, and spark2-gamedev are present under cc-haha-builtin', () => {
     const imageGen = PLUGIN_CATALOG.find(
       (e) => e.id === 'image-gen' && e.marketplace === 'cc-haha-builtin',
     )
@@ -60,6 +60,12 @@ describe('PLUGIN_CATALOG shape', () => {
     )
     expect(re).toBeDefined()
     expect(re?.displayName).toBe('Reverse Engineering')
+
+    const spark2 = PLUGIN_CATALOG.find(
+      (e) => e.id === 'spark2-gamedev' && e.marketplace === 'cc-haha-builtin',
+    )
+    expect(spark2).toBeDefined()
+    expect(spark2?.displayName).toBe('Spark2 Game Dev')
   })
 })
 
