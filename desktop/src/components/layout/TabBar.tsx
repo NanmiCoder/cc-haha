@@ -551,6 +551,18 @@ const TabItem = forwardRef<HTMLDivElement, {
   onContextMenu: (e: React.MouseEvent) => void
   onMouseDown: (event: React.MouseEvent) => void
 }>(({ tab, isRunning, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
+  const t = useTranslation()
+  // Special tabs (settings/scheduled/traces) carry a stored title from when
+  // they were first opened; that title is frozen at the locale active at the
+  // time and persists across locale switches via localStorage. Always derive
+  // the label from i18n at render time so the current locale wins.
+  const displayTitle = tab.type === 'settings'
+    ? t('sidebar.settings')
+    : tab.type === 'scheduled'
+      ? t('sidebar.scheduled')
+      : tab.type === 'traces'
+        ? t('trace.list.title')
+        : (tab.title || 'Untitled')
   return (
     <div
       ref={ref}
@@ -596,12 +608,12 @@ const TabItem = forwardRef<HTMLDivElement, {
       )}
 
       <span className={`flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
-        {tab.title || 'Untitled'}
+        {displayTitle}
       </span>
 
       <button
         type="button"
-        aria-label={`Close ${tab.title || 'Untitled'}`}
+        aria-label={`Close ${displayTitle}`}
         onMouseDown={(e) => { e.stopPropagation() }}
         onClick={(e) => { e.stopPropagation(); onClose() }}
         className="flex-shrink-0 -mr-0.5 inline-flex h-3 w-3 items-center justify-center bg-transparent p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-[opacity,color] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none"
