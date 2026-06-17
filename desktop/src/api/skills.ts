@@ -27,4 +27,16 @@ export const skillsApi = {
       `/api/skills/install`,
       { name },
     ),
+
+  getActiveSkills: (scope: 'global' | 'project' | 'merged' = 'merged', cwd?: string) => {
+    const query = new URLSearchParams({ scope })
+    if (cwd) query.set('cwd', cwd)
+    return api.get<{ activeSkills: string[] }>(`/api/skills/active?${query.toString()}`)
+  },
+
+  setActiveSkills: (skills: string[], scope: 'global' | 'project', cwd?: string) =>
+    api.post<{ ok: true; scope: string; activeSkills: string[] }>(
+      `/api/skills/active`,
+      { scope, skills, cwd },
+    ),
 }

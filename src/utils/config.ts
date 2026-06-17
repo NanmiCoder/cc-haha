@@ -122,6 +122,10 @@ export type ProjectConfig = {
   disabledMcpServers?: string[]
   // Opt-in list for built-in MCP servers that default to disabled
   enabledMcpServers?: string[]
+  // Skills that are always injected into the system prompt for this project.
+  // Values are skill install-directory names. Merged with global activeSkills
+  // (duplicates are deduplicated — project entries take precedence).
+  activeSkills?: string[]
   // Worktree session management
   activeWorktreeSession?: {
     originalCwd: string
@@ -582,6 +586,11 @@ export type GlobalConfig = {
   // preference persists across all projects. Servers themselves are still
   // disabled via the per-project `disabledMcpServers` (see MCPProjectConfig).
   disabledMcpTools?: Record<string, string[]>
+
+  // Skills that are always injected into the system prompt at conversation
+  // start. Values are skill install-directory names (e.g. 'karpathy-guidelines').
+  // Global active skills apply to all projects unless overridden at project level.
+  activeSkills?: string[]
 }
 
 /**

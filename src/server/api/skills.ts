@@ -22,6 +22,8 @@ import {
   getCatalogSkill,
   type CatalogSkillMeta,
 } from '../../skills/skillCatalog.js'
+import { getActiveSkillNames } from '../../skills/activeSkills.js'
+import { getGlobalConfig, getCurrentProjectConfig, saveCurrentProjectConfig, saveGlobalConfig } from '../../utils/config.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -452,6 +454,8 @@ export async function handleSkillsApi(
           return await getSkillDetail(url)
         case 'catalog':
           return await getCatalog()
+        case 'active':
+          return getActiveSkills(url)
         default:
           throw ApiError.notFound(`Unknown skills endpoint: ${sub}`)
       }
@@ -461,6 +465,8 @@ export async function handleSkillsApi(
       switch (sub) {
         case 'install':
           return await installCatalogSkill(req)
+        case 'active':
+          return await setActiveSkills(req)
         default:
           throw ApiError.notFound(`Unknown skills endpoint: ${sub}`)
       }
@@ -600,4 +606,52 @@ async function installCatalogSkill(req: Request): Promise<Response> {
   await writeCatalogSkillFiles(targetDir, entry.files)
 
   return Response.json({ ok: true, installed: true })
+}
+
+// ─── Active Skills Handlers ─────────────────────────────────────────────────
+
+function getActiveSkills(url: URL): Response {
+  const scope = url.searchParams.get('scope') ?? 'merged'
+
+  if (scope === 'global') {
+    const config = getGlobalConfig()
+    return Response.json({ activeSkills: config.activeSkills ?? [] })
+  }
+
+  if (scope === 'project') {
+    const cwd = url.searchParams.get('cwd') ?? undefined
+    const config = getCurrentProjectConfig(cwd)
+    return Response.json({ activeSkills: config.activeSkills ?? [] })
+  }
+
+  // Default: merged (deduplicated)
+  return Response.json({ activeSkills: getActiveSkillNames() })
+}
+
+async function setActiveSkills(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    throw ApiError.badRequest('Invalid JSON body')
+  }
+
+  const { scope, skills } = body as { scope?: string; skills?: unknown }
+
+  if (!Array.isArray(skills) || !skills.every(s => typeof s === 'string')) {
+    throw ApiError.badRequest('skills must be an array of strings')
+  }
+
+  if (scope === 'project') {
+    const cwd = (body as { cwd?: string }).cwd
+    saveCurrentProjectConfig(
+      current => ({ ...current, activeSkills: skills as string[] }),
+      cwd,
+    )
+    return Response.json({ ok: true, scope: 'project', activeSkills: skills })
+  }
+
+  // Default: global scope
+  saveGlobalConfig(current => ({ ...current, activeSkills: skills as string[] }))
+  return Response.json({ ok: true, scope: 'global', activeSkills: skills })
 }
