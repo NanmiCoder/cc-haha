@@ -30,6 +30,7 @@ export function ProjectRulesSettings() {
   const t = useTranslation()
   const [data, setData] = useState<ProjectRulesResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const sessions = useSessionStore((s) => s.sessions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
@@ -41,6 +42,12 @@ export function ProjectRulesSettings() {
       const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
       const res = await api.get<ProjectRulesResponse>(`/api/project-rules${query}`)
       setData(res)
+      // Default-select the current project (or first project) once loaded.
+      setSelectedProjectId((prev) => {
+        if (prev && res.projects.some((p) => p.id === prev)) return prev
+        const current = res.projects.find((p) => p.isCurrent)
+        return current?.id ?? res.projects[0]?.id ?? null
+      })
     } catch {
       setData(null)
     } finally {
@@ -56,7 +63,7 @@ export function ProjectRulesSettings() {
     try {
       await getDesktopHost().shell.openPath(filePath)
     } catch {
-      // fallback: ignore
+      // ignore
     }
   }
 
@@ -79,6 +86,8 @@ export function ProjectRulesSettings() {
 
   if (!data) return null
 
+  const selectedProject = data.projects.find((p) => p.id === selectedProjectId) ?? null
+
   return (
     <div className="space-y-6">
       <div>
@@ -86,7 +95,7 @@ export function ProjectRulesSettings() {
         <p className="text-sm text-[var(--color-text-muted)] mt-1">{t('settings.projectRules.description')}</p>
       </div>
 
-      {/* User-level rules (global) */}
+      {/* User-level rules (always shown, apply globally) */}
       <Section title={t('settings.projectRules.userFile')} description={t('settings.projectRules.userFileDesc')}>
         {data.userFiles.map((file) => (
           <FileRow key={file.path} file={file} onOpen={handleOpen} onCreate={() => {
@@ -94,71 +103,66 @@ export function ProjectRulesSettings() {
             else handleCreate('user')
           }} t={t} />
         ))}
-        {data.userFiles.every(f => !f.exists) && (
-          <div className="flex gap-2 mt-2">
-            <Button size="sm" variant="secondary" onClick={() => handleCreate('user')}>
-              <span className="material-symbols-outlined text-base mr-1">add</span>
-              ~/.claude/CLAUDE.md
-            </Button>
-          </div>
-        )}
       </Section>
 
-      {/* Per-project rules */}
-      {data.projects.map((project) => (
-        <ProjectSection
-          key={project.id}
-          project={project}
-          onOpen={handleOpen}
-          onCreate={handleCreate}
-          t={t}
-        />
-      ))}
+      {/* Project selector + dynamic project rules */}
+      <div className="border border-[var(--color-border)] rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h3 className="text-sm font-medium text-[var(--color-text)]">{t('settings.projectRules.projectFile')}</h3>
+          {data.projects.length > 0 && (
+            <select
+              value={selectedProjectId ?? ''}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 max-w-[60%] text-[var(--color-text)]"
+            >
+              {data.projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.isCurrent ? '★ ' : ''}{shortenPath(p.label)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {selectedProject ? (
+          <div className="space-y-1">
+            <p className="text-xs text-[var(--color-text-muted)] font-mono truncate" title={selectedProject.label}>
+              {selectedProject.label}
+            </p>
+            {selectedProject.files.map((file) => (
+              <FileRow
+                key={file.path}
+                file={file}
+                onOpen={handleOpen}
+                onCreate={() => {
+                  const projectCwd = selectedProject.projectPath || undefined
+                  if (file.label === 'CLAUDE.md') handleCreate('project-root', projectCwd)
+                  else if (file.label === '.claude/CLAUDE.md') handleCreate('project', projectCwd)
+                  else if (file.label === 'CLAUDE.local.md') handleCreate('local', projectCwd)
+                }}
+                t={t}
+              />
+            ))}
+            <div className="flex gap-2 mt-2">
+              <Button size="sm" variant="secondary" onClick={() => handleCreate('project-rules', selectedProject.projectPath || undefined, 'new-rule.md')}>
+                <span className="material-symbols-outlined text-base mr-1">add</span>
+                .claude/rules/
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-[var(--color-text-muted)]">{t('settings.projectRules.notFound')}</p>
+        )}
+      </div>
     </div>
   )
 }
 
-function ProjectSection({ project, onOpen, onCreate, t }: {
-  project: ProjectEntry
-  onOpen: (path: string) => void
-  onCreate: (scope: string, cwd?: string, filename?: string) => void
-  t: (key: TranslationKey, params?: Record<string, string | number>) => string
-}) {
-  const projectCwd = project.projectPath || undefined
-  const hasExistingFiles = project.files.some(f => f.exists)
-  const title = project.isCurrent
-    ? `${t('settings.projectRules.projectFile')} (current)`
-    : t('settings.projectRules.projectFile')
-
-  return (
-    <Section
-      title={title}
-      description={project.label}
-    >
-      {project.files.filter(f => f.exists).map((file) => (
-        <FileRow key={file.path} file={file} onOpen={onOpen} onCreate={() => {}} t={t} />
-      ))}
-      {project.files.filter(f => !f.exists).map((file) => (
-        <FileRow key={file.path} file={file} onOpen={onOpen} onCreate={() => {
-          if (file.label === 'CLAUDE.md') onCreate('project-root', projectCwd)
-          else if (file.label === '.claude/CLAUDE.md') onCreate('project', projectCwd)
-          else if (file.label === 'CLAUDE.local.md') onCreate('local', projectCwd)
-        }} t={t} />
-      ))}
-      {!hasExistingFiles && (
-        <div className="flex gap-2 mt-2">
-          <Button size="sm" variant="secondary" onClick={() => onCreate('project-root', projectCwd)}>
-            <span className="material-symbols-outlined text-base mr-1">add</span>
-            CLAUDE.md
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => onCreate('project-rules', projectCwd, 'new-rule.md')}>
-            <span className="material-symbols-outlined text-base mr-1">add</span>
-            .claude/rules/
-          </Button>
-        </div>
-      )}
-    </Section>
-  )
+function shortenPath(p: string): string {
+  // Show last 2 segments for readability, full path is in title/tooltip below.
+  const parts = p.split(/[/\\]/).filter(Boolean)
+  if (parts.length <= 2) return p
+  return '…' + (p.includes('\\') ? '\\' : '/') + parts.slice(-2).join(p.includes('\\') ? '\\' : '/')
 }
 
 function Section({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {

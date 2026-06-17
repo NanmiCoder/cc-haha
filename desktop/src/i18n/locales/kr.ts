@@ -841,6 +841,8 @@ export const kr: Record<TranslationKey, string> = {
   'settings.skills.activation.globalDesc': '모든 프로젝트의 대화에서 자동 로드',
   'settings.skills.activation.project': '프로젝트',
   'settings.skills.activation.projectDesc': '현재 프로젝트의 대화에서만 자동 로드',
+  'settings.skills.activation.appliesTo': '적용 대상:',
+  'settings.skills.activation.active': '활성',
 
   // Settings > Memory
   'settings.tab.memory': '메모리',

@@ -841,6 +841,8 @@ export const zh: Record<TranslationKey, string> = {
   'settings.skills.activation.globalDesc': '所有專案的每次對話都自動載入',
   'settings.skills.activation.project': '專案',
   'settings.skills.activation.projectDesc': '僅當前專案的對話自動載入',
+  'settings.skills.activation.appliesTo': '套用到：',
+  'settings.skills.activation.active': '已啟用',
 
   // Settings > Memory
   'settings.tab.memory': '記憶',

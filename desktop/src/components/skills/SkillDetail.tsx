@@ -6,6 +6,7 @@ import { CodeViewer } from '../chat/CodeViewer'
 import type { FileTreeNode, SkillFrontmatter } from '../../types/skill'
 import { useUIStore } from '../../stores/uiStore'
 import { skillsApi } from '../../api/skills'
+import { api } from '../../api/client'
 import { useSessionStore } from '../../stores/sessionStore'
 
 const META_PRIORITY = [
@@ -244,20 +245,50 @@ export function SkillDetail() {
 
 type ActivationScope = 'off' | 'global' | 'project'
 
+type ProjectChoice = {
+  id: string
+  label: string
+  projectPath: string | null
+  isCurrent: boolean
+}
+
 function SkillActivationScope({ skillName }: { skillName: string }) {
   const t = useTranslation()
   const [globalSkills, setGlobalSkills] = useState<string[]>([])
   const [projectSkills, setProjectSkills] = useState<string[]>([])
+  const [projects, setProjects] = useState<ProjectChoice[]>([])
+  const [selectedProjectPath, setSelectedProjectPath] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const sessions = useSessionStore((s) => s.sessions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const cwd = activeSession?.workDir || activeSession?.projectPath || undefined
 
+  // Load the project list (reuse the project-rules endpoint) so the user can
+  // pick WHICH project the skill applies to under 'project' scope.
+  useEffect(() => {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+    api.get<{ projects: ProjectChoice[] }>(`/api/project-rules${query}`)
+      .then((res) => {
+        const resolved = res.projects.filter((p) => p.projectPath)
+        setProjects(resolved)
+        setSelectedProjectPath((prev) => {
+          if (prev && resolved.some((p) => p.projectPath === prev)) return prev
+          const current = resolved.find((p) => p.isCurrent)
+          return current?.projectPath ?? resolved[0]?.projectPath ?? undefined
+        })
+      })
+      .catch(() => {})
+  }, [cwd])
+
+  // Load activation state for global + the currently selected project.
   useEffect(() => {
     skillsApi.getActiveSkills('global').then(res => setGlobalSkills(res.activeSkills)).catch(() => {})
-    skillsApi.getActiveSkills('project', cwd).then(res => setProjectSkills(res.activeSkills)).catch(() => {})
-  }, [cwd])
+  }, [])
+
+  useEffect(() => {
+    skillsApi.getActiveSkills('project', selectedProjectPath).then(res => setProjectSkills(res.activeSkills)).catch(() => {})
+  }, [selectedProjectPath])
 
   const currentScope: ActivationScope =
     projectSkills.includes(skillName) ? 'project'
@@ -267,7 +298,6 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
   const handleChange = async (scope: ActivationScope) => {
     setSaving(true)
     try {
-      // Remove from both first
       const newGlobal = globalSkills.filter(s => s !== skillName)
       const newProject = projectSkills.filter(s => s !== skillName)
 
@@ -279,7 +309,7 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
 
       await Promise.all([
         skillsApi.setActiveSkills(newGlobal, 'global'),
-        skillsApi.setActiveSkills(newProject, 'project', cwd),
+        skillsApi.setActiveSkills(newProject, 'project', selectedProjectPath),
       ])
       setGlobalSkills(newGlobal)
       setProjectSkills(newProject)
@@ -287,6 +317,23 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
       // ignore
     } finally {
       setSaving(false)
+    }
+  }
+
+  // When the user switches the project dropdown, re-evaluate whether the skill
+  // should be re-applied to the newly selected project (if scope was 'project').
+  const handleProjectSwitch = async (projectPath: string) => {
+    const wasProjectScoped = currentScope === 'project'
+    setSelectedProjectPath(projectPath)
+    // Fetch the new project's active skills to reflect its status immediately.
+    try {
+      const res = await skillsApi.getActiveSkills('project', projectPath)
+      setProjectSkills(res.activeSkills)
+      // If the skill was project-scoped on the previous project, do NOT auto-move
+      // it — let the user explicitly click 'project' again for the new one.
+      void wasProjectScoped
+    } catch {
+      // ignore
     }
   }
 
@@ -318,21 +365,54 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
             key={opt.value}
             onClick={() => handleChange(opt.value)}
             disabled={saving}
-            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
+            className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm min-w-[88px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
               currentScope === opt.value
                 ? 'border-[var(--color-brand)] bg-[var(--color-primary-fixed)] text-[var(--color-text-primary)] font-medium'
                 : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
             } disabled:opacity-50`}
             title={opt.desc}
           >
-            <span className={`w-2 h-2 rounded-full ${currentScope === opt.value ? 'bg-[var(--color-brand)]' : 'bg-[var(--color-text-muted)]'}`} />
+            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${currentScope === opt.value ? 'bg-[var(--color-brand)]' : 'bg-[var(--color-text-muted)]'}`} />
             {opt.label}
           </button>
         ))}
       </div>
+
+      {/* Project selector — only relevant when applying at 'project' scope. */}
+      {currentScope === 'project' && projects.length > 0 && (
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-[var(--color-text-tertiary)]">
+            {t('settings.skills.activation.appliesTo')}
+          </span>
+          <select
+            value={selectedProjectPath ?? ''}
+            onChange={(e) => handleProjectSwitch(e.target.value)}
+            disabled={saving}
+            className="text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 max-w-[70%] text-[var(--color-text-primary)]"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.projectPath ?? ''}>
+                {p.isCurrent ? '★ ' : ''}{shortenProjectPath(p.label)}
+              </option>
+            ))}
+          </select>
+          <span className="inline-flex items-center gap-1 text-xs text-[var(--color-brand)]">
+            <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+            {t('settings.skills.activation.active')}
+          </span>
+        </div>
+      )}
     </section>
   )
 }
+
+function shortenProjectPath(p: string): string {
+  const parts = p.split(/[/\\]/).filter(Boolean)
+  if (parts.length <= 2) return p
+  const sep = p.includes('\\') ? '\\' : '/'
+  return '…' + sep + parts.slice(-2).join(sep)
+}
+
 
 function TreeView({
   nodes,

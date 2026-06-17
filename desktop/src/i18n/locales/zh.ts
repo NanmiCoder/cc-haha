@@ -843,6 +843,8 @@ export const zh: Record<TranslationKey, string> = {
   'settings.skills.activation.globalDesc': '所有项目的每次对话都自动加载',
   'settings.skills.activation.project': '项目',
   'settings.skills.activation.projectDesc': '仅当前项目的对话自动加载',
+  'settings.skills.activation.appliesTo': '应用到：',
+  'settings.skills.activation.active': '已激活',
 
   // Settings > Memory
   'settings.tab.memory': '记忆',

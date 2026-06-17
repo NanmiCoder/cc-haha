@@ -138,6 +138,34 @@ describe('project-rules API', () => {
     expect(res.status).toBe(400)
   })
 
+  it('POST /api/project-rules/create rejects path traversal in filename', async () => {
+    const url = new URL('http://localhost/api/project-rules/create')
+    const res = await handleProjectRulesApi(
+      new Request(url, {
+        method: 'POST',
+        body: JSON.stringify({ scope: 'project-root', cwd: MOCK_PROJECT, filename: '../../../escaped.md' }),
+      }),
+      url,
+      ['api', 'project-rules', 'create'],
+    )
+    expect(res.status).toBe(400)
+    const data = await res.json() as { error: string }
+    expect(data.error).toBe('Invalid filename')
+  })
+
+  it('POST /api/project-rules/create rejects absolute filename', async () => {
+    const url = new URL('http://localhost/api/project-rules/create')
+    const res = await handleProjectRulesApi(
+      new Request(url, {
+        method: 'POST',
+        body: JSON.stringify({ scope: 'project-rules', cwd: MOCK_PROJECT, filename: path.join(MOCK_CLAUDE_HOME, 'evil.md') }),
+      }),
+      url,
+      ['api', 'project-rules', 'create'],
+    )
+    expect(res.status).toBe(400)
+  })
+
   it('POST /api/project-rules/create does not overwrite existing file', async () => {
     const userPath = path.join(MOCK_CLAUDE_HOME, 'CLAUDE.md')
     mockFiles.add(userPath)
