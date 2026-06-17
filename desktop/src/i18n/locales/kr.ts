@@ -463,6 +463,8 @@ export const kr: Record<TranslationKey, string> = {
   'settings.providers.toolSearchEnabled': 'Tool Search 사용',
   'settings.providers.toolSearchDesc': 'MCP와 지연 도구를 필요할 때 로드해 초기 도구 schema 토큰을 줄입니다. 약한 모델이나 tool_reference를 거부하는 공급자에서는 끌 수 있습니다.',
   'settings.providers.toolSearchUnsupported': '여기서는 Anthropic Messages 형식 공급자만 Tool Search를 지원합니다. OpenAI 프록시 형식은 전체 도구 schema를 유지합니다.',
+  'settings.providers.availableModels': '사용 가능한 모델 — 클릭하여 선택',
+  'settings.providers.clickToSelectModel': '클릭하여 이 모델을 주 모델로 사용',
 
   // Settings > Permissions
   'settings.permissions.title': '권한 모드',

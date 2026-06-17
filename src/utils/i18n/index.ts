@@ -54,6 +54,8 @@ export function setLocale(l: Locale | string): void {
   if (lower === 'zh-tw' || lower === 'zh_hant') currentLocale = 'zh-TW'
   else if (lower.startsWith('zh')) currentLocale = 'zh-CN'
   else currentLocale = 'en'
+  // Sync to env so child processes and the CLI startup path pick it up
+  process.env.CC_HAHA_LOCALE = currentLocale
 }
 
 export function getLocale(): Locale {

@@ -322,8 +322,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   setLocale: (locale) => {
+    const prev = get().locale
     set({ locale })
     try { localStorage.setItem(LOCALE_STORAGE_KEY, locale) } catch { /* noop */ }
+    settingsApi.updateUser({ locale }).catch(() => {
+      set({ locale: prev })
+    })
   },
 
   setTheme: async (theme) => {

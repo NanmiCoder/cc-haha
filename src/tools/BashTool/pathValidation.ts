@@ -9,7 +9,8 @@ import {
 } from '../../utils/bash/commands.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
 import { getDirectoryForPath } from '../../utils/path.js'
-import { allWorkingDirectories } from '../../utils/permissions/filesystem.js'
+import { getOriginalCwd } from '../../bootstrap/state.js'
+import { allWorkingDirectories, checkSymlinkPathSafety } from '../../utils/permissions/filesystem.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js'
 import { createReadRuleSuggestion } from '../../utils/permissions/PermissionUpdate.js'
 import type { PermissionUpdate } from '../../utils/permissions/PermissionUpdateSchema.js'
@@ -691,6 +692,23 @@ function validateCommandPaths(
         decisionReason,
       }
     }
+
+    // Symlink TOCTOU check for write/create operations:
+    // Block commands where the resolved path crosses a symlink outside the session.
+    // Read-only operations (ls, cat, grep, etc.) are exempt since they don't modify files.
+    if (operationType === 'write' || operationType === 'create') {
+      const symlinkResult = checkSymlinkPathSafety(resolvedPath, [getOriginalCwd()])
+      if (!symlinkResult.safe) {
+        return {
+          behavior: 'deny',
+          message: `'${command}' to '${resolvedPath}' is blocked: contains a symlink pointing outside the working directory.`,
+          decisionReason: {
+            type: 'safetyCheck',
+            reason: symlinkResult.reason ?? 'Symlink points outside the session working directory',
+          },
+        }
+      }
+    }
   }
 
   // All paths are valid - return passthrough
@@ -992,6 +1010,21 @@ function validateOutputRedirections(
             destination: 'session',
           },
         ],
+      }
+    }
+
+    // Symlink TOCTOU check: ensure the resolved path doesn't cross a symlink
+    // that points outside the session working directory.
+    // This is defense-in-depth on top of the normal permission flow.
+    const symlinkResult = checkSymlinkPathSafety(resolvedPath, [getOriginalCwd()])
+    if (!symlinkResult.safe) {
+      return {
+        behavior: 'deny',
+        message: `Output redirection to '${resolvedPath}' is blocked: contains a symlink pointing outside the working directory.`,
+        decisionReason: {
+          type: 'safetyCheck',
+          reason: symlinkResult.reason ?? 'Symlink points outside the session working directory',
+        },
       }
     }
   }

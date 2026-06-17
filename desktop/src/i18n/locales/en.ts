@@ -461,6 +461,8 @@ export const en = {
   'settings.providers.toolSearchEnabled': 'Enable Tool Search',
   'settings.providers.toolSearchDesc': 'Load MCP and deferred tools on demand to reduce initial tool schema tokens. Disable it for weak models or providers that reject tool references.',
   'settings.providers.toolSearchUnsupported': 'Only Anthropic Messages providers support Tool Search here. OpenAI proxy formats keep full tool schemas available.',
+  'settings.providers.availableModels': 'Available models — click to select',
+  'settings.providers.clickToSelectModel': 'Click to use this model as the main model',
 
   // Settings > Permissions
   'settings.permissions.title': 'Permission Mode',
