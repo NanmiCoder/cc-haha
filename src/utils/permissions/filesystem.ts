@@ -4,6 +4,7 @@ import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import { homedir, tmpdir } from 'os'
 import { join, normalize, posix, sep } from 'path'
+import * as nodePath from 'path'
 import { hasAutoMemPathOverride, isAutoMemPath } from 'src/memdir/paths.js'
 import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
@@ -631,6 +632,98 @@ function hasSuspiciousWindowsPathPattern(
  * @param path The path to check for safety
  * @returns Object with safe=false and message if unsafe, or { safe: true } if all checks pass
  */
+/**
+ * Symlink TOCTOU / path-escape check for paths being written to.
+ *
+ * Performs two realpath + ancestor checks:
+ *  1. lstat → follow readlink → ensure target stays inside allowDirs.
+ *  2. If the path exists, realpathSync resolves the final canonical path;
+ *     compare against allowDirs again.
+ *
+ * Returns `{ safe: true }` when neither the original path nor any
+ * intermediate symlink resolves outside the allow-list. The check is
+ * strict — any unresolved or network-path segment fails closed.
+ *
+ * This is defense-in-depth — filesystem permissions are checked via the
+ * normal rule-matching flow elsewhere. This helper concentrates the
+ * TOCTOU-style symlink walk in one place.
+ */
+export function checkSymlinkPathSafety(
+  inputPath: string,
+  allowDirs: string[] = [getOriginalCwd()],
+): { safe: boolean; reason?: string } {
+  if (!nodePath.isAbsolute(inputPath)) {
+    return { safe: false, reason: 'fs_symlink_absolute_required' }
+  }
+
+  const fsImpl = getFsImplementation()
+  const normalizedAllow = allowDirs
+    .map((d) => nodePath.normalize(d) + nodePath.sep)
+
+  const checkInside = (p: string): boolean => {
+    let norm = nodePath.normalize(p)
+    if (!norm.endsWith(nodePath.sep)) norm = norm + nodePath.sep
+    return normalizedAllow.some((a) => norm === a || norm.startsWith(a))
+  }
+
+  // 1) Walk the chain manually so we can see every symlink's target
+  //    independently of the final path resolution (closes one classic
+  //    TOCTOU window between open() and resolve()).
+  const maxDepth = 40
+  let current = inputPath
+  const visited = new Set<string>()
+  for (let depth = 0; depth < maxDepth; depth++) {
+    if (visited.has(current)) break
+    visited.add(current)
+    try {
+      const st = fsImpl.lstatSync(current)
+      if (st.isSymbolicLink()) {
+        const target = fsImpl.readlinkSync(current)
+        const absolute = nodePath.isAbsolute(target)
+          ? target
+          : nodePath.resolve(nodePath.dirname(current), target)
+        if (!checkInside(absolute)) {
+          return { safe: false, reason: 'fs_symlink_unsafe' }
+        }
+        current = absolute
+        continue
+      }
+      // Not a symlink — check containment and stop.
+      if (!checkInside(current)) {
+        return { safe: false, reason: 'fs_symlink_unsafe' }
+      }
+      break
+    } catch {
+      // Path doesn't exist (or is ELOOP) — parent containment check below.
+      break
+    }
+  }
+
+  // 2) Final canonical resolution to catch e.g. /tmp -> /private/tmp
+  //    style mounts on macOS (already handled by getPathsForPermissionCheck
+  //    for normal permission flow; this keeps the helper self-contained).
+  try {
+    const resolved = fsImpl.realpathSync(inputPath)
+    if (!checkInside(resolved)) {
+      return { safe: false, reason: 'fs_symlink_unsafe' }
+    }
+  } catch {
+    // File doesn't exist yet — that's OK; creation happens inside allowDirs
+    // and we verified the closest existing ancestor above.
+  }
+
+  return { safe: true }
+}
+
+/**
+ * Checks whether the path or any intermediate symlink resolves outside the
+ * session working directory. Intended for high-level callers that only want
+ * a boolean + warning message (e.g. a logging/tracing hook, not policy).
+ */
+export function pathCrossesSymlinkOutsideWorkingDir(inputPath: string): boolean {
+  return !checkSymlinkPathSafety(inputPath).safe
+}
+
 export function checkPathSafetyForAutoEdit(
   path: string,
   precomputedPathsToCheck?: readonly string[],
@@ -641,6 +734,22 @@ export function checkPathSafetyForAutoEdit(
   // Get all paths to check (original + symlink resolved paths)
   const pathsToCheck =
     precomputedPathsToCheck ?? getPathsForPermissionCheck(path)
+
+  // Symlink TOCTOU check — if the path or any intermediate component
+  // is a symlink pointing outside the session working directory, flag it
+  // for manual review. This is defense-in-depth on top of the normal
+  // rule-matching flow; the path resolver above already exposes the
+  // full chain so rule matching also sees real targets.
+  if (!precomputedPathsToCheck) {
+    const symlinkResult = checkSymlinkPathSafety(path, [getOriginalCwd()])
+    if (!symlinkResult.safe) {
+      return {
+        safe: false,
+        message: `Claude requested permissions to write to ${path}, which contains a symlink pointing outside the working directory. Manual approval required.`,
+        classifierApprovable: false,
+      }
+    }
+  }
 
   // Check for suspicious Windows path patterns on all paths
   for (const pathToCheck of pathsToCheck) {

@@ -149,4 +149,6 @@ export interface ProviderTestResult {
   connectivity: ProviderTestStepResult
   /** Step 2: Proxy pipeline — full Anthropic→OpenAI→Anthropic round-trip (only for openai_* formats) */
   proxy?: ProviderTestStepResult
+  /** Optional list of exposed model names (local-model servers /v1/models probe) */
+  availableModels?: string[] | null
 }
