@@ -1,0 +1,26 @@
+name: Lock Closed Issues
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: lock-closed-issues
+  cancel-in-progress: true
+
+jobs:
+  lock-closed-issues:
+    name: lock-closed-issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lock closed issues
+        uses: dessant/lock-threads@v5
+        with:
+          github-token: ${{ github.token }}
+          issue-inactive-days: '30'
+          pr-inactive-days: '90'
+          process-only: 'issues, prs'
