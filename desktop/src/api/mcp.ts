@@ -11,6 +11,11 @@ export const mcpApi = {
     return api.get<{ projectPaths: string[] }>('/api/mcp/project-paths')
   },
 
+  configFiles: (cwd?: string) => {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+    return api.get<{ files: Array<{ scope: string; path: string; label: string }> }>(`/api/mcp/config-files${query}`)
+  },
+
   status: (name: string, cwd?: string) => {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
     return api.get<{ server: McpServerRecord }>(`/api/mcp/${encodeURIComponent(name)}/status${query}`)

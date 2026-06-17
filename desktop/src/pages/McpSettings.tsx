@@ -10,6 +10,7 @@ import { useMcpStore } from '../stores/mcpStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { sessionsApi } from '../api/sessions'
 import { mcpApi } from '../api/mcp'
+import { getDesktopHost } from '../lib/desktopHost'
 import { MarketplacePage } from './McpMarketplace'
 import type { McpServerRecord, McpToolInfo, McpToolsResult, McpUpsertPayload, McpWritableScope } from '../types/mcp'
 
@@ -366,16 +367,18 @@ function ServerRow({
   isBusy,
   onOpen,
   onToggle,
+  onRefresh,
   t,
 }: {
   server: McpServerRecord
   isBusy: boolean
   onOpen: () => void
   onToggle: () => void
+  onRefresh: () => void
   t: ReturnType<typeof useTranslation>
 }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-6 py-5 border-t border-[var(--color-border)] first:border-t-0">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-4 px-6 py-5 border-t border-[var(--color-border)] first:border-t-0">
       <div className="min-w-0">
         <div className="flex items-center gap-3 mb-2 min-w-0">
           <div className="text-[1.05rem] font-semibold text-[var(--color-text-primary)] truncate">{server.name}</div>
@@ -402,6 +405,17 @@ function ServerRow({
           <div className="mt-2 text-xs text-[var(--color-text-tertiary)] truncate">{server.statusDetail}</div>
         )}
       </div>
+
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={isBusy || server.status === 'checking'}
+        className="flex h-10 w-10 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+        aria-label={`Refresh ${server.name}`}
+        title={t('common.retry')}
+      >
+        <span className={`material-symbols-outlined text-[20px] ${server.status === 'checking' ? 'animate-spin' : ''}`}>refresh</span>
+      </button>
 
       <button
         type="button"
@@ -754,6 +768,7 @@ export function McpSettings() {
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const projectPathsForFetchRef = useRef<string[] | undefined>(undefined)
   const refreshInFlightRef = useRef(new Set<string>())
+  const retryAttemptedRef = useRef(new Set<string>())
 
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = activeSession?.workDir || undefined
@@ -865,7 +880,7 @@ export function McpSettings() {
 
     let cancelled = false
     const queue = [...pendingServers]
-    const workerCount = Math.min(2, queue.length)
+    const workerCount = queue.length
 
     const runWorker = async () => {
       while (!cancelled) {
@@ -878,11 +893,31 @@ export function McpSettings() {
           const updated = await refreshServerStatus(server, resolveOperationCwd(server))
           if (cancelled) return
 
-          setView((current) => {
-            if (current.type !== 'details' && current.type !== 'edit') return current
-            if (getServerIdentityKey(current.server) !== key) return current
-            return { ...current, server: updated }
-          })
+          // Auto-retry once for timeout failures (npx/uvx first-run downloads)
+          if (
+            updated.status === 'failed' &&
+            updated.statusDetail?.includes('timed out') &&
+            !retryAttemptedRef.current.has(key)
+          ) {
+            retryAttemptedRef.current.add(key)
+            refreshInFlightRef.current.delete(key)
+            await new Promise((r) => setTimeout(r, 5000))
+            if (cancelled) return
+            refreshInFlightRef.current.add(key)
+            const retried = await refreshServerStatus(updated, resolveOperationCwd(updated))
+            if (cancelled) return
+            setView((current) => {
+              if (current.type !== 'details' && current.type !== 'edit') return current
+              if (getServerIdentityKey(current.server) !== key) return current
+              return { ...current, server: retried }
+            })
+          } else {
+            setView((current) => {
+              if (current.type !== 'details' && current.type !== 'edit') return current
+              if (getServerIdentityKey(current.server) !== key) return current
+              return { ...current, server: updated }
+            })
+          }
         } catch {
           // Keep passive checks silent. Explicit reconnect remains the action that
           // surfaces failures to the user.
@@ -912,6 +947,23 @@ export function McpSettings() {
         type: 'error',
         message: error instanceof Error ? error.message : t('settings.mcp.toast.toggleFailed'),
       })
+    } finally {
+      setBusyServerKey(null)
+    }
+  }
+
+  const handleRefresh = async (server: McpServerRecord) => {
+    const key = getServerIdentityKey(server)
+    setBusyServerKey(key)
+    try {
+      const updated = await refreshServerStatus(server, resolveOperationCwd(server))
+      setView((current) => {
+        if (current.type !== 'details' && current.type !== 'edit') return current
+        if (getServerIdentityKey(current.server) !== key) return current
+        return { ...current, server: updated }
+      })
+    } catch {
+      // silent — status stays as-is
     } finally {
       setBusyServerKey(null)
     }
@@ -1499,6 +1551,22 @@ export function McpSettings() {
           <Button
             variant="secondary"
             size="lg"
+            onClick={() => {
+              void mcpApi.configFiles(currentWorkDir).then(({ files }) => {
+                const userFile = files.find((f) => f.scope === 'user')
+                if (userFile) {
+                  void getDesktopHost().shell.openPath(userFile.path)
+                }
+              })
+            }}
+            title={t('settings.mcp.editConfigTooltip')}
+          >
+            <span className="material-symbols-outlined text-[18px]">edit_document</span>
+            {t('settings.mcp.editConfig')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="lg"
             onClick={() => setView({ type: 'marketplace' })}
           >
             <span className="material-symbols-outlined text-[18px]">storefront</span>
@@ -1561,6 +1629,7 @@ export function McpSettings() {
                           isBusy={busyServerKey === getServerIdentityKey(server)}
                           onOpen={() => beginEdit(server)}
                           onToggle={() => void handleToggle(server)}
+                          onRefresh={() => void handleRefresh(server)}
                           t={t}
                         />
                       ))}

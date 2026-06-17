@@ -573,6 +573,8 @@ export const en = {
   'settings.mcp.title': 'MCP servers',
   'settings.mcp.description': 'Connect external tools and data sources for Claude Code. Local, project, and user scopes follow the same behavior as the CLI.',
   'settings.mcp.addServer': 'Add server',
+  'settings.mcp.editConfig': 'Edit JSON',
+  'settings.mcp.editConfigTooltip': 'Open the MCP configuration file in your default editor',
   'settings.mcp.empty': 'No MCP servers configured yet',
   'settings.mcp.emptyHint': 'Add a custom stdio, HTTP, or SSE MCP server to start extending tool access.',
   'settings.mcp.stats.total': 'Total servers',

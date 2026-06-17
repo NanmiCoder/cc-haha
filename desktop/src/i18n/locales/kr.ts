@@ -575,6 +575,8 @@ export const kr: Record<TranslationKey, string> = {
   'settings.mcp.title': 'MCP 서버',
   'settings.mcp.description': 'Claude Code용 외부 도구와 데이터 소스를 연결합니다. Local, Project, User 범위는 CLI와 동일하게 동작합니다.',
   'settings.mcp.addServer': '서버 추가',
+  'settings.mcp.editConfig': 'JSON 편집',
+  'settings.mcp.editConfigTooltip': '기본 편집기에서 MCP 구성 파일 열기',
   'settings.mcp.empty': '아직 구성된 MCP 서버가 없습니다',
   'settings.mcp.emptyHint': '사용자 지정 stdio, HTTP 또는 SSE MCP 서버를 추가하여 도구 액세스 확장을 시작하세요.',
   'settings.mcp.stats.total': '총 서버',

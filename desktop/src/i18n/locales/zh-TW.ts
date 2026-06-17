@@ -575,6 +575,8 @@ export const zh: Record<TranslationKey, string> = {
   'settings.mcp.title': 'MCP 服務',
   'settings.mcp.description': '在桌面端直接管理外部工具與資料來源。Local、Project、User 三種範圍與 CLI 保持一致。',
   'settings.mcp.addServer': '新增服務',
+  'settings.mcp.editConfig': '編輯 JSON',
+  'settings.mcp.editConfigTooltip': '用預設編輯器開啟 MCP 配置檔',
   'settings.mcp.empty': '還沒有配置 MCP 服務',
   'settings.mcp.emptyHint': '先新增一個自定義的 STDIO、HTTP 或 SSE MCP 服務。',
   'settings.mcp.stats.total': '服務總數',

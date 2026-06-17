@@ -575,6 +575,8 @@ export const jp: Record<TranslationKey, string> = {
   'settings.mcp.title': 'MCP サーバー',
   'settings.mcp.description': 'Claude Code 用に外部ツールやデータソースを接続します。Local、Project、User の各スコープは CLI と同じ動作に従います。',
   'settings.mcp.addServer': 'サーバーを追加',
+  'settings.mcp.editConfig': 'JSON 編集',
+  'settings.mcp.editConfigTooltip': 'デフォルトエディタで MCP 設定ファイルを開く',
   'settings.mcp.empty': 'MCP サーバーはまだ設定されていません',
   'settings.mcp.emptyHint': 'カスタムの stdio、HTTP、または SSE の MCP サーバーを追加して、ツールアクセスの拡張を始めましょう。',
   'settings.mcp.stats.total': 'サーバー総数',

@@ -452,7 +452,7 @@ const IMAGE_MIME_TYPES = new Set([
 ])
 
 function getConnectionTimeoutMs(): number {
-  return parseInt(process.env.MCP_TIMEOUT || '', 10) || 30000
+  return parseInt(process.env.MCP_TIMEOUT || '', 10) || 60000
 }
 
 /**
