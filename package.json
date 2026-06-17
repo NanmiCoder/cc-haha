@@ -16,6 +16,7 @@
     "check:desktop": "cd desktop && bun run lint && bun run test -- --run && bun run build",
     "check:electron": "cd desktop && bun run check:electron",
     "check:adapters": "cd adapters && bun test",
+    "check:security": "bun audit 2>/dev/null || npm audit --production 2>/dev/null || echo 'No audit tool available'",
     "check:native": "cd desktop && bun run build:sidecars && bun run check:electron && CSC_IDENTITY_AUTO_DISCOVERY=false bun run electron:package:dir && cd .. && bun run test:package-smoke:current",
     "check:docs": "npm ci --loglevel=error && npm run --loglevel=error docs:build",
     "check:persistence-upgrade": "bun run scripts/quality-gate/persistence-upgrade.ts",

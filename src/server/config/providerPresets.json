@@ -185,6 +185,9 @@
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "lmstudio"
+    },
+    "modelContextWindows": {
+      "default": 200000
     }
   },
   {
@@ -204,6 +207,9 @@
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "ollama"
+    },
+    "modelContextWindows": {
+      "default": 200000
     }
   },
   {
