@@ -57,7 +57,9 @@
     "promoText": "智谱 GLM 为 cc-haha 用户准备了专属邀请福利，使用此链接注册后可领取新用户权益。",
     "authStrategy": "auth_token",
     "defaultEnv": {
-      "CC_HAHA_SEND_DISABLED_THINKING": "1"
+      "CC_HAHA_SEND_DISABLED_THINKING": "1",
+      "ENABLE_TOOL_SEARCH": "0",
+      "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
     },
     "modelContextWindows": {
       "glm-5.1": 200000,
