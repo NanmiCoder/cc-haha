@@ -8,7 +8,7 @@ import { useUIStore } from '../../stores/uiStore'
 import { skillsApi } from '../../api/skills'
 import { api } from '../../api/client'
 import { useSessionStore } from '../../stores/sessionStore'
-import { Dropdown } from '../shared/Dropdown'
+import { MultiSelectDropdown } from '../shared/MultiSelectDropdown'
 
 const META_PRIORITY = [
   'description',
@@ -256,9 +256,11 @@ type ProjectChoice = {
 function SkillActivationScope({ skillName }: { skillName: string }) {
   const t = useTranslation()
   const [globalSkills, setGlobalSkills] = useState<string[]>([])
-  const [projectSkills, setProjectSkills] = useState<string[]>([])
+  // Set of project paths where this skill is currently active. Replaces the
+  // old single "selectedProjectPath" model: the skill can now be active in
+  // any number of projects independently.
+  const [activeProjects, setActiveProjects] = useState<Set<string>>(new Set())
   const [projects, setProjects] = useState<ProjectChoice[]>([])
-  const [selectedProjectPath, setSelectedProjectPath] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const sessions = useSessionStore((s) => s.sessions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -266,75 +268,155 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
   const cwd = activeSession?.workDir || activeSession?.projectPath || undefined
 
   // Load the project list (reuse the project-rules endpoint) so the user can
-  // pick WHICH project the skill applies to under 'project' scope.
+  // pick WHICH projects the skill applies to under 'project' scope.
   useEffect(() => {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
     api.get<{ projects: ProjectChoice[] }>(`/api/project-rules${query}`)
       .then((res) => {
-        const resolved = res.projects.filter((p) => p.projectPath)
-        setProjects(resolved)
-        setSelectedProjectPath((prev) => {
-          if (prev && resolved.some((p) => p.projectPath === prev)) return prev
-          const current = resolved.find((p) => p.isCurrent)
-          return current?.projectPath ?? resolved[0]?.projectPath ?? undefined
-        })
+        setProjects(res.projects.filter((p) => p.projectPath))
       })
       .catch(() => {})
   }, [cwd])
 
-  // Load activation state for global + the currently selected project.
+  // Global is a single list; load it once.
   useEffect(() => {
     skillsApi.getActiveSkills('global').then(res => setGlobalSkills(res.activeSkills)).catch(() => {})
   }, [])
 
+  // Project state is per-project. Fan out one read per project and collect
+  // those whose activeSkills contains this skill into a Set. Re-run when the
+  // resolved project list changes.
   useEffect(() => {
-    skillsApi.getActiveSkills('project', selectedProjectPath).then(res => setProjectSkills(res.activeSkills)).catch(() => {})
-  }, [selectedProjectPath])
+    let cancelled = false
+    const projectPaths = projects.map(p => p.projectPath).filter((p): p is string => Boolean(p))
+    if (projectPaths.length === 0) {
+      setActiveProjects(new Set())
+      return
+    }
+    Promise.all(
+      projectPaths.map(async (path) => {
+        try {
+          const res = await skillsApi.getActiveSkills('project', path)
+          return { path, active: res.activeSkills.includes(skillName) }
+        } catch {
+          return { path, active: false }
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      const next = new Set<string>()
+      for (const { path, active } of results) {
+        if (active) next.add(path)
+      }
+      setActiveProjects(next)
+    })
+    return () => { cancelled = true }
+  }, [projects, skillName])
 
+  const isGlobal = globalSkills.includes(skillName)
   const currentScope: ActivationScope =
-    projectSkills.includes(skillName) ? 'project'
-    : globalSkills.includes(skillName) ? 'global'
+    activeProjects.size > 0 ? 'project'
+    : isGlobal ? 'global'
     : 'off'
 
-  const handleChange = async (scope: ActivationScope) => {
+  const writeProjectActivation = async (projectPath: string, shouldBeActive: boolean) => {
+    // Read-modify-write that single project's activeSkills, leaving every
+    // other project untouched. This keeps each toggle independent — a
+    // failure on one project does not corrupt the others.
+    const res = await skillsApi.getActiveSkills('project', projectPath)
+    const current = res.activeSkills
+    const has = current.includes(skillName)
+    if (shouldBeActive === has) return
+    const next = shouldBeActive
+      ? [...current, skillName]
+      : current.filter(s => s !== skillName)
+    await skillsApi.setActiveSkills(next, 'project', projectPath)
+  }
+
+  // Bulk apply for the high-level Off / Global / Project buttons.
+  const handleScopeChange = async (scope: ActivationScope) => {
     setSaving(true)
     try {
-      const newGlobal = globalSkills.filter(s => s !== skillName)
-      const newProject = projectSkills.filter(s => s !== skillName)
-
-      if (scope === 'global') {
-        newGlobal.push(skillName)
-      } else if (scope === 'project') {
-        newProject.push(skillName)
+      if (scope === 'off') {
+        // Clear from global + every active project.
+        const promises: Promise<unknown>[] = []
+        if (isGlobal) {
+          promises.push(skillsApi.setActiveSkills(globalSkills.filter(s => s !== skillName), 'global'))
+        }
+        for (const p of activeProjects) {
+          promises.push(writeProjectActivation(p, false))
+        }
+        await Promise.all(promises)
+        setGlobalSkills(g => g.filter(s => s !== skillName))
+        setActiveProjects(new Set())
+        return
       }
 
-      await Promise.all([
-        skillsApi.setActiveSkills(newGlobal, 'global'),
-        skillsApi.setActiveSkills(newProject, 'project', selectedProjectPath),
-      ])
-      setGlobalSkills(newGlobal)
-      setProjectSkills(newProject)
+      if (scope === 'global') {
+        const promises: Promise<unknown>[] = []
+        if (!isGlobal) {
+          promises.push(skillsApi.setActiveSkills([...globalSkills, skillName], 'global'))
+        }
+        // Switching to global clears project-level entries to avoid double-injection.
+        for (const p of activeProjects) {
+          promises.push(writeProjectActivation(p, false))
+        }
+        await Promise.all(promises)
+        setGlobalSkills(g => (g.includes(skillName) ? g : [...g, skillName]))
+        setActiveProjects(new Set())
+        return
+      }
+
+      // scope === 'project': default-activate the current project. If we're
+      // already in project mode, this button is a no-op and the user should
+      // use the multi-select dropdown instead.
+      if (activeProjects.size === 0) {
+        const defaultPath =
+          projects.find(p => p.isCurrent)?.projectPath ??
+          projects[0]?.projectPath
+        if (!defaultPath) return
+        const promises: Promise<unknown>[] = []
+        if (isGlobal) {
+          promises.push(skillsApi.setActiveSkills(globalSkills.filter(s => s !== skillName), 'global'))
+        }
+        promises.push(writeProjectActivation(defaultPath, true))
+        await Promise.all(promises)
+        setGlobalSkills(g => g.filter(s => s !== skillName))
+        setActiveProjects(new Set([defaultPath]))
+      }
     } catch {
-      // ignore
+      // ignore — UI state stays in sync with what we last successfully wrote
     } finally {
       setSaving(false)
     }
   }
 
-  // When the user switches the project dropdown, re-evaluate whether the skill
-  // should be re-applied to the newly selected project (if scope was 'project').
-  const handleProjectSwitch = async (projectPath: string) => {
-    const wasProjectScoped = currentScope === 'project'
-    setSelectedProjectPath(projectPath)
-    // Fetch the new project's active skills to reflect its status immediately.
+  // Per-project toggle from the multi-select dropdown.
+  const handleToggleProject = async (projectPath: string) => {
+    if (saving) return
+    const wantActive = !activeProjects.has(projectPath)
+    setSaving(true)
     try {
-      const res = await skillsApi.getActiveSkills('project', projectPath)
-      setProjectSkills(res.activeSkills)
-      // If the skill was project-scoped on the previous project, do NOT auto-move
-      // it — let the user explicitly click 'project' again for the new one.
-      void wasProjectScoped
+      // Activating any project also clears the global flag, since the two
+      // scopes are mutually exclusive in the high-level UI summary.
+      const promises: Promise<unknown>[] = [writeProjectActivation(projectPath, wantActive)]
+      if (wantActive && isGlobal) {
+        promises.push(skillsApi.setActiveSkills(globalSkills.filter(s => s !== skillName), 'global'))
+      }
+      await Promise.all(promises)
+      setActiveProjects(prev => {
+        const next = new Set(prev)
+        if (wantActive) next.add(projectPath)
+        else next.delete(projectPath)
+        return next
+      })
+      if (wantActive && isGlobal) {
+        setGlobalSkills(g => g.filter(s => s !== skillName))
+      }
     } catch {
       // ignore
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -366,7 +448,7 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
           return (
             <button
               key={opt.value}
-              onClick={() => handleChange(opt.value)}
+              onClick={() => handleScopeChange(opt.value)}
               disabled={saving}
               className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm min-w-[88px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface)] ${
                 selected
@@ -382,35 +464,46 @@ function SkillActivationScope({ skillName }: { skillName: string }) {
         })}
       </div>
 
-      {/* Project selector — only relevant when applying at 'project' scope. */}
+      {/* Multi-select project picker — visible whenever there are projects to
+          choose from. The skill can be active in any combination of them. */}
       {currentScope === 'project' && projects.length > 0 && (
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <span className="text-xs text-[var(--color-text-tertiary)]">
             {t('settings.skills.activation.appliesTo')}
           </span>
-          <Dropdown
-            value={selectedProjectPath ?? ''}
-            onChange={(v) => handleProjectSwitch(v)}
+          <MultiSelectDropdown
+            values={Array.from(activeProjects)}
+            onToggle={(v) => void handleToggleProject(v)}
             items={projects.map((p) => ({
               value: p.projectPath ?? '',
               label: shortenProjectPath(p.label),
               description: p.isCurrent ? t('settings.skills.activation.currentProject') : undefined,
             }))}
-            width={300}
-            maxHeight={280}
+            width={320}
+            maxHeight={320}
             trigger={
               <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors max-w-[260px]">
                 <span className="truncate">
-                  {shortenProjectPath(projects.find((p) => p.projectPath === selectedProjectPath)?.label ?? selectedProjectPath ?? '')}
+                  {activeProjects.size === 0
+                    ? t('settings.skills.activation.selectProjects')
+                    : activeProjects.size === 1
+                      ? shortenProjectPath(
+                          projects.find((p) => p.projectPath === Array.from(activeProjects)[0])?.label
+                          ?? Array.from(activeProjects)[0]
+                          ?? '',
+                        )
+                      : t('settings.skills.activation.projectCount', { count: activeProjects.size })}
                 </span>
                 <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)] flex-shrink-0">expand_more</span>
               </div>
             }
           />
-          <span className="inline-flex items-center gap-1 text-xs text-[var(--color-brand)]">
-            <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-            {t('settings.skills.activation.active')}
-          </span>
+          {activeProjects.size > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs text-[var(--color-brand)]">
+              <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+              {t('settings.skills.activation.active')}
+            </span>
+          )}
         </div>
       )}
     </section>

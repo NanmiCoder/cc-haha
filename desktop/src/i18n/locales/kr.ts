@@ -856,6 +856,8 @@ export const kr: Record<TranslationKey, string> = {
   'settings.skills.activation.projectDesc': '현재 프로젝트의 대화에서만 자동 로드',
   'settings.skills.activation.appliesTo': '적용 대상:',
   'settings.skills.activation.active': '활성',
+  'settings.skills.activation.selectProjects': '프로젝트 선택…',
+  'settings.skills.activation.projectCount': '{count}개 프로젝트',
   'settings.skills.activation.currentProject': '현재 프로젝트',
 
   // Settings > Memory

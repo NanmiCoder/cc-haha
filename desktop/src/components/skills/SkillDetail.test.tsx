@@ -176,4 +176,29 @@ describe('SkillActivationScope', () => {
     // "Applies to:" label appears only under project scope with resolved projects.
     expect(await screen.findByText(/Applies to/i)).toBeInTheDocument()
   })
+
+  it('treats multiple projects as independently active and surfaces the count', async () => {
+    // Skill is active in 2 of 3 projects — the trigger should show "2 projects".
+    getActiveSkills.mockImplementation((scope: string, cwd?: string) => {
+      if (scope !== 'project') return Promise.resolve({ activeSkills: [] })
+      if (cwd === '/work/alpha' || cwd === '/work/beta') {
+        return Promise.resolve({ activeSkills: ['multi-skill'] })
+      }
+      return Promise.resolve({ activeSkills: [] })
+    })
+    apiGet.mockResolvedValue({
+      projects: [
+        { id: 'p1', label: '/work/alpha', projectPath: '/work/alpha', isCurrent: true },
+        { id: 'p2', label: '/work/beta', projectPath: '/work/beta', isCurrent: false },
+        { id: 'p3', label: '/work/gamma', projectPath: '/work/gamma', isCurrent: false },
+      ],
+    })
+    selectSkill('multi-skill')
+    render(<SkillDetail />)
+
+    // Trigger label uses the {count} key once 2+ projects are active.
+    expect(await screen.findByText(/2 projects/i)).toBeInTheDocument()
+    // The activated badge is still shown.
+    expect(screen.getByText(/Active/)).toBeInTheDocument()
+  })
 })

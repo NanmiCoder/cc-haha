@@ -856,6 +856,8 @@ export const zh: Record<TranslationKey, string> = {
   'settings.skills.activation.projectDesc': '僅當前專案的對話自動載入',
   'settings.skills.activation.appliesTo': '套用到：',
   'settings.skills.activation.active': '已啟用',
+  'settings.skills.activation.selectProjects': '選擇專案…',
+  'settings.skills.activation.projectCount': '{count} 個專案',
   'settings.skills.activation.currentProject': '目前專案',
 
   // Settings > Memory
