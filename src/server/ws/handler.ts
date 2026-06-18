@@ -1230,6 +1230,43 @@ function markPrewarmed(sessionId: string) {
   const timer = setTimeout(() => {
     prewarmIdleTimers.delete(sessionId)
     if (!prewarmedSessions.has(sessionId)) return
+    // Don't kill the session if there's an active user turn — the CLI is
+    // still processing (e.g. waiting for a slow API response). The timer
+    // will be re-armed by resetPrewarmIdleTimer when the turn completes.
+    if (isSessionTurnActive(sessionId)) {
+      console.log(`[WS] Prewarmed session ${sessionId} idle for ${timeoutMs}ms, but turn is active — re-arming timer`)
+      resetPrewarmIdleTimer(sessionId)
+      return
+    }
+    console.log(`[WS] Prewarmed session ${sessionId} idle for ${timeoutMs}ms, stopping CLI subprocess`)
+    conversationService.stopSession(sessionId)
+    prewarmedSessions.delete(sessionId)
+  }, timeoutMs)
+  prewarmIdleTimers.set(sessionId, timer)
+}
+
+/**
+ * Reset the prewarm idle timer for a session that just showed activity
+ * (e.g. received a keep_alive or stream_request_start message from the CLI).
+ * This prevents the prewarm idle timeout from killing a session that is
+ * actively processing but waiting for a slow API response.
+ */
+function resetPrewarmIdleTimer(sessionId: string) {
+  if (!prewarmedSessions.has(sessionId)) return
+  const timeoutMs = getPrewarmIdleTimeoutMs()
+  if (timeoutMs === 0) return
+
+  const existingTimer = prewarmIdleTimers.get(sessionId)
+  if (existingTimer) clearTimeout(existingTimer)
+
+  const timer = setTimeout(() => {
+    prewarmIdleTimers.delete(sessionId)
+    if (!prewarmedSessions.has(sessionId)) return
+    if (isSessionTurnActive(sessionId)) {
+      console.log(`[WS] Prewarmed session ${sessionId} idle for ${timeoutMs}ms, but turn is active — re-arming timer`)
+      resetPrewarmIdleTimer(sessionId)
+      return
+    }
     console.log(`[WS] Prewarmed session ${sessionId} idle for ${timeoutMs}ms, stopping CLI subprocess`)
     conversationService.stopSession(sessionId)
     prewarmedSessions.delete(sessionId)
@@ -1302,6 +1339,11 @@ function bindPrewarmMetadataCapture(sessionId: string) {
   conversationService.clearOutputCallbacks(sessionId)
   conversationService.onOutput(sessionId, (cliMsg) => {
     cacheSessionInitMetadata(sessionId, cliMsg)
+    // Reset prewarm idle timer on keep_alive — the CLI is alive but
+    // may be waiting for a slow API response.
+    if (cliMsg.type === 'keep_alive' || cliMsg.type === 'stream_request_start') {
+      resetPrewarmIdleTimer(sessionId)
+    }
   })
 }
 
@@ -1874,6 +1916,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     default:
+      // keep_alive is sent by the CLI to signal the session is still active
+      // (e.g. waiting for a slow API response). It must NOT trigger the
+      // "Unknown CLI message type" warning.
+      if (cliMsg.type === 'keep_alive') {
+        return []
+      }
       // 未知类型 — 调试输出但不转发
       console.log(`[WS] Unknown CLI message type: ${cliMsg.type}`, JSON.stringify(cliMsg).substring(0, 200))
       return []
@@ -2383,7 +2431,17 @@ function bindClientSessionOutput(
       return
     }
 
+    // Reset the prewarm idle timer on any CLI activity — especially
+    // keep_alive and stream_request_start, which signal the CLI is
+    // alive but waiting for a slow API response.
+    if (cliMsg.type === 'keep_alive' || cliMsg.type === 'stream_request_start' || cliMsg.type === 'assistant' || cliMsg.type === 'result') {
+      resetPrewarmIdleTimer(sessionId)
+    }
+
     const serverMsgs = translateCliMessage(cliMsg, sessionId)
+
+    const msgTypes = serverMsgs.map((m: any) => m.type).join(',')
+
     for (const msg of serverMsgs) {
       sendMessage(ws, msg)
     }
