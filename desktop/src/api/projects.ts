@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, getApiUrl, getAuthToken } from './client'
 
 export type RecentSessionDerived = {
   sessionId: string
@@ -134,5 +134,72 @@ export const projectsApi = {
       '/api/projects/sessions/clear',
       { workDir },
     )
+  },
+
+  /**
+   * Stream a session's .jsonl transcript and trigger a browser download.
+   * Returns the suggested filename so the caller can show it in a toast.
+   */
+  async exportSession(workDir: string, sessionId: string): Promise<{ filename: string; bytes: number }> {
+    const params = new URLSearchParams({ workDir, sessionId })
+    const url = getApiUrl(`/api/projects/sessions/export?${params.toString()}`)
+    const token = getAuthToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(url, { headers })
+    if (!res.ok) {
+      let message = `Export failed (${res.status})`
+      try {
+        const body = await res.json() as { message?: string }
+        if (body?.message) message = body.message
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+    const blob = await res.blob()
+    const filename = `${sessionId}.jsonl`
+    // Trigger the download via a temporary <a download> click. Wrapped in a
+    // window check so unit tests in non-jsdom envs don't blow up.
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Defer revoke so the click handler picks up the URL first.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+    }
+    return { filename, bytes: blob.size }
+  },
+
+  /**
+   * Upload a .jsonl transcript and import it as a new session under the
+   * given project (workDir). Returns the new server-side session id.
+   */
+  async importSession(workDir: string, file: File | Blob, fileName?: string): Promise<{
+    sessionId: string
+    projectId: string
+    bytes: number
+    nonEmptyLines: number
+  }> {
+    const form = new FormData()
+    form.set('workDir', workDir)
+    if (file instanceof File) {
+      form.set('file', file)
+    } else {
+      form.set('file', file, fileName ?? 'session.jsonl')
+    }
+    const url = getApiUrl('/api/projects/sessions/import')
+    const token = getAuthToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(url, { method: 'POST', body: form, headers })
+    const data = await res.json().catch(() => ({})) as Record<string, unknown>
+    if (!res.ok) {
+      const message = typeof data?.message === 'string' ? data.message : `Import failed (${res.status})`
+      throw new Error(message)
+    }
+    return data as { sessionId: string; projectId: string; bytes: number; nonEmptyLines: number }
   },
 }

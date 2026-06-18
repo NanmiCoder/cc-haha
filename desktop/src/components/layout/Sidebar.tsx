@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Folder, FolderOpen, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, Trash2, X } from 'lucide-react'
+import { Folder, FolderOpen, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, Trash2, Upload, X } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
@@ -533,6 +533,69 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
     setContextMenu(null)
     setPendingDeleteSessionId(id)
   }, [])
+
+  const handleExportSession = useCallback(async (sessionId: string) => {
+    setContextMenu(null)
+    const session = sessions.find((s) => s.id === sessionId)
+    const workDir = session?.workDir || session?.projectRoot || session?.projectPath
+    if (!workDir) {
+      addToast({ type: 'error', message: t('sidebar.exportSessionNoWorkDir') })
+      return
+    }
+    try {
+      const result = await projectsApi.exportSession(workDir, sessionId)
+      addToast({
+        type: 'success',
+        message: t('sidebar.exportSessionSuccess', { filename: result.filename }),
+      })
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: t('sidebar.exportSessionFailure', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      })
+    }
+  }, [addToast, sessions, t])
+
+  const importFileInputRef = useRef<HTMLInputElement | null>(null)
+  const importTargetWorkDirRef = useRef<string | null>(null)
+
+  const triggerImportSession = useCallback((project: ProjectGroup) => {
+    setProjectContextMenu(null)
+    if (!project.workDir) {
+      addToast({ type: 'error', message: t('sidebar.importSessionNoWorkDir') })
+      return
+    }
+    importTargetWorkDirRef.current = project.workDir
+    importFileInputRef.current?.click()
+  }, [addToast, t])
+
+  const handleImportFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    const workDir = importTargetWorkDirRef.current
+    // Always reset the input so picking the same file twice still fires change.
+    event.target.value = ''
+    importTargetWorkDirRef.current = null
+    if (!file || !workDir) return
+    try {
+      const result = await projectsApi.importSession(workDir, file)
+      await fetchSessions()
+      addToast({
+        type: 'success',
+        message: t('sidebar.importSessionSuccess', {
+          lines: result.nonEmptyLines,
+        }),
+      })
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: t('sidebar.importSessionFailure', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      })
+    }
+  }, [addToast, fetchSessions, t])
 
   const confirmDelete = useCallback(async () => {
     if (!pendingDeleteSessionId) return
@@ -1173,6 +1236,12 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
           >
             {t('common.delete')}
           </button>
+          <button
+            onClick={() => handleExportSession(contextMenu.id)}
+            className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+          >
+            {t('sidebar.exportSession')}
+          </button>
         </div>
       )}
 
@@ -1199,6 +1268,12 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
               onClick={() => void openProjectInFinder(project)}
             >
               {t('sidebar.openInFinder')}
+            </ProjectMenuItem>
+            <ProjectMenuItem
+              icon={<Upload size={18} aria-hidden="true" />}
+              onClick={() => triggerImportSession(project)}
+            >
+              {t('sidebar.importSession')}
             </ProjectMenuItem>
             <ProjectMenuItem
               icon={hidden ? <RotateCcw size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}
@@ -1325,6 +1400,13 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
         cancelLabel={t('common.cancel')}
         confirmVariant="danger"
         loading={isClearingProject}
+      />
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".jsonl,application/x-ndjson,application/jsonl"
+        className="hidden"
+        onChange={handleImportFileChange}
       />
     </aside>
   )
