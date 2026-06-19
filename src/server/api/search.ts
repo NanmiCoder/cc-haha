@@ -35,8 +35,12 @@ export async function handleSearchApi(
 
     // ── POST /api/search/sessions ──────────────────────────────────────────
     if (sub === 'sessions') {
-      const results = await searchService.searchSessions(query)
-      return Response.json({ results })
+      const { results, truncated } = await searchService.searchSessions(query, {
+        limit: body.limit as number | undefined,
+        matchesPerSession: body.matchesPerSession as number | undefined,
+        caseSensitive: body.caseSensitive as boolean | undefined,
+      })
+      return Response.json({ results, total: results.length, truncated })
     }
 
     // ── POST /api/search ───────────────────────────────────────────────────

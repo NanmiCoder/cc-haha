@@ -567,49 +567,63 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
     const requestKey = makePreviewKey(sessionId, tabId)
     const existing = get().previewTabsBySession[sessionId]?.find((tab) => tab.id === tabId)
 
+    const requestId = nextRequestId(previewRequestIds, requestKey)
+
     if (existing) {
       set((state) => ({
         activePreviewTabIdBySession: {
           ...state.activePreviewTabIdBySession,
           [sessionId]: tabId,
         },
+        loading: {
+          ...state.loading,
+          previewByTabId: {
+            ...state.loading.previewByTabId,
+            [requestKey]: true,
+          },
+        },
+        errors: {
+          ...state.errors,
+          previewByTabId: {
+            ...state.errors.previewByTabId,
+            [requestKey]: null,
+          },
+        },
       }))
-      return
-    }
+    } else {
+      const baseTab: WorkspacePreviewTab = {
+        id: tabId,
+        path,
+        kind,
+        title: getPathTitle(path),
+        state: 'loading',
+      }
 
-    const requestId = nextRequestId(previewRequestIds, requestKey)
-    const baseTab: WorkspacePreviewTab = {
-      id: tabId,
-      path,
-      kind,
-      title: getPathTitle(path),
-      state: 'loading',
+      set((state) => ({
+        previewTabsBySession: {
+          ...state.previewTabsBySession,
+          [sessionId]: [...(state.previewTabsBySession[sessionId] ?? []), baseTab],
+        },
+        activePreviewTabIdBySession: {
+          ...state.activePreviewTabIdBySession,
+          [sessionId]: tabId,
+        },
+        loading: {
+          ...state.loading,
+          previewByTabId: {
+            ...state.loading.previewByTabId,
+            [requestKey]: true,
+          },
+        },
+        errors: {
+          ...state.errors,
+          previewByTabId: {
+            ...state.errors.previewByTabId,
+            [requestKey]: null,
+          },
+        },
+      }))
     }
-
-    set((state) => ({
-      previewTabsBySession: {
-        ...state.previewTabsBySession,
-        [sessionId]: [...(state.previewTabsBySession[sessionId] ?? []), baseTab],
-      },
-      activePreviewTabIdBySession: {
-        ...state.activePreviewTabIdBySession,
-        [sessionId]: tabId,
-      },
-      loading: {
-        ...state.loading,
-        previewByTabId: {
-          ...state.loading.previewByTabId,
-          [requestKey]: true,
-        },
-      },
-      errors: {
-        ...state.errors,
-        previewByTabId: {
-          ...state.errors.previewByTabId,
-          [requestKey]: null,
-        },
-      },
-    }))
 
     try {
       if (kind === 'diff') {

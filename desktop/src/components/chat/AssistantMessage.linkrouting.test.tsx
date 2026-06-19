@@ -80,6 +80,24 @@ describe('AssistantMessage output-target cards', () => {
     expect(screen.getByText('assistantOutputs.kind.localhost')).toBeInTheDocument()
   })
 
+  it('does NOT render a localhost card for URLs shown inside a log code block', () => {
+    render(
+      <AssistantMessage
+        sessionId="s1"
+        content={[
+          '日志前 50 行：',
+          '```log',
+          '[08:29:36][INFO] 代理服务已启动: 127.0.0.1:15721',
+          '[08:29:36][INFO] Claude Live 配置已接管，代理地址: http://127.0.0.1:15721',
+          '```',
+        ].join('\n')}
+        isStreaming={false}
+      />,
+    )
+
+    expect(screen.queryByText('assistantOutputs.kind.localhost')).toBeNull()
+  })
+
   it('renders a card for a markdown link with its Markdown badge', () => {
     render(
       <AssistantMessage

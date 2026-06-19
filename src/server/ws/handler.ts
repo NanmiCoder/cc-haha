@@ -34,7 +34,10 @@ import {
 } from '../services/titleService.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
 import {
+  COMMAND_ARGS_TAG,
+  COMMAND_MESSAGE_TAG,
   COMMAND_NAME_TAG,
+  LOCAL_COMMAND_CAVEAT_TAG,
   LOCAL_COMMAND_STDERR_TAG,
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../../constants/xml.js'
@@ -2144,6 +2147,34 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           },
         ]
       }
+      if (subtype === 'agent_tool_activity') {
+        // Tool activity streamed from a background (async) agent. Re-emit as a
+        // normal tool_use_complete / tool_result carrying the parent Agent
+        // tool_use_id, so the desktop groups it under the agent card exactly
+        // like a synchronous subagent (childToolCallsByParent).
+        const activity = cliMsg.activity
+        const parentToolUseId =
+          typeof cliMsg.tool_use_id === 'string' ? cliMsg.tool_use_id : undefined
+        if (activity?.kind === 'tool_use') {
+          return [{
+            type: 'tool_use_complete',
+            toolName: activity.tool_name,
+            toolUseId: activity.tool_use_id,
+            input: activity.input,
+            parentToolUseId,
+          }]
+        }
+        if (activity?.kind === 'tool_result') {
+          return [{
+            type: 'tool_result',
+            toolUseId: activity.tool_use_id,
+            content: activity.content,
+            isError: activity.is_error === true,
+            parentToolUseId,
+          }]
+        }
+        return []
+      }
       if (subtype === 'session_state_changed') {
         return [{
           type: 'system_notification',
@@ -2574,9 +2605,34 @@ function hasToolResultBlock(content: unknown): boolean {
       (block as { type?: unknown }).type === 'tool_result')
 }
 
+function isInternalCommandBreadcrumb(content: unknown): boolean {
+  const textBlocks = typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.flatMap((block) => {
+        if (!block || typeof block !== 'object') return []
+        const typedBlock = block as { type?: unknown; text?: unknown }
+        return typedBlock.type === 'text' && typeof typedBlock.text === 'string'
+          ? [typedBlock.text]
+          : []
+      })
+      : []
+
+  return textBlocks.length > 0 && textBlocks.every((text) => {
+    const trimmed = text.trim()
+    return (
+      trimmed.includes(`<${COMMAND_NAME_TAG}>`) ||
+      trimmed.includes(`<${COMMAND_MESSAGE_TAG}>`) ||
+      trimmed.includes(`<${COMMAND_ARGS_TAG}>`) ||
+      trimmed.includes(`<${LOCAL_COMMAND_CAVEAT_TAG}>`)
+    )
+  })
+}
+
 function extractReplayUserText(cliMsg: any): string | null {
   if (cliMsg?.isReplay !== true) return null
   const content = cliMsg.message?.content
+  if (isInternalCommandBreadcrumb(content)) return null
   if (isCompactSummaryMessageContent(content)) return null
   if (hasToolResultBlock(content)) return null
   if (extractLocalCommandOutput(content)) return null

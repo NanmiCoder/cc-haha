@@ -18,6 +18,13 @@ export type ModelMapping = {
   opus: string
 }
 
+export type Model1mSupport = {
+  main: boolean
+  haiku: boolean
+  sonnet: boolean
+  opus: boolean
+}
+
 export type ModelContextWindows = Record<string, number>
 
 export type SavedProvider = {
@@ -30,8 +37,10 @@ export type SavedProvider = {
   apiFormat: ApiFormat
   runtimeKind?: ProviderRuntimeKind
   models: ModelMapping
+  model1mSupport?: Model1mSupport
   autoCompactWindow?: number
   modelContextWindows?: ModelContextWindows
+  toolSearchEnabled?: boolean
   notes?: string
   /**
    * Sticky compatibility marker — server sets this when it observes the
@@ -57,8 +66,10 @@ export type CreateProviderInput = {
   apiFormat?: ApiFormat
   runtimeKind?: ProviderRuntimeKind
   models: ModelMapping
+  model1mSupport?: Model1mSupport
   autoCompactWindow?: number
   modelContextWindows?: ModelContextWindows
+  toolSearchEnabled?: boolean
   notes?: string
 }
 
@@ -70,8 +81,10 @@ export type UpdateProviderInput = {
   apiFormat?: ApiFormat
   runtimeKind?: ProviderRuntimeKind
   models?: ModelMapping
+  model1mSupport?: Model1mSupport | null
   autoCompactWindow?: number | null
   modelContextWindows?: ModelContextWindows | null
+  toolSearchEnabled?: boolean
   notes?: string
 }
 

@@ -7,6 +7,7 @@ type Props = {
   language?: string
   maxLines?: number
   showLineNumbers?: boolean
+  wrapLongLines?: boolean
 }
 
 const warmPrismTheme: PrismTheme = {
@@ -124,7 +125,17 @@ function loadShikiRuntime(): Promise<ShikiRuntime | null> {
   return shikiRuntimePromise
 }
 
-function PrismCodeContent({ code, language, showLineNumbers }: { code: string; language?: string; showLineNumbers: boolean }) {
+function PrismCodeContent({
+  code,
+  language,
+  showLineNumbers,
+  wrapLongLines,
+}: {
+  code: string
+  language?: string
+  showLineNumbers: boolean
+  wrapLongLines: boolean
+}) {
   return (
     <Highlight
       theme={warmPrismTheme}
@@ -141,8 +152,8 @@ function PrismCodeContent({ code, language, showLineNumbers }: { code: string; l
             fontFamily: 'var(--font-mono)',
             fontSize: '12px',
             lineHeight: String(CODE_LINE_HEIGHT),
-            whiteSpace: 'pre',
-            wordBreak: 'normal',
+            whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
+            wordBreak: wrapLongLines ? 'break-word' : 'normal',
             color: 'var(--color-code-fg)',
           }}
         >
@@ -168,7 +179,17 @@ function PrismCodeContent({ code, language, showLineNumbers }: { code: string; l
   )
 }
 
-function CodeArea({ code, language, showLineNumbers }: { code: string; language?: string; showLineNumbers: boolean }) {
+function CodeArea({
+  code,
+  language,
+  showLineNumbers,
+  wrapLongLines,
+}: {
+  code: string
+  language?: string
+  showLineNumbers: boolean
+  wrapLongLines: boolean
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [runtime, setRuntime] = useState<ShikiRuntime | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -217,6 +238,7 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
           code={code}
           language={language}
           showLineNumbers={showLineNumbers}
+          wrapLongLines={wrapLongLines}
         />
       )}
       {ShikiHighlighter && (
@@ -248,7 +270,8 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
               fontFamily: 'var(--font-mono)',
               fontSize: '12px',
               lineHeight: String(CODE_LINE_HEIGHT),
-              whiteSpace: 'pre',
+              whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
+              wordBreak: wrapLongLines ? 'break-word' : 'normal',
             }}
           >
             {code}
@@ -259,7 +282,7 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
   )
 }
 
-export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = false }: Props) {
+export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = false, wrapLongLines = false }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   const allLines = code.split('\n')
@@ -290,6 +313,7 @@ export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = fa
         code={visibleCode}
         language={language}
         showLineNumbers={effectiveShowLineNumbers}
+        wrapLongLines={wrapLongLines}
       />
 
       {/* Expand/collapse toggle */}

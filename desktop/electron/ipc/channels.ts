@@ -2,6 +2,8 @@ export const ELECTRON_IPC_CHANNELS = {
   appGetVersion: 'desktop:app:get-version',
   runtimeGetServerUrl: 'desktop:runtime:get-server-url',
   commandInvoke: 'desktop:command:invoke',
+  clipboardReadText: 'desktop:clipboard:read-text',
+  clipboardWriteText: 'desktop:clipboard:write-text',
   shellOpen: 'desktop:shell:open',
   shellOpenPath: 'desktop:shell:open-path',
   traceOpenWindow: 'desktop:trace:open-window',

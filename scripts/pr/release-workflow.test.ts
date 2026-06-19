@@ -12,6 +12,14 @@ describe('release desktop workflow', () => {
     )?.[0]
   }
 
+  function extractStep(workflow: string, stepName: string) {
+    return workflow.match(
+      new RegExp(`- name: ${stepName}[\\s\\S]*?(?:\\n\\s{6}- name:|$)`),
+    )?.[0]
+  }
+
+  const electronBuilderCli = 'node ./node_modules/electron-builder/out/cli/cli.js ${{ matrix.builder_args }} --publish never'
+
   test('release packaging does not run the PR-quality gate', () => {
     const workflow = readReleaseWorkflow()
 
@@ -41,7 +49,13 @@ describe('release desktop workflow', () => {
         )
       }
 
-      expect(workflow).toContain('Build Electron')
+      if (workflowPath === '.github/workflows/release-desktop.yml') {
+        expect(workflow).toContain('Build signed macOS Electron release artifacts')
+        expect(workflow).toContain('Build unsigned Electron release artifacts')
+      } else {
+        expect(workflow).toContain('Build Electron app')
+        expect(workflow).toContain(electronBuilderCli)
+      }
       expect(workflow).toContain('smoke_platform')
       // The packaged app must ship the cc-haha-builtin plugin seed. The
       // release build inlines electron:build's steps rather than calling the
@@ -102,15 +116,88 @@ describe('release desktop workflow', () => {
     const gatekeeperStep = workflow.match(
       /- name: Verify macOS launch policy[\s\S]*?(?:\n\s{6}- name:|$)/,
     )?.[0]
+    const notarizationWarningStep = workflow.match(
+      /- name: Warn macOS notarization skipped[\s\S]*?(?:\n\s{6}- name:|$)/,
+    )?.[0]
     const unsignedWarningStep = workflow.match(
       /- name: Warn unsigned macOS launch policy skipped[\s\S]*?(?:\n\s{6}- name:|$)/,
     )?.[0]
 
-    expect(gatekeeperStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'")
+    expect(workflow).toContain('notarize_macos:')
+    expect(workflow).toContain("description: 'Notarize macOS artifacts'")
+    expect(gatekeeperStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.notarize_macos == true)")
     expect(gatekeeperStep).toContain('bun run test:package-smoke --platform macos --package-kind release --artifacts-dir desktop/build-artifacts/electron --require-macos-gatekeeper')
+    expect(notarizationWarningStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && github.event_name == 'workflow_dispatch' && inputs.notarize_macos == false")
+    expect(notarizationWarningStep).toContain('Developer ID signed but not notarized')
     expect(unsignedWarningStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed != 'true'")
     expect(unsignedWarningStep).toContain('install-macos-unsigned.sh')
     expect(workflow.indexOf('Verify macOS launch policy')).toBeLessThan(workflow.indexOf('Upload release artifacts for final publish'))
+  })
+
+  test('release workflow signs and notarizes macOS builds only when signing preflight succeeds', () => {
+    const workflow = readReleaseWorkflow()
+    const signedBuildStep = extractStep(workflow, 'Build signed macOS Electron release artifacts')
+    const unsignedBuildStep = extractStep(workflow, 'Build unsigned Electron release artifacts')
+
+    expect(workflow).toContain('app_bundle_dir: mac-arm64')
+    expect(workflow).toContain('app_bundle_dir: mac')
+    expect(signedBuildStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'")
+    expect(signedBuildStep).toContain('CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}')
+    expect(signedBuildStep).toContain('CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}')
+    expect(signedBuildStep).toContain('APPLE_ID: ${{ secrets.APPLE_ID }}')
+    expect(signedBuildStep).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}')
+    expect(signedBuildStep).toContain('APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}')
+    expect(signedBuildStep).toContain("MACOS_NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize_macos }}")
+    expect(signedBuildStep).not.toContain('CSC_IDENTITY_AUTO_DISCOVERY')
+    expect(signedBuildStep).toContain('timeout-minutes: 80')
+    expect(signedBuildStep).toContain("DEBUG: 'electron-builder,electron-osx-sign,electron-notarize*'")
+    expect(signedBuildStep).toContain('macOS signing diagnostics')
+    expect(signedBuildStep).toContain('xcrun --find notarytool')
+    expect(signedBuildStep).toContain('security find-identity -v -p codesigning')
+    expect(signedBuildStep).toContain('macOS notarization requested: ${MACOS_NOTARIZE}')
+    expect(signedBuildStep).toContain('builder_args=( ${{ matrix.builder_args }} --publish never -c.mac.notarize=false )')
+    expect(signedBuildStep).toContain('max_attempts=1')
+    expect(signedBuildStep).toContain('build_timeout_seconds=900')
+    expect(signedBuildStep).toContain('-c.mac.notarize=false')
+    expect(signedBuildStep).toContain('macOS notarization is disabled for this draft run')
+    expect(signedBuildStep).toContain('run_signed_electron_builder')
+    expect(signedBuildStep).toContain('run_electron_builder_with_retries')
+    expect(signedBuildStep).toContain('notarize_app_bundle')
+    expect(signedBuildStep).toContain('xcrun notarytool submit "$notary_zip"')
+    expect(signedBuildStep).toContain('--timeout "$notary_timeout"')
+    expect(signedBuildStep).toContain('notary_attempts=3')
+    expect(signedBuildStep).toContain('xcrun stapler staple "$app_path"')
+    expect(signedBuildStep).toContain('xcrun stapler validate "$app_path"')
+    expect(signedBuildStep).toContain('spctl -a -vv -t execute "$app_path"')
+    expect(signedBuildStep).toContain('app_path="build-artifacts/electron/${{ matrix.app_bundle_dir }}/Claude Code Haha.app"')
+    expect(signedBuildStep).toContain('package_args=( ${{ matrix.builder_args }} --prepackaged "$app_path" --publish never -c.mac.notarize=false )')
+    expect(signedBuildStep).toContain('find build-artifacts/electron -maxdepth 1 -type f -delete')
+    expect(signedBuildStep).toContain('Signed electron-builder timed out')
+    expect(signedBuildStep).toContain('pkill -TERM -P "$build_pid"')
+    expect(signedBuildStep).toContain('with ${timeout_seconds}s watchdog')
+    expect(signedBuildStep).toContain('set +e')
+    expect(signedBuildStep).toContain('status=$?')
+    expect(signedBuildStep).toContain('if [ "$status" -eq 0 ]; then')
+    expect(signedBuildStep).toContain('rm -rf build-artifacts/electron')
+    expect(signedBuildStep).toContain('Starting signed electron-builder attempt')
+    expect(signedBuildStep).toContain('Finished signed electron-builder attempt')
+    expect(signedBuildStep).toContain('retrying after 120 seconds')
+    expect(signedBuildStep).toContain('node ./node_modules/electron-builder/out/cli/cli.js "${builder_args[@]}"')
+
+    expect(unsignedBuildStep).toContain("if: matrix.smoke_platform != 'macos' || needs.signing-preflight.outputs.macos_signed != 'true'")
+    expect(unsignedBuildStep).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'")
+    for (const envName of [
+      'CSC_LINK:',
+      'CSC_KEY_PASSWORD:',
+      'APPLE_ID:',
+      'APPLE_APP_SPECIFIC_PASSWORD:',
+      'APPLE_TEAM_ID:',
+    ]) {
+      expect(unsignedBuildStep).not.toContain(envName)
+    }
+    expect(unsignedBuildStep).toContain(electronBuilderCli)
+    expect(workflow.indexOf('Build signed macOS Electron release artifacts')).toBeLessThan(workflow.indexOf('Verify packaged app structure'))
+    expect(workflow.indexOf('Build unsigned Electron release artifacts')).toBeLessThan(workflow.indexOf('Verify packaged app structure'))
   })
 
   test('release workflow records macOS signing state and warns for unsigned builds', () => {
@@ -208,6 +295,10 @@ describe('release desktop workflow', () => {
     expect(publishJob).toContain('artifacts/release-assets/**/*.blockmap')
     expect(publishJob).toContain('artifacts/update-metadata-standard/*.yml')
     expect(publishJob).toContain('desktop/scripts/install-macos-unsigned.sh')
+    expect(publishJob).toContain("draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}")
+    expect(publishJob).toContain('Ensure workflow-dispatch release remains draft')
+    expect(publishJob).toContain("if: github.event_name == 'workflow_dispatch' && inputs.draft == true")
+    expect(publishJob).toContain('gh release edit "v${{ steps.version.outputs.value }}" --draft --repo "${{ github.repository }}"')
     expect(publishJob).toContain('fail_on_unmatched_files: true')
     expect(publishJob).toContain('Load release notes')
     expect(workflow.indexOf('publish-release:')).toBeGreaterThan(workflow.indexOf('build:'))
@@ -333,6 +424,31 @@ describe('release desktop workflow', () => {
     expect(desktopPackage.build.mac?.publish).toBeUndefined()
     expect(desktopPackage.build.win?.publish).toBeUndefined()
     expect(desktopPackage.build.linux?.publish).toBeUndefined()
+  })
+
+  test('Electron Builder macOS config keeps the signed auto-update contract', () => {
+    const desktopPackage = JSON.parse(readFileSync('desktop/package.json', 'utf8')) as {
+      build: {
+        mac?: {
+          target?: string[]
+          hardenedRuntime?: boolean
+          notarize?: boolean
+          entitlements?: string
+          entitlementsInherit?: string
+          signIgnore?: string[]
+        }
+      }
+    }
+
+    expect(desktopPackage.build.mac?.target).toEqual(['dmg', 'zip'])
+    expect(desktopPackage.build.mac?.hardenedRuntime).toBe(true)
+    expect(desktopPackage.build.mac?.notarize).toBe(true)
+    expect(desktopPackage.build.mac?.entitlements).toBe('build/entitlements.mac.plist')
+    expect(desktopPackage.build.mac?.entitlementsInherit).toBe('build/entitlements.mac.inherit.plist')
+    expect(desktopPackage.build.mac?.signIgnore).toEqual([
+      '/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$',
+      '/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$',
+    ])
   })
 
   test('Windows NSIS installer lets users choose the install directory', () => {

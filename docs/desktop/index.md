@@ -40,6 +40,10 @@
 
 迁移收口验证：自动化证据、Review 收口项、macOS Computer Use smoke、Windows/Linux 实机验收边界。
 
+### [Electron 发布与自动更新](./10-release-auto-update.md)
+
+维护者发版 runbook：Developer ID 签名、GitHub Release metadata、`v0.4.3 -> v0.4.4` 自动更新验证路径。
+
 ### [Electron 迁移交互式验收清单](/desktop/electron-migration-qa-checklist.html)
 
 本地浏览器可直接打开的验收 checklist，支持勾选进度、记录问题、导出 Markdown。

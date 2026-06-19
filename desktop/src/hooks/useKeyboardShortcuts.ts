@@ -14,6 +14,7 @@ export function useKeyboardShortcuts() {
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
+  const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
   const stopGeneration = useChatStore((s) => s.stopGeneration)
@@ -58,15 +59,10 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      // Cmd+K — Focus search (sidebar search input)
+      // Cmd+K — Open global session search
       if (meta && e.key === 'k') {
         e.preventDefault()
-        setSidebarOpen(true)
-        requestAnimationFrame(() => {
-          const searchInput = document.querySelector('#sidebar-search') as HTMLInputElement | null
-          searchInput?.focus()
-          searchInput?.select()
-        })
+        openModal('globalSearch')
       }
 
       // Escape — Close modal or clear state
@@ -87,5 +83,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, setActiveSession, setActiveView, setSidebarOpen, toggleSidebar, setUiZoom, stopGeneration])
+  }, [closeModal, openModal, setActiveSession, setActiveView, setSidebarOpen, toggleSidebar, setUiZoom, stopGeneration])
 }

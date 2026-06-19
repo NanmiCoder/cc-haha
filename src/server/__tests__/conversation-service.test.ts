@@ -336,6 +336,44 @@ describe('ConversationService', () => {
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
   })
 
+  test('buildChildEnv ties the first-token watchdog to the user request timeout so slow prefill is not killed early (#826)', async () => {
+    const prev = process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+    delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ network: { aiRequestTimeoutMs: 600_000 } }),
+      'utf-8',
+    )
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+
+      // The user's "请求超时" must reach the first-token watchdog, not only the
+      // SDK client timeout (which on a stream is cleared the moment response
+      // headers arrive). Otherwise a local/3P model that needs minutes to emit
+      // its first token gets killed by the 240s idle watchdog no matter how high
+      // the configured timeout is (#826).
+      expect(env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe('600000')
+      expect(env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe(env.API_TIMEOUT_MS)
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+      else process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS = prev
+    }
+  })
+
+  test('buildChildEnv lets caller env override the first-token watchdog (#826)', async () => {
+    const prev = process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+    process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS = '900000'
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+      expect(env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe('900000')
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+      else process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS = prev
+    }
+  })
+
   test('buildChildEnv injects CLAUDE_CODE_OAUTH_TOKEN when official mode + haha oauth token exists', async () => {
     const ccHahaDir = path.join(tmpDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -54,6 +55,7 @@ class FakePty implements TerminalPtyProcess {
 }
 
 const tempDirs: string[] = []
+const itOnDarwin = process.platform === 'darwin' ? it : it.skip
 
 function tempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-haha-terminal-'))
@@ -166,6 +168,25 @@ describe('Electron terminal service', () => {
     prepareNodePtyRuntime(source, cache)
 
     expect(fs.readFileSync(path.join(cache, 'index.js'), 'utf8')).toBe('module.exports = { spawn() { return "source" } }\n')
+  })
+
+  itOnDarwin('removes stale macOS quarantine attributes from the node-pty runtime cache', () => {
+    const source = tempDir()
+    const cache = path.join(tempDir(), 'node-pty-cache')
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'node-pty', main: 'index.js' }))
+    fs.writeFileSync(path.join(source, 'index.js'), 'module.exports = { spawn() { return "source" } }\n')
+
+    prepareNodePtyRuntime(source, cache)
+
+    const cachedEntry = path.join(cache, 'index.js')
+    execFileSync('/usr/bin/xattr', ['-w', 'com.apple.quarantine', '0381;00000000;Chrome;CC-HAHA-TEST', cachedEntry])
+    execFileSync('/usr/bin/xattr', ['-p', 'com.apple.quarantine', cachedEntry], { stdio: 'ignore' })
+    fs.chmodSync(cachedEntry, 0o500)
+
+    prepareNodePtyRuntime(source, cache)
+
+    expect(() => execFileSync('/usr/bin/xattr', ['-p', 'com.apple.quarantine', cachedEntry], { stdio: 'ignore' })).toThrow()
+    expect(fs.statSync(cachedEntry).mode & 0o777).toBe(0o500)
   })
 
   it('spawns a PTY, forwards events, and controls the active session', async () => {

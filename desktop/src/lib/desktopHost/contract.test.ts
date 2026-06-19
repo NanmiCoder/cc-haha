@@ -9,6 +9,7 @@ describe('desktop host contract', () => {
     expect(browserHost.isDesktop).toBe(false)
     expect(browserHost.capabilities).toEqual({
       appMode: false,
+      clipboard: false,
       dialogs: false,
       notifications: false,
       previewWebview: false,

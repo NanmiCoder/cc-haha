@@ -1151,7 +1151,7 @@ function getMessageMetricSignature(message: UIMessage): string {
     case 'system':
       return `${message.type}:${message.content.length}`
     case 'tool_use':
-      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}`
+      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}:${message.status ?? ''}`
     case 'tool_result':
       return `${message.type}:${message.toolUseId}:${message.isError ? 1 : 0}`
     case 'compact_summary':
@@ -1349,6 +1349,7 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
   const messages = sessionState?.messages ?? EMPTY_MESSAGES
   const chatState = sessionState?.chatState ?? 'idle'
   const streamingText = sessionState?.streamingText ?? ''
+  const streamingToolInput = sessionState?.streamingToolInput ?? ''
   const activeThinkingId = sessionState?.activeThinkingId ?? null
   const agentTaskNotifications = sessionState?.agentTaskNotifications ?? EMPTY_AGENT_TASK_NOTIFICATIONS
   const activeAskUserQuestionToolUseId =
@@ -1505,11 +1506,16 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
     // prevent the jump-to-latest button from flickering during auto-scroll.
     const container = scrollContainerRef.current
     if (!container) return
-    const shouldIgnoreRecentProgrammaticScroll =
-      performance.now() < ignoreProgrammaticScrollUntilRef.current &&
+    const matchesProgrammaticScrollTop =
       ignoreProgrammaticScrollTopRef.current !== null &&
       Math.abs(container.scrollTop - ignoreProgrammaticScrollTopRef.current) < 1
-    if (isProgrammaticScrollingRef.current || shouldIgnoreRecentProgrammaticScroll) {
+    const shouldIgnoreRecentProgrammaticScroll =
+      matchesProgrammaticScrollTop &&
+      (
+        isProgrammaticScrollingRef.current ||
+        performance.now() < ignoreProgrammaticScrollUntilRef.current
+      )
+    if (shouldIgnoreRecentProgrammaticScroll) {
       syncVirtualViewportFromContainer(container)
       return
     }
@@ -1603,7 +1609,7 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
     }
 
     scrollToBottom('auto')
-  }, [messages.length, resolvedSessionId, scrollToBottom, streamingText])
+  }, [messages.length, resolvedSessionId, scrollToBottom, streamingText, streamingToolInput])
 
   const handleJumpToLatest = useCallback(() => {
     scrollToBottom('auto')
@@ -2146,6 +2152,7 @@ export const MessageBlock = memo(function MessageBlock({
           input={message.input}
           result={toolResult}
           isPending={message.isPending}
+          status={message.status}
           partialInput={message.partialInput}
           agentTaskNotification={
             message.toolName === 'Agent'

@@ -203,7 +203,16 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   updateProvider: async (id, input) => {
     const { provider } = await providersApi.update(id, input)
     await get().fetchProviders()
-    refreshConnectedSessionsForProvider(provider, get().activeId)
+    const activeId = get().activeId
+    if (activeId === provider.id && input.models !== undefined) {
+      const mainModelId = provider.models.main.trim()
+      if (mainModelId) {
+        const settings = useSettingsStore.getState()
+        await settings.setModel(mainModelId)
+        await settings.fetchAll()
+      }
+    }
+    refreshConnectedSessionsForProvider(provider, activeId)
     return provider
   },
 

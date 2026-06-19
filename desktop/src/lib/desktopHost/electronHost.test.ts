@@ -23,6 +23,20 @@ describe('electron desktop host', () => {
     })
   })
 
+  it('routes clipboard reads and writes through narrow IPC channels', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce('from clipboard').mockResolvedValueOnce(undefined)
+    const host = createElectronHost({
+      invoke,
+      subscribe: vi.fn(),
+    })
+
+    await expect(host.clipboard.readText()).resolves.toBe('from clipboard')
+    await host.clipboard.writeText('to clipboard')
+
+    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.clipboardReadText, undefined)
+    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.clipboardWriteText, 'to clipboard')
+  })
+
   it('rejects invalid preload payloads before invoking Electron IPC', async () => {
     const invoke = vi.fn()
     const host = createElectronHost({

@@ -190,6 +190,34 @@ describe('WorkspaceService', () => {
     expect(diff.diff?.length).toBeGreaterThan(0)
   })
 
+  it('prefers the live git diff over stale transcript edits for a currently changed file', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(
+      async (sessionId) => sessionId === 'session-1' ? repoDir : null,
+      async () => [{
+        id: 'assistant-1',
+        type: 'tool_use',
+        timestamp: new Date().toISOString(),
+        content: [{
+          type: 'tool_use',
+          name: 'Edit',
+          input: {
+            file_path: 'tracked.txt',
+            old_string: 'before\n',
+            new_string: 'model snapshot\n',
+          },
+        }],
+      }],
+    )
+
+    const diff = await service.getDiff('session-1', 'tracked.txt')
+
+    expect(diff.state).toBe('ok')
+    expect(diff.diff).toContain('diff --git a/tracked.txt b/tracked.txt')
+    expect(diff.diff).toContain('+after')
+    expect(diff.diff).not.toContain('+model snapshot')
+  })
+
   it('returns explicit non-git and missing-workdir states', async () => {
     const nonGitDir = await makeTempDir('workspace-service-non-git-')
     const missingDir = path.join(await makeTempDir('workspace-service-missing-parent-'), 'missing')

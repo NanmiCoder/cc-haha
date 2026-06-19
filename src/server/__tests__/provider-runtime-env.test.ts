@@ -52,6 +52,7 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://api.example.com/anthropic',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-active',
+      ENABLE_TOOL_SEARCH: 'true',
       ANTHROPIC_MODEL: 'active-main',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'active-main',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'active-sonnet',
@@ -95,6 +96,7 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://sub2api.example.com',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-sub2api',
+      ENABLE_TOOL_SEARCH: 'true',
       ANTHROPIC_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.5',
@@ -157,5 +159,90 @@ describe('providerRuntimeEnv', () => {
 
     const env = readActiveProviderManagedEnv(tmpDir)
     expect(env?.CLAUDE_CODE_DISABLE_THINKING).toBeUndefined()
+  })
+
+  test('honors disabled tool search for native Anthropic providers', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'provider-1',
+      providers: [
+        {
+          id: 'provider-1',
+          presetId: 'custom',
+          name: 'Tool Search Off',
+          apiKey: 'sk-active',
+          authStrategy: 'auth_token',
+          baseUrl: 'https://api.example.com/anthropic',
+          apiFormat: 'anthropic',
+          toolSearchEnabled: false,
+          models: {
+            main: 'active-main',
+            haiku: 'active-main',
+            sonnet: 'active-main',
+            opus: 'active-main',
+          },
+        },
+      ],
+    })
+
+    const env = readActiveProviderManagedEnv(tmpDir)
+
+    expect(env.ENABLE_TOOL_SEARCH).toBe('false')
+  })
+
+  test('keeps providers readable when stored tool search values are stringly typed', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'provider-1',
+      providers: [
+        {
+          id: 'provider-1',
+          presetId: 'custom',
+          name: 'String Tool Search',
+          apiKey: 'sk-active',
+          authStrategy: 'auth_token',
+          baseUrl: 'https://api.example.com/anthropic',
+          apiFormat: 'anthropic',
+          toolSearchEnabled: 'false',
+          models: {
+            main: 'active-main',
+            haiku: 'active-main',
+            sonnet: 'active-main',
+            opus: 'active-main',
+          },
+        },
+      ],
+    })
+
+    const env = readActiveProviderManagedEnv(tmpDir)
+
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com/anthropic')
+    expect(env.ENABLE_TOOL_SEARCH).toBe('false')
+  })
+
+  test('does not write tool search env for OpenAI proxy providers', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'provider-1',
+      providers: [
+        {
+          id: 'provider-1',
+          presetId: 'custom',
+          name: 'OpenAI Proxy Provider',
+          apiKey: 'sk-active',
+          authStrategy: 'auth_token',
+          baseUrl: 'https://api.example.com/openai',
+          apiFormat: 'openai_chat',
+          toolSearchEnabled: true,
+          models: {
+            main: 'active-main',
+            haiku: 'active-main',
+            sonnet: 'active-main',
+            opus: 'active-main',
+          },
+        },
+      ],
+    })
+
+    const env = readActiveProviderManagedEnv(tmpDir)
+
+    expect(env.ENABLE_TOOL_SEARCH).toBeUndefined()
   })
 })

@@ -63,6 +63,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     isDesktop: true,
     capabilities: {
       appMode: true,
+      clipboard: true,
       dialogs: true,
       notifications: true,
       previewWebview: true,
@@ -80,6 +81,10 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     },
     commands: {
       invoke: (command, args) => invoke(ELECTRON_IPC_CHANNELS.commandInvoke, { command, args }),
+    },
+    clipboard: {
+      readText: () => invoke(ELECTRON_IPC_CHANNELS.clipboardReadText),
+      writeText: text => invoke(ELECTRON_IPC_CHANNELS.clipboardWriteText, text),
     },
     events: {
       listen: (_eventName, handler) => subscribe(ELECTRON_EVENT_CHANNELS.event, handler),

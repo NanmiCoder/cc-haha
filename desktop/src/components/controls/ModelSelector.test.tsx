@@ -97,11 +97,12 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-oauth-on-open" />)
 
-    await clickByRole(/alpha/i)
+    await clickByRole(/provider-main/i)
     await act(async () => {
+      fireEvent.keyDown(document, { key: 'Escape' })
       await Promise.resolve()
     })
-    await clickByRole(/alpha/i)
+    await clickByRole(/provider-main/i)
 
     expect(fetchClaudeStatus).toHaveBeenCalledTimes(1)
     expect(fetchOpenAIStatus).toHaveBeenCalledTimes(1)
@@ -192,7 +193,7 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-1" />)
 
-    await clickByRole(/alpha/i)
+    await clickByRole(/provider-main/i)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /provider-fast/ }))
       await Promise.resolve()
@@ -208,6 +209,51 @@ describe('ModelSelector', () => {
       modelId: 'provider-fast',
       effortLevel: 'max',
     })
+  })
+
+  it('defaults blank provider-scoped runtime selections to the active provider main model', async () => {
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: [
+        { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', description: 'Main Model · Haiku Model', context: '' },
+        { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', description: 'Sonnet Model · Opus Model', context: '' },
+      ],
+      currentModel: { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', description: 'Sonnet Model · Opus Model', context: '' },
+      activeProviderName: 'Custom-DeepSeek-OpenAI',
+    })
+    useProviderStore.setState({
+      providers: [{
+        id: 'deepseek-provider',
+        presetId: 'custom',
+        name: 'Custom-DeepSeek-OpenAI',
+        apiKey: '***',
+        baseUrl: 'https://api.deepseek.com',
+        apiFormat: 'openai_chat',
+        models: {
+          main: 'deepseek-v4-flash',
+          haiku: 'deepseek-v4-flash',
+          sonnet: 'deepseek-v4-pro',
+          opus: 'deepseek-v4-pro',
+        },
+      }],
+      activeId: 'deepseek-provider',
+      hasLoadedProviders: true,
+      isLoading: true,
+    })
+
+    render(<ModelSelector runtimeKey="blank-session" />)
+
+    const trigger = screen.getByRole('button', { name: /deepseek-v4-flash/i })
+    await act(async () => {
+      fireEvent.click(trigger)
+      await Promise.resolve()
+    })
+
+    const flashOption = screen
+      .getAllByRole('button', { name: /deepseek-v4-flash/i })
+      .find((button) => button.textContent?.includes('Main Model'))
+    expect(flashOption).toBeDefined()
+    expect(flashOption?.className).toContain('border-[var(--color-model-option-selected-border)]')
   })
 
   it('keeps runtime effort scoped to the selected session', async () => {
@@ -249,12 +295,12 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-1" />)
 
-    await clickByRole(/alpha/i)
+    await clickByRole(/provider-main/i)
     await clickByRole(/^High$/)
 
     expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual({
       providerId: 'provider-a',
-      modelId: 'alpha',
+      modelId: 'provider-main',
       effortLevel: 'high',
     })
     expect(useSessionRuntimeStore.getState().selections['session-2']).toEqual({
@@ -264,7 +310,7 @@ describe('ModelSelector', () => {
     })
     expect(setSessionRuntime).toHaveBeenCalledWith('session-1', {
       providerId: 'provider-a',
-      modelId: 'alpha',
+      modelId: 'provider-main',
       effortLevel: 'high',
     })
     expect(useSettingsStore.getState().effortLevel).toBe('max')
@@ -357,7 +403,7 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-hide" />)
 
-    await clickByRole(/alpha/i)
+    await clickByRole(/provider-main/i)
 
     const dropdown = screen.getByTestId('model-selector-dropdown')
     expect(dropdown.textContent).not.toContain('Claude Official')

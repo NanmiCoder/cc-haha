@@ -465,7 +465,7 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().getMode('session-preview-mode')).toBe('workspace')
   })
 
-  it('opens preview tabs, supports multiple kinds, and reuses duplicates without persistence', async () => {
+  it('opens preview tabs, supports multiple kinds, and refreshes duplicates without persistence', async () => {
     const storage = typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage
     const setItemSpy = storage ? vi.spyOn(storage, 'setItem') : null
 
@@ -487,7 +487,7 @@ describe('workspacePanelStore', () => {
     await useWorkspacePanelStore.getState().openPreview('session-preview', 'src/a.ts', 'diff')
     await useWorkspacePanelStore.getState().openPreview('session-preview', 'src/a.ts', 'file')
 
-    expect(mocks.getWorkspaceFileMock).toHaveBeenCalledTimes(1)
+    expect(mocks.getWorkspaceFileMock).toHaveBeenCalledTimes(2)
     expect(mocks.getWorkspaceDiffMock).toHaveBeenCalledTimes(1)
 
     const tabs = useWorkspacePanelStore.getState().previewTabsBySession['session-preview']
@@ -512,6 +512,34 @@ describe('workspacePanelStore', () => {
     } else {
       expect(storage).toBeNull()
     }
+  })
+
+  it('refreshes an existing preview tab when the same path is opened again', async () => {
+    mocks.getWorkspaceDiffMock
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/a.ts',
+        diff: '@@ -1 +1 @@\n-old\n+first',
+      })
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/a.ts',
+        diff: '@@ -1 +1 @@\n-old\n+latest',
+      })
+
+    await useWorkspacePanelStore.getState().openPreview('session-refresh', 'src/a.ts', 'diff')
+    await useWorkspacePanelStore.getState().openPreview('session-refresh', 'src/a.ts', 'diff')
+
+    expect(mocks.getWorkspaceDiffMock).toHaveBeenCalledTimes(2)
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-refresh']).toMatchObject([
+      {
+        id: 'diff:src/a.ts',
+        kind: 'diff',
+        path: 'src/a.ts',
+        diff: '@@ -1 +1 @@\n-old\n+latest',
+      },
+    ])
+    expect(useWorkspacePanelStore.getState().activePreviewTabIdBySession['session-refresh']).toBe('diff:src/a.ts')
   })
 
   it('closes exact tab id and preserves sibling preview for the same path', async () => {

@@ -467,6 +467,50 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('does not restore internal slash-command breadcrumbs as user history bubbles', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'agent-command-string',
+        type: 'user',
+        timestamp: '2026-06-15T03:32:13.000Z',
+        content: [
+          '<command-message>agent</command-message>',
+          '<command-name>/agent</command-name>',
+          '<command-args>Plan 222</command-args>',
+        ].join('\n'),
+      },
+      {
+        id: 'agent-command-array',
+        type: 'user',
+        timestamp: '2026-06-15T03:32:14.000Z',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '<command-message>agent</command-message>',
+              '<command-name>/agent</command-name>',
+              '<command-args>Plan 333</command-args>',
+            ].join('\n'),
+          },
+        ],
+      },
+      {
+        id: 'transcript-user-1',
+        type: 'user',
+        timestamp: '2026-06-15T03:32:15.000Z',
+        content: '继续处理这个问题',
+      },
+    ]
+
+    expect(mapHistoryMessagesToUiMessages(messages)).toMatchObject([
+      {
+        id: 'transcript-user-1',
+        type: 'user_text',
+        content: '继续处理这个问题',
+      },
+    ])
+  })
+
   it('restores persisted image user messages as renderable attachments without exposing image metadata text', () => {
     const messages: MessageEntry[] = [
       {
@@ -764,6 +808,49 @@ describe('chatStore history mapping', () => {
       action: 'completed',
       status: 'complete',
       objective: 'ship the smoke test',
+    })
+  })
+
+  it('restores token usage from transcript history after reopening a session', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-1',
+          type: 'user',
+          timestamp: '2026-04-06T00:00:00.000Z',
+          content: 'build the docs',
+        },
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:01.000Z',
+          content: 'done',
+          usage: { input_tokens: 1200, output_tokens: 80 },
+        },
+        {
+          id: 'assistant-2',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:02.000Z',
+          content: [{ type: 'text', text: 'follow-up done' }],
+          usage: { input_tokens: 3400, output_tokens: 120 },
+        },
+      ],
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [],
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 4600,
+      output_tokens: 200,
     })
   })
 
@@ -2264,6 +2351,45 @@ describe('chatStore history mapping', () => {
     vi.useRealTimers()
   })
 
+  it('marks pending tool input as stopped when generation is stopped', () => {
+    vi.useFakeTimers()
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'tool_executing' }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'Write',
+      toolUseId: 'write-1',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      toolInput: '{"file_path":"/private/tmp/story.md","content":"第一章',
+    })
+    vi.advanceTimersByTime(60)
+
+    useChatStore.getState().stopGeneration(TEST_SESSION_ID)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.chatState).toBe('idle')
+    expect(session?.activeToolUseId).toBeNull()
+    expect(session?.activeToolName).toBeNull()
+    expect(session?.streamingToolInput).toBe('')
+    expect(session?.messages[0]).toMatchObject({
+      type: 'tool_use',
+      toolUseId: 'write-1',
+      isPending: false,
+      status: 'stopped',
+    })
+
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
   it('refreshes merged slash commands when a live CLI update omits project commands', async () => {
     const cliCommand = { name: 'builtin-help', description: 'Built-in command' }
     const projectCommand = { name: 'project-probe', description: 'Project custom command' }
@@ -3492,6 +3618,40 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
   })
 
+  it('starts an elapsed timer when a reconnected session reports running status', () => {
+    vi.useFakeTimers()
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          elapsedSeconds: 0,
+          elapsedTimer: null,
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'status',
+      state: 'thinking',
+      verb: 'Thinking',
+    })
+
+    vi.advanceTimersByTime(2100)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedSeconds).toBe(2)
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'status',
+      state: 'idle',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer).toBeNull()
+
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
   it('tracks API retry status until the request finishes', () => {
     useChatStore.setState({
       sessions: {
@@ -4273,7 +4433,10 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().stopGeneration('session-a')
 
-    expect(useChatStore.getState().sessions['session-a']?.streamingText).toBe('A-only response')
+    expect(useChatStore.getState().sessions['session-a']?.streamingText).toBe('')
+    expect(useChatStore.getState().sessions['session-a']?.messages).toMatchObject([
+      { type: 'assistant_text', content: 'A-only response' },
+    ])
     expect(useChatStore.getState().sessions['session-b']?.streamingText).toBe('')
 
     useChatStore.getState().handleServerMessage('session-b', {

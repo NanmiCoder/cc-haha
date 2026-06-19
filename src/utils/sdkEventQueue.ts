@@ -66,11 +66,45 @@ type SessionStateChangedEvent = {
   state: 'idle' | 'running' | 'requires_action'
 }
 
+// A single tool_use / tool_result produced by a background (async) agent.
+export type AgentToolActivity =
+  | {
+      kind: 'tool_use'
+      tool_name: string
+      tool_use_id: string
+      input: unknown
+    }
+  | {
+      kind: 'tool_result'
+      tool_use_id: string
+      content: unknown
+      is_error: boolean
+    }
+
+// Emitted per tool_use / tool_result produced by a BACKGROUND (async) agent.
+// Background agents run detached from the main query loop (void
+// runAsyncAgentLifecycle), so their tool activity never reaches the parent's
+// stdout stream the way a synchronous subagent's progress messages do —
+// which is why the desktop shows their cards stuck on "no tool activity".
+// Draining these into the output stream lets the desktop handler re-emit them
+// as tool_use_complete / tool_result carrying the parent Agent tool_use_id, so
+// the UI groups them under the agent card (childToolCallsByParent) exactly
+// like a synchronous subagent. Does NOT trigger the LLM loop.
+type AgentToolActivityEvent = {
+  type: 'system'
+  subtype: 'agent_tool_activity'
+  task_id: string
+  // Parent Agent tool_use id — the card this activity belongs under.
+  tool_use_id: string
+  activity: AgentToolActivity
+}
+
 export type SdkEvent =
   | TaskStartedEvent
   | TaskProgressEvent
   | TaskNotificationSdkEvent
   | SessionStateChangedEvent
+  | AgentToolActivityEvent
 
 const MAX_QUEUE_SIZE = 1000
 const queue: SdkEvent[] = []
@@ -131,5 +165,27 @@ export function emitTaskTerminatedSdk(
     output_file: opts?.outputFile ?? '',
     summary: opts?.summary ?? '',
     usage: opts?.usage,
+  })
+}
+
+/**
+ * Emit one tool_use / tool_result produced by a background (async) agent so
+ * the desktop can render it under the parent Agent card in real time.
+ *
+ * No-op in interactive (TUI) mode — enqueueSdkEvent only queues in
+ * headless/streaming mode (the desktop's CLI subprocess), and synchronous
+ * subagents already surface their activity through the normal progress path.
+ */
+export function emitAgentToolActivity(
+  taskId: string,
+  parentToolUseId: string,
+  activity: AgentToolActivity,
+): void {
+  enqueueSdkEvent({
+    type: 'system',
+    subtype: 'agent_tool_activity',
+    task_id: taskId,
+    tool_use_id: parentToolUseId,
+    activity,
   })
 }

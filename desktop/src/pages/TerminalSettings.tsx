@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type WheelEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type WheelEvent } from 'react'
 import { Info } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
 import { terminalApi } from '../api/terminal'
@@ -386,6 +386,24 @@ export function TerminalSettings({
     scroller.scrollBy({ top: event.deltaY, left: event.deltaX })
   }, [])
 
+  const handleTerminalKeyDownCapture = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const terminal = runtime.terminal
+    if (!terminal) return
+
+    if (isTerminalCopyShortcut(event, terminal)) {
+      event.preventDefault()
+      event.stopPropagation()
+      void copyTerminalSelection(terminal).catch(() => {})
+      return
+    }
+
+    if (isTerminalPasteShortcut(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      void pasteClipboardIntoTerminal(terminal).catch(() => {})
+    }
+  }, [runtime])
+
   const savePreferences = async () => {
     setPreferencesError(null)
     setPreferencesSaved(false)
@@ -597,6 +615,7 @@ export function TerminalSettings({
       ) : (
         <div
           data-testid="settings-terminal-frame"
+          onKeyDownCapture={handleTerminalKeyDownCapture}
           onWheelCapture={handleTerminalWheelCapture}
           className="min-h-0 flex-1 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-terminal-border)] bg-[var(--color-terminal-bg)] shadow-[var(--shadow-dropdown)]"
         >
@@ -609,6 +628,80 @@ export function TerminalSettings({
       )}
     </div>
   )
+}
+
+type TerminalKeyboardEvent = Pick<KeyboardEvent<HTMLElement>, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>
+type ClipboardTerminal = {
+  focus(): void
+  getSelection(): string
+  hasSelection(): boolean
+  paste(data: string): void
+}
+
+function isApplePlatform() {
+  if (typeof navigator === 'undefined') return false
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform)
+}
+
+function isWindowsPlatform() {
+  if (typeof navigator === 'undefined') return false
+  return /Win/i.test(navigator.platform || navigator.userAgent)
+}
+
+function normalizedKey(event: TerminalKeyboardEvent) {
+  return event.key.toLowerCase()
+}
+
+function isTerminalCopyShortcut(event: TerminalKeyboardEvent, terminal: ClipboardTerminal) {
+  if (event.altKey || !terminal.hasSelection()) return false
+
+  const key = normalizedKey(event)
+  if (isApplePlatform()) {
+    return event.metaKey && !event.ctrlKey && key === 'c'
+  }
+
+  if (key === 'insert') {
+    return event.ctrlKey && !event.shiftKey && !event.metaKey
+  }
+
+  if (isWindowsPlatform() && event.ctrlKey && !event.metaKey && !event.shiftKey && key === 'c') {
+    return true
+  }
+
+  return event.ctrlKey && !event.metaKey && event.shiftKey && key === 'c'
+}
+
+function isTerminalPasteShortcut(event: TerminalKeyboardEvent) {
+  if (event.altKey) return false
+
+  const key = normalizedKey(event)
+  if (isApplePlatform()) {
+    return event.metaKey && !event.ctrlKey && key === 'v'
+  }
+
+  if (key === 'insert') {
+    return event.shiftKey && !event.ctrlKey && !event.metaKey
+  }
+
+  if (isWindowsPlatform() && event.ctrlKey && !event.metaKey && !event.shiftKey && key === 'v') {
+    return true
+  }
+
+  return event.ctrlKey && !event.metaKey && event.shiftKey && key === 'v'
+}
+
+async function copyTerminalSelection(terminal: ClipboardTerminal) {
+  const text = terminal.getSelection()
+  if (!text) return
+  await getDesktopHost().clipboard.writeText(text)
+  terminal.focus()
+}
+
+async function pasteClipboardIntoTerminal(terminal: ClipboardTerminal) {
+  const text = await getDesktopHost().clipboard.readText()
+  if (!text) return
+  terminal.paste(text)
+  terminal.focus()
 }
 
 function TerminalHelpHint({ compact = false }: { compact?: boolean }) {

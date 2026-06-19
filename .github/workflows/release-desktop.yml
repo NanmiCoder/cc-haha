@@ -10,6 +10,11 @@ on:
         required: false
         default: true
         type: boolean
+      notarize_macos:
+        description: 'Notarize macOS artifacts'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -71,11 +76,13 @@ jobs:
           - platform: macos-latest
             target_triple: aarch64-apple-darwin
             builder_args: --mac dmg zip --arm64
+            app_bundle_dir: mac-arm64
             label: macOS-ARM64
             smoke_platform: macos
           - platform: macos-latest
             target_triple: x86_64-apple-darwin
             builder_args: --mac dmg zip --x64
+            app_bundle_dir: mac
             label: macOS-x64
             smoke_platform: macos
           - platform: ubuntu-22.04
@@ -159,24 +166,211 @@ jobs:
           bun run build
           bun run build:electron
 
-      - name: Build Electron release artifacts
+      - name: Build signed macOS Electron release artifacts
+        if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'
+        working-directory: desktop
+        timeout-minutes: 80
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEBUG: 'electron-builder,electron-osx-sign,electron-notarize*'
+          # Signed macOS releases require all of these secrets. Keep this step
+          # separate from the unsigned fallback so empty secrets are never passed
+          # to electron-builder as CSC_LINK / APPLE_* env vars.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize_macos }}
+        run: |
+          set -euo pipefail
+          echo "::group::macOS signing diagnostics"
+          echo "UTC start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          sw_vers
+          xcodebuild -version
+          xcrun --find notarytool
+          xcrun notarytool --version || true
+          security find-identity -v -p codesigning || true
+          echo "macOS notarization requested: ${MACOS_NOTARIZE}"
+          echo "::endgroup::"
+          if [ "$MACOS_NOTARIZE" = "true" ]; then
+            max_attempts=1
+            build_timeout_seconds=900
+            builder_args=( ${{ matrix.builder_args }} --publish never -c.mac.notarize=false )
+          else
+            max_attempts=1
+            build_timeout_seconds=900
+            builder_args=( ${{ matrix.builder_args }} --publish never -c.mac.notarize=false )
+            echo "::warning::macOS notarization is disabled for this draft run; artifacts will be Developer ID signed but not notarized."
+          fi
+
+          run_signed_electron_builder() {
+            local timeout_seconds="$1"
+            shift
+            "$@" &
+            local build_pid=$!
+            local start_epoch
+            start_epoch=$(date +%s)
+
+            while true; do
+              if ! jobs -pr | grep -q "^${build_pid}$"; then
+                break
+              fi
+
+              local now_epoch elapsed_seconds
+              now_epoch=$(date +%s)
+              elapsed_seconds=$((now_epoch - start_epoch))
+              if [ "$elapsed_seconds" -ge "$timeout_seconds" ]; then
+                echo "::warning::Signed electron-builder timed out after ${elapsed_seconds}s; terminating process ${build_pid}"
+                pkill -TERM -P "$build_pid" 2>/dev/null || true
+                kill -TERM "$build_pid" 2>/dev/null || true
+                sleep 10
+                pkill -KILL -P "$build_pid" 2>/dev/null || true
+                kill -KILL "$build_pid" 2>/dev/null || true
+                wait "$build_pid" 2>/dev/null || true
+                return 124
+              fi
+
+              sleep 15
+            done
+
+            wait "$build_pid"
+          }
+
+          run_electron_builder_with_retries() {
+            local attempts="$1"
+            local timeout_seconds="$2"
+            local clean_before_attempt="$3"
+            shift 3
+            local status=0
+
+            for attempt in $(seq 1 "$attempts"); do
+              echo "Starting signed electron-builder attempt ${attempt}/${attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ') with ${timeout_seconds}s watchdog"
+              if [ "$clean_before_attempt" = "true" ]; then
+                rm -rf build-artifacts/electron
+              fi
+              set +e
+              run_signed_electron_builder "$timeout_seconds" "$@"
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ]; then
+                echo "Finished signed electron-builder attempt ${attempt}/${attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+                return 0
+              fi
+
+              if [ "$attempt" -eq "$attempts" ]; then
+                echo "::error::Signed electron-builder failed after ${attempts} attempts"
+                return "$status"
+              fi
+              echo "::warning::Signed electron-builder attempt ${attempt}/${attempts} failed with exit code ${status}; retrying after 120 seconds"
+              sleep 120
+            done
+          }
+
+          notarize_app_bundle() {
+            local app_path="$1"
+            local notary_zip="${RUNNER_TEMP}/${{ matrix.label }}-notary.zip"
+            local notary_attempts=3
+            local notary_timeout=20m
+            local status=0
+
+            if [ ! -d "$app_path" ]; then
+              echo "::error::Expected signed macOS app bundle does not exist: ${app_path}"
+              return 1
+            fi
+
+            echo "::group::macOS notarization"
+            echo "Verifying signed app before notarization: ${app_path}"
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            rm -f "$notary_zip"
+            (
+              cd "$(dirname "$app_path")"
+              ditto -c -k --sequesterRsrc --keepParent "$(basename "$app_path")" "$notary_zip"
+            )
+
+            for attempt in $(seq 1 "$notary_attempts"); do
+              echo "Starting notarytool attempt ${attempt}/${notary_attempts} at $(date -u '+%Y-%m-%dT%H:%M:%SZ') with ${notary_timeout} timeout"
+              set +e
+              xcrun notarytool submit "$notary_zip" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" \
+                --wait \
+                --timeout "$notary_timeout" \
+                --output-format json
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ]; then
+                echo "Notarytool attempt ${attempt}/${notary_attempts} succeeded at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+                xcrun stapler staple "$app_path"
+                xcrun stapler validate "$app_path"
+                spctl -a -vv -t execute "$app_path"
+                echo "::endgroup::"
+                return 0
+              fi
+
+              if [ "$attempt" -eq "$notary_attempts" ]; then
+                echo "::endgroup::"
+                echo "::error::notarytool failed after ${notary_attempts} attempts"
+                return "$status"
+              fi
+              echo "::warning::notarytool attempt ${attempt}/${notary_attempts} failed with exit code ${status}; retrying after 120 seconds"
+              sleep 120
+            done
+          }
+
+          set +e
+          run_electron_builder_with_retries "$max_attempts" "$build_timeout_seconds" true node ./node_modules/electron-builder/out/cli/cli.js "${builder_args[@]}"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          if [ "$MACOS_NOTARIZE" != "true" ]; then
+            exit 0
+          fi
+
+          app_path="build-artifacts/electron/${{ matrix.app_bundle_dir }}/Claude Code Haha.app"
+          set +e
+          notarize_app_bundle "$app_path"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          package_args=( ${{ matrix.builder_args }} --prepackaged "$app_path" --publish never -c.mac.notarize=false )
+          find build-artifacts/electron -maxdepth 1 -type f -delete
+          set +e
+          run_electron_builder_with_retries 1 900 false node ./node_modules/electron-builder/out/cli/cli.js "${package_args[@]}"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+      - name: Build unsigned Electron release artifacts
+        if: matrix.smoke_platform != 'macos' || needs.signing-preflight.outputs.macos_signed != 'true'
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 未签名发布：故意不传 CSC_LINK / APPLE_* / WIN_CSC_* 这些 env。
-          # 当对应 secret 缺失时它们会被渲染成空字符串，而 electron-builder 一旦看到
-          # CSC_LINK 这个 key 就会进入证书签名流程，把空路径当成证书去加载，最终报
-          # "<workdir> not a file" 而失败。拿到 Apple Developer ID / Windows 证书后，
-          # 再把对应签名 env 加回来即可开启签名 + 公证。
+          # Unsigned fallback: do not pass CSC_LINK / APPLE_* / WIN_CSC_* here.
+          # Empty secrets are rendered as empty strings, and electron-builder
+          # treats an empty CSC_LINK key as an explicit certificate path.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: bunx electron-builder ${{ matrix.builder_args }} --publish never
+        run: node ./node_modules/electron-builder/out/cli/cli.js ${{ matrix.builder_args }} --publish never
 
       - name: Verify packaged app structure
         run: bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --package-kind release --artifacts-dir desktop/build-artifacts/electron
 
       - name: Verify macOS launch policy
-        if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'
+        if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.notarize_macos == true)
         run: bun run test:package-smoke --platform macos --package-kind release --artifacts-dir desktop/build-artifacts/electron --require-macos-gatekeeper
+
+      - name: Warn macOS notarization skipped
+        if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && github.event_name == 'workflow_dispatch' && inputs.notarize_macos == false
+        run: echo "::warning::Skipping macOS Gatekeeper package-smoke because notarization is disabled for this draft. Artifacts are Developer ID signed but not notarized."
 
       - name: Warn unsigned macOS launch policy skipped
         if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed != 'true'
@@ -394,7 +588,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.value }}
           name: Claude Code Haha v${{ steps.version.outputs.value }}
           body: ${{ steps.release_notes.outputs.body }}
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}
           prerelease: false
           fail_on_unmatched_files: true
           files: |
@@ -406,3 +600,9 @@ jobs:
             artifacts/release-assets/**/*.blockmap
             artifacts/update-metadata-standard/*.yml
             desktop/scripts/install-macos-unsigned.sh
+
+      - name: Ensure workflow-dispatch release remains draft
+        if: github.event_name == 'workflow_dispatch' && inputs.draft == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ steps.version.outputs.value }}" --draft --repo "${{ github.repository }}"

@@ -46,6 +46,10 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "signIgnore": [
+        "/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$",
+        "/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$"
+      ],
       "notarize": true
     },
     "win": {

@@ -9,6 +9,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { sessionService } from './sessionService.js'
 
 export type SearchResult = {
   file: string
@@ -17,12 +18,61 @@ export type SearchResult = {
   context?: string[]
 }
 
+export type SessionMatchRole = 'user' | 'assistant'
+
+export type SessionMatch = {
+  /** Who produced the matched text. */
+  role: SessionMatchRole
+  /** Transcript entry uuid (for future "jump to message"); null on legacy rows. */
+  messageId: string | null
+  /** 1-based line number inside the .jsonl file. */
+  lineNumber: number
+  /** Whitespace-collapsed, window-trimmed readable excerpt. */
+  snippet: string
+  /** Match ranges relative to `snippet`, for highlighting. */
+  highlights: Array<{ start: number; end: number }>
+  timestamp?: string
+}
+
 export type SessionSearchResult = {
   sessionId: string
   title: string
+  projectPath: string
+  workDir: string | null
+  modifiedAt: string
+  /** Total readable matches in the session (may exceed matches.length). */
   matchCount: number
-  matches: Array<{ line: number; text: string }>
+  matches: SessionMatch[]
 }
+
+export type SessionSearchOptions = {
+  limit?: number
+  matchesPerSession?: number
+  caseSensitive?: boolean
+}
+
+export type SessionSearchOutput = {
+  results: SessionSearchResult[]
+  truncated: boolean
+}
+
+/** Minimal transcript-entry shape needed for search (mirrors sessionService's RawEntry). */
+type RawSearchEntry = {
+  type?: string
+  uuid?: string
+  timestamp?: string
+  message?: { role?: string; content?: unknown }
+  [key: string]: unknown
+}
+
+/** Cap files parsed in phase B so a broad query can't read hundreds of large files. */
+const SESSION_SEARCH_MAX_FILES = 60
+const SESSION_SEARCH_DEFAULT_LIMIT = 50
+const SESSION_SEARCH_DEFAULT_MATCHES_PER_SESSION = 5
+/** Characters of context kept on each side of a match inside a snippet. */
+const SESSION_SNIPPET_WINDOW = 120
+/** Guard ripgrep output against multi-MB single lines (base64 / big tool results). */
+const RG_MAX_COLUMNS = 500
 
 export class SearchService {
   // ---------------------------------------------------------------------------
@@ -72,77 +122,348 @@ export class SearchService {
   // 会话历史搜索
   // ---------------------------------------------------------------------------
 
-  /** 搜索会话历史文件 */
-  async searchSessions(query: string): Promise<SessionSearchResult[]> {
-    if (!query) {
+  /**
+   * Full-text search across all session transcripts.
+   *
+   * Two-phase: (A) ripgrep scans `~/.claude/projects` for candidate files +
+   * matched line numbers (fast — tens of ms over hundreds of MB; falls back to a
+   * pure-JS scan when rg is unavailable). (B) for the most-recently-modified
+   * candidate files we parse only the matched lines, keep just user/assistant
+   * text blocks, re-confirm the query against the cleaned text (dropping
+   * ripgrep's false positives on JSON keys / UUIDs / base64), and build
+   * highlighted snippets with real session titles.
+   */
+  async searchSessions(
+    query: string,
+    options?: SessionSearchOptions,
+  ): Promise<SessionSearchOutput> {
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery) {
       throw ApiError.badRequest('Search query is required')
     }
+
+    const caseSensitive = options?.caseSensitive ?? false
+    const limit = options?.limit ?? SESSION_SEARCH_DEFAULT_LIMIT
+    const matchesPerSession =
+      options?.matchesPerSession ?? SESSION_SEARCH_DEFAULT_MATCHES_PER_SESSION
 
     const configDir =
       process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
     const projectsDir = path.join(configDir, 'projects')
 
-    const results: SessionSearchResult[] = []
-
     try {
       await fs.access(projectsDir)
     } catch {
-      // 目录不存在，返回空
-      return results
+      return { results: [], truncated: false }
     }
 
-    // 遍历 projects/ 下的 JSONL 会话文件
-    const entries = await this.walkJsonlFiles(projectsDir)
-    const lowerQuery = query.toLowerCase()
+    // ── Phase A: candidate files + matched line numbers ──────────────────────
+    const candidates = await this.findSessionCandidateLines(
+      trimmedQuery,
+      projectsDir,
+      { caseSensitive },
+    )
+    if (candidates.size === 0) {
+      return { results: [], truncated: false }
+    }
 
-    for (const filePath of entries) {
-      try {
-        const raw = await fs.readFile(filePath, 'utf-8')
-        const lines = raw.split('\n').filter(Boolean)
-
-        const matches: Array<{ line: number; text: string }> = []
-        let title = path.basename(filePath, '.jsonl')
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i]
-          if (line.toLowerCase().includes(lowerQuery)) {
-            // 尝试提取可读文本
-            try {
-              const obj = JSON.parse(line) as Record<string, unknown>
-              const text =
-                typeof obj.message === 'string'
-                  ? obj.message
-                  : typeof obj.content === 'string'
-                    ? obj.content
-                    : line.slice(0, 200)
-
-              // 提取 title
-              if (i === 0 && typeof obj.title === 'string') {
-                title = obj.title
-              }
-
-              matches.push({ line: i + 1, text: text.slice(0, 300) })
-            } catch {
-              matches.push({ line: i + 1, text: line.slice(0, 200) })
-            }
-          }
+    // Prefer the most recently modified sessions; cap how many we parse.
+    const ranked = await Promise.all(
+      [...candidates.keys()].map(async (filePath) => {
+        let mtimeMs = 0
+        try {
+          mtimeMs = (await fs.stat(filePath)).mtimeMs
+        } catch {
+          // unreadable — sinks to the bottom
         }
+        return { filePath, mtimeMs }
+      }),
+    )
+    ranked.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
-        if (matches.length > 0) {
-          const sessionId = path.basename(filePath, '.jsonl')
-          results.push({
-            sessionId,
-            title,
-            matchCount: matches.length,
-            matches: matches.slice(0, 20), // 每个会话最多 20 条匹配
+    let truncated = false
+    let filesToParse = ranked
+    if (filesToParse.length > SESSION_SEARCH_MAX_FILES) {
+      filesToParse = filesToParse.slice(0, SESSION_SEARCH_MAX_FILES)
+      truncated = true
+    }
+
+    // ── Phase B: parse matched lines serially (avoid concurrent big-file reads)
+    const results: SessionSearchResult[] = []
+    for (const { filePath } of filesToParse) {
+      const lineNumbers = candidates.get(filePath)
+      if (!lineNumbers || lineNumbers.size === 0) continue
+
+      const { matches, matchCount } = await this.extractSessionMatches(
+        filePath,
+        lineNumbers,
+        trimmedQuery,
+        { caseSensitive, matchesPerSession },
+      )
+      // All ripgrep hits were JSON noise (no readable user/assistant text).
+      if (matchCount === 0) continue
+
+      const sessionId = path.basename(filePath, '.jsonl')
+      let title = sessionId
+      let projectPath = path.basename(path.dirname(filePath))
+      let workDir: string | null = null
+      let modifiedAt = new Date(0).toISOString()
+      try {
+        const meta = await sessionService.getSessionTitleAndMeta(filePath)
+        title = meta.title
+        projectPath = meta.projectPath
+        workDir = meta.workDir
+        modifiedAt = meta.modifiedAt
+      } catch {
+        // keep fallbacks
+      }
+
+      results.push({
+        sessionId,
+        title,
+        projectPath,
+        workDir,
+        modifiedAt,
+        matchCount,
+        matches,
+      })
+    }
+
+    // Most recently modified first.
+    results.sort((a, b) =>
+      a.modifiedAt < b.modifiedAt ? 1 : a.modifiedAt > b.modifiedAt ? -1 : 0,
+    )
+
+    if (results.length > limit) {
+      return { results: results.slice(0, limit), truncated: true }
+    }
+    return { results, truncated }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 会话搜索 — Phase A: 候选文件 + 命中行号
+  // ---------------------------------------------------------------------------
+
+  private async findSessionCandidateLines(
+    query: string,
+    projectsDir: string,
+    opts: { caseSensitive: boolean },
+  ): Promise<Map<string, Set<number>>> {
+    if (await this.commandExists('rg')) {
+      try {
+        return await this.findSessionCandidatesWithRipgrep(query, projectsDir, opts)
+      } catch {
+        // rg failed — fall back to a portable scan
+      }
+    }
+    return this.findSessionCandidatesWithFilesystem(query, projectsDir, opts)
+  }
+
+  private async findSessionCandidatesWithRipgrep(
+    query: string,
+    projectsDir: string,
+    opts: { caseSensitive: boolean },
+  ): Promise<Map<string, Set<number>>> {
+    const args = ['--json', '--max-columns', String(RG_MAX_COLUMNS), '--glob', '*.jsonl']
+    if (!opts.caseSensitive) args.push('--ignore-case')
+    args.push('--', query, projectsDir)
+
+    const output = await this.runCommand('rg', args)
+    const map = new Map<string, Set<number>>()
+
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      try {
+        const obj = JSON.parse(line) as Record<string, unknown>
+        if (obj.type !== 'match') continue
+        const data = obj.data as { path?: { text?: string }; line_number?: number }
+        const file = data.path?.text
+        const lineNum = data.line_number
+        if (!file || !lineNum) continue
+        let set = map.get(file)
+        if (!set) {
+          set = new Set<number>()
+          map.set(file, set)
+        }
+        set.add(lineNum)
+      } catch {
+        // skip unparseable rg rows
+      }
+    }
+    return map
+  }
+
+  private async findSessionCandidatesWithFilesystem(
+    query: string,
+    projectsDir: string,
+    opts: { caseSensitive: boolean },
+  ): Promise<Map<string, Set<number>>> {
+    const files = await this.walkJsonlFiles(projectsDir)
+    const needle = opts.caseSensitive ? query : query.toLowerCase()
+    const map = new Map<string, Set<number>>()
+
+    for (const filePath of files) {
+      let raw: string
+      try {
+        raw = await fs.readFile(filePath, 'utf-8')
+      } catch {
+        continue
+      }
+      const lines = raw.split('\n')
+      const set = new Set<number>()
+      for (let i = 0; i < lines.length; i++) {
+        const haystack = opts.caseSensitive ? lines[i] : lines[i].toLowerCase()
+        if (haystack.includes(needle)) set.add(i + 1)
+      }
+      if (set.size > 0) map.set(filePath, set)
+    }
+    return map
+  }
+
+  // ---------------------------------------------------------------------------
+  // 会话搜索 — Phase B: 解析命中行 → 清洗 → 提取片段
+  // ---------------------------------------------------------------------------
+
+  private async extractSessionMatches(
+    filePath: string,
+    lineNumbers: Set<number>,
+    query: string,
+    opts: { caseSensitive: boolean; matchesPerSession: number },
+  ): Promise<{ matches: SessionMatch[]; matchCount: number }> {
+    let raw: string
+    try {
+      raw = await fs.readFile(filePath, 'utf-8')
+    } catch {
+      return { matches: [], matchCount: 0 }
+    }
+
+    const lines = raw.split('\n')
+    const needle = opts.caseSensitive ? query : query.toLowerCase()
+    const matches: SessionMatch[] = []
+    let matchCount = 0
+
+    for (const lineNo of [...lineNumbers].sort((a, b) => a - b)) {
+      const line = lines[lineNo - 1]
+      if (!line) continue
+
+      let entry: RawSearchEntry
+      try {
+        entry = JSON.parse(line) as RawSearchEntry
+      } catch {
+        continue // half-written / malformed line
+      }
+
+      for (const segment of this.extractUserAssistantSegments(entry)) {
+        const haystack = opts.caseSensitive ? segment.text : segment.text.toLowerCase()
+        if (!haystack.includes(needle)) continue // ripgrep false positive (JSON noise)
+
+        matchCount += 1
+        if (matches.length < opts.matchesPerSession) {
+          const { snippet, highlights } = this.buildSnippet(
+            segment.text,
+            query,
+            opts.caseSensitive,
+          )
+          matches.push({
+            role: segment.role,
+            messageId: typeof entry.uuid === 'string' ? entry.uuid : null,
+            lineNumber: lineNo,
+            snippet,
+            highlights,
+            ...(typeof entry.timestamp === 'string' ? { timestamp: entry.timestamp } : {}),
           })
         }
-      } catch {
-        // 跳过无法读取的文件
       }
     }
 
-    return results
+    return { matches, matchCount }
+  }
+
+  /**
+   * Extract only the user/assistant natural-language text from a transcript
+   * entry. Tool calls (tool_use) and tool results (tool_result) are skipped, as
+   * are internal command breadcrumbs — keeping search results clean.
+   */
+  private extractUserAssistantSegments(
+    entry: RawSearchEntry,
+  ): Array<{ role: SessionMatchRole; text: string }> {
+    if (entry.type !== 'user' && entry.type !== 'assistant') return []
+
+    const content = entry.message?.content
+    if (this.isInternalCommandBreadcrumb(content)) return []
+
+    const role: SessionMatchRole =
+      entry.type === 'assistant' || entry.message?.role === 'assistant'
+        ? 'assistant'
+        : 'user'
+
+    return this.extractPlainTextBlocks(content).map((text) => ({ role, text }))
+  }
+
+  /** Plain text from message content (string, or `text` blocks only). */
+  private extractPlainTextBlocks(content: unknown): string[] {
+    if (typeof content === 'string') {
+      const trimmed = content.trim()
+      return trimmed ? [trimmed] : []
+    }
+    if (!Array.isArray(content)) return []
+
+    const out: string[] = []
+    for (const block of content) {
+      if (block && typeof block === 'object') {
+        const record = block as Record<string, unknown>
+        if (record.type === 'text' && typeof record.text === 'string') {
+          const trimmed = record.text.trim()
+          if (trimmed) out.push(trimmed)
+        }
+      }
+    }
+    return out
+  }
+
+  private isInternalCommandBreadcrumb(content: unknown): boolean {
+    const textBlocks = this.extractPlainTextBlocks(content)
+    return (
+      textBlocks.length > 0 &&
+      textBlocks.every((text) =>
+        text.includes('<command-name>') ||
+        text.includes('<command-message>') ||
+        text.includes('<command-args>') ||
+        text.includes('<local-command-caveat>'),
+      )
+    )
+  }
+
+  /** Window a single match into a one-line, highlighted snippet. */
+  private buildSnippet(
+    text: string,
+    query: string,
+    caseSensitive: boolean,
+  ): { snippet: string; highlights: Array<{ start: number; end: number }> } {
+    const normalized = text.replace(/\s+/g, ' ').trim()
+    const haystack = caseSensitive ? normalized : normalized.toLowerCase()
+    const needle = caseSensitive ? query : query.toLowerCase()
+
+    const idx = haystack.indexOf(needle)
+    if (idx < 0) {
+      const head = normalized.slice(0, SESSION_SNIPPET_WINDOW * 2)
+      return {
+        snippet: head + (normalized.length > head.length ? '…' : ''),
+        highlights: [],
+      }
+    }
+
+    const start = Math.max(0, idx - SESSION_SNIPPET_WINDOW)
+    const end = Math.min(normalized.length, idx + needle.length + SESSION_SNIPPET_WINDOW)
+    const prefix = start > 0 ? '…' : ''
+    const suffix = end < normalized.length ? '…' : ''
+    const snippet = prefix + normalized.slice(start, end) + suffix
+    const highlightStart = prefix.length + (idx - start)
+
+    return {
+      snippet,
+      highlights: [{ start: highlightStart, end: highlightStart + needle.length }],
+    }
   }
 
   // ---------------------------------------------------------------------------

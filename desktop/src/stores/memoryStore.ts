@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import { memoryApi } from '../api/memory'
 import type { MemoryFile, MemoryFileDetail, MemoryProject } from '../types/memory'
 
+function canSelectMemoryProject(project: MemoryProject): boolean {
+  return project.exists || project.fileCount > 0
+}
+
 type MemoryStore = {
   projects: MemoryProject[]
   files: MemoryFile[]
@@ -41,12 +45,26 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
     set({ isLoadingProjects: true, error: null })
     try {
       const { projects } = await memoryApi.listProjects(cwd)
-      const current = projects.find((project) => project.isCurrent)
+      const selectableProjects = projects.filter(canSelectMemoryProject)
+      const current = selectableProjects.find((project) => project.isCurrent)
+      const previousSelectedProjectId = get().selectedProjectId
       const selectedProjectId =
-        get().selectedProjectId && projects.some((project) => project.id === get().selectedProjectId)
-          ? get().selectedProjectId
-          : current?.id ?? projects[0]?.id ?? null
-      set({ projects, selectedProjectId, isLoadingProjects: false })
+        previousSelectedProjectId && selectableProjects.some((project) => project.id === previousSelectedProjectId)
+          ? previousSelectedProjectId
+          : current?.id ?? selectableProjects[0]?.id ?? null
+      set({
+        projects,
+        selectedProjectId,
+        isLoadingProjects: false,
+        ...(selectedProjectId === previousSelectedProjectId
+          ? {}
+          : {
+              files: [],
+              selectedFile: null,
+              draftContent: '',
+              lastSavedAt: null,
+            }),
+      })
     } catch (err) {
       set({ error: (err as Error).message, isLoadingProjects: false })
     }

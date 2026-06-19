@@ -42,10 +42,16 @@ vi.mock('../../pages/TraceList', () => ({
   TraceList: () => <div data-testid="trace-list" />,
 }))
 
+vi.mock('../workbench/WorkbenchTab', () => ({
+  WorkbenchTab: ({ sessionId, tabId }: { sessionId: string; tabId: string }) => (
+    <div data-testid="workbench-tab">workbench:{sessionId}:{tabId}</div>
+  ),
+}))
+
 import { ContentRouter } from './ContentRouter'
 import { useTabStore } from '../../stores/tabStore'
 
-describe('ContentRouter terminal tabs', () => {
+describe('ContentRouter tab surfaces', () => {
   afterEach(() => {
     cleanup()
     previewBridgeMock.close.mockClear()
@@ -145,6 +151,24 @@ describe('ContentRouter terminal tabs', () => {
     render(<ContentRouter />)
 
     expect(screen.getByTestId('trace-list')).toBeInTheDocument()
+    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
+  })
+
+  it('renders workbench tabs as main content instead of mounting the chat session surface', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: '__workbench__session-1',
+        title: 'Workbench',
+        type: 'workbench',
+        status: 'idle',
+        workbenchSessionId: 'session-1',
+      }],
+      activeTabId: '__workbench__session-1',
+    })
+
+    render(<ContentRouter />)
+
+    expect(screen.getByTestId('workbench-tab')).toHaveTextContent('workbench:session-1:__workbench__session-1')
     expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
   })
 

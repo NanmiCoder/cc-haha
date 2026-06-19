@@ -29,7 +29,7 @@ import { Button } from '../components/shared/Button'
 import { Dropdown } from '../components/shared/Dropdown'
 import type { ThemeMode, UpdateProxyMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource } from '../types/settings'
 import type { Locale } from '../i18n'
-import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ProviderAuthStrategy } from '../types/provider'
+import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ProviderAuthStrategy } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
 import { AdapterSettings } from './AdapterSettings'
 import { useAgentStore } from '../stores/agentStore'
@@ -740,6 +740,7 @@ const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
 const MODEL_CONTEXT_WINDOW_MIN = 16000
 const MODEL_CONTEXT_WINDOW_MAX = 10000000
+const MODEL_1M_CONTEXT_WINDOW = 1000000
 const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
 
 // Pull `id` strings out of common /v1/models response shapes (OpenAI: { data: [{ id }] };
@@ -826,6 +827,13 @@ export function extractModelEntries(payload: unknown): FetchedModelEntry[] {
     }
   }
   return out
+}
+
+const DEFAULT_MODEL_1M_SUPPORT: Model1mSupport = {
+  main: false,
+  haiku: false,
+  sonnet: false,
+  opus: false,
 }
 const DEFAULT_PROVIDER_AUTH_STRATEGY: ProviderAuthStrategy = 'auth_token'
 const AUTH_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
@@ -973,6 +981,81 @@ function buildModelContextWindows(
   return windows
 }
 
+function hasModel1mMarker(model: string): boolean {
+  return /\[1m\]$/i.test(model.trim()) || /:1m$/i.test(model.trim())
+}
+
+function stripModel1mMarker(model: string): string {
+  return model.trim().replace(/\[1m\]$/i, '').replace(/:1m$/i, '').trim()
+}
+
+function stripModel1mMarkers(models: ModelMapping): ModelMapping {
+  return {
+    main: stripModel1mMarker(models.main),
+    haiku: stripModel1mMarker(models.haiku),
+    sonnet: stripModel1mMarker(models.sonnet),
+    opus: stripModel1mMarker(models.opus),
+  }
+}
+
+function getInitialModel1mSupport(
+  models: ModelMapping,
+  provider?: SavedProvider,
+): Model1mSupport {
+  return {
+    main: provider?.model1mSupport?.main === true || hasModel1mMarker(models.main),
+    haiku: provider?.model1mSupport?.haiku === true || hasModel1mMarker(models.haiku),
+    sonnet: provider?.model1mSupport?.sonnet === true || hasModel1mMarker(models.sonnet),
+    opus: provider?.model1mSupport?.opus === true || hasModel1mMarker(models.opus),
+  }
+}
+
+function applyModel1mSupport(model: string, enabled: boolean): string {
+  const stripped = stripModel1mMarker(model)
+  return enabled && stripped ? `${stripped}[1m]` : stripped
+}
+
+function applyModel1mSupportMapping(
+  models: ModelMapping,
+  model1mSupport: Model1mSupport,
+): ModelMapping {
+  return {
+    main: applyModel1mSupport(models.main, model1mSupport.main),
+    haiku: applyModel1mSupport(models.haiku, model1mSupport.haiku),
+    sonnet: applyModel1mSupport(models.sonnet, model1mSupport.sonnet),
+    opus: applyModel1mSupport(models.opus, model1mSupport.opus),
+  }
+}
+
+function hasAnyModel1mSupport(model1mSupport: Model1mSupport): boolean {
+  return MODEL_SLOTS.some((slot) => model1mSupport[slot])
+}
+
+function shouldFill1mContextWindow(value: string): boolean {
+  const parsed = parseModelContextWindowsInput(value)
+  return parsed === undefined || parsed < MODEL_1M_CONTEXT_WINDOW
+}
+
+function apply1mSupportToContextInput(
+  inputs: ModelContextInputs,
+  slot: ModelSlot,
+  enabled: boolean,
+): ModelContextInputs {
+  if (!enabled || !shouldFill1mContextWindow(inputs[slot])) return inputs
+  return { ...inputs, [slot]: String(MODEL_1M_CONTEXT_WINDOW) }
+}
+
+function apply1mSupportToContextInputs(
+  inputs: ModelContextInputs,
+  model1mSupport: Model1mSupport,
+): ModelContextInputs {
+  let nextInputs = inputs
+  for (const slot of MODEL_SLOTS) {
+    nextInputs = apply1mSupportToContextInput(nextInputs, slot, model1mSupport[slot])
+  }
+  return nextInputs
+}
+
 function normalizeModelMapping(models: ModelMapping): ModelMapping {
   const main = models.main.trim()
   return {
@@ -981,6 +1064,50 @@ function normalizeModelMapping(models: ModelMapping): ModelMapping {
     sonnet: models.sonnet.trim() || main,
     opus: models.opus.trim() || main,
   }
+}
+
+function applyToolSearchEnv(
+  env: Record<string, unknown>,
+  apiFormat: ApiFormat,
+  toolSearchEnabled: boolean,
+): void {
+  delete env.ENABLE_TOOL_SEARCH
+  if (apiFormat === 'anthropic') {
+    env.ENABLE_TOOL_SEARCH = toolSearchEnabled ? 'true' : 'false'
+  }
+}
+
+function updateSettingsJsonToolSearch(
+  raw: string,
+  apiFormat: ApiFormat,
+  toolSearchEnabled: boolean,
+): string {
+  try {
+    const parsed = JSON.parse(raw || '{}') as { env?: Record<string, unknown> }
+    const existingEnv = parsed.env && typeof parsed.env === 'object' && !Array.isArray(parsed.env)
+      ? parsed.env
+      : {}
+    const env = { ...existingEnv }
+    applyToolSearchEnv(env, apiFormat, toolSearchEnabled)
+    parsed.env = env
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return raw
+  }
+}
+
+function readToolSearchEnabledFromEnv(env: Record<string, unknown>): boolean {
+  const value = env.ENABLE_TOOL_SEARCH
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['0', 'false', 'off', 'no'].includes(normalized)) return false
+    if (['1', 'true', 'on', 'yes', 'auto'].includes(normalized) || normalized.startsWith('auto:')) {
+      return true
+    }
+  }
+  return true
 }
 
 function updateSettingsJsonAutoCompactWindow(raw: string, value: string): string {
@@ -1025,18 +1152,23 @@ function updateSettingsJsonModelContextWindows(
   }
 }
 
-function updateSettingsJsonModels(raw: string, models: ModelMapping): string {
+function updateSettingsJsonModels(
+  raw: string,
+  models: ModelMapping,
+  model1mSupport: Model1mSupport = DEFAULT_MODEL_1M_SUPPORT,
+): string {
   try {
     const parsed = JSON.parse(raw || '{}') as { env?: Record<string, unknown> }
     const existingEnv = parsed.env && typeof parsed.env === 'object' && !Array.isArray(parsed.env)
       ? parsed.env
       : {}
+    const runtimeModels = applyModel1mSupportMapping(models, model1mSupport)
     parsed.env = {
       ...existingEnv,
-      ANTHROPIC_MODEL: models.main,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
+      ANTHROPIC_MODEL: runtimeModels.main,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: runtimeModels.haiku,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: runtimeModels.sonnet,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: runtimeModels.opus,
     }
     return JSON.stringify(parsed, null, 2)
   } catch {
@@ -1052,6 +1184,7 @@ function updateSettingsJsonProviderConnection(
   preset: ProviderPreset,
   baseUrl: string,
   proxyBaseUrl: string,
+  toolSearchEnabled = true,
 ): string {
   try {
     const parsed = JSON.parse(raw || '{}') as { env?: Record<string, unknown> }
@@ -1061,6 +1194,7 @@ function updateSettingsJsonProviderConnection(
     const env = { ...existingEnv }
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
+    applyToolSearchEnv(env, apiFormat, toolSearchEnabled)
     env.ANTHROPIC_BASE_URL = apiFormat !== 'anthropic' ? proxyBaseUrl : baseUrl
     Object.assign(env, buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, preset))
     parsed.env = env
@@ -1242,6 +1376,15 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
       : availablePresets[0] ?? fallbackPreset,
   )
+  const initialModels = stripModel1mMarkers(provider?.models ?? initialPreset.defaultModels)
+  const initialModel1mSupport = getInitialModel1mSupport(
+    provider?.models ?? initialPreset.defaultModels,
+    provider,
+  )
+  const initialModelContextInputs = apply1mSupportToContextInputs(
+    getModelContextInputs(initialModels, initialPreset, provider),
+    initialModel1mSupport,
+  )
 
   const [selectedPreset, setSelectedPreset] = useState<ProviderPreset>(initialPreset)
   const [name, setName] = useState(provider?.name ?? initialPreset.name)
@@ -1251,15 +1394,15 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [apiKey, setApiKey] = useState(provider?.apiKey ?? '')
   const [showApiKey, setShowApiKey] = useState(false)
   const [notes, setNotes] = useState(provider?.notes ?? '')
-  const [models, setModels] = useState<ModelMapping>(provider?.models ?? { ...initialPreset.defaultModels })
-  const [modelContextInputs, setModelContextInputs] = useState<ModelContextInputs>(
-    getModelContextInputs(provider?.models ?? initialPreset.defaultModels, initialPreset, provider),
-  )
+  const [models, setModels] = useState<ModelMapping>(initialModels)
+  const [model1mSupport, setModel1mSupport] = useState<Model1mSupport>(initialModel1mSupport)
+  const [modelContextInputs, setModelContextInputs] = useState<ModelContextInputs>(initialModelContextInputs)
   const [autoCompactWindow, setAutoCompactWindow] = useState(
     provider?.autoCompactWindow !== undefined
       ? String(provider.autoCompactWindow)
       : getPresetAutoCompactWindow(initialPreset),
   )
+  const [toolSearchEnabled, setToolSearchEnabled] = useState(provider?.toolSearchEnabled ?? true)
   const [showContextSettings, setShowContextSettings] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
@@ -1285,25 +1428,28 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         const autoCompactWindowEnv = autoCompactWindow.trim()
         const modelContextWindows = buildModelContextWindows(models, modelContextInputs)
         const normalizedModels = normalizeModelMapping(models)
+        const runtimeModels = applyModel1mSupportMapping(normalizedModels, model1mSupport)
         const existingEnv = (settings.env as Record<string, string>) || {}
         const cleanedEnv = stripProviderSettingsJsonEnv(existingEnv, presetDefaultEnvKeys)
+        const mergedEnv: Record<string, unknown> = {
+          ...cleanedEnv,
+          ...omitAuthEnv(selectedPreset.defaultEnv),
+          ...(autoCompactWindowEnv ? { [AUTO_COMPACT_WINDOW_ENV_KEY]: autoCompactWindowEnv } : {}),
+          ...(Object.keys(modelContextWindows).length > 0
+            ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
+            : {}),
+          ANTHROPIC_BASE_URL: needsProxy ? providerProxyBaseUrl : baseUrl,
+          ...buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, selectedPreset),
+          ANTHROPIC_MODEL: runtimeModels.main,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: runtimeModels.haiku,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: runtimeModels.sonnet,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: runtimeModels.opus,
+        }
+        applyToolSearchEnv(mergedEnv, apiFormat, toolSearchEnabled)
         const merged = {
           ...settings,
           skipWebFetchPreflight: settings.skipWebFetchPreflight ?? true,
-          env: {
-            ...cleanedEnv,
-            ...omitAuthEnv(selectedPreset.defaultEnv),
-            ...(autoCompactWindowEnv ? { [AUTO_COMPACT_WINDOW_ENV_KEY]: autoCompactWindowEnv } : {}),
-            ...(Object.keys(modelContextWindows).length > 0
-              ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
-              : {}),
-            ANTHROPIC_BASE_URL: needsProxy ? providerProxyBaseUrl : baseUrl,
-            ...buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, selectedPreset),
-            ANTHROPIC_MODEL: normalizedModels.main,
-            ANTHROPIC_DEFAULT_HAIKU_MODEL: normalizedModels.haiku,
-            ANTHROPIC_DEFAULT_SONNET_MODEL: normalizedModels.sonnet,
-            ANTHROPIC_DEFAULT_OPUS_MODEL: normalizedModels.opus,
-          },
+          env: mergedEnv,
         }
         setSettingsJson(JSON.stringify(merged, null, 2))
       }).catch(() => {
@@ -1319,9 +1465,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     setBaseUrl(preset.baseUrl)
     setApiFormat(preset.apiFormat ?? 'anthropic')
     setAuthStrategy(getPresetAuthStrategy(preset))
-    setModels({ ...preset.defaultModels })
-    setModelContextInputs(getModelContextInputs(preset.defaultModels, preset))
+    const nextModels = stripModel1mMarkers(preset.defaultModels)
+    const nextModel1mSupport = getInitialModel1mSupport(preset.defaultModels)
+    const nextModelContextInputs = apply1mSupportToContextInputs(
+      getModelContextInputs(nextModels, preset),
+      nextModel1mSupport,
+    )
+    setModels(nextModels)
+    setModel1mSupport(nextModel1mSupport)
+    setModelContextInputs(nextModelContextInputs)
     setAutoCompactWindow(getPresetAutoCompactWindow(preset))
+    setToolSearchEnabled(true)
     setShowContextSettings(false)
     setTestResult(null)
   }
@@ -1387,6 +1541,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     },
   ] satisfies Array<{ value: ProviderAuthStrategy; label: string; description: string; icon: ReactNode }>
   const selectedAuthStrategyLabel = authStrategyItems.find((item) => item.value === authStrategy)?.label ?? t('settings.providers.authStrategyAuthToken')
+  const toolSearchUnsupported = apiFormat !== 'anthropic'
+  const toolSearchDescription = toolSearchUnsupported
+    ? t('settings.providers.toolSearchUnsupported')
+    : t('settings.providers.toolSearchDesc')
   const configuredContextWindows = buildModelContextWindows(models, modelContextInputs)
   const configuredContextSummary = Object.entries(configuredContextWindows)
     .filter(([model], index, entries) => entries.findIndex(([candidate]) => candidate === model) === index)
@@ -1407,31 +1565,56 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   }
   const handleBaseUrlChange = (value: string) => {
     setBaseUrl(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value, providerProxyBaseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value, providerProxyBaseUrl, toolSearchEnabled))
   }
   const handleApiKeyChange = (value: string) => {
     setApiKey(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl, providerProxyBaseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled))
   }
   const handleApiFormatChange = (value: ApiFormat) => {
     setApiFormat(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled))
   }
   const handleAuthStrategyChange = (value: ProviderAuthStrategy) => {
     setAuthStrategy(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled))
+  }
+  const handleToolSearchToggle = (enabled: boolean) => {
+    if (toolSearchUnsupported) return
+    setToolSearchEnabled(enabled)
+    setSettingsJson((current) => updateSettingsJsonToolSearch(current, apiFormat, enabled))
   }
   const handleModelChange = (slot: ModelSlot, value: string) => {
-    const nextModels = { ...models, [slot]: value }
+    const hasMarker = hasModel1mMarker(value)
+    const nextModels = { ...models, [slot]: stripModel1mMarker(value) }
+    const nextModel1mSupport = hasMarker
+      ? { ...model1mSupport, [slot]: true }
+      : model1mSupport
     const nextInputs = {
       ...modelContextInputs,
-      [slot]: getModelContextInputValue(value, selectedPreset, provider),
+      [slot]: getModelContextInputValue(nextModels[slot], selectedPreset, provider),
     }
+    const nextInputsWith1mSupport = apply1mSupportToContextInput(
+      nextInputs,
+      slot,
+      nextModel1mSupport[slot],
+    )
     setModels(nextModels)
+    setModel1mSupport(nextModel1mSupport)
+    setModelContextInputs(nextInputsWith1mSupport)
+    setSettingsJson((current) => updateSettingsJsonModelContextWindows(
+      updateSettingsJsonModels(current, normalizeModelMapping(nextModels), nextModel1mSupport),
+      buildModelContextWindows(nextModels, nextInputsWith1mSupport),
+    ))
+  }
+  const handleModel1mSupportChange = (slot: ModelSlot, enabled: boolean) => {
+    const nextModel1mSupport = { ...model1mSupport, [slot]: enabled }
+    const nextInputs = apply1mSupportToContextInput(modelContextInputs, slot, enabled)
+    setModel1mSupport(nextModel1mSupport)
     setModelContextInputs(nextInputs)
     setSettingsJson((current) => updateSettingsJsonModelContextWindows(
-      updateSettingsJsonModels(current, normalizeModelMapping(nextModels)),
-      buildModelContextWindows(nextModels, nextInputs),
+      updateSettingsJsonModels(current, normalizeModelMapping(models), nextModel1mSupport),
+      buildModelContextWindows(models, nextInputs),
     ))
   }
   const handleModelContextWindowChange = (slot: ModelSlot, value: string) => {
@@ -1461,6 +1644,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     const normalizedModels = normalizeModelMapping(models)
     const parsedAutoCompactWindow = parseAutoCompactWindowInput(autoCompactWindow)
     const parsedModelContextWindows = buildModelContextWindows(models, modelContextInputs)
+    const storedModel1mSupport = hasAnyModel1mSupport(model1mSupport)
+      ? model1mSupport
+      : undefined
     setIsSubmitting(true)
     try {
       // Write the edited cc-haha settings.json first so provider-specific model
@@ -1484,8 +1670,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           baseUrl: baseUrl.trim(),
           apiFormat,
           models: normalizedModels,
+          ...(storedModel1mSupport !== undefined && { model1mSupport: storedModel1mSupport }),
           ...(parsedAutoCompactWindow !== undefined && { autoCompactWindow: parsedAutoCompactWindow }),
           ...(Object.keys(parsedModelContextWindows).length > 0 && { modelContextWindows: parsedModelContextWindows }),
+          toolSearchEnabled,
           notes: notes.trim() || undefined,
         })
       } else if (provider) {
@@ -1495,10 +1683,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           authStrategy,
           apiFormat,
           models: normalizedModels,
+          model1mSupport: storedModel1mSupport ?? null,
           autoCompactWindow: parsedAutoCompactWindow ?? null,
           modelContextWindows: Object.keys(parsedModelContextWindows).length > 0
             ? parsedModelContextWindows
             : null,
+          toolSearchEnabled,
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
@@ -1705,6 +1895,32 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           </div>
         )}
 
+        <label
+          className={`relative flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-3 transition-colors ${
+            toolSearchUnsupported
+              ? 'cursor-not-allowed opacity-70'
+              : 'cursor-pointer hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)]'
+          }`}
+        >
+          <input
+            type="checkbox"
+            aria-label={t('settings.providers.toolSearchEnabled')}
+            checked={toolSearchEnabled && !toolSearchUnsupported}
+            disabled={toolSearchUnsupported}
+            onChange={(e) => handleToolSearchToggle(e.target.checked)}
+            className={SETTINGS_CHECKBOX_INPUT_CLASS}
+          />
+          <SettingsCheckboxMark checked={toolSearchEnabled && !toolSearchUnsupported} disabled={toolSearchUnsupported} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.providers.toolSearchEnabled')}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+              {toolSearchDescription}
+            </div>
+          </div>
+        </label>
+
         <div className="flex flex-col gap-1">
           <label htmlFor="provider-api-key" className="text-sm font-medium text-[var(--color-text-primary)]">
             {t('settings.providers.apiKey')}
@@ -1783,35 +1999,38 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             </p>
           )}
           <div className="grid grid-cols-2 gap-2">
-            <ModelComboInput
-              label={t('settings.providers.mainModel')}
-              required
-              value={models.main}
-              onChange={(value) => handleModelChange('main', value)}
-              placeholder="Model ID"
-              options={fetchedModels}
-            />
-            <ModelComboInput
-              label={t('settings.providers.haikuModel')}
-              value={models.haiku}
-              onChange={(value) => handleModelChange('haiku', value)}
-              placeholder={t('settings.providers.sameAsMain')}
-              options={fetchedModels}
-            />
-            <ModelComboInput
-              label={t('settings.providers.sonnetModel')}
-              value={models.sonnet}
-              onChange={(value) => handleModelChange('sonnet', value)}
-              placeholder={t('settings.providers.sameAsMain')}
-              options={fetchedModels}
-            />
-            <ModelComboInput
-              label={t('settings.providers.opusModel')}
-              value={models.opus}
-              onChange={(value) => handleModelChange('opus', value)}
-              placeholder={t('settings.providers.sameAsMain')}
-              options={fetchedModels}
-            />
+            {MODEL_SLOTS.map((slot) => {
+              const labelKey = slot === 'main'
+                ? 'settings.providers.mainModel'
+                : slot === 'haiku'
+                  ? 'settings.providers.haikuModel'
+                  : slot === 'sonnet'
+                    ? 'settings.providers.sonnetModel'
+                    : 'settings.providers.opusModel'
+              const label = t(labelKey)
+              return (
+                <div key={slot} className="min-w-0">
+                  <ModelComboInput
+                    label={label}
+                    required={slot === 'main'}
+                    value={models[slot]}
+                    onChange={(value) => handleModelChange(slot, value)}
+                    placeholder={slot === 'main' ? 'Model ID' : t('settings.providers.sameAsMain')}
+                    options={fetchedModels}
+                  />
+                  <label className="mt-1 inline-flex h-6 w-fit cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+                    <input
+                      type="checkbox"
+                      checked={model1mSupport[slot]}
+                      onChange={(e) => handleModel1mSupportChange(slot, e.target.checked)}
+                      aria-label={`1M support: ${slot}`}
+                      className="h-3.5 w-3.5 rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+                    />
+                    <span>{t('settings.providers.model1mSupportShort')}</span>
+                  </label>
+                </div>
+              )
+            })}
           </div>
         </div>
 
@@ -1964,6 +2183,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
                   if (nextAuthStrategy) {
                     setAuthStrategy(nextAuthStrategy)
                   }
+                  setToolSearchEnabled(readToolSearchEnabledFromEnv(env))
                   if (env[AUTO_COMPACT_WINDOW_ENV_KEY] !== undefined) {
                     setAutoCompactWindow(String(env[AUTO_COMPACT_WINDOW_ENV_KEY]))
                   } else {
@@ -1988,11 +2208,22 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
                   if (env.ANTHROPIC_DEFAULT_OPUS_MODEL) newModels.opus = env.ANTHROPIC_DEFAULT_OPUS_MODEL
                   if (Object.keys(newModels).length > 0) {
                     setModels((prev) => {
-                      const nextModels = { ...prev, ...newModels }
-                      setModelContextInputs(getModelContextInputs(nextModels, {
-                        ...selectedPreset,
-                        modelContextWindows: parsedContextWindows,
-                      }))
+                      const mergedModels = { ...prev, ...newModels }
+                      const nextModel1mSupport = {
+                        main: hasModel1mMarker(mergedModels.main),
+                        haiku: hasModel1mMarker(mergedModels.haiku),
+                        sonnet: hasModel1mMarker(mergedModels.sonnet),
+                        opus: hasModel1mMarker(mergedModels.opus),
+                      }
+                      const nextModels = stripModel1mMarkers(mergedModels)
+                      setModel1mSupport(nextModel1mSupport)
+                      setModelContextInputs(apply1mSupportToContextInputs(
+                        getModelContextInputs(nextModels, {
+                          ...selectedPreset,
+                          modelContextWindows: parsedContextWindows,
+                        }),
+                        nextModel1mSupport,
+                      ))
                       return nextModels
                     })
                   } else if (Object.keys(parsedContextWindows).length > 0) {

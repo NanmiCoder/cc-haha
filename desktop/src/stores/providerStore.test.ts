@@ -115,6 +115,7 @@ describe('providerStore runtime refresh', () => {
       providerId: provider.id,
       modelId: 'model-main',
     })
+    expect(settingsSetModelMock).not.toHaveBeenCalled()
   })
 
   it('keeps an explicit provider model selection when the model still exists', async () => {
@@ -179,6 +180,21 @@ describe('providerStore runtime refresh', () => {
     await useProviderStore.getState().activateProvider(provider.id)
 
     expect(settingsSetModelMock).toHaveBeenCalledWith('model-main')
+    expect(settingsFetchAllMock).toHaveBeenCalled()
+  })
+
+  it('sets the provider main model when updating the active saved provider', async () => {
+    const provider = makeProvider({ models: { main: 'model-flash', haiku: 'model-flash', sonnet: 'model-pro', opus: 'model-pro' } })
+    providersApiMock.update.mockResolvedValue({ provider })
+    providersApiMock.list.mockResolvedValue({
+      providers: [provider],
+      activeId: provider.id,
+    })
+
+    const { useProviderStore } = await import('./providerStore')
+    await useProviderStore.getState().updateProvider(provider.id, { models: provider.models })
+
+    expect(settingsSetModelMock).toHaveBeenCalledWith('model-flash')
     expect(settingsFetchAllMock).toHaveBeenCalled()
   })
 })

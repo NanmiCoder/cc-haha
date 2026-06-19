@@ -40,6 +40,18 @@ afterEach(async () => {
 })
 
 describe('memory API', () => {
+  it('does not fabricate a current memory project when no memory directory exists', async () => {
+    const cwd = path.join(tmpDir, 'fresh-install', 'app')
+
+    const projectsRes = await request('GET', `/api/memory/projects?cwd=${encodeURIComponent(cwd)}`)
+    expect(projectsRes.status).toBe(200)
+    const projectsBody = await projectsRes.json() as {
+      projects: Array<{ id: string; isCurrent: boolean; exists: boolean; fileCount: number }>
+    }
+
+    expect(projectsBody.projects).toEqual([])
+  })
+
   it('lists current project memory files with frontmatter metadata', async () => {
     const cwd = path.join(tmpDir, 'workspace', 'app')
     const projectId = sanitizePath(cwd)
