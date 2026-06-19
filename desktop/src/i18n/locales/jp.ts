@@ -94,6 +94,8 @@ export const jp: Record<TranslationKey, string> = {
   'sidebar.batchDeselectAll': 'すべて選択解除',
   'sidebar.batchSelectGroup': '{group} を選択',
   'sidebar.batchDeleteSelected': '選択項目を削除 ({count})',
+  'sidebar.batchExportSelected': '選択項目をエクスポート ({count})',
+  'sidebar.exportProjectSessions': 'セッションをエクスポート…',
   'sidebar.batchDeleteConfirm': '{count} 件のセッションを削除しますか？この操作は取り消せません。',
   'sidebar.batchDeleteConfirmBody': '以下のセッションが削除されます:',
   'sidebar.batchDeleteMore': '...他 {count} 件',

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Folder, FolderOpen, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, Trash2, Upload, X } from 'lucide-react'
+import { Download, Folder, FolderOpen, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, Trash2, Upload, X } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
@@ -631,6 +631,19 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
     setPendingBatchDeleteSessionIds(null)
   }, [exitBatchMode])
 
+  const handleBatchExport = useCallback(async () => {
+    const ids = [...selectedSessionIds]
+    if (ids.length === 0) return
+    let successCount = 0
+    for (const sessionId of ids) {
+      await handleExportSession(sessionId)
+      successCount++
+    }
+    if (successCount > 0) {
+      handleExitBatchMode()
+    }
+  }, [handleExportSession, handleExitBatchMode, selectedSessionIds])
+
   const requestBatchDelete = useCallback((ids: string[]) => {
     if (ids.length === 0) return
     setPendingBatchDeleteSessionIds([...new Set(ids)])
@@ -920,7 +933,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                     <span className="material-symbols-outlined text-[17px]">close</span>
                   </button>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -936,6 +949,14 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                     {filteredSessionIds.length > 0 && filteredSessionIds.every((id) => selectedSessionIds.has(id))
                       ? t('sidebar.batchDeselectAll')
                       : t('sidebar.batchSelectAll')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBatchExport()}
+                    disabled={selectedCount === 0}
+                    className="rounded-md border border-[var(--color-border)] px-2 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
+                  >
+                    {t('sidebar.batchExportSelected', { count: selectedCount })}
                   </button>
                   <button
                     type="button"
@@ -1291,6 +1312,19 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
               onClick={() => triggerImportSession(project)}
             >
               {t('sidebar.importSession')}
+            </ProjectMenuItem>
+            <ProjectMenuItem
+              icon={<Download size={18} aria-hidden="true" />}
+              onClick={() => {
+                setProjectContextMenu(null)
+                enterBatchMode()
+                const projectSessionIds = sessions
+                  .filter((s) => (s.workDir || s.projectRoot || s.projectPath) === project.workDir)
+                  .map((s) => s.id)
+                selectSessions(projectSessionIds)
+              }}
+            >
+              {t('sidebar.exportProjectSessions')}
             </ProjectMenuItem>
             <ProjectMenuItem
               icon={hidden ? <RotateCcw size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}

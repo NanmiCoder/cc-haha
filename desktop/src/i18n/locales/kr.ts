@@ -94,6 +94,8 @@ export const kr: Record<TranslationKey, string> = {
   'sidebar.batchDeselectAll': '모두 선택 해제',
   'sidebar.batchSelectGroup': '{group} 선택',
   'sidebar.batchDeleteSelected': '선택 항목 삭제 ({count})',
+  'sidebar.batchExportSelected': '선택 항목 내보내기 ({count})',
+  'sidebar.exportProjectSessions': '세션 내보내기…',
   'sidebar.batchDeleteConfirm': '{count}개의 세션을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.',
   'sidebar.batchDeleteConfirmBody': '다음 세션이 삭제됩니다:',
   'sidebar.batchDeleteMore': '...외 {count}개',

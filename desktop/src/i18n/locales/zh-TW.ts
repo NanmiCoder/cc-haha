@@ -94,6 +94,8 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.batchDeselectAll': '取消全選',
   'sidebar.batchSelectGroup': '選擇{group}',
   'sidebar.batchDeleteSelected': '刪除已選 ({count})',
+  'sidebar.batchExportSelected': '匯出已選 ({count})',
+  'sidebar.exportProjectSessions': '匯出會話…',
   'sidebar.batchDeleteConfirm': '確定要刪除 {count} 個會話嗎？此操作不可撤銷。',
   'sidebar.batchDeleteConfirmBody': '以下會話將被刪除：',
   'sidebar.batchDeleteMore': '...還有 {count} 條',

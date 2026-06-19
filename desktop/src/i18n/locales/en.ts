@@ -92,6 +92,8 @@ export const en = {
   'sidebar.batchDeselectAll': 'Deselect all',
   'sidebar.batchSelectGroup': 'Select {group}',
   'sidebar.batchDeleteSelected': 'Delete selected ({count})',
+  'sidebar.batchExportSelected': 'Export selected ({count})',
+  'sidebar.exportProjectSessions': 'Export sessions…',
   'sidebar.batchDeleteConfirm': 'Delete {count} sessions? This cannot be undone.',
   'sidebar.batchDeleteConfirmBody': 'The following sessions will be deleted:',
   'sidebar.batchDeleteMore': '...and {count} more',
