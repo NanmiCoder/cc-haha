@@ -53,6 +53,40 @@ const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
 
+/**
+ * Number of *consecutive identical* failures before we surface a retry to
+ * the chat as a SystemAPIErrorMessage. The first few transient retries are
+ * suppressed so the user does not see a wall of identical error bubbles
+ * for a flaky upstream that recovers on its own. Distinct errors are
+ * still yielded immediately — they carry new information.
+ *
+ * Configurable via CLAUDE_CODE_RETRY_REPORT_AFTER (positive integer, ≥1).
+ * The default of 3 means "two silent retries, then start reporting".
+ */
+const DEFAULT_RETRY_REPORT_THRESHOLD = 3
+
+function getRetryReportThreshold(): number {
+  const raw = process.env.CLAUDE_CODE_RETRY_REPORT_AFTER
+  if (!raw) return DEFAULT_RETRY_REPORT_THRESHOLD
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_RETRY_REPORT_THRESHOLD
+  return parsed
+}
+
+/**
+ * Stable identity key for "is this the same error as last time?". Uses the
+ * error message plus (when present) the upstream HTTP status so a 401 and
+ * a 503 with the same generic body don't fold together. Falls back to
+ * String(error) for non-Error values so the comparison is always defined.
+ */
+function errorIdentityKey(error: unknown): string {
+  if (error instanceof Error) {
+    const status = error instanceof APIError ? `:${error.status ?? 'na'}` : ''
+    return `${error.name}${status}:${error.message}`
+  }
+  return String(error)
+}
+
 // Foreground query sources where the user IS blocking on the result — these
 // retry on 529. Everything else (summaries, titles, suggestions, classifiers)
 // bails immediately: during a capacity cascade each retry is 3-10× gateway
@@ -185,6 +219,38 @@ export async function* withRetry<T>(
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
   let lastError: unknown
   let persistentAttempt = 0
+  // Suppress noisy duplicate retry messages: yield to chat only after
+  // SAME_ERROR_REPORT_THRESHOLD identical failures in a row, so a flaky
+  // upstream that recovers in 1–2 retries does not splash the chat with
+  // identical error bubbles. Distinct errors yield immediately because
+  // they carry new information for the user.
+  const reportThreshold = getRetryReportThreshold()
+  let consecutiveSameErrorCount = 0
+  let prevErrorKey: string | undefined
+  /**
+   * Decide whether the current retry attempt's error should be surfaced
+   * to the chat as a SystemAPIErrorMessage. Updates the
+   * consecutive-same-error counter as a side effect. Always reports the
+   * first occurrence of a *new* error key (it carries new info), and
+   * always reports rate-limit 429s (the wait-time info is what the user
+   * is waiting to see). Otherwise gates on the threshold.
+   */
+  const shouldReportRetry = (error: unknown): boolean => {
+    const key = errorIdentityKey(error)
+    if (key === prevErrorKey) {
+      consecutiveSameErrorCount += 1
+    } else {
+      prevErrorKey = key
+      consecutiveSameErrorCount = 1
+      // First sighting of a new error key — report immediately (new
+      // information for the user).
+      return true
+    }
+    // 429 rate-limit retries always report: the delay/wait info in the
+    // SystemAPIErrorMessage is the whole point of surfacing them.
+    if (error instanceof APIError && error.status === 429) return true
+    return consecutiveSameErrorCount >= reportThreshold
+  }
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     if (options.signal?.aborted) {
       throw new APIUserAbortError()
@@ -480,11 +546,17 @@ export async function* withRetry<T>(
         // does not mark the session idle. Each yield surfaces as
         // {type:'system', subtype:'api_retry'} on stdout via QueryEngine.
         let remaining = delayMs
+        // Decide once per outer retry whether this error gets surfaced
+        // to chat (gated by the same-error threshold). Heartbeats during
+        // the sleep loop keep yielding so long persistent waits don't
+        // look like the session has died — but they only do so once we
+        // have crossed the threshold for this error.
+        const surfaceThisError = error instanceof APIError && shouldReportRetry(error)
         while (remaining > 0) {
           if (options.signal?.aborted) throw new APIUserAbortError()
-          if (error instanceof APIError) {
+          if (surfaceThisError) {
             yield createSystemAPIErrorMessage(
-              error,
+              error as APIError,
               remaining,
               reportedAttempt,
               maxRetries,
@@ -498,7 +570,7 @@ export async function* withRetry<T>(
         // persistentAttempt counter which keeps growing to the 5-min cap.
         if (attempt >= maxRetries) attempt = maxRetries
       } else {
-        if (error instanceof APIError) {
+        if (error instanceof APIError && shouldReportRetry(error)) {
           yield createSystemAPIErrorMessage(error, delayMs, attempt, maxRetries)
         }
         await sleep(delayMs, options.signal, { abortError })
