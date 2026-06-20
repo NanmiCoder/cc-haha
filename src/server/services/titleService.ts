@@ -170,17 +170,16 @@ export async function generateTitle(
 
     return await generateTitleWithLanguageRetry(
       async (strictLanguage) => {
-        const response = await fetchAnthropicTitleResponse(
-          url,
-          requestHeaders,
-          {
-            ...requestBody,
-            messages: [{
-              role: 'user',
-              content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
-            }],
-          },
-        )
+        const userContent = buildTitleUserPrompt(trimmed, languagePreference, strictLanguage)
+        const response = await fetchTitleText({
+          apiFormat,
+          authStrategy,
+          baseUrl,
+          apiKey: resolvedProvider.apiKey,
+          model,
+          systemPrompt: SESSION_TITLE_PROMPT,
+          userContent,
+        })
         if (!response) return null
         return parseGeneratedTitleText(response)
       },
