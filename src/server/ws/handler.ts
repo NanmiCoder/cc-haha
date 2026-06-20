@@ -1047,9 +1047,11 @@ function bindTitleSessionOutput(
     if (cliMsg?.type === 'result') {
       conversationService.removeOutputCallback(sessionId, callback)
       const completedTurnCount = completeActiveTitleTurn(sessionId)
-      if (!cliMsg.is_error) {
-        triggerTitleGeneration(ws, sessionId, 'turn-complete', completedTurnCount ?? undefined)
-      }
+      // Always attempt AI title generation — even on error turns the user
+      // message (and partial assistant output) contain enough context for a
+      // good title. generateTitle is fire-and-forget and returns null on
+      // any failure, so this is safe.
+      triggerTitleGeneration(ws, sessionId, 'turn-complete', completedTurnCount ?? undefined)
     }
   }
 
