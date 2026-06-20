@@ -6,14 +6,21 @@
  * 2. generateTitle() — async Haiku call for a polished 3-7 word title
  */
 
-import { ProviderService } from './providerService.js'
+import { ProviderService, buildAnthropicAuthHeaders } from './providerService.js'
 import { sessionService } from './sessionService.js'
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
 import { resolveOpenAICodexModel } from '../../services/openaiAuth/models.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
+import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
+import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
+import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesToAnthropic.js'
 import { openaiResponsesStreamToAnthropicResponse } from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'
+import type { ApiFormat, ProviderAuthStrategy } from '../types/provider.js'
+import type { AnthropicRequest } from '../proxy/transform/types.js'
+import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import { getPresetAuthStrategy } from './providerRuntimeEnv.js'
 import { cleanSessionTitleSource, hasSessionTitleMarkup } from '../../utils/sessionTitleText.js'
 import { extractConversationText, SESSION_TITLE_PROMPT } from '../../utils/sessionTitle.js'
 
@@ -155,32 +162,24 @@ export async function generateTitle(
 
     if (!resolvedProvider?.baseUrl || !resolvedProvider?.apiKey) return null
 
-    const model = resolvedProvider.models.haiku || resolvedProvider.models.main
-    const url = `${resolvedProvider.baseUrl.replace(/\/+$/, '')}/v1/messages`
-    const requestHeaders = {
-      'Content-Type': 'application/json',
-      'x-api-key': resolvedProvider.apiKey,
-      'anthropic-version': '2023-06-01',
-    }
-    const requestBody = {
-      model,
-      max_tokens: TITLE_MAX_OUTPUT_TOKENS,
-      system: SESSION_TITLE_PROMPT,
-    }
+    const model = normalizeModelStringForAPI(resolvedProvider.models.haiku || resolvedProvider.models.main)
+    const apiFormat: ApiFormat = resolvedProvider.apiFormat ?? 'anthropic'
+    const authStrategy: ProviderAuthStrategy =
+      resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
+    const baseUrl = resolvedProvider.baseUrl.replace(/\/+$/, '')
 
     return await generateTitleWithLanguageRetry(
       async (strictLanguage) => {
-        const response = await fetchAnthropicTitleResponse(
-          url,
-          requestHeaders,
-          {
-            ...requestBody,
-            messages: [{
-              role: 'user',
-              content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
-            }],
-          },
-        )
+        const userContent = buildTitleUserPrompt(trimmed, languagePreference, strictLanguage)
+        const response = await fetchTitleText({
+          apiFormat,
+          authStrategy,
+          baseUrl,
+          apiKey: resolvedProvider.apiKey,
+          model,
+          systemPrompt: SESSION_TITLE_PROMPT,
+          userContent,
+        })
         if (!response) return null
         return parseGeneratedTitleText(response)
       },
@@ -245,11 +244,42 @@ async function generateOpenAIOfficialTitle(
   )
 }
 
-async function fetchAnthropicTitleResponse(
-  url: string,
-  requestHeaders: Record<string, string>,
-  requestBody: Record<string, unknown>,
-): Promise<string | null> {
+type FetchTitleInput = {
+  apiFormat: ApiFormat
+  authStrategy: ProviderAuthStrategy
+  baseUrl: string
+  apiKey: string
+  model: string
+  systemPrompt: string
+  userContent: string
+}
+
+async function fetchTitleText(input: FetchTitleInput): Promise<string | null> {
+  if (input.apiFormat === 'openai_chat') {
+    return fetchOpenAIChatTitleText(input)
+  }
+  if (input.apiFormat === 'openai_responses') {
+    return fetchOpenAIResponsesTitleText(input)
+  }
+  return fetchAnthropicTitleText(input)
+}
+
+async function fetchAnthropicTitleText(input: FetchTitleInput): Promise<string | null> {
+  const url = `${input.baseUrl}/v1/messages`
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    ...buildAnthropicAuthHeaders(input.apiKey, input.authStrategy),
+  }
+  const requestBody: Record<string, unknown> = {
+    model: input.model,
+    max_tokens: TITLE_MAX_OUTPUT_TOKENS,
+    system: input.systemPrompt,
+    messages: [{ role: 'user', content: input.userContent }],
+  }
+
+  // First attempt with thinking disabled. Some providers reject this field
+  // with a 4xx error, so retry without it on 4xx.
   let response = await fetch(url, {
     method: 'POST',
     headers: requestHeaders,
