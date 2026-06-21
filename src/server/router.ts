@@ -13,6 +13,7 @@ import { handleConversationsApi } from './api/conversations.js'
 import { handleTeamsApi } from './api/teams.js'
 import { handleFilesystemRoute } from './api/filesystem.js'
 import { handleProvidersApi } from './api/providers.js'
+import { handleVoiceApi } from './api/voice.js'
 import { handleAdaptersApi } from './api/adapters.js'
 import { handlePluginsApi } from './api/plugins.js'
 import { handleSkillsApi } from './api/skills.js'
@@ -77,6 +78,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'providers':
       return handleProvidersApi(req, url, segments)
+
+    case 'voice':
+      return handleVoiceApi(req, url, segments)
 
     case 'haha-oauth':
       return handleHahaOAuthApi(req, url, segments)

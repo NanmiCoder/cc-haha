@@ -559,6 +559,8 @@ function ProviderSettings() {
         </SortableContext>
       </DndContext>
 
+      <VoiceInputSettings />
+
       {isLoading && providers.length === 0 ? (
         <div className="flex justify-center py-8">
           <div className="animate-spin w-5 h-5 border-2 border-[var(--color-brand)] border-t-transparent rounded-full" />
@@ -589,6 +591,69 @@ function ProviderSettings() {
         confirmVariant="danger"
         loading={isDeletingProvider}
       />
+    </div>
+  )
+}
+
+function VoiceInputSettings() {
+  const t = useTranslation()
+  const voiceInput = useSettingsStore((s) => s.voiceInput)
+  const setVoiceInput = useSettingsStore((s) => s.setVoiceInput)
+  const [draft, setDraft] = useState(voiceInput)
+
+  useEffect(() => {
+    setDraft(voiceInput)
+  }, [voiceInput])
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(voiceInput)
+
+  return (
+    <div className="mt-8 border-t border-[var(--color-border)] pt-8">
+      <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.voice.title')}</h2>
+      <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.voice.description')}</p>
+      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-4">
+        <div className="grid grid-cols-1 gap-3">
+          <Input
+            id="voice-endpoint"
+            label={t('settings.voice.endpoint')}
+            value={draft.endpoint ?? ''}
+            placeholder="https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+            autoComplete="off"
+            onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
+          />
+          <Input
+            id="voice-api-key"
+            type="password"
+            label={t('settings.voice.apiKey')}
+            value={draft.apiKey ?? ''}
+            placeholder="••••••••"
+            autoComplete="off"
+            onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+          />
+          <Input
+            id="voice-model"
+            label={t('settings.voice.model')}
+            value={draft.model ?? ''}
+            placeholder="glm-asr-2512"
+            autoComplete="off"
+            onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+          />
+          <p className="text-xs text-[var(--color-text-tertiary)] leading-5">
+            {t('settings.voice.hint')}
+          </p>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="min-w-[72px] px-4 whitespace-nowrap"
+            disabled={!dirty}
+            onClick={() => void setVoiceInput(draft)}
+          >
+            {t('settings.voice.save')}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

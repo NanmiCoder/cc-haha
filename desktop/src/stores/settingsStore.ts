@@ -23,6 +23,7 @@ import {
   type UpdateProxyMode,
   type UpdateProxySettings,
   type WebSearchSettings,
+  type VoiceInputSettings,
 } from '../types/settings'
 import type { TraceCaptureSettings } from '../types/trace'
 import { getDesktopHost } from '../lib/desktopHost'
@@ -76,6 +77,7 @@ type SettingsStore = {
   desktopNotificationsEnabled: boolean
   desktopTerminal: DesktopTerminalSettings
   webSearch: WebSearchSettings
+  voiceInput: VoiceInputSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
   traceCapture: TraceCaptureSettings
@@ -106,6 +108,7 @@ type SettingsStore = {
   setDesktopNotificationsEnabled: (enabled: boolean) => Promise<void>
   setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
+  setVoiceInput: (settings: VoiceInputSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
   setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
@@ -146,6 +149,12 @@ const DEFAULT_DESKTOP_TERMINAL_SETTINGS: DesktopTerminalSettings = {
 const DEFAULT_UPDATE_PROXY_SETTINGS: UpdateProxySettings = {
   mode: 'system',
   url: '',
+}
+
+export const DEFAULT_VOICE_INPUT_SETTINGS: VoiceInputSettings = {
+  endpoint: 'https://open.bigmodel.cn/api/paas/v4/audio/transcriptions',
+  apiKey: '',
+  model: 'glm-asr-2512',
 }
 
 const DEFAULT_NETWORK_SETTINGS: NetworkSettings = {
@@ -192,6 +201,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   desktopNotificationsEnabled: false,
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
+  voiceInput: { ...DEFAULT_VOICE_INPUT_SETTINGS },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
@@ -247,6 +257,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         desktopNotificationsEnabled: userSettings.desktopNotificationsEnabled === true,
         desktopTerminal: normalizeDesktopTerminalSettings(userSettings.desktopTerminal),
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
+        voiceInput: normalizeVoiceInputSettings(userSettings.voiceInput),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
         traceCapture,
@@ -455,6 +466,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setVoiceInput: async (voiceInput) => {
+    const prev = get().voiceInput
+    const next = normalizeVoiceInputSettings(voiceInput)
+    set({ voiceInput: next })
+    try {
+      await settingsApi.updateUser({ voiceInput: next })
+    } catch {
+      set({ voiceInput: prev })
+    }
+  },
+
   setUpdateProxy: async (settings) => {
     const prev = get().updateProxy
     const next = normalizeUpdateProxySettings(settings)
@@ -604,6 +626,20 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): We
     mode: settings?.mode ?? 'auto',
     tavilyApiKey: settings?.tavilyApiKey ?? '',
     braveApiKey: settings?.braveApiKey ?? '',
+  }
+}
+
+function normalizeVoiceInputSettings(settings: VoiceInputSettings | undefined): VoiceInputSettings {
+  return {
+    endpoint:
+      typeof settings?.endpoint === 'string' && settings.endpoint.trim().length > 0
+        ? settings.endpoint.trim()
+        : DEFAULT_VOICE_INPUT_SETTINGS.endpoint,
+    apiKey: typeof settings?.apiKey === 'string' ? settings.apiKey : '',
+    model:
+      typeof settings?.model === 'string' && settings.model.trim().length > 0
+        ? settings.model.trim()
+        : DEFAULT_VOICE_INPUT_SETTINGS.model,
   }
 }
 

@@ -42,6 +42,12 @@ export type WebSearchSettings = {
   braveApiKey?: string
 }
 
+export type VoiceInputSettings = {
+  endpoint?: string
+  apiKey?: string
+  model?: string
+}
+
 export type UpdateProxyMode = 'system' | 'manual'
 
 export type UpdateProxySettings = {
@@ -117,6 +123,7 @@ export type UserSettings = {
   skipWebFetchPreflight?: boolean
   desktopNotificationsEnabled?: boolean
   webSearch?: WebSearchSettings
+  voiceInput?: VoiceInputSettings
   updateProxy?: Partial<UpdateProxySettings>
   network?: {
     aiRequestTimeoutMs?: number
