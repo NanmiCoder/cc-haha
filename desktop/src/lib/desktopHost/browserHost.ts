@@ -9,6 +9,7 @@ import { buildTraceWindowUrl } from '../traceLaunch'
 
 const browserCapabilities: DesktopHostCapabilities = {
   appMode: false,
+  clipboard: false,
   dialogs: false,
   notifications: false,
   previewWebview: false,
@@ -52,6 +53,21 @@ export const browserHost: DesktopHost = {
   commands: {
     async invoke() {
       unsupported('Native commands')
+    },
+  },
+  clipboard: {
+    async readText() {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+        return navigator.clipboard.readText()
+      }
+      unsupported('Reading clipboard text')
+    },
+    async writeText(text) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        return
+      }
+      unsupported('Writing clipboard text')
     },
   },
   events: {

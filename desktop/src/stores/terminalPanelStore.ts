@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 
-export const TERMINAL_PANEL_DEFAULT_HEIGHT = 300
-export const TERMINAL_PANEL_MIN_HEIGHT = 220
-export const TERMINAL_PANEL_MAX_HEIGHT = 560
+export const TERMINAL_PANEL_DEFAULT_HEIGHT = 420
+export const TERMINAL_PANEL_MIN_HEIGHT = 260
+export const TERMINAL_PANEL_MAX_HEIGHT = 760
 export const SESSION_TERMINAL_RUNTIME_PREFIX = '__session_terminal__'
 
 type TerminalPanelSessionState = {

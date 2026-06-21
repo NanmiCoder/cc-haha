@@ -154,17 +154,24 @@ function metadataFiles(metadata: UpdateMetadata, sourcePath: string) {
 
 function archRank(url: string) {
   const lowerUrl = url.toLowerCase()
-  if (/(^|[-_.])x64($|[-_.])/.test(lowerUrl)) return 0
+  if (/(^|[-_.])(?:x64|x86_64|amd64)($|[-_.])/.test(lowerUrl)) return 0
   if (/(^|[-_.])arm64($|[-_.])|(^|[-_.])aarch64($|[-_.])/.test(lowerUrl)) return 1
   if (/(^|[-_.])ia32($|[-_.])/.test(lowerUrl)) return 2
   return 3
 }
 
 function artifactRank(canonicalName: string, url: string) {
-  if (canonicalName !== 'latest-mac.yml') return 0
   const lowerUrl = url.toLowerCase()
-  if (lowerUrl.endsWith('.zip')) return 0
-  if (lowerUrl.endsWith('.dmg')) return 1
+  if (canonicalName === 'latest-mac.yml') {
+    if (lowerUrl.endsWith('.zip')) return 0
+    if (lowerUrl.endsWith('.dmg')) return 1
+    return 2
+  }
+  if (canonicalName.startsWith('latest-linux')) {
+    if (lowerUrl.endsWith('.appimage')) return 0
+    if (lowerUrl.endsWith('.deb')) return 1
+    return 2
+  }
   return 2
 }
 

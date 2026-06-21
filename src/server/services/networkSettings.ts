@@ -10,12 +10,19 @@ export type NetworkSettings = {
   }
 }
 
-// API_TIMEOUT_MS is the CLI's *time-to-first-byte* budget for streaming
-// requests: third-party Anthropic-compatible gateways (sensenova, bailian,
-// zhipu, ...) often send no response bytes — not even headers or an SSE ping —
-// until prefill finishes, which can take minutes at large contexts. A short
-// default here aborts those healthy-but-slow requests dead at exactly this
-// timeout (#766), so the default matches the SDK's own 600s.
+// aiRequestTimeoutMs is the user-facing "wait for the first reply" budget. It
+// drives two CLI knobs in lockstep (see conversationService.buildChildEnv):
+//   1. API_TIMEOUT_MS — the SDK client timeout, which on a streaming request
+//      only covers connection → response headers (the SDK clears it the moment
+//      headers arrive; the streaming body is not covered).
+//   2. CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS — the CLI's first-token watchdog,
+//      which covers the gap between response headers and the FIRST SSE chunk.
+// Together they make the configured timeout span the whole pre-first-token
+// window: third-party gateways and local models (sensenova, bailian, zhipu,
+// ollama, llama.cpp, ...) often send nothing — not headers, not an SSE ping —
+// for minutes while prefilling a large context (#766, #826). Once tokens start
+// flowing the CLI hands off to the shorter mid-stream idle watchdog. The
+// default matches the SDK's own 600s.
 export const DEFAULT_AI_REQUEST_TIMEOUT_MS = 600_000
 export const MIN_AI_REQUEST_TIMEOUT_MS = 30_000
 export const MAX_AI_REQUEST_TIMEOUT_MS = 1_800_000

@@ -122,6 +122,30 @@ describe('extractAssistantOutputTargets', () => {
     ])
   })
 
+  it('ignores localhost URLs printed inside fenced log output', () => {
+    const targets = extractAssistantOutputTargets(
+      [
+        '日志前 50 行：',
+        '```log',
+        '[08:29:36][INFO] 代理服务已启动: 127.0.0.1:15721',
+        '[08:29:36][INFO] Claude Live 配置已接管，代理地址: http://127.0.0.1:15721',
+        '```',
+      ].join('\n'),
+      { workDir },
+    )
+
+    expect(targets).toEqual([])
+  })
+
+  it('ignores markdown links printed inside fenced code blocks', () => {
+    const targets = extractAssistantOutputTargets(
+      ['```md', '调试输出: [preview](http://localhost:5173/) [page](index.html)', '```'].join('\n'),
+      { workDir },
+    )
+
+    expect(targets).toEqual([])
+  })
+
   it('keeps markdown localhost links as markdown-link targets with authored labels', () => {
     const targets = extractAssistantOutputTargets(
       '[Preview](http://localhost:4173) then http://localhost:4173',

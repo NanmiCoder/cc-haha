@@ -95,6 +95,7 @@ const zhSidebar = [
       { text: 'Electron 迁移调研', link: '/desktop/07-electron-migration-research' },
       { text: 'Electron 迁移任务', link: '/desktop/08-electron-migration-tasks' },
       { text: 'Electron 迁移验证', link: '/desktop/09-electron-migration-validation-checklist' },
+      { text: 'Electron 发布与更新', link: '/desktop/10-release-auto-update' },
     ],
   },
   {

@@ -1044,6 +1044,33 @@ describe('MessageList nested tool calls', () => {
     expect(container.querySelectorAll('[data-message-shell="assistant"]')).toHaveLength(0)
   })
 
+  it('renders stopped tool calls as terminal instead of still generating content', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'idle',
+          messages: [
+            {
+              id: 'tool-write',
+              type: 'tool_use',
+              toolName: 'Write',
+              toolUseId: 'write-1',
+              input: { file_path: '/tmp/story.md' },
+              timestamp: 1,
+              isPending: false,
+              status: 'stopped',
+            } as UIMessage,
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText('Stopped')).toBeTruthy()
+    expect(screen.queryByText('Generating content')).toBeNull()
+  })
+
   it('renders saved memory events with an entrypoint to memory settings', () => {
     useChatStore.setState({
       sessions: {
@@ -2242,6 +2269,80 @@ describe('MessageList nested tool calls', () => {
     expect(scrollTop).toBe(600)
   })
 
+  it('keeps auto-scrolling when active tool input updates in place', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'tool_executing',
+          streamingToolInput: '{"file_path":"/tmp/app.vue","content":"<template>',
+          activeToolUseId: 'write-1',
+          activeToolName: 'Write',
+          messages: [
+            {
+              id: 'tool-write',
+              type: 'tool_use',
+              toolName: 'Write',
+              toolUseId: 'write-1',
+              input: {},
+              partialInput: '{"file_path":"/tmp/app.vue","content":"<template>',
+              isPending: true,
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let scrollTop = 552
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value
+      },
+    })
+
+    scrollIntoView.mockClear()
+    await waitForProgrammaticScrollReset()
+    fireEvent.scroll(scroller)
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [ACTIVE_TAB]: {
+            ...state.sessions[ACTIVE_TAB]!,
+            streamingToolInput: '{"file_path":"/tmp/app.vue","content":"<template>\\n<section>latest</section>',
+            streamingResponseChars: 32,
+            messages: [
+              {
+                ...state.sessions[ACTIVE_TAB]!.messages[0] as Extract<UIMessage, { type: 'tool_use' }>,
+                input: { file_path: '/tmp/app.vue', content: '<template>\n<section>latest</section>' },
+                partialInput: '{"file_path":"/tmp/app.vue","content":"<template>\\n<section>latest</section>',
+              },
+            ],
+          },
+        },
+      }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('2 lines · 36 chars')).toBeTruthy()
+    })
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(scrollTop).toBe(600)
+  })
+
   it('keeps auto-scrolling without reading scroll geometry synchronously', async () => {
     useChatStore.setState({
       sessions: {
@@ -2454,6 +2555,83 @@ describe('MessageList nested tool calls', () => {
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(1200)
     expect(screen.queryByRole('button', { name: 'Latest' })).toBeNull()
+  })
+
+  it('lets the user drag away from active thinking output before the programmatic scroll settles', async () => {
+    let resizeCallback: ResizeObserverCallback | null = null
+    class TestResizeObserver {
+      observe = vi.fn()
+      unobserve = vi.fn()
+      disconnect = vi.fn()
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback
+      }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'thinking',
+          activeThinkingId: 'thinking-1',
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: '分析一下这段代码',
+              timestamp: 1,
+            },
+            {
+              id: 'thinking-1',
+              type: 'thinking',
+              content: '正在阅读代码路径',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let scrollTop = 600
+    let scrollHeight = 1000
+    Object.defineProperty(scroller, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value
+      },
+    })
+
+    await waitFor(() => {
+      expect(resizeCallback).not.toBeNull()
+    })
+
+    act(() => {
+      resizeCallback?.([{
+        contentRect: { height: 600 },
+      } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+
+    scrollTop = 200
+    fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', { name: 'Latest' })).toBeTruthy()
+
+    scrollHeight = 1200
+    act(() => {
+      resizeCallback?.([{
+        contentRect: { height: 760 },
+      } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+
+    expect(scrollTop).toBe(200)
   })
 
   it('ignores one-pixel content resize jitter while pinned to active thinking output', async () => {

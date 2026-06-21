@@ -1294,7 +1294,7 @@ describe('AppShell layout renders chrome', () => {
     expect(container.querySelector('aside')).toBeInTheDocument()
     expect(container.innerHTML).toContain('New session')
     expect(container.innerHTML).toContain('Scheduled')
-    expect(container.innerHTML).toContain('Search sessions')
+    expect(container.innerHTML).toContain('Search chats')
     expect(container.innerHTML).toContain('Settings')
   })
 })

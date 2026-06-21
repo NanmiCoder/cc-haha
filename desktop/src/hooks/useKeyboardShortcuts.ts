@@ -12,7 +12,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 export function useKeyboardShortcuts() {
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setActiveView = useUIStore((s) => s.setActiveView)
-  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
+  const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
   const stopGeneration = useChatStore((s) => s.stopGeneration)
@@ -50,15 +50,10 @@ export function useKeyboardShortcuts() {
         setActiveView('code')
       }
 
-      // Cmd+K — Focus search (sidebar search input)
+      // Cmd+K — Open global session search
       if (meta && e.key === 'k') {
         e.preventDefault()
-        setSidebarOpen(true)
-        requestAnimationFrame(() => {
-          const searchInput = document.querySelector('#sidebar-search') as HTMLInputElement | null
-          searchInput?.focus()
-          searchInput?.select()
-        })
+        openModal('globalSearch')
       }
 
       // Escape — Close modal or clear state
@@ -79,5 +74,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, setActiveSession, setActiveView, setSidebarOpen, setUiZoom, stopGeneration])
+  }, [closeModal, openModal, setActiveSession, setActiveView, setUiZoom, stopGeneration])
 }

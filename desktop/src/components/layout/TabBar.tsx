@@ -6,6 +6,7 @@ import {
   TERMINAL_TAB_PREFIX,
   TRACE_LIST_TAB_ID,
   TRACE_TAB_PREFIX,
+  WORKBENCH_TAB_PREFIX,
   useTabStore,
   type Tab,
 } from '../../stores/tabStore'
@@ -44,7 +45,8 @@ function isSessionTabId(tabId: string | null) {
     tabId !== SCHEDULED_TAB_ID &&
     tabId !== TRACE_LIST_TAB_ID &&
     !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !tabId.startsWith(TRACE_TAB_PREFIX)
+    !tabId.startsWith(TRACE_TAB_PREFIX) &&
+    !tabId.startsWith(WORKBENCH_TAB_PREFIX)
 }
 
 export function TabBar() {
@@ -548,6 +550,9 @@ const TabItem = forwardRef<HTMLDivElement, {
       )}
       {tab.type === 'terminal' && (
         <span className="material-symbols-outlined text-[14px] flex-shrink-0 text-[var(--color-text-tertiary)]">terminal</span>
+      )}
+      {tab.type === 'workbench' && (
+        <span className="material-symbols-outlined text-[14px] flex-shrink-0 text-[var(--color-text-tertiary)]">view_sidebar</span>
       )}
 
       <span className={`flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>

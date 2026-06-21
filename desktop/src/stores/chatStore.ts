@@ -356,6 +356,20 @@ function upsertToolUseMessage(
   return next
 }
 
+function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
+  let changed = false
+  const stoppedMessages = messages.map((message) => {
+    if (message.type !== 'tool_use' || !message.isPending) return message
+    changed = true
+    return {
+      ...message,
+      isPending: false,
+      status: 'stopped' as const,
+    }
+  })
+  return changed ? stoppedMessages : messages
+}
+
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
@@ -826,6 +840,37 @@ function mergeSlashCommandUpdates(
   return [...merged.values()]
 }
 
+function readUsageToken(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | null {
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheCreationTokens = 0
+
+  for (const message of messages) {
+    const usage = message.usage
+    if (!usage) continue
+    inputTokens += readUsageToken(usage.input_tokens)
+    outputTokens += readUsageToken(usage.output_tokens)
+    cacheReadTokens += readUsageToken(usage.cache_read_input_tokens)
+    cacheCreationTokens += readUsageToken(usage.cache_creation_input_tokens)
+  }
+
+  if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
+    return null
+  }
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    ...(cacheReadTokens > 0 ? { cache_read_tokens: cacheReadTokens } : {}),
+    ...(cacheCreationTokens > 0 ? { cache_creation_tokens: cacheCreationTokens } : {}),
+  }
+}
+
 async function fetchAndMapSessionHistory(sessionId: string) {
   const { messages, taskNotifications } = await sessionsApi.getMessages(sessionId)
   const uiMessages = mapHistoryMessagesToUiMessages(messages)
@@ -841,6 +886,7 @@ async function fetchAndMapSessionHistory(sessionId: string) {
     restoredBackgroundTasks: backgroundTaskRecordFromNotifications(Object.values(restoredNotifications)),
     lastTodos: extractLastTodoWriteFromHistory(messages),
     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
+    tokenUsage: summarizeTokenUsageFromHistory(messages),
   }
 }
 
@@ -1087,21 +1133,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   stopGeneration: (sessionId) => {
     wsManager.send(sessionId, { type: 'stop_generation' })
-    if (pendingDeltaBySession.has(sessionId)) {
-      const text = consumePendingDelta(sessionId)
-      set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
-    }
+    const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
+    clearPendingTaskToolUseIds(sessionId)
+    clearPendingToolParentUseIds(sessionId)
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) return s
       if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+      const pendingAssistantText = `${session.streamingText}${bufferedText}`
+      const messagesWithFlushedText = pendingAssistantText.trim()
+        ? appendAssistantTextMessage(session.messages, pendingAssistantText, Date.now())
+        : session.messages
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...session,
+            messages: markPendingToolUseMessagesStopped(messagesWithFlushedText),
             chatState: 'idle',
+            activeToolUseId: null,
+            activeToolName: null,
+            activeThinkingId: null,
+            streamingText: '',
+            streamingToolInput: '',
+            statusVerb: '',
             pendingPermission: null,
             pendingComputerUsePermission: null,
             apiRetry: null,
@@ -1111,6 +1167,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       }
     })
+    useTabStore.getState().updateTabStatus(sessionId, 'idle')
   },
 
   loadHistory: async (sessionId) => {
@@ -1137,6 +1194,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           restoredBackgroundTasks,
           lastTodos,
           hasMessagesAfterTaskCompletion,
+          tokenUsage,
         } = await fetchAndMapSessionHistory(sessionId)
         set((state) => {
           const session = state.sessions[sessionId]
@@ -1151,6 +1209,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 s.backgroundAgentTasks ?? {},
                 restoredBackgroundTasks,
               ),
+              tokenUsage: tokenUsage ?? s.tokenUsage,
               messages: mergeRestoredHistoryIntoLiveMessages(
                 mergeBackgroundTaskMessages(s.messages, restoredBackgroundTasks),
                 uiMessages,
@@ -1167,6 +1226,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               s.backgroundAgentTasks ?? {},
               restoredBackgroundTasks,
             ),
+            tokenUsage: tokenUsage ?? s.tokenUsage,
           })) }
         })
         if (lastTodos && lastTodos.length > 0) {
@@ -1210,6 +1270,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         restoredBackgroundTasks,
         lastTodos,
         hasMessagesAfterTaskCompletion,
+        tokenUsage,
       } = await fetchAndMapSessionHistory(sessionId)
 
       set((state) => {
@@ -1224,6 +1285,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             activeGoal,
             agentTaskNotifications: restoredNotifications,
             backgroundAgentTasks: restoredBackgroundTasks,
+            tokenUsage: tokenUsage ?? session.tokenUsage,
             chatState: 'idle',
             activeThinkingId: null,
             activeToolUseId: null,
@@ -1475,6 +1537,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             } : pendingText !== session.streamingText ? { streamingText: pendingText } : {}),
           }
         })
+        if (msg.state !== 'idle') {
+          const session = get().sessions[sessionId]
+          if (session && !session.elapsedTimer) {
+            const timer = setInterval(() => {
+              set((st) => ({
+                sessions: updateSessionIn(st.sessions, sessionId, (sess) => ({
+                  elapsedSeconds: sess.elapsedSeconds + 1,
+                })),
+              }))
+            }, 1000)
+            update(() => ({ elapsedTimer: timer }))
+          }
+        }
         if (msg.state === 'idle') {
           const session = get().sessions[sessionId]
           if (session?.elapsedTimer) {
@@ -2291,6 +2366,16 @@ function extractHistoryTextBlocks(content: unknown): string[] {
     .filter(Boolean)
 }
 
+function isInternalCommandBreadcrumbContent(content: unknown): boolean {
+  const textBlocks = extractHistoryTextBlocks(content)
+  return textBlocks.length > 0 && textBlocks.every((text) => (
+    text.includes('<command-name>') ||
+    text.includes('<command-message>') ||
+    text.includes('<command-args>') ||
+    text.includes('<local-command-caveat>')
+  ))
+}
+
 function isTaskNotificationContent(content: unknown): boolean {
   const textBlocks = extractHistoryTextBlocks(content)
   return textBlocks.length > 0 && textBlocks.every((text) => extractTaskNotificationXml(text) !== null)
@@ -2976,6 +3061,9 @@ export function mapHistoryMessagesToUiMessages(
   for (const msg of messages) {
     if (msg.type === 'user' && isTaskNotificationContent(msg.content)) {
       suppressTaskNotificationResponse = true
+      continue
+    }
+    if (msg.type === 'user' && isInternalCommandBreadcrumbContent(msg.content)) {
       continue
     }
     if (msg.type === 'user') {

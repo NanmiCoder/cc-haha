@@ -5,6 +5,7 @@ import {
   SETTINGS_TAB_ID,
   TERMINAL_TAB_PREFIX,
   TRACE_TAB_PREFIX,
+  WORKBENCH_TAB_PREFIX,
   useTabStore,
   type TabType,
 } from '../stores/tabStore'
@@ -47,7 +48,8 @@ function isSessionTabState(activeTabId: string | null, activeTabType: TabType | 
   return activeTabId !== SETTINGS_TAB_ID &&
     activeTabId !== SCHEDULED_TAB_ID &&
     !activeTabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !activeTabId.startsWith(TRACE_TAB_PREFIX)
+    !activeTabId.startsWith(TRACE_TAB_PREFIX) &&
+    !activeTabId.startsWith(WORKBENCH_TAB_PREFIX)
 }
 
 function getSessionTerminalCwd(session: SessionListItem | undefined) {
@@ -335,6 +337,7 @@ export function ActiveSession() {
   const streamingText = sessionState?.streamingText ?? ''
   const activeGoal = sessionState?.activeGoal ?? null
   const isEmpty = messages.length === 0 && !streamingText && (session?.messageCount ?? 0) === 0
+  const compactEmptyHero = isEmpty && showTerminalPanel
   const isHistoryLoading =
     !isMemberSession &&
     (session?.messageCount ?? 0) > 0 &&
@@ -370,7 +373,7 @@ export function ActiveSession() {
       <div data-testid="active-session-content-row" className="flex min-h-0 min-w-0 flex-1">
         <div
           data-testid="active-session-chat-column"
-          className={`flex flex-col ${showRightPanel ? CHAT_COLUMN_WITH_WORKSPACE_CLASS : isMobileLayout ? 'min-w-0 flex-1' : 'min-w-[360px] flex-1'}`}
+          className={`flex min-h-0 flex-col ${showRightPanel ? CHAT_COLUMN_WITH_WORKSPACE_CLASS : isMobileLayout ? 'min-w-0 flex-1' : 'min-w-[360px] flex-1'}`}
         >
           {isMemberSession && (
             <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-container)]">
@@ -418,11 +421,17 @@ export function ActiveSession() {
           )}
 
           {isEmpty ? (
-            <div className="flex flex-1 flex-col items-center justify-center p-8 pb-32">
+            <div
+              data-testid="empty-session-hero"
+              className={[
+                'flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-8 pt-8',
+                compactEmptyHero ? 'pb-6' : 'pb-32',
+              ].join(' ')}
+            >
               <div className="flex max-w-md flex-col items-center text-center">
                 {isMemberSession ? (
                   <>
-                    <span className="material-symbols-outlined text-[48px] mb-4 text-[var(--color-text-tertiary)]">smart_toy</span>
+                    <span className={`material-symbols-outlined mb-4 text-[var(--color-text-tertiary)] ${compactEmptyHero ? 'text-[36px]' : 'text-[48px]'}`}>smart_toy</span>
                     <p className="text-[var(--color-text-secondary)]">
                       {memberInfo?.status === 'running'
                         ? `${memberInfo.role} ${t('teams.working')}`
@@ -431,11 +440,15 @@ export function ActiveSession() {
                   </>
                 ) : (
                   <>
-                    <img src={publicAssetPath('app-icon.png')} alt="Claude Code Haha" className="mb-6 h-24 w-24" />
-                    <h1 className="mb-2 text-3xl font-extrabold tracking-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
+                    <img
+                      src={publicAssetPath('app-icon.png')}
+                      alt="Claude Code Haha"
+                      className={compactEmptyHero ? 'mb-4 h-16 w-16' : 'mb-6 h-24 w-24'}
+                    />
+                    <h1 className={`${compactEmptyHero ? 'mb-1 text-2xl' : 'mb-2 text-3xl'} font-extrabold tracking-tight text-[var(--color-text-primary)]`} style={{ fontFamily: 'var(--font-headline)' }}>
                       {t('empty.title')}
                     </h1>
-                    <p className="mx-auto max-w-xs text-[var(--color-text-secondary)]" style={{ fontFamily: 'var(--font-body)' }}>
+                    <p className={`mx-auto max-w-xs text-[var(--color-text-secondary)] ${compactEmptyHero ? 'text-sm' : ''}`} style={{ fontFamily: 'var(--font-body)' }}>
                       {t('empty.subtitle')}
                     </p>
                   </>
@@ -543,7 +556,7 @@ export function ActiveSession() {
             <div
               data-testid="session-terminal-panel"
               className={[
-                'flex shrink-0 flex-col border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]',
+                'flex min-h-0 shrink-0 flex-col border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]',
                 showTerminalPanel ? '' : 'hidden',
               ].join(' ')}
               style={{ height: showTerminalPanel ? terminalPanelHeight : 0 }}

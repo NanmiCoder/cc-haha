@@ -241,7 +241,7 @@ describe('SearchService', () => {
   })
 
   it('should return empty session results when no projects dir exists', async () => {
-    const results = await service.searchSessions('test')
+    const { results } = await service.searchSessions('test')
     expect(results).toEqual([])
   })
 })

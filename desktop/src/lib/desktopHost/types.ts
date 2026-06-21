@@ -7,6 +7,7 @@ export type DesktopHostKind = 'browser' | 'electron'
 
 export type DesktopHostCapability =
   | 'appMode'
+  | 'clipboard'
   | 'dialogs'
   | 'notifications'
   | 'previewWebview'
@@ -152,6 +153,10 @@ export type DesktopHost = {
   }
   commands: {
     invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
+  }
+  clipboard: {
+    readText(): Promise<string>
+    writeText(text: string): Promise<void>
   }
   events: {
     listen<T>(eventName: string, handler: (payload: T) => void): Promise<DesktopHostUnlisten>

@@ -136,6 +136,64 @@ describe('release update metadata merge', () => {
     expect(arm64.path).toBe('Claude-Code-Haha-0.3.2-arm64.AppImage')
   })
 
+  test('keeps Linux AppImage as primary update artifact when deb is also published', () => {
+    const inputDir = tempDir()
+    const outputDir = tempDir()
+
+    writeYaml(join(inputDir, 'latest-linux-Linux-x64.yml'), `
+      version: 0.3.2
+      files:
+        - url: Claude-Code-Haha-0.3.2-linux-amd64.deb
+          sha512: linux-deb-checksum
+          size: 222
+        - url: Claude-Code-Haha-0.3.2-linux-x86_64.AppImage
+          sha512: linux-appimage-checksum
+          size: 111
+      path: Claude-Code-Haha-0.3.2-linux-amd64.deb
+      sha512: linux-deb-checksum
+    `)
+
+    mergeUpdateMetadataArtifacts({ metadataDir: inputDir, outDir: outputDir })
+
+    const x64 = parse(readFileSync(join(outputDir, 'latest-linux.yml'), 'utf8')) as {
+      files: Array<{ url: string, sha512: string }>
+      path: string
+      sha512: string
+    }
+    expect(x64.files.map(file => file.url)).toEqual([
+      'Claude-Code-Haha-0.3.2-linux-x86_64.AppImage',
+      'Claude-Code-Haha-0.3.2-linux-amd64.deb',
+    ])
+    expect(x64.path).toBe('Claude-Code-Haha-0.3.2-linux-x86_64.AppImage')
+    expect(x64.sha512).toBe('linux-appimage-checksum')
+  })
+
+  test('restores standard Windows channel metadata after matrix namespacing', () => {
+    const inputDir = tempDir()
+    const outputDir = tempDir()
+
+    writeYaml(join(inputDir, 'latest-Windows-x64.yml'), `
+      version: 0.3.2
+      files:
+        - url: Claude-Code-Haha-0.3.2-win-x64.exe
+          sha512: win-checksum
+          size: 333
+      path: Claude-Code-Haha-0.3.2-win-x64.exe
+      sha512: win-checksum
+    `)
+
+    mergeUpdateMetadataArtifacts({ metadataDir: inputDir, outDir: outputDir })
+
+    const windows = parse(readFileSync(join(outputDir, 'latest.yml'), 'utf8')) as {
+      files: Array<{ url: string, sha512: string }>
+      path: string
+      sha512: string
+    }
+    expect(windows.files.map(file => file.url)).toEqual(['Claude-Code-Haha-0.3.2-win-x64.exe'])
+    expect(windows.path).toBe('Claude-Code-Haha-0.3.2-win-x64.exe')
+    expect(windows.sha512).toBe('win-checksum')
+  })
+
   test('rejects metadata groups with mixed app versions', () => {
     const inputDir = tempDir()
     const outputDir = tempDir()

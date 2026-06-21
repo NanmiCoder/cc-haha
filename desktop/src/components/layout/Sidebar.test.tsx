@@ -34,6 +34,7 @@ vi.mock('../../i18n', () => ({
       'sidebar.noMatching': 'No matching sessions',
       'sidebar.sessionListFailed': 'Session list failed',
       'sidebar.refreshSessions': 'Refresh sessions',
+      'search.global.trigger': 'Search chats',
       'sidebar.projects': 'Projects',
       'sidebar.projectMenu': 'Project menu',
       'sidebar.newProject': 'New project',
@@ -1057,7 +1058,7 @@ describe('Sidebar', () => {
     })
 
     expect(useUIStore.getState().sidebarOpen).toBe(false)
-    expect(screen.queryByPlaceholderText('Search sessions')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Search chats' })).not.toBeInTheDocument()
     expect(screen.getByRole('complementary')).toHaveAttribute('data-state', 'closed')
     expect(screen.getByTestId('sidebar-expand-button')).toHaveClass('sidebar-toggle-button--collapsed')
 
@@ -1066,7 +1067,7 @@ describe('Sidebar', () => {
     })
 
     expect(useUIStore.getState().sidebarOpen).toBe(true)
-    expect(screen.getByPlaceholderText('Search sessions')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
     expect(screen.getByRole('complementary')).toHaveAttribute('data-state', 'open')
   })
 
@@ -1075,7 +1076,7 @@ describe('Sidebar', () => {
 
     expect(screen.getByTestId('sidebar-search-controls-section')).toHaveStyle({ overflow: 'visible' })
     expect(screen.getByTestId('sidebar-search-controls-section')).toHaveClass('relative', 'z-20')
-    expect(screen.getByPlaceholderText('Search sessions')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /All projects/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('project-filter')).not.toBeInTheDocument()
   })

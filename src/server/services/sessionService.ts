@@ -94,6 +94,13 @@ export type TrimSessionResult = {
   removedMessageIds: string[]
 }
 
+export type MessageUsage = {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
 export type MessageEntry = {
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
@@ -101,6 +108,7 @@ export type MessageEntry = {
   toolUseResult?: unknown
   timestamp: string
   model?: string
+  usage?: MessageUsage
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean
@@ -223,6 +231,34 @@ type RawEntry = {
   worktreeSession?: PersistedWorktreeSession | null
   title?: string
   [key: string]: unknown
+}
+
+type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
+
+function normalizeMessageUsage(usage: RawMessageUsage): MessageUsage | undefined {
+  if (!usage) return undefined
+
+  const normalized: MessageUsage = {}
+  if (typeof usage.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) {
+    normalized.input_tokens = usage.input_tokens
+  }
+  if (typeof usage.output_tokens === 'number' && Number.isFinite(usage.output_tokens)) {
+    normalized.output_tokens = usage.output_tokens
+  }
+  if (
+    typeof usage.cache_read_input_tokens === 'number' &&
+    Number.isFinite(usage.cache_read_input_tokens)
+  ) {
+    normalized.cache_read_input_tokens = usage.cache_read_input_tokens
+  }
+  if (
+    typeof usage.cache_creation_input_tokens === 'number' &&
+    Number.isFinite(usage.cache_creation_input_tokens)
+  ) {
+    normalized.cache_creation_input_tokens = usage.cache_creation_input_tokens
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 type PersistedWorktreeSession = {
@@ -501,6 +537,30 @@ export class SessionService {
     }
   }
 
+  /**
+   * Resolve a session's display title + lightweight metadata from its JSONL file.
+   *
+   * Reuses the same title precedence as the session list (custom-title > goal >
+   * ai-title > first user message), so global session search shows real titles
+   * instead of the raw UUID file name.
+   */
+  async getSessionTitleAndMeta(filePath: string): Promise<{
+    title: string
+    modifiedAt: string
+    workDir: string | null
+    projectPath: string
+  }> {
+    const stat = await fs.stat(filePath)
+    const projectPath = path.basename(path.dirname(filePath))
+    const summary = await this.scanSessionListSummary(filePath, projectPath, stat)
+    return {
+      title: summary.title,
+      modifiedAt: stat.mtime.toISOString(),
+      workDir: summary.workDir ?? null,
+      projectPath,
+    }
+  }
+
   private async appendJsonlEntry(filePath: string, entry: Record<string, unknown>): Promise<void> {
     const line = JSON.stringify(entry) + '\n'
     await fs.appendFile(filePath, line, 'utf-8')
@@ -676,6 +736,8 @@ export class SessionService {
       type = 'system'
     }
 
+    const usage = normalizeMessageUsage(msg.usage)
+
     return {
       id: entry.uuid || crypto.randomUUID(),
       type,
@@ -683,6 +745,7 @@ export class SessionService {
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
+      ...(usage ? { usage } : {}),
       parentUuid: entry.parentUuid ?? undefined,
       parentToolUseId,
       isSidechain: entry.isSidechain,
@@ -706,13 +769,15 @@ export class SessionService {
   }
 
   private isInternalCommandBreadcrumb(content: unknown): boolean {
-    if (typeof content !== 'string') return false
-
+    const textBlocks = this.extractTextBlocks(content)
     return (
-      content.includes('<command-name>') ||
-      content.includes('<command-message>') ||
-      content.includes('<command-args>') ||
-      content.includes('<local-command-caveat>')
+      textBlocks.length > 0 &&
+      textBlocks.every((text) =>
+        text.includes('<command-name>') ||
+        text.includes('<command-message>') ||
+        text.includes('<command-args>') ||
+        text.includes('<local-command-caveat>')
+      )
     )
   }
 
@@ -1302,6 +1367,7 @@ export class SessionService {
   ): Promise<number | undefined> {
     const launchInfo = await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
+    const allowSavedProviderInference = launchInfo?.runtimeProviderId === undefined
 
     if (typeof launchInfo?.runtimeProviderId === 'string') {
       providerIds.push(launchInfo.runtimeProviderId)
@@ -1324,7 +1390,45 @@ export class SessionService {
       }
     }
 
+    if (allowSavedProviderInference) {
+      return this.getUniqueSavedProviderContextWindow(model)
+    }
+
     return undefined
+  }
+
+  private async getUniqueSavedProviderContextWindow(model: string): Promise<number | undefined> {
+    const { providers } = await this.providerService.listProviders().catch(() => ({ providers: [] }))
+    const matches: number[] = []
+
+    for (const provider of providers) {
+      const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
+      const contextWindow = getModelContextWindowFromEnvValue(
+        model,
+        env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
+      )
+      if (contextWindow !== undefined) {
+        matches.push(contextWindow)
+      }
+    }
+
+    if (matches.length === 0) {
+      return undefined
+    }
+
+    const uniqueWindows = new Set(matches)
+    if (uniqueWindows.size !== 1) {
+      return undefined
+    }
+
+    const [contextWindow] = uniqueWindows
+    if (
+      contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT &&
+      is1mContextDisabled()
+    ) {
+      return MODEL_CONTEXT_WINDOW_DEFAULT
+    }
+    return contextWindow
   }
 
   private async getTranscriptContextWindow(sessionId: string, model: string): Promise<number> {

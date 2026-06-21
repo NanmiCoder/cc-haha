@@ -699,6 +699,101 @@ describe('ConversationService', () => {
     }
   })
 
+  it('should infer a unique saved provider context window for sessions missing runtime metadata', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-provider-infer-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-provider-infer-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+    delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+
+    try {
+      const providerService = new ProviderService()
+      await providerService.addProvider({
+        presetId: 'custom',
+        name: 'Xiaomi MiMo',
+        apiKey: 'provider-key',
+        authStrategy: 'auth_token',
+        baseUrl: 'https://token-plan-sgp.xiaomimimo.com/anthropic',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'mimo-v2.5-pro[1m]',
+          haiku: 'mimo-v2.5-pro[1m]',
+          sonnet: 'mimo-v2.5-pro[1m]',
+          opus: 'mimo-v2.5-pro[1m]',
+        },
+        modelContextWindows: {
+          'mimo-v2.5-pro[1m]': 1_000_000,
+        },
+      })
+      const activeProvider = await providerService.addProvider({
+        presetId: 'custom',
+        name: 'Active DeepSeek',
+        apiKey: 'provider-key',
+        authStrategy: 'auth_token',
+        baseUrl: 'https://api.deepseek.com/anthropic',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'deepseek-v4-pro',
+          haiku: 'deepseek-v4-flash',
+          sonnet: 'deepseek-v4-pro',
+          opus: 'deepseek-v4-pro',
+        },
+        modelContextWindows: {
+          'deepseek-v4-pro': 1_000_000,
+        },
+      })
+      await providerService.activateProvider(activeProvider.id)
+
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-06-15T12:00:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        message: {
+          role: 'assistant',
+          model: 'mimo-v2.5-pro',
+          content: [{ type: 'text', text: 'hello' }],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+          },
+        },
+      }) + '\n')
+
+      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+
+      expect(contextEstimate?.model).toBe('mimo-v2.5-pro')
+      expect(contextEstimate?.rawMaxTokens).toBe(1_000_000)
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      if (previousModelContextWindows === undefined) {
+        delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+      } else {
+        process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS = previousModelContextWindows
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('should not report transcript context as full for low-trust media usage spikes', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
@@ -2125,6 +2220,10 @@ describe('WebSocket Chat Integration', () => {
         options: {
           providerId: provider.id,
         },
+      })
+      const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+      expect(launchInfo).toMatchObject({
+        runtimeProviderId: provider.id,
       })
     } finally {
       conversationService.startSession = originalStartSession

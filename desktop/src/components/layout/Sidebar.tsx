@@ -4,6 +4,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
+import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import type { SessionListItem } from '../../types/session'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -62,12 +63,14 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const addToast = useUIStore((s) => s.addToast)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
+  const activeModal = useUIStore((s) => s.activeModal)
+  const openModal = useUIStore((s) => s.openModal)
+  const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
   const chatSessions = useChatStore((s) => s.sessions)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
-  const [searchQuery, setSearchQuery] = useState('')
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
@@ -109,14 +112,8 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
     return () => document.removeEventListener('click', close)
   }, [contextMenu, projectContextMenu, projectHeaderMenu, projectHeaderSubmenu])
 
-  const filteredSessions = useMemo(() => {
-    let result = sessions
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter((s) => s.title.toLowerCase().includes(q))
-    }
-    return result
-  }, [sessions, searchQuery])
+  // Title filtering moved into the global search modal (Cmd+K); the list shows all sessions.
+  const filteredSessions = sessions
 
   const projectGroups = useMemo(() => groupByProject(filteredSessions, projectSortBy), [filteredSessions, projectSortBy])
   const orderedProjectGroups = useMemo(
@@ -696,19 +693,19 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
             style={{ overflow: 'visible' }}
           >
             <div className="flex items-center gap-1.5">
-              <div className="flex h-9 min-w-0 flex-1 items-center rounded-[14px] border border-[var(--color-sidebar-search-border)] bg-[var(--color-sidebar-search-bg)] pl-3 pr-3 transition-colors focus-within:border-[var(--color-border-focus)]">
+              <button
+                type="button"
+                onClick={() => openModal('globalSearch')}
+                className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[14px] border border-[var(--color-sidebar-search-border)] bg-[var(--color-sidebar-search-bg)] pl-3 pr-2 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] focus-visible:border-[var(--color-border-focus)] focus-visible:outline-none"
+                aria-label={t('search.global.trigger')}
+                title={t('search.global.trigger')}
+              >
                 <span className="pointer-events-none flex shrink-0 items-center text-[var(--color-text-tertiary)]">
                   <SearchIcon />
                 </span>
-                <input
-                  id="sidebar-search"
-                  type="text"
-                  placeholder={t('sidebar.searchPlaceholder')}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="min-w-0 flex-1 bg-transparent pl-2 pr-0 text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] outline-none"
-                />
-              </div>
+                <span className="min-w-0 flex-1 truncate pl-2">{t('search.global.trigger')}</span>
+                <kbd className="pointer-events-none shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1 font-mono text-[10px] leading-tight text-[var(--color-text-tertiary)]">⌘K</kbd>
+              </button>
               <button
                 type="button"
                 onClick={() => void refreshSessionsNow()}
@@ -804,7 +801,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                 </div>
               ) : filteredSessions.length === 0 && (
                 <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">
-                  {searchQuery ? t('sidebar.noMatching') : t('sidebar.noSessions')}
+                  {t('sidebar.noSessions')}
                 </div>
               )}
               {orderedProjectGroups.length > 0 && (
@@ -1205,6 +1202,8 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
         confirmVariant="danger"
         loading={isBatchDeleting}
       />
+
+      <GlobalSearchModal open={activeModal === 'globalSearch'} onClose={closeModal} />
     </aside>
   )
 }

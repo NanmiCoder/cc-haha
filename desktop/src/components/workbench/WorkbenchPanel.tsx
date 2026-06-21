@@ -1,15 +1,18 @@
-import { FolderOpen, Globe, X } from 'lucide-react'
+import { FolderOpen, Globe, Maximize2, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import {
   useWorkspacePanelStore,
   type WorkbenchMode,
 } from '../../stores/workspacePanelStore'
 import { useBrowserPanelStore } from '../../stores/browserPanelStore'
+import { useTabStore } from '../../stores/tabStore'
 import { WorkspacePanel } from '../workspace/WorkspacePanel'
 import { BrowserSurface } from '../browser/BrowserSurface'
 
 type WorkbenchPanelProps = {
   sessionId: string
+  variant?: 'panel' | 'tab'
+  onClose?: () => void
 }
 
 const MODE_ITEMS: ReadonlyArray<{
@@ -26,18 +29,31 @@ const MODE_ITEMS: ReadonlyArray<{
  * browser surface behind a single per-session mode switch (file ↔ browser),
  * sharing the panel's open state and width via {@link useWorkspacePanelStore}.
  */
-export function WorkbenchPanel({ sessionId }: WorkbenchPanelProps) {
+export function WorkbenchPanel({ sessionId, variant = 'panel', onClose }: WorkbenchPanelProps) {
   const t = useTranslation()
   const mode = useWorkspacePanelStore((state) => state.getMode(sessionId))
   const setMode = useWorkspacePanelStore((state) => state.setMode)
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const ensureBlankBrowser = useBrowserPanelStore((state) => state.ensureBlank)
+  const isTabVariant = variant === 'tab'
 
   const handleModeSelect = (nextMode: WorkbenchMode) => {
     if (nextMode === 'browser') {
       ensureBlankBrowser(sessionId)
     }
     setMode(sessionId, nextMode)
+  }
+
+  const handleExpand = () => {
+    useTabStore.getState().openWorkbenchTab(sessionId, t('workbench.tabTitle'))
+  }
+
+  const handleClose = () => {
+    if (onClose) {
+      onClose()
+      return
+    }
+    closePanel(sessionId)
   }
 
   return (
@@ -70,21 +86,34 @@ export function WorkbenchPanel({ sessionId }: WorkbenchPanelProps) {
           })}
         </div>
 
-        <button
-          type="button"
-          aria-label={t('workbench.close')}
-          onClick={() => closePanel(sessionId)}
-          className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
-        >
-          <X size={16} strokeWidth={2} aria-hidden="true" />
-        </button>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {!isTabVariant && (
+            <button
+              type="button"
+              aria-label={t('workbench.expand')}
+              title={t('workbench.expand')}
+              onClick={handleExpand}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
+            >
+              <Maximize2 size={15} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label={t('workbench.close')}
+            onClick={handleClose}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
+          >
+            <X size={16} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
         {mode === 'browser' ? (
           <BrowserSurface sessionId={sessionId} />
         ) : (
-          <WorkspacePanel sessionId={sessionId} embedded />
+          <WorkspacePanel sessionId={sessionId} embedded forceVisible={isTabVariant} />
         )}
       </div>
     </div>

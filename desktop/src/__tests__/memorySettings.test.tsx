@@ -163,6 +163,33 @@ describe('MemorySettings', () => {
     expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Prefer small diffs')
   })
 
+  it('does not select a missing current project with no memory files', async () => {
+    memoryApiMock.listProjects.mockResolvedValue({
+      projects: [
+        {
+          id: '-programs-claude-code',
+          label: 'C:\\Programs\\claude-code',
+          memoryDir: 'C:\\Users\\HUAWEI\\.claude\\projects\\-programs-claude-code\\memory',
+          exists: false,
+          fileCount: 0,
+          isCurrent: true,
+        },
+      ],
+    })
+
+    render(<MemorySettings />)
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Programs/claude-code')).toHaveLength(1)
+    })
+    expect(screen.getByText('Missing')).toBeInTheDocument()
+    expect(screen.getAllByText('No file selected').length).toBeGreaterThan(0)
+    expect(screen.getByText('Select a project.')).toBeInTheDocument()
+    expect(screen.queryByText(/HUAWEI/)).not.toBeInTheDocument()
+    expect(memoryApiMock.listFiles).not.toHaveBeenCalled()
+    expect(useMemoryStore.getState().selectedProjectId).toBeNull()
+  })
+
   it('lets the markdown editor fill the remaining detail pane height', async () => {
     render(<MemorySettings />)
 

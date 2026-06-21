@@ -11,6 +11,7 @@ const TERMINAL_CONFIG_FILE = 'terminal-config.json'
 const MIN_TERMINAL_COLS = 20
 const MIN_TERMINAL_ROWS = 8
 const NODE_PTY_MANIFEST_FILE = '.cc-haha-node-pty-manifest.json'
+const MACOS_DOWNLOAD_XATTRS = ['com.apple.quarantine', 'com.apple.provenance']
 
 export type TerminalSpawnInput = {
   cols?: number
@@ -367,6 +368,47 @@ function chmodNodePtyDirectories(moduleDir: string): void {
   }
 }
 
+function stripMacosDownloadAttributes(moduleDir: string): void {
+  if (process.platform !== 'darwin') return
+
+  for (const attr of MACOS_DOWNLOAD_XATTRS) {
+    try {
+      execFileSync('/usr/bin/xattr', ['-dr', attr, moduleDir], { stdio: 'ignore' })
+    } catch {
+      // Best effort: the attribute may be absent, but stale quarantine blocks copied .node files.
+    }
+  }
+
+  for (const filePath of walkNodePtyFiles(moduleDir)) {
+    let originalMode: number | null = null
+    try {
+      const stat = fs.statSync(filePath)
+      const mode = stat.mode & 0o777
+      if ((mode & 0o200) === 0) {
+        originalMode = mode
+        fs.chmodSync(filePath, mode | 0o200)
+      }
+      for (const attr of MACOS_DOWNLOAD_XATTRS) {
+        try {
+          execFileSync('/usr/bin/xattr', ['-d', attr, filePath], { stdio: 'ignore' })
+        } catch {
+          // Best effort: only files that still carry download xattrs need this fallback.
+        }
+      }
+    } catch {
+      // Best effort: a partially rebuilt cache will be removed and copied again later.
+    } finally {
+      if (originalMode != null) {
+        try {
+          fs.chmodSync(filePath, originalMode)
+        } catch {
+          // Best effort: helper executable bits are restored separately before loading node-pty.
+        }
+      }
+    }
+  }
+}
+
 function isNodePtyCacheCurrent(sourceManifest: NodePtyIntegrityManifest, cacheDir: string): boolean {
   const cacheManifest = readNodePtyManifest(cacheDir)
   if (!cacheManifest || !manifestsEqual(sourceManifest, cacheManifest)) return false
@@ -385,9 +427,11 @@ export function prepareNodePtyRuntime(sourceDir: string, cacheDir: string): stri
   const sourceManifest = buildNodePtyManifest(sourceDir)
 
   if (preparedNodePtyDirs.has(cacheDir) && isNodePtyCacheCurrent(sourceManifest, cacheDir)) {
+    stripMacosDownloadAttributes(cacheDir)
     return cacheDir
   }
   if (!preparedNodePtyDirs.has(cacheDir) && isNodePtyCacheCurrent(sourceManifest, cacheDir)) {
+    stripMacosDownloadAttributes(cacheDir)
     preparedNodePtyDirs.add(cacheDir)
     return cacheDir
   }
@@ -396,6 +440,7 @@ export function prepareNodePtyRuntime(sourceDir: string, cacheDir: string): stri
   fs.mkdirSync(path.dirname(cacheDir), { recursive: true, mode: 0o700 })
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 })
   fs.cpSync(sourceDir, cacheDir, { recursive: true })
+  stripMacosDownloadAttributes(cacheDir)
   ensureNodePtyHelpersExecutable(cacheDir)
   chmodNodePtyDirectories(cacheDir)
   if (!manifestsEqual(sourceManifest, buildNodePtyManifest(cacheDir))) {

@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/NanmiCoder/cc-haha",
   "author": {
@@ -44,6 +44,10 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "signIgnore": [
+        "/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$",
+        "/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$"
+      ],
       "notarize": true
     },
     "win": {

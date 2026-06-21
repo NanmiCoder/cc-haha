@@ -105,6 +105,10 @@ export function extractAssistantOutputTargets(
     const localhostTarget = toLocalhostTarget(href)
     const fileTarget = toWorkspaceFileTarget(href, workDir)
 
+    if (isInCodeBlock(match.start, codeBlocks)) {
+      continue
+    }
+
     if (!title) {
       continue
     }
@@ -141,6 +145,10 @@ export function extractAssistantOutputTargets(
     const position = match.index ?? 0
 
     if (isInMarkdownLink(position, markdownLinks)) {
+      continue
+    }
+
+    if (isInCodeBlock(position, codeBlocks)) {
       continue
     }
 

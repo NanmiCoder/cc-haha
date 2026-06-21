@@ -91,6 +91,7 @@ function isToolCallResolved(
   resultMap: Map<string, ToolResult>,
   childToolCallsByParent: Map<string, ToolCall[]>,
 ): boolean {
+  if (toolCall.status === 'stopped') return true
   if (!resultMap.has(toolCall.toolUseId)) return false
 
   return (childToolCallsByParent.get(toolCall.toolUseId) ?? []).every((childToolCall) =>
@@ -652,6 +653,7 @@ function ToolCallTree({
         result={result ? { content: result.content, isError: result.isError } : null}
         compact={compact}
         isPending={toolCall.isPending}
+        status={toolCall.status}
         partialInput={toolCall.partialInput}
       />
       {childToolCalls.length > 0 && (

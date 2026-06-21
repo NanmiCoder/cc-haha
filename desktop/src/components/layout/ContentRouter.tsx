@@ -7,6 +7,7 @@ import { Settings } from '../../pages/Settings'
 import { TerminalSettings } from '../../pages/TerminalSettings'
 import { TraceList } from '../../pages/TraceList'
 import { TraceSession } from '../../pages/TraceSession'
+import { WorkbenchTab } from '../workbench/WorkbenchTab'
 import { previewBridge } from '../../lib/previewBridge'
 
 export function ContentRouter() {
@@ -16,7 +17,7 @@ export function ContentRouter() {
   const terminalTabs = tabs.filter((tab) => tab.type === 'terminal')
 
   useEffect(() => {
-    if (activeTabType === 'session') return
+    if (activeTabType === 'session' || activeTabType === 'workbench') return
     void previewBridge.close()
   }, [activeTabType])
 
@@ -32,6 +33,11 @@ export function ContentRouter() {
     page = traceSessionId ? <TraceSession sessionId={traceSessionId} /> : <EmptySession />
   } else if (activeTabType === 'traces') {
     page = <TraceList />
+  } else if (activeTabType === 'workbench') {
+    const workbenchTab = tabs.find((t) => t.sessionId === activeTabId)
+    page = workbenchTab?.workbenchSessionId
+      ? <WorkbenchTab tabId={activeTabId} sessionId={workbenchTab.workbenchSessionId} />
+      : <EmptySession />
   } else if (activeTabType !== 'terminal') {
     page = <ActiveSession />
   }

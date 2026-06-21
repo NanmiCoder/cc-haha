@@ -804,6 +804,126 @@ describe('WorkspacePanel', () => {
     expect(view.getAllByText('b.ts').length).toBeGreaterThanOrEqual(1)
   })
 
+  it('keeps the file navigator hidden while previewing until explicitly opened', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-preview-focused': {
+          isOpen: true,
+          activeView: 'changed',
+          hasUserSelectedView: true,
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-preview-focused': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [
+            {
+              path: 'src/app.ts',
+              status: 'modified',
+              additions: 4,
+              deletions: 1,
+            },
+          ],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-preview-focused': [{
+          id: 'diff:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'diff',
+          title: 'app.ts',
+          diff: '@@ -1 +1 @@\n-old\n+new',
+          state: 'ok',
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-preview-focused': 'diff:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-preview-focused')
+
+    expect(view.getByTestId('workspace-code').textContent).toContain('+new')
+    expect(view.queryByRole('button', { name: 'Changed files' })).toBeNull()
+    expect(view.queryByPlaceholderText('Filter files...')).toBeNull()
+
+    await clickElement(view.getByRole('button', { name: 'Show file navigator' }))
+
+    expect(view.getByRole('button', { name: 'Changed files' })).toBeTruthy()
+    expect(view.getByPlaceholderText('Filter files...')).toBeTruthy()
+    expect(view.getByText('src/app.ts')).toBeTruthy()
+    expect(view.getByRole('button', { name: 'Hide file navigator' })).toBeTruthy()
+  })
+
+  it('defers all-files tree loading while the file navigator is hidden behind a preview', async () => {
+    getMocks().getWorkspaceTreeMock.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      entries: [{ name: 'src', path: 'src', isDirectory: true }],
+    })
+
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-preview-hidden-tree': {
+          isOpen: true,
+          activeView: 'all',
+          hasUserSelectedView: true,
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-preview-hidden-tree': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-preview-hidden-tree': [{
+          id: 'file:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'file',
+          title: 'app.ts',
+          content: 'export const ready = true',
+          language: 'typescript',
+          state: 'ok',
+          size: 25,
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-preview-hidden-tree': 'file:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-preview-hidden-tree')
+    await flushReactWork()
+
+    expect(getMocks().getWorkspaceTreeMock).not.toHaveBeenCalled()
+
+    await clickElement(view.getByRole('button', { name: 'Show file navigator' }))
+
+    await waitFor(() => {
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith('session-preview-hidden-tree', '')
+    })
+    expect(view.getAllByText('src').length).toBeGreaterThanOrEqual(2)
+  })
+
   it('uses theme tokens for the panel, preview tabs, and code surface in dark mode', async () => {
     await setSettingsState({ ...settingsInitialState, locale: 'en', theme: 'dark' })
     await setWorkspaceState((state) => ({

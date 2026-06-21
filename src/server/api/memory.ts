@@ -114,7 +114,7 @@ async function listMemoryProjects(cwd?: string): Promise<MemoryProject[]> {
   )
 
   return resolved
-    .filter((project) => project.isCurrent || project.exists || project.fileCount > 0)
+    .filter((project) => project.exists)
     .sort((a, b) => {
       if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
       if (a.fileCount !== b.fileCount) return b.fileCount - a.fileCount

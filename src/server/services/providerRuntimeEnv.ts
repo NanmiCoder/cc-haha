@@ -27,6 +27,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
+  'ENABLE_TOOL_SEARCH',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES',
@@ -42,7 +43,9 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
 ] as const
 
 const CUSTOM_PROVIDER_MODEL_CAPABILITIES = 'thinking,effort,adaptive_thinking,max_effort'
+const XIAOMI_MIMO_MODEL_CAPABILITIES = 'thinking'
 const AUTH_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
+const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -55,6 +58,13 @@ function isProviderModels(value: unknown): value is SavedProvider['models'] {
     typeof value.haiku === 'string' &&
     typeof value.sonnet === 'string' &&
     typeof value.opus === 'string'
+  )
+}
+
+function isProviderModel1mSupport(value: unknown): value is SavedProvider['model1mSupport'] {
+  return (
+    isRecord(value) &&
+    MODEL_SLOTS.every((slot) => typeof value[slot] === 'boolean')
   )
 }
 
@@ -72,8 +82,22 @@ function isSavedProvider(value: unknown): value is SavedProvider {
       runtimeKind === 'anthropic_compatible' ||
       runtimeKind === 'openai_oauth'
     ) &&
-    isProviderModels(value.models)
+    isProviderModels(value.models) &&
+    (value.model1mSupport === undefined || isProviderModel1mSupport(value.model1mSupport))
   )
+}
+
+function normalizeToolSearchEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['0', 'false', 'off', 'no'].includes(normalized)) return false
+    if (['1', 'true', 'on', 'yes', 'auto'].includes(normalized) || normalized.startsWith('auto:')) {
+      return true
+    }
+  }
+  return true
 }
 
 export function normalizeModelMapping(models: SavedProvider['models']): SavedProvider['models'] {
@@ -86,12 +110,48 @@ export function normalizeModelMapping(models: SavedProvider['models']): SavedPro
   }
 }
 
-export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
+function normalizeModel1mSupport(
+  model1mSupport: SavedProvider['model1mSupport'] | undefined,
+): SavedProvider['model1mSupport'] | undefined {
+  if (!model1mSupport) return undefined
+  const normalized = {
+    main: model1mSupport.main === true,
+    haiku: model1mSupport.haiku === true,
+    sonnet: model1mSupport.sonnet === true,
+    opus: model1mSupport.opus === true,
+  }
+  return MODEL_SLOTS.some((slot) => normalized[slot]) ? normalized : undefined
+}
+
+function applyModel1mSupport(model: string, enabled: boolean | undefined): string {
+  const trimmed = model.trim()
+  if (!enabled) return trimmed
+  return `${trimmed.replace(/\[1m\]$/i, '').replace(/:1m$/i, '').trim()}[1m]`
+}
+
+function applyModel1mSupportMapping(
+  models: SavedProvider['models'],
+  model1mSupport: SavedProvider['model1mSupport'] | undefined,
+): SavedProvider['models'] {
   return {
-    ...provider,
+    main: applyModel1mSupport(models.main, model1mSupport?.main),
+    haiku: applyModel1mSupport(models.haiku, model1mSupport?.haiku),
+    sonnet: applyModel1mSupport(models.sonnet, model1mSupport?.sonnet),
+    opus: applyModel1mSupport(models.opus, model1mSupport?.opus),
+  }
+}
+
+export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
+  const { model1mSupport: rawModel1mSupport, ...rest } = provider
+  const rawProvider = provider as SavedProvider & Record<string, unknown>
+  const model1mSupport = normalizeModel1mSupport(rawModel1mSupport)
+  return {
+    ...rest,
     apiFormat: provider.apiFormat ?? 'anthropic',
     runtimeKind: provider.runtimeKind ?? 'anthropic_compatible',
     models: normalizeModelMapping(provider.models),
+    toolSearchEnabled: normalizeToolSearchEnabled(rawProvider.toolSearchEnabled),
+    ...(model1mSupport !== undefined ? { model1mSupport } : {}),
   }
 }
 
@@ -182,6 +242,25 @@ function getPresetModelContextWindows(presetId: string): Record<string, number> 
   return PROVIDER_PRESETS.find((preset) => preset.id === presetId)?.modelContextWindows ?? {}
 }
 
+function isXiaomiMimoProvider(provider: SavedProvider, models: SavedProvider['models']): boolean {
+  const baseUrl = provider.baseUrl.toLowerCase()
+  const modelIds = Object.values(models).map((model) => model.toLowerCase())
+  return (
+    baseUrl.includes('xiaomimimo.com') ||
+    modelIds.some((model) => /^mimo-v\d/i.test(model))
+  )
+}
+
+function getCustomProviderModelCapabilities(
+  provider: SavedProvider,
+  models: SavedProvider['models'],
+): string {
+  if (isXiaomiMimoProvider(provider, models)) {
+    return XIAOMI_MIMO_MODEL_CAPABILITIES
+  }
+  return CUSTOM_PROVIDER_MODEL_CAPABILITIES
+}
+
 export function buildProviderAuthEnv(
   provider: SavedProvider,
   presetDefaultEnv: Record<string, string>,
@@ -237,18 +316,20 @@ export function buildProviderManagedEnv(
     : provider.baseUrl
 
   const models = normalizeModelMapping(provider.models)
+  const runtimeModels = applyModel1mSupportMapping(models, provider.model1mSupport)
   const modelContextWindows = {
     ...getPresetModelContextWindows(provider.presetId),
     ...(provider.modelContextWindows ?? {}),
   }
 
   const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
+  const customProviderCapabilities = getCustomProviderModelCapabilities(provider, models)
   const customProviderCapabilityEnv =
     provider.presetId === 'custom'
       ? {
-          ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
-          ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
-          ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
+          ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
+          ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
         }
       : {}
 
@@ -261,13 +342,16 @@ export function buildProviderManagedEnv(
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     }),
+    ...(apiFormat === 'anthropic' && {
+      ENABLE_TOOL_SEARCH: provider.toolSearchEnabled === false ? 'false' : 'true',
+    }),
     ANTHROPIC_BASE_URL: baseUrl,
     ...buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy),
-    ANTHROPIC_MODEL: models.main,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
-    ...attributionHeaderEnvForModel(models.main),
+    ANTHROPIC_MODEL: runtimeModels.main,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: runtimeModels.haiku,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: runtimeModels.sonnet,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: runtimeModels.opus,
+    ...attributionHeaderEnvForModel(runtimeModels.main),
   }
 }
 

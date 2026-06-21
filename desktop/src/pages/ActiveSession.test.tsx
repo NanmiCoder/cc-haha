@@ -958,6 +958,63 @@ describe('ActiveSession task polling', () => {
     expect(useTabStore.getState().activeTabId).toBe(terminalTab?.sessionId)
   })
 
+  it('keeps the docked terminal usable on a new empty session', () => {
+    const sessionId = 'empty-terminal-session'
+
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Empty Terminal Session',
+        createdAt: '2026-04-10T00:00:00.000Z',
+        modifiedAt: '2026-04-10T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/tmp/project-root',
+        workDir: '/tmp/project-root',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Empty Terminal Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+    useTerminalPanelStore.getState().openPanel(sessionId)
+
+    render(<ActiveSession />)
+
+    expect(screen.getByTestId('active-session-chat-column')).toHaveClass('min-h-0')
+    expect(screen.getByTestId('empty-session-hero')).toHaveClass('min-h-0')
+    expect(screen.getByTestId('empty-session-hero')).toHaveClass('pb-6')
+    expect(screen.getByTestId('empty-session-hero')).not.toHaveClass('pb-32')
+    expect(screen.getByTestId('session-terminal-panel')).toHaveStyle({ height: '420px' })
+    expect(screen.getByTestId('terminal-resize-handle')).toHaveAttribute('aria-valuemax', '760')
+  })
+
   it('keeps the docked terminal mounted when the panel is hidden', async () => {
     const sessionId = 'terminal-hide-session'
 

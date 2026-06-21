@@ -27,6 +27,39 @@ describe('WebSocket memory events', () => {
     ])
   })
 
+  it('does not replay internal slash-command breadcrumbs as user messages', () => {
+    expect(translateCliMessage({
+      type: 'user',
+      isReplay: true,
+      message: {
+        role: 'user',
+        content: [
+          '<command-message>agent</command-message>',
+          '<command-name>/agent</command-name>',
+          '<command-args>Plan 222</command-args>',
+        ].join('\n'),
+      },
+    }, 'session-1')).toEqual([])
+
+    expect(translateCliMessage({
+      type: 'user',
+      isReplay: true,
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '<command-message>agent</command-message>',
+              '<command-name>/agent</command-name>',
+              '<command-args>Plan 222</command-args>',
+            ].join('\n'),
+          },
+        ],
+      },
+    }, 'session-1')).toEqual([])
+  })
+
   it('forwards CLI memory_saved system messages to the desktop client', () => {
     const messages = translateCliMessage(
       {

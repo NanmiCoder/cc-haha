@@ -54,6 +54,8 @@ import {
   classifyYoloAction,
 } from '../../utils/permissions/yoloClassifier.js'
 import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkProgress.js'
+import { emitAgentToolActivity, type AgentToolActivity } from '../../utils/sdkEventQueue.js'
+import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../SyntheticOutputTool/SyntheticOutputTool.js'
 import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { getTokenCountFromUsage } from '../../utils/tokens.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
@@ -366,6 +368,48 @@ export function getLastToolUseName(message: MessageType): string | undefined {
   return block?.type === 'tool_use' ? block.name : undefined
 }
 
+/**
+ * Extract the tool_use / tool_result blocks from a background agent message so
+ * they can be streamed to the desktop as the agent's tool activity. Skips the
+ * internal StructuredOutput tool (matches updateProgressFromMessage) and
+ * non-array user content (string-only messages carry no tool_result).
+ */
+export function extractAgentToolActivities(
+  message: MessageType,
+): AgentToolActivity[] {
+  if (message.type === 'assistant') {
+    const activities: AgentToolActivity[] = []
+    for (const block of message.message.content) {
+      if (block.type === 'tool_use' && block.name !== SYNTHETIC_OUTPUT_TOOL_NAME) {
+        activities.push({
+          kind: 'tool_use',
+          tool_name: block.name,
+          tool_use_id: block.id,
+          input: block.input,
+        })
+      }
+    }
+    return activities
+  }
+  if (message.type === 'user') {
+    const content = message.message.content
+    if (!Array.isArray(content)) return []
+    const activities: AgentToolActivity[] = []
+    for (const block of content) {
+      if (block.type === 'tool_result') {
+        activities.push({
+          kind: 'tool_result',
+          tool_use_id: block.tool_use_id,
+          content: block.content,
+          is_error: block.is_error === true,
+        })
+      }
+    }
+    return activities
+  }
+  return []
+}
+
 export function emitTaskProgress(
   tracker: ProgressTracker,
   taskId: string,
@@ -579,6 +623,19 @@ export async function runAsyncAgentLifecycle({
         getProgressUpdate(tracker),
         rootSetAppState,
       )
+      // Stream this background agent's tool activity to the desktop so its
+      // card shows tool_use/tool_result in real time (childToolCallsByParent),
+      // instead of being stuck on "no tool activity". Synchronous subagents
+      // surface activity through the normal in-loop progress path; background
+      // agents are detached (void runAsyncAgentLifecycle), so we route through
+      // the SDK event queue → stdout → ws handler, tagged with the parent
+      // Agent tool_use_id so the UI groups it under the right card.
+      const parentToolUseId = toolUseContext.toolUseId
+      if (parentToolUseId) {
+        for (const activity of extractAgentToolActivities(message)) {
+          emitAgentToolActivity(taskId, parentToolUseId, activity)
+        }
+      }
       const lastToolName = getLastToolUseName(message)
       if (lastToolName) {
         emitTaskProgress(

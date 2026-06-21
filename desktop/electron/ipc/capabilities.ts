@@ -73,6 +73,8 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
   [ELECTRON_IPC_CHANNELS.commandInvoke]: commandInvoke,
+  [ELECTRON_IPC_CHANNELS.clipboardReadText]: noPayload,
+  [ELECTRON_IPC_CHANNELS.clipboardWriteText]: stringPayload,
   [ELECTRON_IPC_CHANNELS.shellOpen]: stringPayload,
   [ELECTRON_IPC_CHANNELS.shellOpenPath]: stringPayload,
   [ELECTRON_IPC_CHANNELS.traceOpenWindow]: sessionIdPayload,

@@ -3,6 +3,8 @@ import type { ServerWebSocket } from 'bun'
 import {
   __markPrewarmPendingForTests,
   __markActiveTurnForTests,
+  __registerPendingUserTurnForTests,
+  __markPrewarmedForTests,
   __resetWebSocketHandlerStateForTests,
   closeSessionConnection,
   getActiveSessionIds,
@@ -243,5 +245,62 @@ describe('WebSocket handler session isolation', () => {
     // A late result must not schedule cleanup now that a client is back.
     turnCompleteCallback?.({ type: 'result', subtype: 'success' })
     expect(setTimeoutSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('prewarm idle timer active-turn guard (issue #865 follow-up)', () => {
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    mock.restore()
+  })
+
+  // Arm the prewarm idle timer the way markPrewarmed does, and return its fire
+  // callback so a test can trigger it deterministically without waiting 5 min.
+  function armPrewarmIdleTimer(sessionId: string): () => void {
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(
+      (() => 0) as unknown as typeof setTimeout,
+    )
+    __markPrewarmedForTests(sessionId)
+    const fire = setTimeoutSpy.mock.calls.at(-1)?.[0] as (() => void) | undefined
+    if (!fire) throw new Error('prewarm idle timer was not armed')
+    return fire
+  }
+
+  it('does not kill a prewarmed session once a user turn is registered, even before messageSent flips (CLI-startup blind window)', () => {
+    const sessionId = `prewarm-blind-window-${crypto.randomUUID()}`
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const fire = armPrewarmIdleTimer(sessionId)
+
+    // The concurrent prewarm_session/user_message race: the turn is registered
+    // (activeUserTurns has it) but messageSent is still false during CLI startup
+    // when the idle timer fires. The old isSessionTurnActive guard was blind to
+    // this window — the turn-registered guard must catch it.
+    __registerPendingUserTurnForTests(sessionId)
+    fire()
+
+    expect(stopSession).not.toHaveBeenCalled()
+  })
+
+  it('does not kill a prewarmed session with a fully active (messageSent) turn', () => {
+    const sessionId = `prewarm-active-turn-${crypto.randomUUID()}`
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const fire = armPrewarmIdleTimer(sessionId)
+
+    __markActiveTurnForTests(sessionId)
+    fire()
+
+    expect(stopSession).not.toHaveBeenCalled()
+  })
+
+  it('still reclaims a truly idle prewarmed session with no turn and no clients', () => {
+    const sessionId = `prewarm-truly-idle-${crypto.randomUUID()}`
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const fire = armPrewarmIdleTimer(sessionId)
+
+    // No registered turn and no connected client → the reaper must still fire,
+    // otherwise the timer's whole purpose (reclaiming idle prewarmed CLIs) is lost.
+    fire()
+
+    expect(stopSession).toHaveBeenCalledWith(sessionId)
   })
 })

@@ -16,6 +16,10 @@ const terminalMocks = vi.hoisted(() => {
     write: vi.fn(),
     writeln: vi.fn(),
     clear: vi.fn(),
+    focus: vi.fn(),
+    getSelection: vi.fn(),
+    hasSelection: vi.fn(),
+    paste: vi.fn(),
   }
   const fitInstance = {
     fit: vi.fn(),
@@ -86,6 +90,12 @@ describe('TerminalSettings', () => {
     terminalMocks.terminalInstance.write.mockClear()
     terminalMocks.terminalInstance.writeln.mockClear()
     terminalMocks.terminalInstance.clear.mockClear()
+    terminalMocks.terminalInstance.focus.mockClear()
+    terminalMocks.terminalInstance.getSelection.mockReset()
+    terminalMocks.terminalInstance.hasSelection.mockReset()
+    terminalMocks.terminalInstance.paste.mockClear()
+    terminalMocks.terminalInstance.getSelection.mockReturnValue('')
+    terminalMocks.terminalInstance.hasSelection.mockReturnValue(false)
     terminalMocks.fitInstance.fit.mockClear()
     terminalMocks.onOutput.mockResolvedValue(vi.fn())
     terminalMocks.onExit.mockResolvedValue(vi.fn())
@@ -213,6 +223,96 @@ describe('TerminalSettings', () => {
 
     expect(terminalMocks.terminalInstance.write).toHaveBeenCalledWith('hello\r\n')
     expect(terminalMocks.terminalInstance.write).not.toHaveBeenCalledWith('ignored\r\n')
+  })
+
+  it('copies the terminal selection through the desktop clipboard on Windows shortcuts', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    terminalMocks.available = true
+    terminalMocks.terminalInstance.hasSelection.mockReturnValue(true)
+    terminalMocks.terminalInstance.getSelection.mockReturnValue('Microsoft Windows [Version 10.0.19045]')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      capabilities: { ...browserHost.capabilities, clipboard: true },
+      clipboard: {
+        readText: vi.fn(),
+        writeText,
+      },
+    }
+
+    render(<TerminalSettings />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'c', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('Microsoft Windows [Version 10.0.19045]')
+    })
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'C', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'Insert', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(3)
+    })
+    expect(terminalMocks.terminalInstance.focus).toHaveBeenCalled()
+  })
+
+  it('pastes clipboard text into xterm on Windows paste shortcuts', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    terminalMocks.available = true
+    const readText = vi.fn().mockResolvedValue('dir')
+    window.desktopHost = {
+      ...browserHost,
+      capabilities: { ...browserHost.capabilities, clipboard: true },
+      clipboard: {
+        readText,
+        writeText: vi.fn(),
+      },
+    }
+
+    render(<TerminalSettings />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'v', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(terminalMocks.terminalInstance.paste).toHaveBeenCalledWith('dir')
+    })
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'V', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(screen.getByTestId('settings-terminal-frame'), { key: 'Insert', shiftKey: true })
+
+    await waitFor(() => {
+      expect(terminalMocks.terminalInstance.paste).toHaveBeenCalledTimes(3)
+    })
+    expect(terminalMocks.terminalInstance.focus).toHaveBeenCalled()
+  })
+
+  it('does not intercept Ctrl+C as copy when the Windows terminal has no selection', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    terminalMocks.available = true
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      capabilities: { ...browserHost.capabilities, clipboard: true },
+      clipboard: {
+        readText: vi.fn(),
+        writeText,
+      },
+    }
+
+    render(<TerminalSettings />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+
+    const event = new window.KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'c',
+    })
+    screen.getByTestId('settings-terminal-frame').dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(writeText).not.toHaveBeenCalled()
   })
 
   it('can preserve and reattach a running terminal runtime across unmounts', async () => {

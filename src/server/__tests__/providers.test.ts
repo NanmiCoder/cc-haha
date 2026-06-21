@@ -230,6 +230,61 @@ describe('ProviderService', () => {
       )
     })
 
+    test('Xiaomi MiMo custom providers declare thinking without effort passthrough', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        name: 'Xiaomi MiMo Custom',
+        baseUrl: 'https://token-plan-sgp.xiaomimimo.com/anthropic',
+        models: {
+          main: 'mimo-v2.5-pro[1m]',
+          haiku: 'mimo-v2.5-pro[1m]',
+          sonnet: 'mimo-v2.5-pro[1m]',
+          opus: 'mimo-v2.5-pro[1m]',
+        },
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+    })
+
+    test('custom providers can mark main and role models as 1M-capable', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        models: {
+          main: 'claude-sonnet-4-6',
+          haiku: 'claude-haiku-4-5',
+          sonnet: 'claude-sonnet-4-6',
+          opus: 'claude-opus-4-7',
+        },
+        model1mSupport: {
+          main: true,
+          haiku: false,
+          sonnet: true,
+          opus: true,
+        },
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.ANTHROPIC_MODEL).toBe('claude-sonnet-4-6[1m]')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-4-5')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('claude-sonnet-4-6[1m]')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('claude-opus-4-7[1m]')
+
+      const runtimeEnv = await svc.getProviderRuntimeEnv(provider.id)
+      expect(runtimeEnv.ANTHROPIC_MODEL).toBe('claude-sonnet-4-6[1m]')
+      expect(runtimeEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-4-5')
+      expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('claude-sonnet-4-6[1m]')
+      expect(runtimeEnv.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('claude-opus-4-7[1m]')
+    })
+
     test('DeepSeek preset follows the global thinking toggle instead of forcing disabled thinking', async () => {
       const svc = new ProviderService()
       const provider = await svc.addProvider(sampleInput({
@@ -766,12 +821,29 @@ describe('ProviderService', () => {
       expect(env.ANTHROPIC_BASE_URL).toBe('https://second-api.example.com')
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-second-key')
       expect(env.ANTHROPIC_API_KEY).toBe('')
+      expect(env.ENABLE_TOOL_SEARCH).toBe('true')
       expect(env.ANTHROPIC_MODEL).toBe('model-main')
       expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('model-haiku')
       expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('model-sonnet')
       expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('model-opus')
       expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0')
       expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    })
+
+    test('should persist disabled tool search for native Anthropic providers', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        toolSearchEnabled: false,
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.ENABLE_TOOL_SEARCH).toBe('false')
+
+      const runtimeEnv = await svc.getProviderRuntimeEnv(provider.id)
+      expect(runtimeEnv.ENABLE_TOOL_SEARCH).toBe('false')
     })
 
     test('should preserve attribution header for Claude-prefixed provider models', async () => {
@@ -846,6 +918,7 @@ describe('ProviderService', () => {
       const env = settings.env as Record<string, string>
       expect(env.ANTHROPIC_API_KEY).toBe('proxy-managed')
       expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+      expect(env.ENABLE_TOOL_SEARCH).toBeUndefined()
     })
 
     test('should include preset default env on activation and runtime env', async () => {
