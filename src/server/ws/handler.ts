@@ -1399,6 +1399,13 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
   switch (cliMsg.type) {
     case 'assistant': {
       if (cliMsg.error || cliMsg.isApiErrorMessage) {
+        // If the user requested stop, suppress API errors caused by the
+        // stream being interrupted (e.g. "Stream ended without receiving
+        // any events"). The result message handler also checks this flag,
+        // but the assistant error arrives first and would leak to the UI.
+        if (sessionStopRequested.has(sessionId)) {
+          return []
+        }
         const message = extractAssistantText(cliMsg) || cliMsg.error || 'Unknown API error'
         const code = typeof cliMsg.error === 'string' ? cliMsg.error : 'API_ERROR'
         streamState.lastApiError = { message, code }
