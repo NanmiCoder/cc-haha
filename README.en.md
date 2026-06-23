@@ -20,6 +20,14 @@
 A Claude Code build repaired from the source leaked from Anthropic's npm registry on 2026-03-31. Claude Code Haha is now primarily a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, right-side file changes, code diffs, permission review, provider setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
 
 <p align="center">
+  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha">
+    <img src="docs/images/atlas-cloud-logo.png" alt="Atlas Cloud" width="200">
+  </a>
+</p>
+
+> 🎁 **[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha)** is a full-modal, OpenAI-compatible AI inference platform you can plug into Claude Code Haha as a model provider: route the Anthropic-style API through a LiteLLM proxy to reach DeepSeek, Qwen, GLM, Kimi, MiniMax and more behind a single API, with no multi-vendor setup. A budget-friendly [coding plan](https://www.atlascloud.ai/console/coding-plan) is available — see [.env.example](.env.example) for setup.
+
+<p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#more-documentation">More Docs</a>
 </p>
 
