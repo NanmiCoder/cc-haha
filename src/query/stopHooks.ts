@@ -221,6 +221,19 @@ export async function* handleStopHooks(
     const hookErrors: string[] = []
     const hookInfos: StopHookInfo[] = []
     let goalCompleted = false
+	
+	// Goal hook's preventContinuation and blockingError arrive as separate
+    // generator yields — preventContinuation comes first, but blockingError.command
+    // (which identifies it as a goal hook) arrives later. Defer the
+    // preventContinuation decision until we've seen all results and can
+    // cross-reference with blockingError.command.
+    let pendingPreventContinuation: {
+      stopReason: string
+      toolUseID: string
+    } | null = null
+    // Track whether any blockingError came from a goal hook, so we can
+    // resolve the pending preventContinuation correctly after the loop.
+    let goalBlockingErrorSeen = false
 
     for await (const result of generator) {
       if (result.message) {
@@ -283,6 +296,13 @@ export async function* handleStopHooks(
         }
       }
       if (result.blockingError) {
+	    const isGoalHook = isGoalPromptHookCommand(result.blockingError?.command)
+		// If this blockingError is from a goal hook AND we have a pending
+        // preventContinuation, the goal hook's intent is block-and-continue
+        // (not prevent-and-stop). Mark it so we can resolve after the loop.
+        if (isGoalHook && pendingPreventContinuation) {
+          goalBlockingErrorSeen = true
+        }
         const userMessage = createUserMessage({
           content: getStopHookMessage(result.blockingError),
           isMeta: true, // Hide from UI (shown in summary message instead)
@@ -295,7 +315,13 @@ export async function* handleStopHooks(
       }
       // Check if hook wants to prevent continuation
       if (result.preventContinuation) {
-        if (!shouldLetGoalPromptHookContinue(result)) {
+        // If blockingError.command is already available in this same result,
+        // we can decide immediately using shouldLetGoalPromptHookContinue.
+        if (shouldLetGoalPromptHookContinue(result)) {
+          // Goal hook wants to block-and-continue — don't prevent.
+          // The blockingError (in this or a later yield) drives loop continuation.
+        } else if (result.blockingError?.command) {
+          // Has a blockingError.command but it's NOT a goal hook → prevent immediately
           preventedContinuation = true
           stopReason = result.stopReason || 'Stop hook prevented continuation'
           // Create attachment to track the stopped continuation (for structured data)
@@ -306,6 +332,15 @@ export async function* handleStopHooks(
             toolUseID: stopHookToolUseID,
             hookEvent: 'Stop',
           })
+		 } else {
+          // No blockingError yet — defer the decision. The goal hook's
+          // blockingError.command may arrive in a later yield, and we need
+          // it to distinguish goal-hook preventContinuation (block-and-continue)
+          // from regular preventContinuation (prevent-and-stop).
+          pendingPreventContinuation = {
+            stopReason: result.stopReason || 'Stop hook prevented continuation',
+            toolUseID: stopHookToolUseID,
+          }
         }
       }
 
@@ -323,6 +358,30 @@ export async function* handleStopHooks(
         return { blockingErrors: [], preventContinuation: true }
       }
     }
+
+    // Resolve any pending preventContinuation after collecting all results.
+    // If a goal hook's blockingError was seen, the preventContinuation was
+    // the goal hook's signal — it wants to block-and-continue, not stop.
+    // The blockingError will drive the query loop continuation via the
+    // blockingErrors return path.
+    if (pendingPreventContinuation && goalBlockingErrorSeen) {
+      // Don't set preventedContinuation — the blockingErrors will drive
+      // loop continuation in query.ts.
+      pendingPreventContinuation = null
+    } else if (pendingPreventContinuation) {
+      // No goal hook blockingError was found → this preventContinuation
+      // is from a regular hook → actually prevent and stop the session.
+      preventedContinuation = true
+      stopReason = pendingPreventContinuation.stopReason
+      yield createAttachmentMessage({
+        type: 'hook_stopped_continuation',
+        message: stopReason,
+        hookName: 'Stop',
+        toolUseID: pendingPreventContinuation.toolUseID,
+        hookEvent: 'Stop',
+      })
+      pendingPreventContinuation = null
+    } 
 
     // Create summary system message if hooks ran
     if (hookCount > 0) {
