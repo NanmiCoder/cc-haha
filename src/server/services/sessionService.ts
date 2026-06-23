@@ -1390,10 +1390,11 @@ export class SessionService {
 
     for (const providerId of providerIds) {
       const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+	  const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
 	  // Step 1: Try matching the transcript model name directly (current behavior)
       const contextWindow = getModelContextWindowFromEnvValue(
         model,
-        env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
+        rawContextWindows,
       )
       if (contextWindow !== undefined) {
         if (contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
@@ -1443,10 +1444,11 @@ export class SessionService {
 
     for (const provider of providers) {
       const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
+	  const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
       // Step 1: Try matching the transcript model name directly
 	  const contextWindow = getModelContextWindowFromEnvValue(
         model,
-        env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
+        rawContextWindows,
       )
       if (contextWindow !== undefined) {
         matches.push(contextWindow)
@@ -1463,12 +1465,6 @@ export class SessionService {
             rawContextWindows,
           )
           if (fallbackWindow !== undefined) {
-            traceDebug('CTX_WIN', 'getUniqueSavedProviderContextWindow — fallback match via configured model', {
-              transcriptModel: model,
-              configuredModel,
-              envKey,
-              fallbackWindow,
-            })
             matches.push(fallbackWindow)
             break // One match per provider is enough
           }
