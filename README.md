@@ -20,6 +20,14 @@
 Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude Code 源码修复而来，现在主要是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限审批、模型提供商、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
 
 <p align="center">
+  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha">
+    <img src="docs/images/atlas-cloud-logo.png" alt="Atlas Cloud" width="200">
+  </a>
+</p>
+
+> 🎁 **[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha)** 是一个全模态、OpenAI 兼容的 AI 推理平台，可作为 Claude Code Haha 的模型提供商之一接入：通过 LiteLLM 代理把 Anthropic 风格接口转发到 Atlas，即可用上 DeepSeek、Qwen、GLM、Kimi、MiniMax 等模型，一个 API 全搞定，无需逐家对接。预算友好的 [coding plan](https://www.atlascloud.ai/console/coding-plan) 可选，配置示例见 [.env.example](.env.example)。
+
+<p align="center">
   <a href="#桌面端预览">桌面端预览</a> · <a href="#安装桌面端">安装桌面端</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#更多文档">更多文档</a>
 </p>
 
