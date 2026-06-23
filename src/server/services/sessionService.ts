@@ -1376,8 +1376,21 @@ export class SessionService {
       if (activeId) providerIds.push(activeId)
     }
 
+    // Provider env model keys — these are the configured model names that
+    // should be used as fallback matching keys when the transcript model name
+    // (from the API response) doesn't match the modelContextWindows keys.
+    // Third-party APIs may return model names with provider-specific suffixes
+    // (e.g. "LongCat-2.0-Preview-LongCatAI" instead of "LongCat-2.0-Preview").
+    const providerEnvModelKeys = [
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ] as const
+
     for (const providerId of providerIds) {
       const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+	  // Step 1: Try matching the transcript model name directly (current behavior)
       const contextWindow = getModelContextWindowFromEnvValue(
         model,
         env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
@@ -1387,6 +1400,27 @@ export class SessionService {
           return MODEL_CONTEXT_WINDOW_DEFAULT
         }
         return contextWindow
+      }
+	  // Step 2: If transcript model name didn't match, try matching with
+      // the provider's configured model names as fallback keys.
+      // This handles the case where the API response returns a model name
+      // that differs from the user-configured model name (e.g. provider
+      // appends its own suffix like "-LongCatAI").
+      if (env && rawContextWindows) {
+        for (const envKey of providerEnvModelKeys) {
+          const configuredModel = env[envKey]
+          if (!configuredModel) continue
+          const fallbackWindow = getModelContextWindowFromEnvValue(
+            configuredModel,
+            rawContextWindows,
+          )
+          if (fallbackWindow !== undefined) {
+            if (fallbackWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
+              return MODEL_CONTEXT_WINDOW_DEFAULT
+            }
+            return fallbackWindow
+          }
+        }
       }
     }
 
@@ -1400,15 +1434,45 @@ export class SessionService {
   private async getUniqueSavedProviderContextWindow(model: string): Promise<number | undefined> {
     const { providers } = await this.providerService.listProviders().catch(() => ({ providers: [] }))
     const matches: number[] = []
+	const providerEnvModelKeys = [
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ] as const
 
     for (const provider of providers) {
       const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
-      const contextWindow = getModelContextWindowFromEnvValue(
+      // Step 1: Try matching the transcript model name directly
+	  const contextWindow = getModelContextWindowFromEnvValue(
         model,
         env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
       )
       if (contextWindow !== undefined) {
         matches.push(contextWindow)
+        continue
+      }
+
+      // Step 2: Fallback — try matching with provider's configured model names
+      if (env && rawContextWindows) {
+        for (const envKey of providerEnvModelKeys) {
+          const configuredModel = env[envKey]
+          if (!configuredModel) continue
+          const fallbackWindow = getModelContextWindowFromEnvValue(
+            configuredModel,
+            rawContextWindows,
+          )
+          if (fallbackWindow !== undefined) {
+            traceDebug('CTX_WIN', 'getUniqueSavedProviderContextWindow — fallback match via configured model', {
+              transcriptModel: model,
+              configuredModel,
+              envKey,
+              fallbackWindow,
+            })
+            matches.push(fallbackWindow)
+            break // One match per provider is enough
+          }
+        }
       }
     }
 
