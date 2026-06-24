@@ -185,6 +185,73 @@ export class MaxFileReadTokenExceededError extends Error {
   }
 }
 
+/**
+ * Thrown when a file with an image extension fails magic-byte validation —
+ * e.g. an HTTP error body written into `*.png`. Surfacing this as a typed
+ * error stops malformed bytes from reaching the model API (Bedrock would
+ * reject with IMAGE_FORMAT_UNSUPPORTED, and the bad block would then be
+ * replayed on every subsequent turn).
+ */
+export class InvalidImageDataError extends Error {
+  constructor(
+    public filePath: string,
+    public actualSize: number,
+    public firstBytesHex: string,
+  ) {
+    super(
+      `File ${filePath} has an image extension but does not contain a recognizable image (size=${actualSize} bytes, first bytes=${firstBytesHex}). The file is likely a non-image response (e.g. an HTTP error body) written with a misleading extension. Re-fetch the source or read it as text instead.`,
+    )
+    this.name = 'InvalidImageDataError'
+  }
+}
+
+/**
+ * Magic-byte check for the image formats Anthropic / Bedrock accept.
+ * Returns true only when the buffer's first bytes match a known signature.
+ * Unlike detectImageFormatFromBuffer (which defaults to 'image/png' on
+ * unknown input), this returns a hard yes/no.
+ */
+function hasKnownImageMagicBytes(buffer: Buffer): boolean {
+  if (buffer.length < 4) return false
+  // PNG: 89 50 4E 47
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return true
+  }
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return true
+  }
+  // GIF: 47 49 46 38 (GIF8…)
+  if (
+    buffer[0] === 0x47 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x38
+  ) {
+    return true
+  }
+  // WebP: 'RIFF' …… 'WEBP'
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return true
+  }
+  return false
+}
+
 // Common image extensions
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
 
@@ -1121,6 +1188,19 @@ export async function readImageWithTokenBudget(
 
   if (originalSize === 0) {
     throw new Error(`Image file is empty: ${filePath}`)
+  }
+
+  // Reject files whose extension says "image" but whose bytes don't match any
+  // known image signature. Without this guard the bytes would still flow
+  // through the rest of the pipeline and reach the model API, where Bedrock
+  // would respond with IMAGE_FORMAT_UNSUPPORTED — and because the bad block
+  // stays in conversation history, every subsequent turn would replay the same
+  // error. See FileReadTool.imageValidation.test.ts for the regression case.
+  if (!hasKnownImageMagicBytes(imageBuffer)) {
+    const firstBytesHex = imageBuffer
+      .subarray(0, Math.min(16, imageBuffer.length))
+      .toString('hex')
+    throw new InvalidImageDataError(filePath, originalSize, firstBytesHex)
   }
 
   const detectedMediaType = detectImageFormatFromBuffer(imageBuffer)
