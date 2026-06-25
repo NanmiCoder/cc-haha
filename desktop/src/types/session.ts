@@ -5,7 +5,7 @@ export type SessionListItem = {
   title: string
   createdAt: string
   modifiedAt: string
-  messageCount: number
+  messageCount?: number
   projectPath: string
   projectRoot?: string | null
   workDir: string | null
