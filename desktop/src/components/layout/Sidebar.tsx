@@ -962,6 +962,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                                     }
                                     useTabStore.getState().openTab(session.id, session.title)
                                     useChatStore.getState().connectToSession(session.id)
+									void useSessionStore.getState().fetchSessionSummary(session.id)
                                     closeMobileDrawer()
                                   }}
                                   onContextMenu={(e) => handleContextMenu(e, session.id)}
@@ -991,7 +992,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                                         )}
                                       </span>
                                     ) : null}
-                                    <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || 'Untitled'}</span>
+                                    <span className="min-w-0 flex-1 truncate font-medium tracking-normal" title={session.title || 'Untitled'}>{session.title || 'Untitled'}</span>
                                     {!session.workDirExists && (
                                       <span
                                         className="flex-shrink-0 text-[10px] text-[var(--color-warning)]"
