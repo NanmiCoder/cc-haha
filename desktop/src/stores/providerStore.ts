@@ -196,7 +196,29 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
 
   createProvider: async (input) => {
     const { provider } = await providersApi.create(input)
-    await get().fetchProviders()
+    // Optimistic: push locally so the UI updates instantly, then
+    // background-fetch the full server list to reconcile order.
+    const previousProviders = get().providers
+    const previousOrder = get().providerOrder
+    const previousActiveId = get().activeId
+    const optimisticOrder = normalizeProviderOrder(
+      [...previousOrder, provider.id],
+      [...previousProviders, provider],
+    )
+    set({
+      providers: [...previousProviders, provider],
+      providerOrder: optimisticOrder,
+      hasLoadedProviders: true,
+    })
+    // Background refresh — does not block the caller.
+    get().fetchProviders().catch(() => {
+      // Roll back if the server list cannot be reconciled.
+      set({
+        providers: previousProviders,
+        providerOrder: previousOrder,
+        activeId: previousActiveId,
+      })
+    })
     return provider
   },
 
