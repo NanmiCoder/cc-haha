@@ -1372,7 +1372,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   )
 
   const handleSubmit = async () => {
-    if (!canSubmit) return
+    if (!canSubmit || isSubmitting) return
     const normalizedModels = normalizeModelMapping(models)
     const parsedAutoCompactWindow = parseAutoCompactWindowInput(autoCompactWindow)
     const parsedModelContextWindows = buildModelContextWindows(models, modelContextInputs)
@@ -1381,33 +1381,36 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       : undefined
     setIsSubmitting(true)
     try {
-      // Write the edited cc-haha settings.json first so provider-specific model
-      // settings never conflict with the user's global ~/.claude/settings.json.
-      if (settingsJson.trim()) {
-        try {
+      // Fire settings write and provider create/update in parallel.
+      // The settings.json write does not need to succeed before the
+      // provider record is created — the store will reconcile via
+      // fetchProviders afterwards, and fetchSettings is already
+      // a background operation below.
+      const settingsWritePromise = settingsJson.trim()
+        ? import('../api/providers').then(({ providersApi }) => {
           const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
-          const { providersApi } = await import('../api/providers')
-          await providersApi.updateSettings(parsed)
-        } catch {
-          // JSON validation already prevents this
-        }
-      }
+          return providersApi.updateSettings(parsed).catch(() => {})
+          })
+        : Promise.resolve()
 
       if (mode === 'create') {
-        await createProvider({
-          presetId: selectedPreset.id,
-          name: name.trim(),
-          apiKey: apiKey.trim(),
-          authStrategy,
-          baseUrl: baseUrl.trim(),
-          apiFormat,
-          models: normalizedModels,
-          ...(storedModel1mSupport !== undefined && { model1mSupport: storedModel1mSupport }),
-          ...(parsedAutoCompactWindow !== undefined && { autoCompactWindow: parsedAutoCompactWindow }),
-          ...(Object.keys(parsedModelContextWindows).length > 0 && { modelContextWindows: parsedModelContextWindows }),
-          toolSearchEnabled,
-          notes: notes.trim() || undefined,
-        })
+        await Promise.all([
+          createProvider({
+			presetId: selectedPreset.id,
+			name: name.trim(),
+			apiKey: apiKey.trim(),
+			authStrategy,
+			baseUrl: baseUrl.trim(),
+			apiFormat,
+			models: normalizedModels,
+			...(storedModel1mSupport !== undefined && { model1mSupport: storedModel1mSupport }),
+			...(parsedAutoCompactWindow !== undefined && { autoCompactWindow: parsedAutoCompactWindow }),
+			...(Object.keys(parsedModelContextWindows).length > 0 && { modelContextWindows: parsedModelContextWindows }),
+			toolSearchEnabled,
+			notes: notes.trim() || undefined,
+          }),
+          settingsWritePromise,
+        ])
       } else if (provider) {
         const input: UpdateProviderInput = {
           name: name.trim(),
@@ -1424,7 +1427,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
-        await updateProvider(provider.id, input)
+        await Promise.all([
+          updateProvider(provider.id, input),
+          settingsWritePromise,
+        ])
       }
       await fetchSettings()
       onClose()
@@ -1475,7 +1481,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit} loading={isSubmitting}>
+          <Button onClick={handleSubmit} disabled={!canSubmit || isSubmitting} loading={isSubmitting}>
             {mode === 'create' ? t('common.add') : t('common.save')}
           </Button>
         </>
