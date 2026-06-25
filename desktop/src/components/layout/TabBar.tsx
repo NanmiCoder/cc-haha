@@ -12,6 +12,7 @@ import {
 } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { useTerminalPanelStore } from '../../stores/terminalPanelStore'
 import { useTranslation } from '../../i18n'
@@ -186,6 +187,12 @@ export function TabBar() {
           useChatStore.getState().stopGeneration(tab.sessionId)
         }
         if (!isRunning || stopRunning) {
+          // Auto-delete empty sessions (placeholder title, no messages sent)
+          const sessionEntry = useSessionStore.getState().sessions.find((s) => s.id === tab.sessionId)
+          const chatEntry = useChatStore.getState().sessions[tab.sessionId]
+          if (isPlaceholderSessionTitle(sessionEntry?.title) && (!chatEntry || chatEntry.messages.length === 0)) {
+            void useSessionStore.getState().deleteSession(tab.sessionId)
+          }
           disconnectSession(tab.sessionId)
         }
       }
