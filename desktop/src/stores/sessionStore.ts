@@ -94,6 +94,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  fetchSessionSummary: async (sessionId: string) => {
+    try {
+      const summary = await sessionsApi.getSessionSummary(sessionId)
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, messageCount: summary.messageCount, permissionMode: summary.permissionMode }
+            : session,
+        ),
+      }))
+    } catch {
+      // Silently ignore — summary is non-critical UI enhancement
+    }
+  },
+
   createSession: async (workDir?: string, options?: CreateSessionOptions) => {
     const { sessionId: id, workDir: resolvedWorkDir } = await sessionsApi.create({
       ...(workDir ? { workDir } : {}),

@@ -357,6 +357,10 @@ export const sessionsApi = {
     return api.get<SessionSummaryResponse>(`/api/sessions/${sessionId}/summary`)
   },
 
+  getSessionSummary(sessionId: string) {
+    return api.get<SessionSummaryResponse>(`/api/sessions/${sessionId}/summary`)
+  },
+
   getRecentProjects(limit?: number) {
     const query = typeof limit === 'number' ? `?limit=${limit}` : ''
     return api.get<{ projects: RecentProject[] }>(`/api/sessions/recent-projects${query}`)
