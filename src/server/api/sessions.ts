@@ -965,14 +965,14 @@ async function getRecentProjects(url: URL): Promise<Response> {
   const validSessions = sessions.filter((session) => session.workDirExists && session.workDir)
 
   // First pass: group by logical project root so worktrees stay under the same project.
+  // Optimization: prefer s.projectRoot (already resolved by listSessions) and only fall back
+  // to the expensive getSessionWorkDir (reads the full transcript) when projectRoot is absent.
   const realPathMap = new Map<string, { projectPath: string; modifiedAt: string; sessionCount: number; sessionId: string }>()
+  const fallbackSessionIds: string[] = []
   for (const s of validSessions) {
-    let realPath: string
-    try {
-      const workDir = await sessionService.getSessionWorkDir(s.id)
-      realPath = s.projectRoot || workDir || sessionService.desanitizePath(s.projectPath)
-    } catch {
-      realPath = s.projectRoot || sessionService.desanitizePath(s.projectPath)
+    const realPath = s.projectRoot || sessionService.desanitizePath(s.projectPath)
+    if (!s.projectRoot && s.id) {
+      fallbackSessionIds.push(s.id)
     }
 
     const existing = realPathMap.get(realPath)
@@ -988,7 +988,46 @@ async function getRecentProjects(url: URL): Promise<Response> {
     }
   }
 
+  // Resolve fallback sessions in parallel (only those missing projectRoot)
+  if (fallbackSessionIds.length > 0) {
+    const resolvedPaths = await Promise.all(
+      fallbackSessionIds.map(async (sessionId) => {
+        try {
+          const workDir = await sessionService.getSessionWorkDir(sessionId)
+          return { sessionId, workDir }
+        } catch {
+          return { sessionId, workDir: null as string | null }
+        }
+      }),
+    )
+    for (const { sessionId, workDir } of resolvedPaths) {
+      if (!workDir) continue
+      // Find the entry we already inserted with the desanitized projectPath
+      const session = validSessions.find((s) => s.id === sessionId)
+      const oldKey = session?.projectRoot || sessionService.desanitizePath(session?.projectPath || '')
+      const oldEntry = oldKey ? realPathMap.get(oldKey) : undefined
+      const newRealPath = workDir
+      if (oldKey && oldEntry && oldKey !== newRealPath) {
+        // Migrate entry to the resolved real path
+        realPathMap.delete(oldKey)
+        const existingNew = realPathMap.get(newRealPath)
+        if (!existingNew || oldEntry.modifiedAt > (existingNew?.modifiedAt ?? '')) {
+          realPathMap.set(newRealPath, {
+            projectPath: newRealPath,
+            modifiedAt: oldEntry.modifiedAt,
+            sessionCount: oldEntry.sessionCount + (existingNew?.sessionCount ?? 0),
+            sessionId: oldEntry.sessionId,
+          })
+        } else {
+          existingNew.sessionCount += oldEntry.sessionCount
+        }
+      }
+    }
+  }
+
   // Build project list with git info — parallelize git operations
+  // Optimization: use findGitRoot (fs.stat traversal + LRU cache, <5ms) to skip git spawns
+  // on non-git directories, avoiding slow git rev-parse on each (seconds per non-git dir).
   const entries = Array.from(realPathMap.entries())
   const projects = await Promise.all(
     entries.map(async ([realPath, info]) => {
@@ -997,15 +1036,11 @@ async function getRecentProjects(url: URL): Promise<Response> {
       let isGit = false
       let repoName: string | null = null
       let branch: string | null = null
-      try {
-        const proc = Bun.spawn(['git', 'rev-parse', '--is-inside-work-tree'], {
-          cwd: realPath, stdout: 'pipe', stderr: 'pipe',
-        })
-        const out = await new Response(proc.stdout).text()
-        isGit = out.trim() === 'true'
-
-        if (isGit) {
-          // Run branch + remote in parallel
+      const gitRoot = findGitRoot(realPath)
+      if (gitRoot) {
+        isGit = true
+        // Run branch + remote in parallel
+        try {
           const [branchResult, remoteResult] = await Promise.all([
             (async () => {
               const branchProc = Bun.spawn(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], {
@@ -1026,8 +1061,9 @@ async function getRecentProjects(url: URL): Promise<Response> {
           ])
           branch = isDesktopWorktreeBranchName(branchResult) ? null : branchResult
           repoName = remoteResult
-        }
-      } catch { /* not a git repo or dir doesn't exist */ }
+        } catch { /* git command failed */ }
+      }
+      
 
       return {
         projectPath: info.projectPath, realPath, projectName, isGit, repoName, branch,
