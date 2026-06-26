@@ -29,6 +29,7 @@ type SessionStore = {
   selectedSessionIds: Set<string>
 
   fetchSessions: (project?: string) => Promise<void>
+  fetchSessionSummary: (sessionId: string) => Promise<void>
   createSession: (workDir?: string, options?: CreateSessionOptions) => Promise<string>
   branchSession: (
     sourceSessionId: string,
@@ -75,6 +76,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } catch (err) {
       if (requestId !== fetchSessionsRequestId) return
       set({ error: (err as Error).message, isLoading: false })
+    }
+  },
+
+  fetchSessionSummary: async (sessionId: string) => {
+    try {
+      const summary = await sessionsApi.getSessionSummary(sessionId)
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, messageCount: summary.messageCount, permissionMode: summary.permissionMode }
+            : session,
+        ),
+      }))
+    } catch {
+      // Silently ignore — summary is non-critical UI enhancement
     }
   },
 
