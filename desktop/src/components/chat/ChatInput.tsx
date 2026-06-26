@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
+import type { PerSessionState } from '../../stores/chatStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -698,32 +699,30 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
           useChatStore.setState((s) => {
             const sess = s.sessions[oldId]
             if (!sess) return s
-            return {
-              sessions: { ...s.sessions, [oldId]: { ...sess, elapsedSeconds: sess.elapsedSeconds + 1 } },
-            }
+            const nextSessions = { ...s.sessions, [oldId]: { ...sess, elapsedSeconds: sess.elapsedSeconds + 1 } } as Record<string, PerSessionState>
+            return { sessions: nextSessions }
           })
         }, 1000)
 
         useChatStore.setState((s) => {
           const session = s.sessions[oldId]
           if (!session) return s
-          return {
-            sessions: {
-              ...s.sessions,
-              [oldId]: {
-                ...session,
-                messages: [...session.messages, optimisticMessage],
-                chatState: 'thinking',
-                elapsedSeconds: 0,
-                streamingText: '',
-                streamingResponseChars: 0,
-                statusVerb: randomSpinnerVerb(),
-                apiRetry: null,
-                streamingFallback: null,
-                elapsedTimer: optimisticTimer,
-              },
+          const nextSessions = {
+            ...s.sessions,
+            [oldId]: {
+              ...session,
+              messages: [...session.messages, optimisticMessage],
+              chatState: 'thinking',
+              elapsedSeconds: 0,
+              streamingText: '',
+              streamingResponseChars: 0,
+              statusVerb: randomSpinnerVerb(),
+              apiRetry: null,
+              streamingFallback: null,
+              elapsedTimer: optimisticTimer,
             },
-          }
+          } as Record<string, PerSessionState>
+          return { sessions: nextSessions }
         })
 
         // Clear composer early so user sees their message in the chat
@@ -750,20 +749,19 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
             useChatStore.setState((s) => {
               const sess = s.sessions[oldId]
               if (!sess) return s
-              return {
-                sessions: {
-                  ...s.sessions,
-                  [oldId]: {
-                    ...sess,
-                    chatState: 'idle',
-                    messages: sess.messages.filter((m) => m.id !== optimisticMsgId),
-                    elapsedSeconds: 0,
-                    elapsedTimer: null,
-                    streamingText: '',
-                    statusVerb: '',
-                  },
+              const nextSessions = {
+                ...s.sessions,
+                [oldId]: {
+                  ...sess,
+                  chatState: 'idle',
+                  messages: sess.messages.filter((m) => m.id !== optimisticMsgId),
+                  elapsedSeconds: 0,
+                  elapsedTimer: null,
+                  streamingText: '',
+                  statusVerb: '',
                 },
-              }
+              } as Record<string, PerSessionState>
+              return { sessions: nextSessions }
             })
           }
           useUIStore.getState().addToast({
