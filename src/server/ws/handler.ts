@@ -455,6 +455,11 @@ function bindActiveUserTurnCompletion(
 
     conversationService.removeOutputCallback(sessionId, callback)
     clearActiveUserTurn(sessionId, activeTurn)
+    // Structurally disarm any prewarm idle timer that a concurrent
+    // prewarm_session/user_message flush may have armed on this session: once a
+    // turn completes the session is firmly user-owned, so no prewarm reaper
+    // should survive — regardless of the order in which the two raced.
+    clearPrewarmState(sessionId)
     applyDeferredPermissionModeAfterActiveTurn(ws, sessionId)
     applyDeferredRuntimeRestartAfterActiveTurn(ws, sessionId)
   }
@@ -566,10 +571,13 @@ async function handlePrewarmSession(ws: ServerWebSocket<WebSocketData>) {
     .then(() => {
       const stillPending = prewarmPendingSessions.delete(sessionId)
       if (!stillPending) return
-      // Safety: if a user message arrived and activated a turn while we were
-      // waiting for startup, do NOT arm the prewarm idle timer — the session
-      // is now owned by the user conversation, not prewarm.
-      if (isSessionTurnActive(sessionId)) {
+      // Safety: if a user message arrived and claimed this session while we
+      // were waiting for startup, do NOT arm the prewarm idle timer — the
+      // session is now owned by the user conversation, not prewarm. Use the
+      // turn-registered check (not messageSent) so the CLI-startup window is
+      // covered: in the concurrent race the turn is registered but messageSent
+      // is still false when this .then runs, which made the old guard dead code.
+      if (hasPendingOrActiveUserTurn(sessionId)) {
         return
       }
       bindPrewarmMetadataCapture(sessionId)
@@ -1248,11 +1256,13 @@ function markPrewarmed(sessionId: string) {
   const timer = setTimeout(() => {
     prewarmIdleTimers.delete(sessionId)
     if (!prewarmedSessions.has(sessionId)) return
-    const turnActive = isSessionTurnActive(sessionId)
+    const turnActive = hasPendingOrActiveUserTurn(sessionId)
     const hasClients = hasActiveClients(sessionId)
-    // Safety guard: never kill a session that has an active user turn or
-    // connected clients. The prewarm idle timer is only meant to reclaim
-    // truly idle prewarmed sessions — not to interrupt an active conversation.
+    // Safety guard: never kill a session that has a registered user turn or
+    // connected clients. The turn-registered check (not messageSent) covers the
+    // CLI-startup window, so a turn racing through startup is protected even if
+    // the client has briefly disconnected. The prewarm idle timer is only meant
+    // to reclaim truly idle prewarmed sessions — not to interrupt a conversation.
     if (turnActive || hasClients) {
       prewarmedSessions.delete(sessionId)
       return
@@ -2011,6 +2021,19 @@ function getDisconnectCleanupDelayMs(sessionId: string): number {
  */
 function isSessionTurnActive(sessionId: string): boolean {
   return activeUserTurns.get(sessionId)?.messageSent === true
+}
+
+/**
+ * Whether a user turn has been registered for this session and not yet settled,
+ * INCLUDING the CLI-startup window before messageSent flips true. handleUserMessage
+ * registers the turn in its synchronous prefix (activeUserTurns.set), well before
+ * the message is actually sent. Unlike isSessionTurnActive, this is not blind to
+ * that window, so the prewarm idle timer can neither arm on nor fire against a
+ * session a user turn has already claimed — even when a concurrent
+ * prewarm_session/user_message flush inverts their ordering.
+ */
+function hasPendingOrActiveUserTurn(sessionId: string): boolean {
+  return activeUserTurns.has(sessionId)
 }
 
 /**
@@ -2779,4 +2802,17 @@ export function __markPrewarmPendingForTests(sessionId: string): void {
 /** Test hook: mark a session as mid-turn so disconnect keeps the CLI alive. */
 export function __markActiveTurnForTests(sessionId: string): void {
   activeUserTurns.set(sessionId, { messageSent: true })
+}
+
+/**
+ * Test hook: register a user turn still in the pre-send (messageSent:false)
+ * window — i.e. the CLI-startup window that isSessionTurnActive is blind to.
+ */
+export function __registerPendingUserTurnForTests(sessionId: string): void {
+  activeUserTurns.set(sessionId, { messageSent: false })
+}
+
+/** Test hook: arm the prewarm idle timer for a session, as markPrewarmed does. */
+export function __markPrewarmedForTests(sessionId: string): void {
+  markPrewarmed(sessionId)
 }
