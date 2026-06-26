@@ -5,6 +5,7 @@ import type { PermissionMode } from '../types/settings'
 import type { TraceCallRecord, TraceSession } from '../types/trace'
 
 type SessionsResponse = { sessions: SessionListItem[]; total: number }
+type SessionSummaryResponse = { messageCount: number; permissionMode?: string }
 type MessagesResponse = {
   messages: MessageEntry[]
   taskNotifications?: AgentTaskNotification[]
@@ -350,6 +351,10 @@ export const sessionsApi = {
 
   rename(sessionId: string, title: string) {
     return api.patch<{ ok: true }>(`/api/sessions/${sessionId}`, { title })
+  },
+  
+  getSessionSummary(sessionId: string) {
+    return api.get<SessionSummaryResponse>(`/api/sessions/${sessionId}/summary`)
   },
 
   getRecentProjects(limit?: number) {
