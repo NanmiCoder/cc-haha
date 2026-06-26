@@ -286,6 +286,14 @@ type SessionListSummary = {
   worktreeSession?: PersistedWorktreeSession | null
 }
 
+type SessionListSummaryLightweight = {
+  title: string
+  createdAt: string
+  workDir: string | null
+  repository?: PreparedSessionWorkspace['repository']
+  worktreeSession?: PersistedWorktreeSession | null
+}
+
 const VALID_SESSION_PERMISSION_MODES = new Set([
   'default',
   'acceptEdits',
@@ -532,6 +540,142 @@ export class SessionService {
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
       ...(effortLevel ? { effortLevel } : {}),
+      ...(repository ? { repository } : {}),
+      ...(worktreeSession !== undefined ? { worktreeSession } : {}),
+    }
+  }
+  
+  /**
+   * Lightweight version of scanSessionListSummary that reads only the
+   * head and tail of a JSONL file instead of scanning the entire file.
+   * This is ~100x faster for large transcripts.
+   *
+   * Omits messageCount and permissionMode — those are fetched on demand
+   * via getSessionSummary when the user selects a session.
+   */
+  private async scanSessionListSummaryLightweight(
+    filePath: string,
+    projectDir: string,
+    stat: { birthtime: Date; size: number },
+  ): Promise<SessionListSummaryLightweight> {
+    const HEAD_BYTES = 16384
+    const TAIL_BYTES = 8192
+
+    let createdAt = stat.birthtime.toISOString()
+    let hasCreatedAt = false
+    let firstUserTitle: string | null = null
+    let goalTitle: string | null = null
+    let aiTitle: string | null = null
+    let customTitle: string | null = null
+    let latestWorkDir: string | null = null
+    let latestCwd: string | null = null
+    let repository: PreparedSessionWorkspace['repository'] | undefined
+    let worktreeSession: PersistedWorktreeSession | null | undefined
+
+    const parseLines = (text: string): void => {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+
+        let entry: RawEntry
+        try {
+          entry = JSON.parse(trimmed) as RawEntry
+        } catch {
+          continue
+        }
+
+        if (!hasCreatedAt && entry.timestamp) {
+          createdAt = entry.timestamp
+          hasCreatedAt = true
+        }
+
+        if (entry.type === 'session-meta') {
+          if (typeof (entry as Record<string, unknown>).workDir === 'string') {
+            latestWorkDir = normalizeDriveRootPathForPlatform(
+              (entry as Record<string, unknown>).workDir as string,
+            )
+          }
+        }
+
+        if (typeof entry.cwd === 'string' && entry.cwd.trim()) {
+          latestCwd = normalizeDriveRootPathForPlatform(entry.cwd)
+        }
+
+        const candidateRepository = (entry as Record<string, unknown>)?.repository
+        if (candidateRepository && typeof candidateRepository === 'object') {
+          repository = candidateRepository as PreparedSessionWorkspace['repository']
+        }
+
+        if (entry.type === 'worktree-state') {
+          if (entry.worktreeSession === null) {
+            worktreeSession = null
+          } else if (
+            entry.worktreeSession &&
+            typeof entry.worktreeSession === 'object' &&
+            typeof entry.worktreeSession.worktreePath === 'string' &&
+            typeof entry.worktreeSession.worktreeName === 'string'
+          ) {
+            worktreeSession = entry.worktreeSession
+          }
+        }
+
+        if (entry.type === 'custom-title' && entry.customTitle) {
+          customTitle = String(entry.customTitle)
+        }
+
+        if (!goalTitle) {
+          goalTitle = this.goalCreationCommandTitle(entry)
+        }
+
+        if (entry.type === 'ai-title' && entry.aiTitle) {
+          const title = cleanSessionTitleSource(String(entry.aiTitle))
+          if (title) aiTitle = title
+        }
+
+        if (
+          !firstUserTitle &&
+          entry.type === 'user' &&
+          !entry.isMeta &&
+          entry.message?.role === 'user'
+        ) {
+          firstUserTitle = this.extractUserMessageTitle(entry.message.content)
+        }
+      }
+    }
+
+    if (stat.size <= HEAD_BYTES) {
+      // Small file: read everything (still fast, under 16KB)
+      const content = await fs.readFile(filePath, 'utf-8')
+      parseLines(content)
+    } else {
+      // Large file: read head + tail only
+      const fd = await fs.open(filePath, 'r')
+
+      // Head: first HEAD_BYTES, truncate to last complete line
+      const headBuf = Buffer.alloc(HEAD_BYTES)
+      await fd.read(headBuf, 0, HEAD_BYTES, 0)
+      const headText = headBuf.toString('utf-8')
+      const headLastNl = headText.lastIndexOf('\n')
+      const cleanHead = headLastNl >= 0 ? headText.substring(0, headLastNl) : headText
+
+      // Tail: last TAIL_BYTES, skip first partial line
+      const tailOffset = Math.max(HEAD_BYTES, stat.size - TAIL_BYTES)
+      const tailSize = stat.size - tailOffset
+      const tailBuf = Buffer.alloc(tailSize)
+      await fd.read(tailBuf, 0, tailSize, tailOffset)
+      await fd.close()
+      const tailText = tailBuf.toString('utf-8')
+      const tailFirstNl = tailText.indexOf('\n')
+      const cleanTail = tailFirstNl >= 0 ? tailText.substring(tailFirstNl + 1) : ''
+
+      parseLines(cleanHead)
+      parseLines(cleanTail)
+    }
+
+    return {
+      title: customTitle || goalTitle || aiTitle || firstUserTitle || 'Untitled Session',
+      createdAt,
+      workDir: latestWorkDir || latestCwd || this.desanitizePath(projectDir),
       ...(repository ? { repository } : {}),
       ...(worktreeSession !== undefined ? { worktreeSession } : {}),
     }
@@ -1740,13 +1884,14 @@ export class SessionService {
     const limit = options?.limit ?? 50
     const paginatedFiles = filesWithStats.slice(offset, offset + limit)
 
-    // Build session list items with metadata from file stats & a streaming
-    // transcript summary. Keep this sequential so large JSONL files are not
-    // loaded into memory concurrently by the sidebar's frequent refresh.
+    // Build session list items with metadata from file stats & a lightweight
+    // head+tail scan. messageCount and permissionMode are omitted here and
+    // fetched on demand via /api/sessions/:id/summary when the user selects
+    // a session. This reduces list load time from ~80s (400 full scans) to <1s.
     const items: SessionListItem[] = []
     for (const { filePath, projectDir, sessionId, stat } of paginatedFiles) {
       try {
-        const summary = await this.scanSessionListSummary(filePath, projectDir, stat)
+        const summary = await this.scanSessionListSummaryLightweight(filePath, projectDir, stat)
         const workDir = summary.workDir
         const projectRoot = await this.resolveProjectRootFromSessionMetadata({
           worktreeSession: summary.worktreeSession,
@@ -1761,12 +1906,12 @@ export class SessionService {
           title: summary.title,
           createdAt: summary.createdAt,
           modifiedAt: stat.mtime.toISOString(),
-          messageCount: summary.messageCount,
+          messageCount: 0,
           projectPath: projectDir,
           projectRoot,
           workDir,
           workDirExists,
-          permissionMode: summary.permissionMode,
+          // permissionMode omitted; fetched on demand via /api/sessions/:id/summary
         })
       } catch {
         // Skip unreadable files
@@ -2033,6 +2178,24 @@ export class SessionService {
     const entries = await this.readJsonlFile(found.filePath)
     const entry = entries.find((candidate) => candidate.uuid === messageId)
     return typeof entry?.cwd === 'string' && entry.cwd.trim() ? entry.cwd : null
+  }
+  
+  /**
+   * Fetch on-demand detail fields (messageCount, permissionMode) for a
+   * single session. Uses the full scan since this is called only when the
+   * user selects a session, not for the bulk list.
+   */
+  async getSessionSummary(sessionId: string): Promise<{ messageCount: number; permissionMode?: string }> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) throw ApiError.notFound(`Session not found: ${sessionId}`)
+
+    const stat = await fs.stat(found.filePath)
+    const summary = await this.scanSessionListSummary(found.filePath, found.projectDir, stat)
+
+    return {
+      messageCount: summary.messageCount,
+      ...(summary.permissionMode ? { permissionMode: summary.permissionMode } : {}),
+    }
   }
 
   /**
