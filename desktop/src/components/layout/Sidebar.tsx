@@ -962,6 +962,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                                     }
                                     useTabStore.getState().openTab(session.id, session.title)
                                     useChatStore.getState().connectToSession(session.id)
+                                    useSessionStore.getState().fetchSessionSummary(session.id)
                                     closeMobileDrawer()
                                   }}
                                   onContextMenu={(e) => handleContextMenu(e, session.id)}
