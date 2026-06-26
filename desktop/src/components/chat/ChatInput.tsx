@@ -43,6 +43,7 @@ import {
 } from '../../lib/composerAttachments'
 import { useComposerFileDrop } from './useComposerFileDrop'
 import { shouldSubmitOnEnter } from './sendShortcut'
+import { randomSpinnerVerb } from '../../config/spinnerVerbs'
 
 type GitInfo = SessionGitInfo
 
@@ -556,6 +557,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const replaceEmptySession = useCallback(async (
     workDir: string,
     repository?: { branch?: string | null; worktree?: boolean },
+    options?: { deferCleanup?: boolean },
   ) => {
     if (!activeTabId) return null
     const oldId = activeTabId
@@ -567,11 +569,15 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       repository ? { repository } : undefined,
     )
     useSessionRuntimeStore.getState().moveSelection(oldId, newId)
-    disconnectSession(oldId)
+    if (!options?.deferCleanup) {
+      disconnectSession(oldId)
+    }
     replaceTabSession(oldId, newId)
     connectToSession(newId)
-    deleteSession(oldId).catch(() => {})
-    return newId
+    if (!options?.deferCleanup) {
+      deleteSession(oldId).catch(() => {})
+    }
+    return { newId, oldId }
   }, [activeTabId])
 
   const handleLaunchWorkDirChange = useCallback(async (newWorkDir: string) => {
@@ -666,20 +672,100 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     ]
 
     let targetSessionId = activeTabId!
+    let deferredOldId: string | null = null
+    let optimisticTimer: ReturnType<typeof setInterval> | null = null
+    
     if (showLaunchControls && activeLaunchWorkDir && launchBranch) {
       const shouldReplaceForRepositoryLaunch =
         launchUseWorktree ||
         (gitInfo?.branch ? launchBranch !== gitInfo.branch : true)
       if (shouldReplaceForRepositoryLaunch) {
+        // Optimistic update: show "thinking" + user message on oldId immediately
+        // so the user sees instant feedback instead of a blank/hero layout
+        // during the await createSession gap (~1-3s).
+        const oldId = activeTabId!
+        deferredOldId = oldId
+        const optimisticMsgId = `msg-optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        const optimisticMessage = {
+          id: optimisticMsgId,
+          type: 'user_text' as const,
+          content: displayContent,
+          ...(contentForModel !== displayContent ? { modelContent: contentForModel } : {}),
+          ...(isMemberSession ? {} : { attachments: visibleAttachmentPayload }),
+          timestamp: Date.now(),
+        }
+        optimisticTimer = setInterval(() => {
+          useChatStore.setState((s) => {
+            const sess = s.sessions[oldId]
+            if (!sess) return s
+            return {
+              sessions: { ...s.sessions, [oldId]: { ...sess, elapsedSeconds: sess.elapsedSeconds + 1 } },
+            }
+          })
+        }, 1000)
+
+        useChatStore.setState((s) => {
+          const session = s.sessions[oldId]
+          if (!session) return s
+          return {
+            sessions: {
+              ...s.sessions,
+              [oldId]: {
+                ...session,
+                messages: [...session.messages, optimisticMessage],
+                chatState: 'thinking',
+                elapsedSeconds: 0,
+                streamingText: '',
+                streamingResponseChars: 0,
+                statusVerb: randomSpinnerVerb(),
+                apiRetry: null,
+                streamingFallback: null,
+                elapsedTimer: optimisticTimer,
+              },
+            },
+          }
+        })
+
+        // Clear composer early so user sees their message in the chat
+        setComposerInput('')
+        setComposerAttachments([])
+        useChatStore.getState().clearComposerDraft(oldId)
+        if (!isMemberSession) {
+          clearWorkspaceReferences(oldId)
+        }
+        
         setLaunchTransitioning(true)
         try {
-          const newSessionId = await replaceEmptySession(activeLaunchWorkDir, {
+          const result = await replaceEmptySession(activeLaunchWorkDir, {
             branch: launchBranch,
             worktree: launchUseWorktree,
-          })
-          if (!newSessionId) return
-          targetSessionId = newSessionId
+          }, { deferCleanup: true })
+          if (!result) return
+          targetSessionId = result.newId
         } catch (error) {
+          // Rollback optimistic update on oldId
+          if (optimisticTimer) clearInterval(optimisticTimer)
+          const session = useChatStore.getState().sessions[oldId]
+          if (session) {
+            useChatStore.setState((s) => {
+              const sess = s.sessions[oldId]
+              if (!sess) return s
+              return {
+                sessions: {
+                  ...s.sessions,
+                  [oldId]: {
+                    ...sess,
+                    chatState: 'idle',
+                    messages: sess.messages.filter((m) => m.id !== optimisticMsgId),
+                    elapsedSeconds: 0,
+                    elapsedTimer: null,
+                    streamingText: '',
+                    statusVerb: '',
+                  },
+                },
+              }
+            })
+          }
           useUIStore.getState().addToast({
             type: 'error',
             message: error instanceof Error ? error.message : t('empty.failedToCreate'),
@@ -689,6 +775,14 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
           setLaunchTransitioning(false)
         }
       }
+    }
+
+    // Disconnect oldId after replaceEmptySession (deferCleanup) —
+    // removes optimistic data from chatStore and closes old WebSocket.
+    // This happens BEFORE sendMessage so that the new session's state
+    // takes over cleanly in the same React batch.
+    if (deferredOldId) {
+      useChatStore.getState().disconnectSession(deferredOldId)
     }
 
     const targetChatState = useChatStore.getState().sessions[targetSessionId]?.chatState ?? 'idle'
@@ -705,6 +799,12 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
         displayAttachments: visibleAttachmentPayload,
       })
     }
+
+    // Delete old session via API after sendMessage completes
+    if (deferredOldId) {
+      useSessionStore.getState().deleteSession(deferredOldId).catch(() => {})
+    }
+    
     setComposerInput('')
     setComposerAttachments([])
     useChatStore.getState().clearComposerDraft(activeTabId!)
