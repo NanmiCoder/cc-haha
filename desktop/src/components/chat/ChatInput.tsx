@@ -556,12 +556,20 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const replaceEmptySession = useCallback(async (
     workDir: string,
     repository?: { branch?: string | null; worktree?: boolean },
+    options?: { deferCleanup?: boolean, preserveDraft?: boolean },
   ) => {
     if (!activeTabId) return null
     const oldId = activeTabId
     const { createSession, deleteSession } = useSessionStore.getState()
     const { replaceTabSession } = useTabStore.getState()
-    const { disconnectSession, connectToSession } = useChatStore.getState()
+    const { disconnectSession, connectToSession, setComposerDraft } = useChatStore.getState()
+
+    // Preserve composer draft before disconnecting old session so prompt survives project switch
+    let preservedDraft: ComposerDraftState | null | undefined = null
+    if (options?.preserveDraft) {
+      saveComposerDraft(oldId)
+      preservedDraft = useChatStore.getState().sessions[oldId]?.composerDraft
+    }
     const newId = await createSession(
       workDir || undefined,
       repository ? { repository } : undefined,
@@ -570,9 +578,13 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     disconnectSession(oldId)
     replaceTabSession(oldId, newId)
     connectToSession(newId)
+    // Transfer preserved draft to new session in the same synchronous block
+    if (preservedDraft) {
+      setComposerDraft(newId, preservedDraft)
+    }
     deleteSession(oldId).catch(() => {})
     return newId
-  }, [activeTabId])
+  }, [activeTabId, saveComposerDraft])
 
   const handleLaunchWorkDirChange = useCallback(async (newWorkDir: string) => {
     setLaunchWorkDir(newWorkDir)
@@ -583,7 +595,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
     setLaunchTransitioning(true)
     try {
-      await replaceEmptySession(newWorkDir)
+      await replaceEmptySession(newWorkDir, undefined, { preserveDraft: true })
     } catch (error) {
       useUIStore.getState().addToast({
         type: 'error',
