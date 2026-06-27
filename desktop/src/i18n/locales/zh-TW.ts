@@ -1846,6 +1846,10 @@ export const zh: Record<TranslationKey, string> = {
   'trace.list.loadFailed': 'Trace 列表載入失敗',
   'trace.list.loadedCount': '已顯示 {shown} / {total}',
   'trace.list.loadMore': '載入更多',
+  'trace.list.clearAll': '清空所有',
+  'trace.list.clearAllConfirm': '確定要刪除所有 trace 記錄嗎？此操作不可撤銷。',
+  'trace.list.purgeSuccess': '已清空 {count} 條 trace 記錄',
+  'trace.list.purgeFailed': '清空 trace 記錄失敗',
 
   // ─── 應用外殼 ──────────────────────────────────────
   'app.serverFailed': '本地服務啟動失敗',
