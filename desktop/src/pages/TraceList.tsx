@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
-import { ExternalLink, RefreshCw, Search, Workflow } from 'lucide-react'
+import { ExternalLink, RefreshCw, Search, Trash2, Workflow } from 'lucide-react'
 import { tracesApi } from '../api/traces'
 import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
 import { useUIStore } from '../stores/uiStore'
 import { useTranslation } from '../i18n'
 import { Button } from '../components/shared/Button'
+import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { getDesktopHost } from '../lib/desktopHost'
 import type { TraceSessionList, TraceSessionListItem } from '../types/trace'
 
@@ -22,10 +23,13 @@ const MAX_MODEL_CHIPS = 2
 
 export function TraceList() {
   const t = useTranslation()
+  const addToast = useUIStore((s) => s.addToast)
   const [state, setState] = useState<TraceListState>({ status: 'loading' })
   const [queryInput, setQueryInput] = useState('')
   const [query, setQuery] = useState('')
   const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [isPurging, setIsPurging] = useState(false)
+  const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const host = getDesktopHost()
 
   useEffect(() => {
@@ -72,6 +76,21 @@ export function TraceList() {
       if (append) setIsLoadingMore(false)
     }
   }, [query, t])
+
+  const handlePurge = useCallback(async () => {
+    setIsPurging(true)
+    try {
+      const result = await tracesApi.purgeAll()
+      addToast({ type: 'success', message: t('trace.list.purgeSuccess', { count: result.removed }) })
+      setState({ status: 'loading' })
+      await load()
+    } catch (error) {
+      addToast({ type: 'error', message: error instanceof Error ? error.message : t('trace.list.purgeFailed') })
+    } finally {
+      setIsPurging(false)
+      setPurgeConfirmOpen(false)
+    }
+  }, [load, addToast, t])
 
   useEffect(() => {
     void load()
@@ -136,6 +155,12 @@ export function TraceList() {
               <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
               {t('trace.refresh')}
             </Button>
+            {state.status === 'ready' && state.data.total > 0 && (
+              <Button size="sm" variant="danger" onClick={() => setPurgeConfirmOpen(true)} disabled={isPurging}>
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                {t('trace.list.clearAll')}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -182,6 +207,17 @@ export function TraceList() {
           />
         )}
       </div>
+      <ConfirmDialog
+        open={purgeConfirmOpen}
+        onClose={() => { if (!isPurging) setPurgeConfirmOpen(false) }}
+        onConfirm={() => void handlePurge()}
+        title={t('trace.list.clearAll')}
+        body={t('trace.list.clearAllConfirm')}
+        confirmLabel={t('trace.list.clearAll')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={isPurging}
+      />
     </div>
   )
 }
