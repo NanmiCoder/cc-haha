@@ -1846,6 +1846,10 @@ export const kr: Record<TranslationKey, string> = {
   'trace.list.loadFailed': 'Trace 목록을 불러오지 못했습니다',
   'trace.list.loadedCount': '{shown} / {total} 표시 중',
   'trace.list.loadMore': '더 불러오기',
+  'trace.list.clearAll': '모두 삭제',
+  'trace.list.clearAllConfirm': '모든 trace 레코드를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
+  'trace.list.purgeSuccess': '{count}개 trace 레코드 삭제 완료',
+  'trace.list.purgeFailed': 'trace 레코드 삭제 실패',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
