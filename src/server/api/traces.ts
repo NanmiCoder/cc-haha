@@ -4,6 +4,7 @@ import {
   readTraceCaptureSettings,
   traceCaptureService,
   updateTraceCaptureSettings,
+  purgeAllTraces,
   type TraceSessionFileItem,
   type TraceSessionListItem,
 } from '../services/traceCaptureService.js'
@@ -44,8 +45,9 @@ export async function handleTracesApi(
 
     switch (sub) {
       case undefined:
-        if (req.method !== 'GET') throw methodNotAllowed(req.method, '/api/traces')
-        return await listTraces(url)
+        if (req.method === 'GET') return await listTraces(url)
+        if (req.method === 'DELETE') return await purgeTraces()
+        throw methodNotAllowed(req.method, '/api/traces')
 
       case 'settings':
         if (req.method === 'GET') {
@@ -65,6 +67,11 @@ export async function handleTracesApi(
   } catch (error) {
     return errorResponse(error)
   }
+}
+
+async function purgeTraces(): Promise<Response> {
+  const result = await purgeAllTraces()
+  return Response.json({ removed: result.removed })
 }
 
 async function listTraces(url: URL): Promise<Response> {
