@@ -294,6 +294,24 @@ export function createTraceCallId(): string {
   return randomUUID()
 }
 
+export async function purgeAllTraces(): Promise<{ removed: number }> {
+  const storageDir = getTraceStorageDir()
+  let entries: string[] = []
+  try {
+    entries = await fs.readdir(storageDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 }
+    throw error
+  }
+  const files = entries.filter((name) => name.endsWith('.jsonl'))
+  for (const name of files) {
+    await fs.unlink(join(storageDir, name)).catch(() => {})
+  }
+  traceReadCache.clear()
+  traceWriteQueues.clear()
+  return { removed: files.length }
+}
+
 class TraceCaptureService {
   async recordCall(input: RecordTraceCallInput): Promise<TraceCallRecord | null> {
     if (!input.sessionId.trim()) return null
