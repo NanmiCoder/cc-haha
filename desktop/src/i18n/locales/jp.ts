@@ -1846,6 +1846,10 @@ export const jp: Record<TranslationKey, string> = {
   'trace.list.loadFailed': 'Trace 一覧の読み込みに失敗しました',
   'trace.list.loadedCount': '{shown} / {total} を表示中',
   'trace.list.loadMore': 'さらに読み込む',
+  'trace.list.clearAll': 'すべて削除',
+  'trace.list.clearAllConfirm': 'すべての trace レコードを削除しますか？この操作は取り消せません。',
+  'trace.list.purgeSuccess': '{count}件の trace レコードを削除しました',
+  'trace.list.purgeFailed': 'trace レコードの削除に失敗しました',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'ローカルサーバーの起動に失敗しました',
