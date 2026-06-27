@@ -15,6 +15,7 @@ export {
   trimTraceCallPreviews,
   updateTraceCaptureSettings,
 } from '../../services/api/traceCapture.js'
+export { purgeAllTraces } from '../../services/api/traceCapture.js'
 export type {
   RecordTraceCallInput,
   RecordTraceEventInput,
