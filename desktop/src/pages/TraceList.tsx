@@ -15,7 +15,7 @@ type TraceListState =
   | { status: 'ready'; data: TraceSessionList }
 
 const POLL_MS = 5_000
-const PAGE_SIZE = 50
+const PAGE_SIZE = 10
 const SEARCH_DEBOUNCE_MS = 250
 const MAX_MODEL_CHIPS = 2
 
