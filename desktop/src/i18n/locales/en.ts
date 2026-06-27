@@ -1844,6 +1844,10 @@ export const en = {
   'trace.list.loadFailed': 'Failed to load trace list',
   'trace.list.loadedCount': 'Showing {shown} of {total}',
   'trace.list.loadMore': 'Load more',
+  'trace.list.clearAll': 'Clear all',
+  'trace.list.clearAllConfirm': 'Are you sure you want to delete all trace records? This action cannot be undone.',
+  'trace.list.purgeSuccess': 'Cleared {count} trace records',
+  'trace.list.purgeFailed': 'Failed to clear trace records',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'Local server failed to start',
