@@ -42,6 +42,7 @@ import {
   type NetworkSettings,
 } from './networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import { t } from '../../utils/i18n/index.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -563,6 +564,7 @@ export class ProviderService {
     const base = input.baseUrl.replace(/\/+$/, '')
     const modelId = normalizeModelStringForAPI(input.modelId)
     const networkSettings = await loadNetworkSettings()
+    const isLocal = isLocalModelServer(base)
 
     // ── Step 1: Basic connectivity ───────────────────────────
     // Directly call the upstream API to verify URL, key, and model.
@@ -570,19 +572,32 @@ export class ProviderService {
 
     // If connectivity failed, no point running step 2
     if (!step1.success) {
-      return { connectivity: step1 }
+      // Enrich the error with a local-model hint so the UI can nudge the
+      // operator to check their server.
+      const hint = isLocal
+        ? `${step1.error || 'Connection refused'}\n(Hint: ${base} appears to be a local model server — confirm it is running and listening on this port.)`
+        : step1.error
+      return {
+        connectivity: { ...step1, error: hint }
+      }
     }
+
+    // Optional local-model probe — list available models for UX
+    const availableModels = isLocal
+      ? await probeAvailableModels(base, input.apiKey, authStrategy, networkSettings).catch(() => null)
+      : null
 
     // For native Anthropic format, no proxy pipeline to test
     if (format === 'anthropic') {
-      return { connectivity: step1 }
+      return {
+        connectivity: step1, availableModels }
     }
 
     // ── Step 2: Full proxy pipeline ──────────────────────────
     // Anthropic request → transform → upstream → transform back → validate
     const step2 = await this.testProxyPipeline(base, input.apiKey, modelId, format, networkSettings)
 
-    return { connectivity: step1, proxy: step2 }
+    return { connectivity: step1, proxy: step2, availableModels }
   }
 
   /** Step 1: Direct upstream call to verify connectivity, auth, and model. */
@@ -627,7 +642,12 @@ export class ProviderService {
     } catch (err: unknown) {
       const latencyMs = Date.now() - start
       if (err instanceof DOMException && err.name === 'TimeoutError') {
-        return { success: false, latencyMs, error: `Request timed out (${Math.round(networkSettings.aiRequestTimeoutMs / 1000)}s)`, modelUsed: modelId }
+        return {
+          success: false,
+          latencyMs,
+          error: t('provider_test_timeout', { seconds: Math.round(networkSettings.aiRequestTimeoutMs / 1000) }),
+          modelUsed: modelId,
+        }
       }
       return { success: false, latencyMs, error: err instanceof Error ? err.message : String(err), modelUsed: modelId }
     }
@@ -704,6 +724,65 @@ export class ProviderService {
 }
 
 // ─── Helpers ───────────────────────────────────────────────
+
+/**
+ * Heuristic detection for a local model server.
+ *
+ * Any of the following is treated as "local":
+ *  - hostname is `localhost` / `127.0.0.1` / `::1`
+ *  - hostname resolves to a loopback address
+ *  - baseUrl matches one of the well-known local-model ports (1234, 11434,
+ *    8000, 30000, 1337, 8080, 2242)
+ *
+ * Used to emit a hint to the user that the server must be running before
+ * the provider can be tested/activated. The check is intentionally broad.
+ */
+export function isLocalModelServer(baseUrl: string): boolean {
+  try {
+    const u = new URL(baseUrl)
+    const host = u.hostname.toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true
+    if (host.startsWith('127.')) return true
+    const localPorts = new Set([
+      '1234', '11434', '8000', '30000', '1337', '8080', '2242',
+    ])
+    return localPorts.has(u.port)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Probe the upstream `/v1/models` endpoint if available.
+ *
+ * Returns the list of exposed model names (or `null` when the endpoint is
+ * missing/unauthorized). Local-model runtimes commonly expose this. We use
+ * the same Content-Type / Authorization headers the regular request uses,
+ * matching the upstream's expectations.
+ */
+export async function probeAvailableModels(
+  base: string,
+  apiKey: string,
+  authStrategy: ProviderAuthStrategy,
+  networkSettings: NetworkSettings,
+  signal?: AbortSignal,
+): Promise<string[] | null> {
+  try {
+    const proxyOptions = getProxyFetchOptions({ proxyUrl: getManualNetworkProxyUrl(networkSettings) })
+    const response = await fetch(`${base}/v1/models`, {
+      method: 'GET',
+      headers: buildAnthropicAuthHeaders(apiKey, authStrategy),
+      signal: signal ?? AbortSignal.timeout(Math.min(networkSettings.aiRequestTimeoutMs, 5000)),
+      ...proxyOptions,
+    })
+    if (!response.ok) return null
+    const json = await response.json().catch(() => null) as { data?: Array<{ id?: string }> } | null
+    if (!json?.data || !Array.isArray(json.data)) return null
+    return json.data.map((m) => m.id).filter((id): id is string => !!id)
+  } catch {
+    return null
+  }
+}
 
 function buildDirectTestRequest(
   base: string,

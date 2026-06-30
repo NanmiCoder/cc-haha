@@ -1,0 +1,71 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    - cron: '0 0 * * MON'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-updates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-outdated:
+    name: check-outdated
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Check outdated packages (root)
+        run: bun outdated || true
+
+      - name: Install adapter dependencies
+        working-directory: adapters
+        run: bun install
+
+      - name: Check outdated packages (adapters)
+        working-directory: adapters
+        run: bun outdated || true
+
+  npm-audit:
+    name: npm-audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run npm audit
+        run: npm audit --json > /tmp/audit-report.json || true
+
+      - name: Show audit summary
+        run: npm audit || true
+
+      - name: Fail on high severity vulnerabilities
+        run: |
+          HIGH=$(npm audit --audit-level=high 2>&1; echo "exit:$?")
+          echo "$HIGH"

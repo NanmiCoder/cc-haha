@@ -463,6 +463,8 @@ export const zh: Record<TranslationKey, string> = {
   'settings.providers.toolSearchEnabled': '启用 Tool Search',
   'settings.providers.toolSearchDesc': '按需加载 MCP 和延迟工具，减少首轮工具 schema token。弱模型或不支持 tool_reference 的服务商可以关闭。',
   'settings.providers.toolSearchUnsupported': '当前仅 Anthropic Messages 格式支持 Tool Search；OpenAI 代理格式会保留完整工具 schema。',
+  'settings.providers.availableModels': '可用模型 — 点击选择',
+  'settings.providers.clickToSelectModel': '点击使用此模型作为主模型',
 
   // Settings > Permissions
   'settings.permissions.title': '权限模式',

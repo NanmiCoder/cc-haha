@@ -1794,6 +1794,33 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           )}
         </div>
 
+        {/* Available models — auto-fill main model when a chip is clicked */}
+        {testResult?.availableModels && testResult.availableModels.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
+              {t('settings.providers.availableModels') || 'Available models'}
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {testResult.availableModels.slice(0, 20).map((model) => (
+                <button
+                  key={model}
+                  type="button"
+                  onClick={() => handleModelChange('main', model)}
+                  title={t('settings.providers.clickToSelectModel') || 'Click to select'}
+                  className="max-w-[200px] truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 py-1 text-xs text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+                >
+                  {model}
+                </button>
+              ))}
+              {testResult.availableModels.length > 20 && (
+                <span className="px-2 py-1 text-xs text-[var(--color-text-tertiary)]">
+                  +{testResult.availableModels.length - 20} more
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Settings JSON — editable, shown for all presets including official */}
         <div>
           <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.settingsJson')}</label>

@@ -463,6 +463,8 @@ export const jp: Record<TranslationKey, string> = {
   'settings.providers.toolSearchEnabled': 'Tool Search を有効にする',
   'settings.providers.toolSearchDesc': 'MCP と遅延ツールを必要に応じて読み込み、初回のツール schema トークンを減らします。弱いモデルや tool_reference を拒否するプロバイダーでは無効にできます。',
   'settings.providers.toolSearchUnsupported': 'ここでは Anthropic Messages 形式のプロバイダーのみ Tool Search をサポートします。OpenAI プロキシ形式では完全なツール schema を維持します。',
+  'settings.providers.availableModels': '利用可能なモデル — クリックして選択',
+  'settings.providers.clickToSelectModel': 'クリックしてこのモデルを使用',
 
   // Settings > Permissions
   'settings.permissions.title': '権限モード',

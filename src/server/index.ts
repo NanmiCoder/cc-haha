@@ -21,7 +21,8 @@ import { sessionService } from './services/sessionService.js'
 import { conversationService } from './services/conversationService.js'
 import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
-import { enableConfigs } from '../utils/config.js'
+import { enableConfigs, getGlobalConfig } from '../utils/config.js'
+import { setLocale } from '../utils/i18n/index.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
 import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
 import { handleStaticH5Request } from './staticH5.js'
@@ -126,6 +127,9 @@ function originFromUrl(value: string | null): string | null {
 
 export function startServer(port = PORT, host = HOST) {
   enableConfigs()
+  // Apply persisted locale from ~/.claude/settings.json (set by desktop UI language switcher)
+  const { locale } = getGlobalConfig()
+  if (locale) setLocale(locale)
   // Warm the synchronous disconnect-grace cache from managed settings so the
   // first client disconnect honors the configured value (issue #764).
   void refreshDisconnectGraceMs()

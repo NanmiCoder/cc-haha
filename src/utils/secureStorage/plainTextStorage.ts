@@ -1,5 +1,6 @@
 import { chmodSync } from 'fs'
 import { join } from 'path'
+import { t } from '../i18n/index.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
 import { getErrnoCode } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
@@ -61,7 +62,7 @@ export const plainTextStorage = {
       chmodSync(storagePath, 0o600)
       return {
         success: true,
-        warning: 'Warning: Storing credentials in plaintext.',
+        warning: t('secure_storage_plaintext_warning'),
       }
     } catch {
       return { success: false }

@@ -1,0 +1,53 @@
+name: CodeQL Advanced
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: codeql
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init-action@v3
+        with:
+          languages: javascript
+          typescript
+          build-mode: manual
+          ram: 4096
+
+      - name: Build
+        run: |
+          bun run build || true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze-action@v3
+        with:
+          category: "/language:javascript-typescript"

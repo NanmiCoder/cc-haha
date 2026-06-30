@@ -185,6 +185,9 @@
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "lmstudio"
+    },
+    "modelContextWindows": {
+      "default": 200000
     }
   },
   {
@@ -204,6 +207,98 @@
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "ollama"
+    },
+    "modelContextWindows": {
+      "default": 200000
+    }
+  },
+  {
+    "id": "llamafile",
+    "name": "llamafile",
+    "baseUrl": "http://localhost:8080",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "LLaMA_CPP",
+      "haiku": "LLaMA_CPP",
+      "sonnet": "LLaMA_CPP",
+      "opus": "LLaMA_CPP"
+    },
+    "needsApiKey": false,
+    "websiteUrl": "https://github.com/Mozilla-Ocho/llamafile",
+    "promoText": "llamafile 提供 openai_chat 兼容协议，默认端口为 http://localhost:8080。Base URL 填 http://localhost:8080，不要追加 /v1。启动命令示例：./my-model.llamafile --server --nobrowser -ngl 9999。",
+    "authStrategy": "dual_dummy",
+    "defaultEnv": {
+      "ANTHROPIC_AUTH_TOKEN": "llamafile",
+      "ANTHROPIC_API_KEY": "llamafile"
+    },
+    "modelContextWindows": {
+      "default": 200000
+    }
+  },
+  {
+    "id": "vllm",
+    "name": "vLLM",
+    "baseUrl": "http://localhost:8000",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "qwen2.5-72b-instruct-awq",
+      "haiku": "qwen2.5-72b-instruct-awq",
+      "sonnet": "qwen2.5-72b-instruct-awq",
+      "opus": "qwen2.5-72b-instruct-awq"
+    },
+    "needsApiKey": false,
+    "websiteUrl": "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html",
+    "promoText": "vLLM 支持 Anthropic 兼容协议，默认端口为 http://localhost:8000。Base URL 填 http://localhost:8000，不要追加 /v1。启动命令示例：vllm serve qwen/qwen3.6-27b-instruct --api-key token-abc123。",
+    "authStrategy": "auth_token_empty_api_key",
+    "defaultEnv": {
+      "ANTHROPIC_AUTH_TOKEN": "vllm"
+    },
+    "modelContextWindows": {
+      "default": 200000
+    }
+  },
+  {
+    "id": "sglang",
+    "name": "SGLang",
+    "baseUrl": "http://localhost:30000",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "default",
+      "haiku": "default",
+      "sonnet": "default",
+      "opus": "default"
+    },
+    "needsApiKey": false,
+    "websiteUrl": "https://sglang.readthedocs.io/en/latest/serving/openai_compatible_server.html",
+    "promoText": "SGLang 支持 Anthropic 兼容协议，默认端口为 http://localhost:30000。Base URL 填 http://localhost:30000，不要追加 /v1。启动命令示例：python -m sglang.launch_server --model-path qwen/qwen3.6-27b-instruct --port 30000。",
+    "authStrategy": "auth_token_empty_api_key",
+    "defaultEnv": {
+      "ANTHROPIC_AUTH_TOKEN": "sglang"
+    },
+    "modelContextWindows": {
+      "default": 200000
+    }
+  },
+  {
+    "id": "jan",
+    "name": "Jan",
+    "baseUrl": "http://localhost:1337",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "@cf/meta/llama-3-8b-instruct",
+      "haiku": "@cf/meta/llama-3-8b-instruct",
+      "sonnet": "@cf/meta/llama-3-8b-instruct",
+      "opus": "@cf/meta/llama-3-8b-instruct"
+    },
+    "needsApiKey": false,
+    "websiteUrl": "https://jan.ai",
+    "promoText": "Jan 本地引擎兼容 openai_chat 协议，默认端口为 http://localhost:1337。Base URL 填 http://localhost:1337/v1。请在 Jan 设置中启用 Local API Server。",
+    "authStrategy": "auth_token_empty_api_key",
+    "defaultEnv": {
+      "ANTHROPIC_AUTH_TOKEN": "jan"
+    },
+    "modelContextWindows": {
+      "default": 131072
     }
   },
   {
