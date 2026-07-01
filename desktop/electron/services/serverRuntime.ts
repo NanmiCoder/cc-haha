@@ -175,7 +175,13 @@ export class ElectronServerRuntime {
     this.stopTunnelProcess()
     this.tunnelState = { status: 'idle', url: null, mode: null, error: null }
     if (this.server) {
-      await this.reportTunnel(this.server.url)
+      // Use /tunnel/clear, NOT /tunnel/report — the report handler treats a
+      // missing/null url as "don't touch" (so a status-only heartbeat can't
+      // accidentally wipe a live URL). To truly clear the server-side runtime
+      // override after the user stops the tunnel, we have to call the explicit
+      // clear endpoint. Reporting idle without clearing leaves the old URL as
+      // the effective publicBaseUrl, so phones bookmark a dead address (CF 1033).
+      await this.clearTunnelOnServer(this.server.url)
     }
     return this.getTunnelStatus()
   }
@@ -184,6 +190,18 @@ export class ElectronServerRuntime {
     if (this.tunnel) {
       killSidecar(this.tunnel.child, sync)
       this.tunnel = null
+    }
+  }
+
+  /** Wipe the server-side runtime tunnel override after the tunnel is stopped. */
+  private async clearTunnelOnServer(serverUrl: string): Promise<void> {
+    try {
+      await fetch(`${serverUrl}/api/h5-access/tunnel/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    } catch (error) {
+      console.error('[desktop] failed to clear tunnel state on server', error)
     }
   }
 
