@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ElectronUpdaterService, normalizeUpdateInfo, type ElectronUpdaterLike } from './updater'
+import { ElectronUpdaterService, normalizeUpdateInfo, isNewerVersion, type ElectronUpdaterLike } from './updater'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,6 +49,42 @@ describe('Electron updater service', () => {
       body: 'One\n\nTwo',
     })
     expect(normalizeUpdateInfo(undefined)).toBeNull()
+  })
+
+  it('compares release versions, ignoring prerelease and build metadata', () => {
+    expect(isNewerVersion('0.5.6', '0.5.5')).toBe(true)
+    expect(isNewerVersion('1.0.0', '0.9.9')).toBe(true)
+    expect(isNewerVersion('0.6.0', '0.5.9')).toBe(true)
+    // Equal or older must not count as newer (the safe up-to-date direction).
+    expect(isNewerVersion('0.5.5', '0.5.5')).toBe(false)
+    expect(isNewerVersion('0.5.4', '0.5.5')).toBe(false)
+    expect(isNewerVersion('v0.5.5', '0.5.5')).toBe(false)
+    expect(isNewerVersion('0.5.5+abc123', '0.5.5')).toBe(false)
+    expect(isNewerVersion('0.5.5-beta.1', '0.5.5')).toBe(false)
+  })
+
+  it('treats a feed version equal to the running version as no update', async () => {
+    updater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.5.5', body: 'Same release' } })
+    const service = new ElectronUpdaterService(updater, undefined, { currentVersion: '0.5.5' })
+
+    await expect(service.checkForUpdates()).resolves.toBeNull()
+    await expect(service.downloadUpdate(() => {})).rejects.toThrow(
+      'No Electron update is available to download',
+    )
+  })
+
+  it('treats a feed version older than the running version as no update', async () => {
+    updater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.5.4' } })
+    const service = new ElectronUpdaterService(updater, undefined, { currentVersion: '0.5.5' })
+
+    await expect(service.checkForUpdates()).resolves.toBeNull()
+  })
+
+  it('surfaces a feed version newer than the running version as an update', async () => {
+    updater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.5.6', body: 'New' } })
+    const service = new ElectronUpdaterService(updater, undefined, { currentVersion: '0.5.5' })
+
+    await expect(service.checkForUpdates()).resolves.toEqual({ version: '0.5.6', body: 'New' })
   })
 
   it('keeps electron-updater autoDownload disabled and emits store-compatible progress', async () => {

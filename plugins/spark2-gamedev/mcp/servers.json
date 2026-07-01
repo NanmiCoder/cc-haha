@@ -1,0 +1,11 @@
+{
+  "sce-editor-mcp": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/sce-editor-bridge.mjs"],
+    "env": {
+      "SCE_MCP_PORT": "${user_config.SCE_MCP_PORT}",
+      "SCE_RUNTIME_MCP_PORT": "${user_config.SCE_RUNTIME_MCP_PORT}",
+      "SCE_PROJECT_DIR": "${user_config.SCE_PROJECT_DIR}"
+    }
+  }
+}

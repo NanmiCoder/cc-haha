@@ -157,6 +157,43 @@ export function TabBar() {
     el.scrollBy({ left: direction === 'left' ? -TAB_WIDTH : TAB_WIDTH, behavior: 'smooth' })
   }
 
+  /**
+   * Translate vertical mouse-wheel input into horizontal tab-bar scroll
+   * so users on a plain mouse (no trackpad) can wheel-scroll the tab
+   * strip just by hovering it. Trackpad users get this for free —
+   * `deltaX` from a two-finger sideways swipe already scrolls the
+   * container natively, and we deliberately do NOT touch deltaX-
+   * dominated wheel events so that input keeps its native feel and
+   * momentum.
+   *
+   * Why preventDefault: when the cursor is over the tab bar AND we
+   * successfully consumed the wheel into horizontal scroll, the user
+   * doesn't want the page below the tab bar to also scroll vertically
+   * (jumping back to the same scroll experience as native browser
+   * tab strips). preventDefault here is safe because we attach the
+   * handler via a non-passive native listener (React's onWheel maps
+   * to addEventListener with passive:true on some platforms; using
+   * the imperative form below avoids that pitfall).
+   */
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      // Trackpad horizontal swipe already scrolls horizontally —
+      // pass through so momentum / direction feel native.
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      // Nothing to scroll → bubble normally so the page can scroll.
+      if (el.scrollWidth <= el.clientWidth) return
+      // Map vertical wheel into horizontal scroll.
+      // Use deltaY directly; it's already a "lines or pixels"
+      // delta the browser tuned for one notch of wheel travel.
+      el.scrollLeft += e.deltaY
+      e.preventDefault()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   const closeTabWithCleanup = useCallback((tab: Tab) => {
     if (isSessionTab(tab)) {
       useWorkspacePanelStore.getState().clearSession(tab.sessionId)
@@ -333,7 +370,11 @@ export function TabBar() {
     >
 
       {canScrollLeft && (
-        <button onClick={() => scroll('left')} className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+        <button
+          onClick={() => scroll('left')}
+          aria-label={t('tabs.scrollLeft')}
+          className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        >
           <span className="material-symbols-outlined text-[16px]">chevron_left</span>
         </button>
       )}
@@ -342,7 +383,7 @@ export function TabBar() {
         ref={scrollRef}
         data-testid="tab-bar-scroll-region"
         data-desktop-drag-region={isDesktopRuntime ? true : undefined}
-        className="flex-1 flex items-stretch overflow-x-hidden"
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onDragOver={(e) => e.preventDefault()}
       >
         {tabs.map((tab, index) => (
@@ -408,7 +449,11 @@ export function TabBar() {
       )}
 
       {canScrollRight && (
-        <button onClick={() => scroll('right')} className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+        <button
+          onClick={() => scroll('right')}
+          aria-label={t('tabs.scrollRight')}
+          className="flex h-11 w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        >
           <span className="material-symbols-outlined text-[16px]">chevron_right</span>
         </button>
       )}
@@ -508,6 +553,18 @@ const TabItem = forwardRef<HTMLDivElement, {
   onContextMenu: (e: React.MouseEvent) => void
   onMouseDown: (event: React.MouseEvent) => void
 }>(({ tab, isRunning, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
+  const t = useTranslation()
+  // Special tabs (settings/scheduled/traces) carry a stored title from when
+  // they were first opened; that title is frozen at the locale active at the
+  // time and persists across locale switches via localStorage. Always derive
+  // the label from i18n at render time so the current locale wins.
+  const displayTitle = tab.type === 'settings'
+    ? t('sidebar.settings')
+    : tab.type === 'scheduled'
+      ? t('sidebar.scheduled')
+      : tab.type === 'traces'
+        ? t('trace.list.title')
+        : (tab.title || 'Untitled')
   return (
     <div
       ref={ref}
@@ -556,12 +613,12 @@ const TabItem = forwardRef<HTMLDivElement, {
       )}
 
       <span className={`flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
-        {tab.title || 'Untitled'}
+        {displayTitle}
       </span>
 
       <button
         type="button"
-        aria-label={`Close ${tab.title || 'Untitled'}`}
+        aria-label={`Close ${displayTitle}`}
         onMouseDown={(e) => { e.stopPropagation() }}
         onClick={(e) => { e.stopPropagation(); onClose() }}
         className="flex-shrink-0 -mr-0.5 inline-flex h-3 w-3 items-center justify-center bg-transparent p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-[opacity,color] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none"

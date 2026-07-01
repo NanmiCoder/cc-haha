@@ -3,7 +3,7 @@
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' | 'dontAsk'
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
-export const THEME_MODES = ['white', 'light', 'dark'] as const
+export const THEME_MODES = ['white', 'light', 'dark', 'system'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
 
 export function isThemeMode(value: unknown): value is ThemeMode {
@@ -76,6 +76,17 @@ export type H5AccessSettings = {
 
 export type H5HostStaleness = 'ok' | 'unreachable' | 'proxy' | 'unset'
 
+export type H5TunnelMode = 'quick' | 'named'
+export type H5TunnelStatus = 'idle' | 'starting' | 'running' | 'error'
+
+export type H5TunnelDiagnostics = {
+  status: H5TunnelStatus
+  url: string | null
+  mode: H5TunnelMode | null
+  error: string | null
+  hasToken: boolean
+}
+
 export type H5AccessDiagnostics = {
   storedHostStaleness: H5HostStaleness
   storedPublicBaseUrl: string | null
@@ -83,6 +94,7 @@ export type H5AccessDiagnostics = {
   suggestedHost: string | null
   localInterfaceHosts: string[]
   activePort?: number
+  tunnel?: H5TunnelDiagnostics
 }
 
 export type DesktopTerminalStartupShell =
@@ -95,6 +107,18 @@ export type DesktopTerminalStartupShell =
 export type DesktopTerminalSettings = {
   startupShell: DesktopTerminalStartupShell
   customShellPath: string
+}
+
+export type WorkspaceLspCustomServerSettings = {
+  name?: string
+  path?: string
+  command?: string
+  args?: string[]
+  extensionToLanguage?: Record<string, string>
+}
+
+export type WorkspaceLspSettings = {
+  server?: WorkspaceLspCustomServerSettings
 }
 
 export type ModelInfo = {
@@ -124,6 +148,7 @@ export type UserSettings = {
   }
   language?: string
   desktopTerminal?: Partial<DesktopTerminalSettings>
+  workspaceLsp?: WorkspaceLspSettings
   [key: string]: unknown
 }
 

@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { CircleStop, LoaderCircle } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import { CodeViewer } from './CodeViewer'
 import { DiffViewer } from './DiffViewer'
 import { TerminalChrome } from './TerminalChrome'
@@ -7,6 +7,7 @@ import { CopyButton } from '../shared/CopyButton'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { InlineImageGallery } from './InlineImageGallery'
+import { ImageGalleryModal } from './ImageGalleryModal'
 import type { AgentTaskNotification } from '../../types/chat'
 import { PlanPreviewCard, extractPlanPreview, isExitPlanModeTool } from './PlanModePreview'
 
@@ -17,7 +18,6 @@ type Props = {
   agentTaskNotification?: AgentTaskNotification
   compact?: boolean
   isPending?: boolean
-  status?: 'stopped'
   partialInput?: string
 }
 
@@ -38,14 +38,7 @@ const TOOL_ICONS: Record<string, string> = {
 const WRITER_PREVIEW_MAX_LINES = 120
 const WRITER_PREVIEW_MAX_CHARS = 30000
 
-type ContentStats = {
-  lines: number
-  chars: number
-  visibleLines?: number
-  windowed?: boolean
-}
-
-export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, isPending = false, status, partialInput }: Props) {
+export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, isPending = false, partialInput }: Props) {
   const isPlanTool = isExitPlanModeTool(toolName)
   const [expanded, setExpanded] = useState(isPlanTool)
   const t = useTranslation()
@@ -62,18 +55,10 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   const pendingSummary = isPending && !result
     ? getPendingSummary(toolName, t)
     : ''
-  const stoppedSummary = status === 'stopped' && !result
-    ? t('tool.stopped')
-    : ''
-  const liveStats = useMemo(
-    () => getToolContentStats(toolName, obj, isPending ? partialInput : undefined),
-    [isPending, obj, partialInput, toolName],
-  )
-  const liveStatsSummary = liveStats ? formatContentStats(liveStats, t) : ''
 
   const preview = useMemo(() => renderPreview(toolName, obj, result, t), [obj, result, toolName, t])
   const details = useMemo(() => renderDetails(toolName, obj, t, isPending ? partialInput : undefined), [isPending, obj, partialInput, toolName, t])
-  const hasResultDetails = Boolean(result && extractTextContent(result.content))
+  const hasResultDetails = Boolean(result && (extractTextContent(result.content) || extractImageBlocks(result.content).length > 0))
   const hasEditPreview = toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string'
   const hasWritePreview = toolName === 'Write' && typeof obj.content === 'string'
   const expandable = hasEditPreview || hasWritePreview || hasResultDetails || Boolean(isPending && partialInput)
@@ -120,25 +105,9 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
           <span className="flex-1" />
         )}
         {pendingSummary ? (
-          <span
-            className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]"
-            title={liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary}
-          >
-            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
-            <span className="truncate">{pendingSummary}</span>
-            {liveStatsSummary ? (
-              <>
-                <span className="shrink-0 text-[var(--color-text-tertiary)]">·</span>
-                <span className="shrink-0 font-[var(--font-mono)] tabular-nums text-[var(--color-text-tertiary)]">
-                  {liveStatsSummary}
-                </span>
-              </>
-            ) : null}
-          </span>
-        ) : stoppedSummary ? (
           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
-            <CircleStop size={12} strokeWidth={2.25} aria-hidden="true" />
-            {stoppedSummary}
+            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+            {pendingSummary}
           </span>
         ) : result && outputSummary ? (
           <span
@@ -149,10 +118,6 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
             }`}
           >
             {outputSummary}
-          </span>
-        ) : liveStatsSummary ? (
-          <span className="shrink-0 font-[var(--font-mono)] text-[10px] tabular-nums text-[var(--color-outline)]">
-            {liveStatsSummary}
           </span>
         ) : null}
         {result?.isError && (
@@ -166,7 +131,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       </button>
 
       {expandable && expanded && (
-        <div className="space-y-2.5 border-t border-[var(--color-border)]/60 px-3 py-3">
+        <div className="fade-in space-y-2.5 border-t border-[var(--color-border)]/60 px-3 py-3">
           {preview}
           {details}
         </div>
@@ -310,13 +275,68 @@ function getVisibleResultText(
   return text
 }
 
+/** Renders extracted image blocks in a grid with click-to-fullscreen gallery. */
+export function ImageBlockGallery({ imageBlocks }: { imageBlocks: ImageBlock[] }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const galleryImages = useMemo(
+    () => imageBlocks.map((img, i) => ({ src: img.src, name: `Image ${i + 1}` })),
+    [imageBlocks],
+  )
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
+        <span className="material-symbols-outlined text-[12px]">image</span>
+        {imageBlocks.length === 1 ? '1 image' : `${imageBlocks.length} images`}
+      </div>
+      <div className={`grid gap-2 ${imageBlocks.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+        {imageBlocks.map((img, i) => (
+          <button
+            key={img.src}
+            type="button"
+            onClick={() => setActiveIndex(i)}
+            className="group/image relative overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-sm transition-all hover:shadow-md hover:border-[var(--color-brand)]/40"
+          >
+            <img
+              src={img.src}
+              alt={`Generated image ${i + 1}`}
+              loading="lazy"
+              className="w-full object-contain"
+              style={{ maxHeight: imageBlocks.length === 1 ? 400 : 240 }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
+              <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">
+                fullscreen
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {activeIndex !== null && activeIndex >= 0 && (
+        <ImageGalleryModal
+          open={activeIndex !== null}
+          images={galleryImages}
+          activeIndex={activeIndex}
+          onClose={() => setActiveIndex(null)}
+          onSelect={setActiveIndex}
+        />
+      )}
+    </div>
+  )
+}
+
 function renderResultOutput(
   result: { content: unknown; isError: boolean },
   text: string,
   t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ) {
+  const imageBlocks = extractImageBlocks(result.content)
   return (
     <>
+      {imageBlocks.length > 0 && (
+        <ImageBlockGallery imageBlocks={imageBlocks} />
+      )}
       <InlineImageGallery text={text} />
       <div className={`overflow-hidden rounded-lg border ${
         result.isError
@@ -351,7 +371,7 @@ function renderDetails(
   if (partialInput) {
     if (toolName === 'Write') {
       const writerContent = extractPartialJsonStringField(partialInput, 'content')
-      if (writerContent !== null) {
+      if (writerContent) {
         return renderWriterPreview(writerContent, t)
       }
     }
@@ -447,99 +467,12 @@ function extractPartialJsonStringField(source: string, field: string): string | 
   return value
 }
 
-function getToolContentStats(
-  toolName: string,
-  obj: Record<string, unknown>,
-  partialInput?: string,
-): ContentStats | null {
-  const content = getToolContentForStats(toolName, obj, partialInput)
-  return content === null ? null : countContentStats(content)
-}
-
-function getToolContentForStats(
-  toolName: string,
-  obj: Record<string, unknown>,
-  partialInput?: string,
-): string | null {
-  if (toolName === 'Write') {
-    if (typeof obj.content === 'string') return obj.content
-    return partialInput ? extractPartialJsonStringField(partialInput, 'content') : null
-  }
-
-  if (toolName === 'Edit') {
-    if (typeof obj.new_string === 'string') return obj.new_string
-    return partialInput ? extractPartialJsonStringField(partialInput, 'new_string') : null
-  }
-
-  if (toolName === 'MultiEdit' && Array.isArray(obj.edits)) {
-    const replacements = obj.edits
-      .map((edit) => (
-        edit && typeof edit === 'object' && typeof (edit as Record<string, unknown>).new_string === 'string'
-          ? (edit as Record<string, string>).new_string
-          : ''
-      ))
-      .filter(Boolean)
-    return replacements.length > 0 ? replacements.join('\n') : null
-  }
-
-  return null
-}
-
-function countContentStats(content: string): ContentStats {
-  return {
-    lines: content.length === 0 ? 0 : content.split('\n').length,
-    chars: content.length,
-  }
-}
-
-function formatContentStats(
-  stats: ContentStats,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-): string {
-  const chars = formatCharCount(stats.chars, t)
-  if (stats.windowed && typeof stats.visibleLines === 'number' && stats.visibleLines < stats.lines) {
-    return t?.('tool.contentStatsLatest', {
-      visible: formatCount(stats.visibleLines),
-      total: formatCount(stats.lines),
-      chars,
-    }) ?? `Latest ${formatCount(stats.visibleLines)} / ${formatCount(stats.lines)} lines · ${chars}`
-  }
-
-  return t?.('tool.contentStats', {
-    lines: formatLineCount(stats.lines, t),
-    chars,
-  }) ?? `${formatLineCount(stats.lines, t)} · ${chars}`
-}
-
-function formatLineCount(
-  count: number,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-): string {
-  return count === 1
-    ? (t?.('tool.lineCountSingular', { count: formatCount(count) }) ?? `${formatCount(count)} line`)
-    : (t?.('tool.lineCountPlural', { count: formatCount(count) }) ?? `${formatCount(count)} lines`)
-}
-
-function formatCharCount(
-  count: number,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-): string {
-  return count === 1
-    ? (t?.('tool.charCountSingular', { count: formatCount(count) }) ?? `${formatCount(count)} char`)
-    : (t?.('tool.charCountPlural', { count: formatCount(count) }) ?? `${formatCount(count)} chars`)
-}
-
-function formatCount(count: number): string {
-  return new Intl.NumberFormat().format(count)
-}
-
 function renderWriterPreview(
   content: string,
   t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ) {
-  const contentStats = countContentStats(content)
-  const lines = content.length === 0 ? [] : content.split('\n')
-  const totalLines = contentStats.lines
+  const lines = content.split('\n')
+  const totalLines = lines.length
   const visibleLines = lines.length > WRITER_PREVIEW_MAX_LINES
     ? lines.slice(-WRITER_PREVIEW_MAX_LINES)
     : lines
@@ -550,21 +483,16 @@ function renderWriterPreview(
   }
   const lineWindowed = totalLines > visibleLines.length
   const isWindowed = lineWindowed || charTruncated
-  const visibleLineCount = visibleContent.length === 0 ? 0 : visibleContent.split('\n').length
-  const statsSummary = formatContentStats({
-    lines: totalLines,
-    chars: contentStats.chars,
-    visibleLines: visibleLineCount,
-    windowed: isWindowed,
-  }, t)
 
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         <span>{t?.('tool.writerPreview') ?? 'Writer'}</span>
-        <span className="font-[var(--font-mono)] normal-case tracking-normal tabular-nums">
-          {statsSummary}
-        </span>
+        {isWindowed ? (
+          <span className="normal-case tracking-normal">
+            {t?.('tool.writerPreviewLatest', { visible: visibleLines.length, total: totalLines }) ?? `Showing latest ${visibleLines.length} of ${totalLines} lines`}
+          </span>
+        ) : null}
       </div>
       <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words bg-[var(--color-code-bg)] px-3 py-2 font-[var(--font-mono)] text-[12px] leading-[1.45] text-[var(--color-code-fg)]">
         {visibleContent}
@@ -577,94 +505,14 @@ function renderPartialInput(
   partialInput: string,
   t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ) {
-  const formattedInput = formatPartialJsonInput(partialInput)
-
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
       <div className="border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         {t?.('tool.partialInput') ?? 'Partial input'}
       </div>
-      <CodeViewer code={formattedInput} language="json" maxLines={8} wrapLongLines />
+      <CodeViewer code={partialInput} language="json" maxLines={8} />
     </div>
   )
-}
-
-function formatPartialJsonInput(source: string): string {
-  const trimmed = source.trim()
-  if (!trimmed) return source
-
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2)
-  } catch {
-    return formatJsonLikeInput(trimmed)
-  }
-}
-
-function formatJsonLikeInput(source: string): string {
-  let output = ''
-  let indent = 0
-  let inString = false
-  let escaping = false
-  let skipWhitespace = false
-
-  const newline = () => {
-    output = output.trimEnd()
-    output += `\n${'  '.repeat(indent)}`
-    skipWhitespace = true
-  }
-
-  for (const char of source) {
-    if (inString) {
-      output += char
-      if (escaping) {
-        escaping = false
-      } else if (char === '\\') {
-        escaping = true
-      } else if (char === '"') {
-        inString = false
-      }
-      continue
-    }
-
-    if (skipWhitespace && /\s/.test(char)) continue
-    skipWhitespace = false
-
-    if (char === '"') {
-      inString = true
-      output += char
-      continue
-    }
-
-    if (char === '{' || char === '[') {
-      output += char
-      indent += 1
-      newline()
-      continue
-    }
-
-    if (char === '}' || char === ']') {
-      indent = Math.max(0, indent - 1)
-      if (!output.endsWith('\n')) newline()
-      output += char
-      continue
-    }
-
-    if (char === ',') {
-      output += char
-      newline()
-      continue
-    }
-
-    if (char === ':') {
-      output += ': '
-      skipWhitespace = true
-      continue
-    }
-
-    output += char
-  }
-
-  return output.trimEnd()
 }
 
 function getPendingSummary(
@@ -752,6 +600,39 @@ function extractTextContent(content: unknown): string | null {
     return JSON.stringify(content, null, 2)
   }
   return null
+}
+
+export type ImageBlock = { src: string; mimeType: string }
+
+function extractImageBlocks(content: unknown): ImageBlock[] {
+  if (!Array.isArray(content)) return []
+  const images: ImageBlock[] = []
+  const seen = new Set<string>()
+  for (const block of content) {
+    if (!block || typeof block !== 'object' || !('type' in block)) continue
+    const typed = block as Record<string, unknown>
+    if (typed.type === 'image' && typeof typed.data === 'string') {
+      const mime = typeof typed.mimeType === 'string' ? typed.mimeType : 'image/png'
+      images.push({ src: `data:${mime};base64,${typed.data}`, mimeType: mime })
+    }
+    // Handle OpenAI-style image_url blocks (from MCP proxy transforms)
+    if (typed.type === 'image_url' && typed.image_url && typeof typed.image_url === 'object') {
+      const url = (typed.image_url as Record<string, unknown>).url
+      if (typeof url === 'string' && /^(https?:|data:)/i.test(url)) {
+        if (!seen.has(url)) { seen.add(url); images.push({ src: url, mimeType: 'image/png' }) }
+      }
+    }
+    // Extract markdown image syntax ![...](url) from text blocks
+    if (typed.type === 'text' && typeof typed.text === 'string') {
+      const mdImageRe = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g
+      let match: RegExpExecArray | null
+      while ((match = mdImageRe.exec(typed.text)) !== null) {
+        const url = match[1]!
+        if (!seen.has(url)) { seen.add(url); images.push({ src: url, mimeType: 'image/png' }) }
+      }
+    }
+  }
+  return images
 }
 
 function changedLineSummary(oldString: string, newString: string, t?: (key: TranslationKey, params?: Record<string, string | number>) => string): string {

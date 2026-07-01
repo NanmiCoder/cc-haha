@@ -48,6 +48,7 @@ import type {
   CreateProviderInput,
   UpdateProviderInput,
   TestProviderInput,
+  FetchModelsInput,
   ProviderTestResult,
   ProviderTestStepResult,
   ApiFormat,
@@ -266,6 +267,19 @@ export class ProviderService {
     if (input.modelContextWindows === null) {
       delete updated.modelContextWindows
     }
+    // Re-arm compatibility markers when the user edits anything about
+    // this provider. The presumption is "user is fixing it" — give the
+    // new config a fresh chance, even if the old one was flagged
+    // incompatible. Mirrors the desktop providerCompatStore behavior
+    // for fake tool_use detection (which clears on edit too).
+    delete updated.thinkingIncompatible
+    delete updated.thinkingIncompatibleReason
+
+    // Bump the revision counter so any in-flight `runtimeOverride` snapshot
+    // for this provider is recognised as stale by handleSetRuntimeConfig
+    // and forces a CLI restart even when the (providerId, modelId, effort)
+    // tuple is unchanged. See SavedProviderSchema.revision docstring.
+    updated.revision = (existing.revision ?? 0) + 1
 
     index.providers[idx] = updated
     await this.writeIndex(index)
@@ -289,6 +303,58 @@ export class ProviderService {
     index.providers.splice(idx, 1)
     index.providerOrder = index.providerOrder.filter((providerId) => providerId !== id)
     await this.writeIndex(index)
+  }
+
+  /**
+   * Sticky-mark this provider as incompatible with Anthropic's `thinking`
+   * field. Called from the WS handler when a 4xx like
+   * "additionalModelRequestFields not supported" is observed in the
+   * sidecar's stdout — that error pattern is the giveaway for Bedrock
+   * proxies that don't know how to relay `thinking`. The marker
+   * survives in providers.json so the next sidecar launch can inject
+   * `CLAUDE_CODE_DISABLE_THINKING=1` via buildProviderManagedEnv.
+   *
+   * Idempotent: marking an already-marked provider with the same reason
+   * is a no-op (returns the existing provider without writing). Returns
+   * null when the id is the OpenAI-OAuth official provider (those are
+   * not user-editable and don't go through Bedrock proxies).
+   *
+   * Cleared automatically by `updateProvider` so the user editing
+   * config gets a fresh chance.
+   */
+  async markThinkingIncompatible(
+    id: string,
+    reason: string,
+  ): Promise<SavedProvider | null> {
+    if (isOpenAIOfficialProviderId(id)) return null
+    const index = await this.readIndex()
+    const idx = index.providers.findIndex((p) => p.id === id)
+    if (idx === -1) return null
+
+    const existing = index.providers[idx]
+    const trimmedReason = reason.slice(0, 500)
+    if (
+      existing.thinkingIncompatible === true &&
+      existing.thinkingIncompatibleReason === trimmedReason
+    ) {
+      // No state change — skip the disk write so we don't thrash on a
+      // burst of identical errors from the same session.
+      return existing
+    }
+
+    const updated: SavedProvider = {
+      ...existing,
+      thinkingIncompatible: true,
+      thinkingIncompatibleReason: trimmedReason,
+    }
+    index.providers[idx] = updated
+    await this.writeIndex(index)
+
+    if (index.activeId === id) {
+      await this.syncToSettings(updated)
+    }
+
+    return updated
   }
 
   /**
@@ -583,6 +649,82 @@ export class ProviderService {
     const step2 = await this.testProxyPipeline(base, input.apiKey, modelId, format, networkSettings)
 
     return { connectivity: step1, proxy: step2 }
+  }
+
+  /**
+   * Server-side fetch of an upstream provider's `/v1/models` endpoint.
+   *
+   * The desktop "获取模型" button used to do this directly from the
+   * renderer via `fetch()`. That breaks for any provider whose URL is
+   * plain `http://` (mixed-content block in the secure-context webview)
+   * or whose `/v1/models` doesn't return permissive CORS headers — both
+   * are common with self-hosted relay endpoints. Routing through the
+   * server has neither restriction.
+   *
+   * Returns the upstream JSON response as-is. The desktop's
+   * `extractModelEntries` walks `data` / `models` / `items` / `results`
+   * arrays and pulls `{ id, contextWindow }`, so any of the common
+   * shapes (OpenAI, Anthropic, OpenAI-compatible) works untransformed.
+   */
+  async fetchUpstreamModels(
+    input: FetchModelsInput,
+  ): Promise<{ status: number; data: unknown }> {
+    const format: ApiFormat = input.apiFormat ?? 'anthropic'
+    const networkSettings = await loadNetworkSettings()
+    // Strip trailing slashes; if the user already wrote `…/v1`, append
+    // only `/models` (mirrors the previous client-side logic so existing
+    // baseUrl shapes continue to work).
+    const trimmed = input.baseUrl.replace(/\/+$/, '')
+    const url = trimmed.endsWith('/v1') ? `${trimmed}/models` : `${trimmed}/v1/models`
+
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (format === 'anthropic') {
+      headers['x-api-key'] = input.apiKey
+      headers['anthropic-version'] = '2023-06-01'
+    } else {
+      headers['Authorization'] = `Bearer ${input.apiKey}`
+    }
+
+    const proxyOptions = getProxyFetchOptions({
+      proxyUrl: getManualNetworkProxyUrl(networkSettings),
+    })
+    let response: Response
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(networkSettings.aiRequestTimeoutMs),
+        ...proxyOptions,
+      })
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
+        throw ApiError.badGateway(
+          `Upstream timed out after ${Math.round(
+            networkSettings.aiRequestTimeoutMs / 1000,
+          )}s`,
+        )
+      }
+      throw ApiError.badGateway(
+        `Upstream fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+
+    const data: unknown = await response.json().catch(() => null)
+    if (!response.ok) {
+      // Surface the upstream's status verbatim so the user can see whether
+      // it was 401 (bad key), 403 (key has no list-models scope), 404
+      // (relay doesn't expose /v1/models at all), or 5xx (upstream sick).
+      const upstreamErrorMessage =
+        data && typeof data === 'object' && 'error' in data && data.error
+          ? typeof (data.error as { message?: unknown }).message === 'string'
+            ? (data.error as { message: string }).message
+            : null
+          : null
+      throw ApiError.badGateway(
+        `Upstream returned HTTP ${response.status}${upstreamErrorMessage ? `: ${upstreamErrorMessage}` : ''}`,
+      )
+    }
+    return { status: response.status, data }
   }
 
   /** Step 1: Direct upstream call to verify connectivity, auth, and model. */

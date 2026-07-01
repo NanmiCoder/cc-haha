@@ -11,10 +11,8 @@ import {
   type AutoCompactTrackingState,
 } from './services/compact/autoCompact.js'
 import { buildPostCompactMessages } from './services/compact/compact.js'
+import * as reactiveCompact from './services/compact/reactiveCompact.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
-const reactiveCompact = feature('REACTIVE_COMPACT')
-  ? (require('./services/compact/reactiveCompact.js') as typeof import('./services/compact/reactiveCompact.js'))
-  : null
 const contextCollapse = feature('CONTEXT_COLLAPSE')
   ? (require('./services/contextCollapse/index.js') as typeof import('./services/contextCollapse/index.js'))
   : null
@@ -521,11 +519,14 @@ async function* queryLoop(
       // compact. recompactionInfo (autoCompact.ts:190) already captured the
       // old values for turnsSincePreviousCompact/previousCompactTurnId before
       // the call, so this reset doesn't lose those.
+      // consecutiveFailures is normally 0 here, but an "ineffective" compaction
+      // (post-compact context still over threshold) returns a non-zero count so
+      // the circuit breaker can stop a re-compaction loop.
       tracking = {
         compacted: true,
         turnId: deps.uuid(),
         turnCounter: 0,
-        consecutiveFailures: 0,
+        consecutiveFailures: consecutiveFailures ?? 0,
       }
 
       const postCompactMessages = buildPostCompactMessages(compactionResult)

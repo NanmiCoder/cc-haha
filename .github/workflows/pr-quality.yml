@@ -37,6 +37,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install root dependencies
+        run: bun install
+
       - name: Run policy tests
         run: bun run check:policy
 
@@ -93,7 +96,14 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Install root dependencies
+        run: bun install
+
+      - name: Install adapter dependencies
+        working-directory: adapters
         run: bun install
 
       - name: Run server checks
@@ -149,6 +159,10 @@ jobs:
         working-directory: desktop
         run: bun install
 
+      - name: Install adapter dependencies
+        working-directory: adapters
+        run: bun install
+
       - name: Run desktop native checks
         run: bun run check:native
 
@@ -185,6 +199,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Install root dependencies
         run: bun install

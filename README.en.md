@@ -1,7 +1,7 @@
-# Claude Code Haha
+# Code Council
 
 <p align="center">
-  <img src="docs/images/logo-horizontal.png" alt="Claude Code Haha" width="480">
+  <img src="docs/images/logo-horizontal.png" alt="Code Council" width="480">
 </p>
 
 <div align="center">
@@ -17,7 +17,7 @@
 
 </div>
 
-A Claude Code build repaired from the source leaked from Anthropic's npm registry on 2026-03-31. Claude Code Haha is now primarily a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, right-side file changes, code diffs, permission review, provider setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
+A Claude Code build repaired from the source leaked from Anthropic's npm registry on 2026-03-31. Code Council is now primarily a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, right-side file changes, code diffs, permission review, provider setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
 
 <p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#more-documentation">More Docs</a>
@@ -27,7 +27,7 @@ A Claude Code build repaired from the source leaked from Anthropic's npm registr
 
 ## Desktop Preview
 
-The Claude Code Haha desktop app brings sessions, multi-project navigation, branch / Worktree controls, right-side file changes, code diffs, permission review, provider setup, and remote access into one graphical workspace for daily development flows beyond the terminal.
+The Code Council desktop app brings sessions, multi-project navigation, branch / Worktree controls, right-side file changes, code diffs, permission review, provider setup, and remote access into one graphical workspace for daily development flows beyond the terminal.
 
 <p align="center">
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
@@ -147,31 +147,6 @@ This project is maintained in the author's spare time. Corporate or individual s
 
 ---
 
-## ☕ Buy Me a Coffee
-
-If this project helps you, consider buying me a coffee — every bit of support keeps this project going ❤️
-
-<table>
-<tr>
-<td align="center" width="33%">
-<img src="docs/images/donate/wechat_pay.jpeg" width="250" alt="WeChat Pay"><br>
-<b>WeChat Pay</b>
-</td>
-<td align="center" width="33%">
-<img src="docs/images/donate/zfb_pay.png" width="250" alt="Alipay"><br>
-<b>Alipay</b>
-</td>
-<td align="center" width="33%">
-<a href="https://buymeacoffee.com/relakkes" target="_blank">
-<img src="docs/images/donate/bmc_button.png" width="250" alt="Buy Me a Coffee">
-</a><br>
-<b>Buy Me a Coffee</b>
-</td>
-</tr>
-</table>
-
----
-
 ## Tech Stack
 
 | Category | Technology |
@@ -197,7 +172,7 @@ Thanks to the following open-source projects and community practices for referen
 
 ## ⭐ Star History
 
-If this project helps you, please support it with a ⭐ Star so more people can discover Claude Code Haha.
+If this project helps you, please support it with a ⭐ Star so more people can discover Code Council.
 
 <a href="https://www.star-history.com/#NanmiCoder/cc-haha&Date">
   <picture>

@@ -36,3 +36,12 @@ export type SkillDetail = {
   files: SkillFile[]
   skillRoot: string
 }
+
+export type CatalogSkill = {
+  name: string
+  displayName: string
+  description: string
+  category: string
+  source: string
+  installed: boolean
+}

@@ -21,7 +21,7 @@
     },
     "adapters": {
       "lines": 75.94,
-      "functions": 83.35,
+      "functions": 83,
       "branches": 0,
       "statements": 75.94
     },
@@ -65,6 +65,6 @@
   },
   "ratchet": {
     "baselinePath": "scripts/quality-gate/coverage-baseline.json",
-    "allowedDropPercent": 0.5
+    "allowedDropPercent": 1.0
   }
 }

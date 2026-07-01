@@ -12,6 +12,8 @@ import * as os from 'os'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ConversationService, ConversationStartupError, conversationService } from '../services/conversationService.js'
+import { getSoloPipelineSystemPrompt } from '../../coordinator/soloPipelinePrompt.js'
+import { ORCHESTRATION_PROMPT_MARKER, ORCHESTRATION_SYSTEM_PROMPT, ORCHESTRATION_PROPAGATE_RULES_MARKER } from '../orchestrationPrompt.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 
@@ -333,6 +335,72 @@ describe('ConversationService', () => {
     ])
   })
 
+  it('should append the orchestration system prompt when coordinator mode is on', () => {
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({ coordinatorMode: true }) as string[]
+    const idx = args.indexOf('--append-system-prompt')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(args[idx + 1]).toContain(ORCHESTRATION_PROMPT_MARKER)
+  })
+
+  it('should not append the orchestration system prompt when coordinator mode is off', () => {
+    const svc = new ConversationService()
+    expect((svc as any).getRuntimeArgs({ coordinatorMode: false })).not.toContain('--append-system-prompt')
+    expect((svc as any).getRuntimeArgs({})).not.toContain('--append-system-prompt')
+  })
+
+  it('should append the Solo Pipeline system prompt when soloPipelineMode is on', () => {
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({ soloPipelineMode: true }) as string[]
+    const idx = args.indexOf('--append-system-prompt')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    // The injected text must be the Solo prompt — sniff for the unique
+    // Stage-0 intent-triage phrasing locked in soloPipelinePrompt.test.ts.
+    expect(args[idx + 1]).toContain('Solo Pipeline mode')
+    expect(args[idx + 1]).toContain('A/B/C Plan Gate')
+    expect(args[idx + 1]).toContain('Critic')
+    expect(args[idx + 1]).toContain('final execution plan')
+  })
+
+  it('should not append the Solo prompt when soloPipelineMode is off', () => {
+    const svc = new ConversationService()
+    expect((svc as any).getRuntimeArgs({ soloPipelineMode: false })).not.toContain('--append-system-prompt')
+  })
+
+  it('routes coordinator and Solo into separate --append-system-prompt slots when both flags are set', () => {
+    // The WS handler enforces mutual exclusion, but getRuntimeArgs must still
+    // produce a deterministic shape if a caller somehow passes both true —
+    // we want each branch's text appended exactly once with no cross-talk.
+    const svc = new ConversationService()
+    const args = (svc as any).getRuntimeArgs({
+      coordinatorMode: true,
+      soloPipelineMode: true,
+    }) as string[]
+    const flagIndices = args
+      .map((arg, i) => (arg === '--append-system-prompt' ? i : -1))
+      .filter((i) => i >= 0)
+    expect(flagIndices.length).toBe(2)
+    const texts = flagIndices.map((i) => args[i + 1] ?? '')
+    expect(texts.some((t) => t.includes(ORCHESTRATION_PROMPT_MARKER))).toBe(true)
+    expect(texts.some((t) => t.includes('A/B/C Plan Gate'))).toBe(true)
+  })
+
+  // Locks the orchestrator's "propagate project tool rules into every dispatched
+  // sub-agent prompt" rule. The bug this guards against was observed live: when the
+  // rule was a soft "for example, restate codegraph rules" bullet, the orchestrator
+  // wrote three sub-agent prompts and forwarded zero project tool conventions, so
+  // the sub-agents ignored the project's mandated codegraph MCP tool and fell back
+  // to plain Bash grep. If this assertion fails because someone softened the
+  // wording, restore the imperative phrasing rather than relaxing the test.
+  it('orchestration prompt mandates propagating project tool rules to sub-agents', () => {
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toContain(ORCHESTRATION_PROPAGATE_RULES_MARKER)
+    // Concrete example must survive — sub-agents look at codegraph-style MCP tools
+    // by name when they're explicitly mentioned in the dispatched prompt.
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toMatch(/codegraph/i)
+    // The rule is mandatory, not a "for example" suggestion.
+    expect(ORCHESTRATION_SYSTEM_PROMPT).toMatch(/REQUIRED, not optional/)
+  })
+
   it('should send thinking token controls to active CLI sessions', () => {
     const svc = new ConversationService() as any
     const sent: string[] = []
@@ -370,6 +438,35 @@ describe('ConversationService', () => {
   it('should not throw when stopping non-existent session', () => {
     const svc = new ConversationService()
     expect(() => svc.stopSession('no-such-session')).not.toThrow()
+  })
+
+  it('getActiveInstanceId returns null for a session with no live process', () => {
+    const svc = new ConversationService()
+    expect(svc.getActiveInstanceId('no-such-session')).toBeNull()
+  })
+
+  it('stopSessionInstance only kills the matching process instance', () => {
+    const svc = new ConversationService()
+    const sessionId = 'instance-guard-session'
+    let killed = 0
+    // Inject a minimal fake live process; killProcess only needs proc.kill().
+    ;(svc as unknown as { sessions: Map<string, unknown> }).sessions.set(sessionId, {
+      instanceId: `${sessionId}#1`,
+      proc: { kill: () => { killed += 1 } },
+    })
+
+    // A stale instanceId (e.g. from a process replaced by a restart) is ignored.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#0`)).toBe(false)
+    expect(killed).toBe(0)
+    expect(svc.hasSession(sessionId)).toBe(true)
+
+    // The matching instanceId kills exactly that process and clears the session.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#1`)).toBe(true)
+    expect(killed).toBe(1)
+    expect(svc.hasSession(sessionId)).toBe(false)
+
+    // No live process left, so a repeat call is a no-op.
+    expect(svc.stopSessionInstance(sessionId, `${sessionId}#1`)).toBe(false)
   })
 
   it('should not throw when registering callback for non-existent session', () => {
@@ -870,11 +967,87 @@ describe('ConversationService', () => {
       await fs.rm(workDir, { recursive: true, force: true })
     }
   })
-})
 
-// ============================================================================
-// WebSocket integration tests (with mock CLI using the SDK websocket protocol)
-// ============================================================================
+  it('scopes the transcript context estimate to messages after the latest compact boundary', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousUseBedrock = process.env.CLAUDE_CODE_USE_BEDROCK
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-compact-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-compact-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1'
+
+    try {
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+
+      // Pre-compact turn: a near-full request (would read as ~100%).
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'pre-compact answer' }],
+          usage: { input_tokens: 190_000, output_tokens: 50 },
+        },
+      }) + '\n')
+
+      // Compaction boundary — everything above is no longer in live context.
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:01.000Z',
+        cwd: workDir,
+      }) + '\n')
+
+      // Post-compact: just the small summary, no new real turn yet.
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'user',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:02.000Z',
+        cwd: workDir,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Summary of the prior conversation: we did a few things.' }],
+        },
+      }) + '\n')
+
+      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+
+      expect(contextEstimate?.rawMaxTokens).toBe(200_000)
+      // The pre-compact 190k request must NOT anchor the estimate post-compaction.
+      expect(contextEstimate?.percentage).toBeLessThan(50)
+      expect(contextEstimate?.totalTokens).toBeLessThan(50_000)
+      expect(contextEstimate?.model).toBe('claude-sonnet-4-6')
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      if (previousUseBedrock === undefined) {
+        delete process.env.CLAUDE_CODE_USE_BEDROCK
+      } else {
+        process.env.CLAUDE_CODE_USE_BEDROCK = previousUseBedrock
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('WebSocket Chat Integration', () => {
   let server: ReturnType<typeof Bun.serve>
@@ -2461,6 +2634,77 @@ describe('WebSocket Chat Integration', () => {
     } finally {
       ws.close()
       conversationService.startSession = originalStartSession
+      conversationService.stopSession(sessionId)
+    }
+  }, 20_000)
+
+  it('restarts an already prewarmed session when Solo Pipeline is enabled', async () => {
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd() }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+    const argsLogPath = path.join(tmpDir, `solo-toggle-${sessionId}.jsonl`)
+    process.env.MOCK_SDK_STARTUP_ARGS_LOG = argsLogPath
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const messages: any[] = []
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const waitForPrewarm = setInterval(() => {
+          fs.readFile(argsLogPath, 'utf8')
+            .then((text) => {
+              if (!text.trim()) return
+              clearInterval(waitForPrewarm)
+              ws.send(JSON.stringify({ type: 'set_pipeline_mode', flavor: 'solo' }))
+            })
+            .catch(() => undefined)
+        }, 25)
+
+        const timeout = setTimeout(() => {
+          clearInterval(waitForPrewarm)
+          reject(new Error(`Timed out waiting for Solo toggle restart for session ${sessionId}`))
+        }, 15_000)
+
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+
+          if (msg.type === 'connected') {
+            ws.send(JSON.stringify({ type: 'prewarm_session' }))
+            return
+          }
+
+          if (msg.type === 'status' && msg.state === 'idle') {
+            clearInterval(waitForPrewarm)
+            clearTimeout(timeout)
+            resolve()
+            return
+          }
+
+          if (msg.type === 'error') {
+            clearInterval(waitForPrewarm)
+            clearTimeout(timeout)
+            reject(new Error(msg.message))
+          }
+        }
+
+        ws.onerror = () => {
+          clearInterval(waitForPrewarm)
+          clearTimeout(timeout)
+          reject(new Error(`WebSocket error for Solo toggle restart session ${sessionId}`))
+        }
+      })
+
+      const argLines = (await fs.readFile(argsLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[])
+      expect(argLines.length).toBeGreaterThanOrEqual(2)
+      expect(argLines[0]).not.toContain(getSoloPipelineSystemPrompt())
+      expect(argLines.at(-1)).toContain(getSoloPipelineSystemPrompt())
+    } finally {
+      ws.close()
+      delete process.env.MOCK_SDK_STARTUP_ARGS_LOG
       conversationService.stopSession(sessionId)
     }
   }, 20_000)

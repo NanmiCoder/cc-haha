@@ -210,7 +210,11 @@ describe('WsBridge: handler serialization', () => {
     expect(bridge.hasSession('chat-reset')).toBe(false)
     expect(staleSession.ws.listenerCount('message')).toBe(0)
     expect(staleSession.ws.listenerCount('close')).toBe(0)
-    expect(staleSession.ws.listenerCount('error')).toBe(0)
+    // resetSession detaches the bridge's handlers but intentionally keeps a
+    // single no-op 'error' listener so a late async socket error (e.g. the
+    // close we just triggered racing an in-flight connect) can't surface as an
+    // unhandled exception.
+    expect(staleSession.ws.listenerCount('error')).toBe(1)
 
     bridge.destroy()
   })

@@ -181,6 +181,7 @@ export function ModelSelector({
     effortLevel,
     activeProviderName,
     setModel,
+    thinkingEnabled: globalThinkingEnabled,
   } = useSettingsStore()
   const {
     providers,
@@ -357,8 +358,11 @@ export function ModelSelector({
     ? selectedProviderChoice?.providerName ?? activeProviderName ?? t('settings.providers.officialName')
     : null
   const selectedRuntimeEffort = activeRuntimeSelection?.effortLevel ?? effortLevel
+  // Per-session thinking override: undefined falls back to the global toggle in Settings.
+  const selectedRuntimeThinkingEnabled =
+    activeRuntimeSelection?.thinkingEnabled ?? globalThinkingEnabled
 
-  const handleRuntimeSelect = (selection: RuntimeSelection) => {
+  const handleRuntimeSelect = (selection: RuntimeSelection, options?: { keepOpen?: boolean }) => {
     onRuntimeSelectionChange?.(selection)
     if (runtimeKey) {
       useSessionRuntimeStore.getState().setSelection(runtimeKey, selection)
@@ -366,7 +370,9 @@ export function ModelSelector({
         useChatStore.getState().setSessionRuntime(runtimeKey, selection)
       }
     }
-    setOpen(false)
+    if (!options?.keepOpen) {
+      setOpen(false)
+    }
   }
 
   const handleRuntimeEffortSelect = (level: EffortLevel) => {
@@ -375,6 +381,14 @@ export function ModelSelector({
       ...activeRuntimeSelection,
       effortLevel: level,
     })
+  }
+
+  const handleRuntimeThinkingSelect = (enabled: boolean) => {
+    if (!activeRuntimeSelection) return
+    handleRuntimeSelect({
+      ...activeRuntimeSelection,
+      thinkingEnabled: enabled,
+    }, { keepOpen: true })
   }
 
   const dropdownContent = (
@@ -513,6 +527,42 @@ export function ModelSelector({
                   onClick={() => {
                     handleRuntimeEffortSelect(opt.value)
                   }}
+                  className={`
+                    rounded-lg py-2 text-center text-xs font-semibold transition-colors
+                    ${isSelected
+                      ? 'bg-[var(--color-brand)] text-white'
+                      : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+                    }
+                  `}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {canEditRuntimeEffort && (
+        <div className="border-t border-[var(--color-border)] p-3">
+          <div className="mb-2 flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
+              {t('model.thinking')}
+            </span>
+            <span className="text-[10px] text-[var(--color-text-tertiary)]">
+              {t('model.thinkingHint')}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {[
+              { value: true, label: t('model.thinkingOn') },
+              { value: false, label: t('model.thinkingOff') },
+            ].map((opt) => {
+              const isSelected = opt.value === selectedRuntimeThinkingEnabled
+              return (
+                <button
+                  key={String(opt.value)}
+                  onClick={() => handleRuntimeThinkingSelect(opt.value)}
                   className={`
                     rounded-lg py-2 text-center text-xs font-semibold transition-colors
                     ${isSelected

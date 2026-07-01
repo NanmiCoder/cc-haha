@@ -79,8 +79,30 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     expect(requiresH5AuthForServerUrl('http://192.168.0.102:28670', 'phone.example.test')).toBe(true)
   })
 
-  it('clears an invalid token but preserves the remembered remote server URL', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
+  it('binds a tunnel URL with a path prefix and verifies through that prefix', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(healthOkResponse()) as typeof fetch
+    globalThis.fetch = fetchMock
+    clientMocks.postVerify.mockResolvedValueOnce({ ok: true })
+
+    await expect(
+      saveAndVerifyH5Connection('https://abcd-1234.ngrok-free.app/h5', 'h5_tunnel_token'),
+    ).resolves.toBe('https://abcd-1234.ngrok-free.app/h5')
+
+    // The path prefix must survive normalization so the reverse proxy / tunnel
+    // routes /health and the API under the same base.
+    expect(clientMocks.setBaseUrl).toHaveBeenLastCalledWith('https://abcd-1234.ngrok-free.app/h5')
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('h5_tunnel_token')
+    expect(fetchMock).toHaveBeenCalledWith('https://abcd-1234.ngrok-free.app/h5/health', {
+      cache: 'no-store',
+    })
+    expect(clientMocks.postVerify).toHaveBeenCalledWith('/api/h5-access/verify')
+    expect(window.localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe(
+      'https://abcd-1234.ngrok-free.app/h5',
+    )
+    expect(window.localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('h5_tunnel_token')
+  })
+
+  it('clears an invalid token but preserves the remembered remote server URL', async () => {    globalThis.fetch = vi.fn().mockResolvedValue(
       healthOkResponse(),
     ) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(

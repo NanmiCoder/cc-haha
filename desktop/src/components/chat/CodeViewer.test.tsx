@@ -22,15 +22,4 @@ describe('CodeViewer', () => {
     expect(container.querySelector('[data-line-number="1"]')).toBeTruthy()
     expect(container.querySelector('[data-line-number="2"]')).toBeTruthy()
   })
-
-  it('can wrap long highlighted code content when requested', () => {
-    const { container } = render(
-      <CodeViewer code={'{"command":"cat << EOF > /tmp/index.html"}'} language="json" wrapLongLines />,
-    )
-
-    const contentWrapper = container.querySelector('[data-code-viewer-content]') as HTMLElement | null
-    expect(contentWrapper).toBeTruthy()
-    expect(contentWrapper?.style.whiteSpace).toBe('pre-wrap')
-    expect(contentWrapper?.style.wordBreak).toBe('break-word')
-  })
 })

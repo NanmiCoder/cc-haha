@@ -11,6 +11,9 @@ import {
 } from '../stores/tabStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
+import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
+import { projectsApi } from '../api/projects'
+import { wsManager } from '../api/websocket'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useTeamStore } from '../stores/teamStore'
 import { useWorkspacePanelStore } from '../stores/workspacePanelStore'
@@ -25,6 +28,7 @@ import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { ComputerUsePermissionModal } from '../components/chat/ComputerUsePermissionModal'
 import { SessionTaskBar } from '../components/chat/SessionTaskBar'
+import { SoloCouncilPanel } from '../components/chat/SoloCouncilPanel'
 import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
 import { TeamStatusBar } from '../components/teams/TeamStatusBar'
 import { TerminalSettings } from './TerminalSettings'
@@ -34,6 +38,13 @@ import { useMobileViewport } from '../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { formatTokenCount } from '../lib/formatTokenCount'
 import { publicAssetPath } from '../lib/publicAsset'
+import {
+  COMPOSER_PREFILL_EVENT,
+  WelcomeTaskCards,
+  type ComposerPrefillDetail,
+  type WelcomeTaskCard,
+} from '../components/welcome/WelcomeTaskCards'
+import { RecentActivityCard } from '../components/welcome/RecentActivityCard'
 
 const TASK_POLL_INTERVAL_MS = 1000
 const WORKSPACE_RESIZE_STEP = 32
@@ -268,6 +279,23 @@ export function ActiveSession() {
   const sessions = useSessionStore((s) => s.sessions)
   const connectToSession = useChatStore((s) => s.connectToSession)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
+  // Hand-off context attached to this session (if any). Drives a small chip
+  // in the header so the user remembers the AI started with summarized
+  // prior context. Set by the "Continue from here" flow on success.
+  const handoffInfoForActive = useSessionRuntimeStore((s) =>
+    activeTabId ? s.handoffInfo[activeTabId] : undefined,
+  )
+  // Live mode flags drive the always-visible status chip in the chat header
+  // so the user can see at a glance which session-level mode is active. The
+  // `+`-menu toggle in ChatInput is the entry point but only surfaces the
+  // current state inside that menu — the chip is the persistent affordance
+  // that the steering contract calls "明示当前模式" (must be explicit).
+  const coordinatorModeForActive = useSessionRuntimeStore((s) =>
+    activeTabId ? s.coordinatorModes[activeTabId] ?? false : false,
+  )
+  const soloPipelineModeForActive = useSessionRuntimeStore((s) =>
+    activeTabId ? s.soloPipelineModes[activeTabId] ?? false : false,
+  )
   const pendingComputerUsePermission = sessionState?.pendingComputerUsePermission ?? null
   const fetchSessionTasks = useCLITaskStore((s) => s.fetchSessionTasks)
   const trackedTaskSessionId = useCLITaskStore((s) => s.sessionId)
@@ -423,10 +451,7 @@ export function ActiveSession() {
           {isEmpty ? (
             <div
               data-testid="empty-session-hero"
-              className={[
-                'flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-8 pt-8',
-                compactEmptyHero ? 'pb-6' : 'pb-32',
-              ].join(' ')}
+              className={`flex min-h-0 flex-1 flex-col items-center justify-center gap-1 overflow-y-auto p-8 ${compactEmptyHero ? 'pb-6' : 'pb-32'}`}
             >
               <div className="flex max-w-md flex-col items-center text-center">
                 {isMemberSession ? (
@@ -454,6 +479,104 @@ export function ActiveSession() {
                   </>
                 )}
               </div>
+              {!isMemberSession && !isMobileLayout && activeTabId && session?.workDir && (
+                <RecentActivityCard
+                  workDir={session.workDir}
+                  excludeSessionId={activeTabId}
+                  hideContinueSessionButton
+                  onContinueSession={(sessionId) => {
+                    useTabStore.getState().openTab(sessionId, 'New Session')
+                    connectToSession(sessionId)
+                  }}
+                  onAutoHandoff={async (previousSessionId, previousSessionTitle, fallbackText, setStage, options) => {
+                    // 1. Resolve summary (cached → generated → null). Any
+                    //    failure degrades silently to the zero-token
+                    //    textarea-prefill path.
+                    setStage('reading-cache')
+                    let summary = null
+                    try {
+                      const cached = await projectsApi.getSessionSummary(previousSessionId)
+                      summary = cached.summary
+                    } catch {
+                      // GET error → fall through to generation path below.
+                    }
+                    if (!summary) {
+                      setStage('generating-summary')
+                      try {
+                        const fresh = await projectsApi.generateSessionSummary(previousSessionId)
+                        summary = fresh.summary
+                      } catch {
+                        summary = null
+                      }
+                    }
+
+                    if (!summary) {
+                      // Zero-token fallback: write the static hand-off
+                      // paragraph into the composer via the existing
+                      // composer-prefill event.
+                      const detail: ComposerPrefillDetail = {
+                        sessionId: activeTabId,
+                        text: fallbackText,
+                      }
+                      window.dispatchEvent(
+                        new CustomEvent(COMPOSER_PREFILL_EVENT, { detail }),
+                      )
+                      return
+                    }
+
+                    setStage('starting-session')
+
+                    // Stash hand-off info on the active session so the
+                    // chat header can render a "↗ continued from..." chip.
+                    useSessionRuntimeStore.getState().setHandoffInfo(activeTabId, {
+                      previousSessionId,
+                      previousSessionTitle,
+                      approxTokens: Math.ceil(
+                        (summary.main.length + summary.recent.length) / 4,
+                      ),
+                      generatedAt: summary.generatedAt,
+                    })
+
+                    // 2. Stage hand-off on the live session and auto-send a
+                    //    short trigger message. Server reads cached summary
+                    //    via WS message, restarts CLI with --append-system-
+                    //    prompt, and the next user_message kicks off the AI
+                    //    turn with full context already in system prompt.
+                    wsManager.send(activeTabId, {
+                      type: 'set_handoff_summary',
+                      previousSessionId,
+                      ...(options?.deep ? { deep: true } : {}),
+                    })
+                    useChatStore.getState().sendMessage(
+                      activeTabId,
+                      t('empty.recentActivity.continueTriggerMessage'),
+                    )
+                  }}
+                />
+              )}
+              {!isMemberSession && !isMobileLayout && activeTabId && (
+                <WelcomeTaskCards
+                  workDir={session?.workDir || undefined}
+                  excludeSessionId={activeTabId}
+                  onApplyTask={(card: WelcomeTaskCard, promptText: string) => {
+                    // Push the starter prompt into ChatInput's draft via a
+                    // window event — ChatInput listens for this and sets its
+                    // textarea state when the sessionId matches the active tab.
+                    const detail: ComposerPrefillDetail = {
+                      sessionId: activeTabId,
+                      text: promptText,
+                    }
+                    window.dispatchEvent(new CustomEvent(COMPOSER_PREFILL_EVENT, { detail }))
+                    if (card.orchestrate) {
+                      // Session already exists here (we're in ActiveSession),
+                      // so this immediately persists the preference and
+                      // pushes the WS message if connected. Won't disable an
+                      // existing toggle — non-orchestration cards leave it.
+                      useChatStore.getState().setSessionCoordinatorMode(activeTabId, true)
+                    }
+                  }}
+                />
+              )}
             </div>
           ) : (
             <>
@@ -510,6 +633,59 @@ export function ActiveSession() {
                           <span>{t('session.messages', { count: visibleMessageCount })}</span>
                         </>
                       )}
+                      {handoffInfoForActive && (
+                        <>
+                          <span className="text-[var(--color-outline)]">·</span>
+                          <span
+                            data-testid="session-handoff-chip"
+                            title={t('session.handoffChipTooltip', {
+                              title: handoffInfoForActive.previousSessionTitle,
+                              tokens: handoffInfoForActive.approxTokens,
+                            })}
+                            className="inline-flex shrink-0 items-center gap-0.5 cursor-help text-[var(--color-primary)]"
+                          >
+                            {t('session.handoffChip', {
+                              tokens: handoffInfoForActive.approxTokens,
+                            })}
+                          </span>
+                        </>
+                      )}
+                      {coordinatorModeForActive && (
+                        <>
+                          <span className="text-[var(--color-outline)]">·</span>
+                          <span
+                            data-testid="session-coordinator-chip"
+                            title={t('session.coordinatorChipTooltip')}
+                            className="inline-flex shrink-0 items-center gap-1 cursor-help text-[var(--color-primary)]"
+                          >
+                            <span
+                              className="material-symbols-outlined text-[12px]"
+                              aria-hidden="true"
+                            >
+                              hub
+                            </span>
+                            {t('session.coordinatorChip')}
+                          </span>
+                        </>
+                      )}
+                      {soloPipelineModeForActive && (
+                        <>
+                          <span className="text-[var(--color-outline)]">·</span>
+                          <span
+                            data-testid="session-solo-chip"
+                            title={t('session.soloPipelineChipTooltip')}
+                            className="inline-flex shrink-0 items-center gap-1 cursor-help text-[var(--color-primary)]"
+                          >
+                            <span
+                              className="material-symbols-outlined text-[12px]"
+                              aria-hidden="true"
+                            >
+                              linear_scale
+                            </span>
+                            {t('session.soloPipelineChip')}
+                          </span>
+                        </>
+                      )}
                     </div>
                     {session?.workDirExists === false && (
                       <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-lg border border-[var(--color-error)]/20 bg-[var(--color-error)]/8 px-3 py-1.5 text-[11px] text-[var(--color-error)]">
@@ -524,6 +700,12 @@ export function ActiveSession() {
                       isRunning={isActive}
                       compact={showRightPanel}
                     />
+                    {soloPipelineModeForActive && activeTabId && (
+                      <SoloCouncilPanel
+                        sessionId={activeTabId}
+                        compact={showRightPanel}
+                      />
+                    )}
                   </div>
                 </div>
               )}

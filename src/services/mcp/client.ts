@@ -111,6 +111,7 @@ import {
 } from './elicitationHandler.js'
 import { buildMcpToolName } from './mcpStringUtils.js'
 import { normalizeNameForMCP } from './normalization.js'
+import { isMcpToolDisabled } from './toolOverrides.js'
 import { getLoggingSafeMcpBaseUrl } from './utils.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -451,7 +452,7 @@ const IMAGE_MIME_TYPES = new Set([
 ])
 
 function getConnectionTimeoutMs(): number {
-  return parseInt(process.env.MCP_TIMEOUT || '', 10) || 30000
+  return parseInt(process.env.MCP_TIMEOUT || '', 10) || 60000
 }
 
 /**
@@ -1981,6 +1982,17 @@ export const fetchToolsForClient = memoizeWithLRU(
           }
         })
         .filter(isIncludedMcpTool)
+        // Hide tools the user has explicitly disabled at the global scope. Tools
+        // without mcpInfo (none in practice — fetchToolsForClient produces MCP
+        // tools only) are kept defensively. The override map is read inside the
+        // memoized cache value, so callers MUST invalidate this LRU entry
+        // (`fetchToolsForClient.cache.delete(serverName)`) after toggling tools
+        // for the change to surface to the agent loop.
+        .filter(
+          (tool) =>
+            !tool.mcpInfo ||
+            !isMcpToolDisabled(tool.mcpInfo.serverName, tool.mcpInfo.toolName),
+        )
     } catch (error) {
       logMCPError(client.name, `Failed to fetch tools: ${errorMessage(error)}`)
       return []
@@ -1989,6 +2001,91 @@ export const fetchToolsForClient = memoizeWithLRU(
   (client: MCPServerConnection) => client.name,
   MCP_FETCH_CACHE_SIZE,
 )
+
+/**
+ * Lightweight tool DTO for admin/inspection UIs.
+ *
+ * Returned by `listRawToolsForServer`; intentionally divorced from the
+ * agent-loop `Tool` wrapper produced by `fetchToolsForClient`. The shape
+ * mirrors the raw MCP `tools/list` response so the desktop MCP settings
+ * page can render names, descriptions, JSON Schemas and annotation hints
+ * without bringing in any agent-loop dependencies.
+ */
+export type RawMcpToolInfo = {
+  /** Unqualified tool name as advertised by the MCP server. */
+  name: string
+  /** Fully-qualified `mcp__server__tool` name used by the agent loop. */
+  qualifiedName: string
+  /** Tool description from the MCP server. Empty string when not provided. */
+  description: string
+  /** Raw JSON Schema for the tool's input. */
+  inputSchema: unknown
+  /** Optional human-readable title from MCP annotations. */
+  title?: string
+  /** Booleans surfaced by MCP annotations; default to `false` when absent. */
+  annotations: {
+    readOnlyHint: boolean
+    destructiveHint: boolean
+    openWorldHint: boolean
+    idempotentHint: boolean
+  }
+  /**
+   * Whether this tool is currently visible to the agent. Reflects the user's
+   * global override map (`disabledMcpTools`); admin UIs need to surface
+   * disabled tools so they remain togglable, hence we report rather than
+   * filter them out at this layer.
+   */
+  enabled: boolean
+}
+
+/**
+ * Issue a raw `tools/list` against the connected MCP server and project the
+ * result into `RawMcpToolInfo`.
+ *
+ * Independent of `fetchToolsForClient` so this admin path stays decoupled from
+ * agent-loop tool wrapping (and its memo cache lifecycle). `connectToServer`
+ * is cached upstream, so repeated calls are cheap; we deliberately don't add
+ * a second cache layer here to keep the UI's "refresh tools" UX honest.
+ */
+export async function listRawToolsForServer(
+  client: MCPServerConnection,
+): Promise<RawMcpToolInfo[]> {
+  if (client.type !== 'connected') return []
+  if (!client.capabilities?.tools) return []
+
+  try {
+    const result = (await client.client.request(
+      { method: 'tools/list' },
+      ListToolsResultSchema,
+    )) as ListToolsResult
+
+    const toolsToProcess = recursivelySanitizeUnicode(result.tools)
+
+    return toolsToProcess.map((tool) => {
+      const annotations = tool.annotations ?? {}
+      return {
+        name: tool.name,
+        qualifiedName: buildMcpToolName(client.name, tool.name),
+        description: typeof tool.description === 'string' ? tool.description : '',
+        inputSchema: tool.inputSchema,
+        title: typeof annotations.title === 'string' ? annotations.title : undefined,
+        annotations: {
+          readOnlyHint: annotations.readOnlyHint === true,
+          destructiveHint: annotations.destructiveHint === true,
+          openWorldHint: annotations.openWorldHint === true,
+          idempotentHint: annotations.idempotentHint === true,
+        },
+        enabled: !isMcpToolDisabled(client.name, tool.name),
+      }
+    })
+  } catch (error) {
+    logMCPError(
+      client.name,
+      `Failed to list raw tools: ${errorMessage(error)}`,
+    )
+    return []
+  }
+}
 
 export const fetchResourcesForClient = memoizeWithLRU(
   async (client: MCPServerConnection): Promise<ServerResource[]> => {
@@ -2473,13 +2570,46 @@ export async function transformResultContent(
   serverName: string,
 ): Promise<Array<ContentBlockParam>> {
   switch (resultContent.type) {
-    case 'text':
+    case 'text': {
+      // Detect markdown image URLs in text blocks (e.g., from image-gen plugin)
+      // and convert them to Anthropic API's URL image source format. This avoids
+      // accumulating base64 data in conversation history — the API fetches the
+      // image from the URL server-side, keeping the request body small.
+      const mdImageRe = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g
+      const text = resultContent.text
+      const imageUrls: string[] = []
+      let match: RegExpExecArray | null
+      while ((match = mdImageRe.exec(text)) !== null) {
+        imageUrls.push(match[1]!)
+      }
+
+      if (imageUrls.length > 0) {
+        const blocks: Array<ContentBlockParam> = []
+        // Add image blocks using URL source (no base64 accumulation)
+        for (const url of imageUrls) {
+          blocks.push({
+            type: 'image',
+            source: {
+              type: 'url',
+              url,
+            },
+          } as ContentBlockParam)
+        }
+        // Keep the text (contains metadata like provider/model info)
+        const remainingText = text.replace(mdImageRe, '').trim()
+        if (remainingText) {
+          blocks.push({ type: 'text', text: remainingText })
+        }
+        return blocks
+      }
+
       return [
         {
           type: 'text',
-          text: resultContent.text,
+          text,
         },
       ]
+    }
     case 'audio': {
       const audioData = resultContent as {
         type: 'audio'

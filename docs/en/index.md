@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: Claude Code Haha
+  name: Code Council
   text: Locally Runnable Claude Code
   tagline: Repaired from leaked source, supports any Anthropic-compatible API endpoint (MiniMax, OpenRouter, etc.)
   image:
     src: /images/logo-horizontal.png
-    alt: Claude Code Haha
+    alt: Code Council
   actions:
     - theme: brand
       text: Quick Start

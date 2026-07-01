@@ -66,6 +66,25 @@ describe('AttachmentGallery', () => {
     expect(onRemove).toHaveBeenCalledWith('selection-1')
   })
 
+  it('renders image attachments from previewUrl without using the local path as img src', () => {
+    const view = render(
+      <AttachmentGallery
+        variant="message"
+        attachments={[{
+          id: 'image-preview',
+          type: 'image',
+          name: 'chart.png',
+          path: 'C:\\Users\\Ada\\Pictures\\chart.png',
+          previewUrl: 'http://127.0.0.1:3456/api/filesystem/file?path=C%3A%5CUsers%5CAda%5CPictures%5Cchart.png',
+        }]}
+      />,
+    )
+
+    const image = view.getByAltText('chart.png')
+    expect(image).toHaveAttribute('src', 'http://127.0.0.1:3456/api/filesystem/file?path=C%3A%5CUsers%5CAda%5CPictures%5Cchart.png')
+    expect(image).not.toHaveAttribute('src', 'C:\\Users\\Ada\\Pictures\\chart.png')
+  })
+
   it('shows a compact element chip for annotated selection images and exposes the note on hover', () => {
     const view = render(
       <AttachmentGallery

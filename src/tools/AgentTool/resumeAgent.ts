@@ -24,10 +24,9 @@ import {
 } from '../../utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js'
 import type { SystemPrompt } from '../../utils/systemPromptType.js'
-import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { getParentSessionId } from '../../utils/teammate.js'
 import { reconstructForSubagentResume } from '../../utils/toolResultStorage.js'
-import { runAsyncAgentLifecycle } from './agentToolUtils.js'
+import { getAgentProgressOutputPath, runAsyncAgentLifecycle } from './agentToolUtils.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { FORK_AGENT, isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -260,6 +259,6 @@ export async function resumeAgentBackground({
   return {
     agentId,
     description: uiDescription,
-    outputFile: getTaskOutputPath(agentId),
+    outputFile: getAgentProgressOutputPath(agentId),
   }
 }

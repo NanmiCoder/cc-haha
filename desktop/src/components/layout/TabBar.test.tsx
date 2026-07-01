@@ -213,6 +213,109 @@ describe('TabBar', () => {
     })
   })
 
+  it('exposes the scroll region with overflow-x-auto and a hidden scrollbar', async () => {
+    // Pins the CSS contract introduced when we enabled wheel scroll
+    // on the tab strip: the strip MUST scroll natively
+    // (overflow-x-auto) so vertical wheel input translated to
+    // scrollLeft actually moves it, but the visible scrollbar MUST
+    // stay hidden so the tab strip looks like a clean app chrome
+    // surface (mirrors the look of native browser tab bars).
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [{ sessionId: 'tab-1', title: 'A', type: 'session', status: 'idle' }],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    const region = screen.getByTestId('tab-bar-scroll-region')
+    expect(region).toHaveClass('overflow-x-auto')
+    expect(region).toHaveClass('min-w-0')
+    expect(region.className).toContain('[scrollbar-width:none]')
+    expect(region.className).toContain('[&::-webkit-scrollbar]:hidden')
+  })
+
+  it('translates a vertical wheel into a horizontal scroll on the tab strip', async () => {
+    // The desktop wheel-scroll affordance: hover the tab strip,
+    // spin the mouse wheel, the strip moves horizontally. JSDOM's
+    // scrollLeft writes are persistent on the element, so we can
+    // assert directly on it.
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'A', type: 'session', status: 'idle' },
+        { sessionId: 'tab-2', title: 'B', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+    const region = screen.getByTestId('tab-bar-scroll-region')
+    // Force the region into an "overflowing" geometry — JSDOM
+    // doesn't lay things out, so scrollWidth defaults to 0 and the
+    // handler short-circuits without our help.
+    Object.defineProperty(region, 'scrollWidth', { configurable: true, value: 800 })
+    Object.defineProperty(region, 'clientWidth', { configurable: true, value: 200 })
+    region.scrollLeft = 0
+
+    fireEvent.wheel(region, { deltaY: 120, deltaX: 0 })
+
+    expect(region.scrollLeft).toBe(120)
+  })
+
+  it('passes horizontal wheel input through untouched (trackpad sideways swipe)', async () => {
+    // Trackpad two-finger horizontal swipe already produces a
+    // deltaX-dominated wheel event the browser scrolls natively.
+    // We must NOT also mutate scrollLeft, or the strip jumps by 2x.
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'A', type: 'session', status: 'idle' },
+        { sessionId: 'tab-2', title: 'B', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+    const region = screen.getByTestId('tab-bar-scroll-region')
+    Object.defineProperty(region, 'scrollWidth', { configurable: true, value: 800 })
+    Object.defineProperty(region, 'clientWidth', { configurable: true, value: 200 })
+    region.scrollLeft = 50
+
+    fireEvent.wheel(region, { deltaY: 10, deltaX: 80 })
+
+    // We did NOT add deltaY's 10 to scrollLeft — the deltaX-
+    // dominated event was a pass-through.
+    expect(region.scrollLeft).toBe(50)
+  })
+
   it('keeps the overflow button flush against window controls on Windows', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
@@ -236,8 +339,10 @@ describe('TabBar', () => {
       render(<TabBar />)
     })
 
-    const scrollRegion = screen.getByTestId('tab-bar').querySelector('.overflow-x-hidden')
+    const scrollRegion = screen.getByTestId('tab-bar').querySelector('.overflow-x-auto')
     expect(scrollRegion).toBeInTheDocument()
+    expect(scrollRegion).toHaveClass('min-w-0')
+    expect(scrollRegion).toHaveClass('flex-1')
 
     Object.defineProperty(scrollRegion!, 'clientWidth', {
       configurable: true,

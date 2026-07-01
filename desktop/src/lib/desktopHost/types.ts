@@ -141,12 +141,32 @@ export type PortableDirDetection = {
   hasData: boolean
 }
 
+export type DesktopTunnelMode = 'quick' | 'named'
+
+export type DesktopTunnelStatus = {
+  status: 'idle' | 'starting' | 'running' | 'error'
+  url: string | null
+  mode: DesktopTunnelMode | null
+  error: string | null
+}
+
+export type DesktopTunnelStartOptions = {
+  mode: DesktopTunnelMode
+  token?: string | null
+  namedUrl?: string | null
+}
+
 export type DesktopHost = {
   kind: DesktopHostKind
   isDesktop: boolean
   capabilities: DesktopHostCapabilities
   runtime: {
     getServerUrl(): Promise<string>
+  }
+  tunnel?: {
+    start(options: DesktopTunnelStartOptions): Promise<DesktopTunnelStatus>
+    stop(): Promise<DesktopTunnelStatus>
+    getStatus(): Promise<DesktopTunnelStatus>
   }
   app: {
     getVersion(): Promise<string>

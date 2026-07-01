@@ -3,9 +3,11 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { handleApiRequest } from '../router.js'
+import { resetRuntimeTunnelState } from '../services/h5AccessService.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
+let originalH5TunnelUrl: string | undefined
 
 async function api(
   method: string,
@@ -38,12 +40,17 @@ async function api(
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'h5-access-api-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  originalH5TunnelUrl = process.env.CLAUDE_H5_TUNNEL_URL
   process.env.CLAUDE_CONFIG_DIR = tmpDir
+  delete process.env.CLAUDE_H5_TUNNEL_URL
 })
 
 afterEach(async () => {
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  if (originalH5TunnelUrl === undefined) delete process.env.CLAUDE_H5_TUNNEL_URL
+  else process.env.CLAUDE_H5_TUNNEL_URL = originalH5TunnelUrl
+  resetRuntimeTunnelState()
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -209,5 +216,83 @@ describe('/api/h5-access', () => {
     })
 
     expect(response.status).toBe(400)
+  })
+
+  test('GET surfaces a runtime tunnel URL as the effective publicBaseUrl', async () => {
+    // The tunnel URL is a runtime override, never persisted. Enabling H5 access
+    // should make GET report it so the desktop UI / QR reflect the public entry.
+    await api('POST', '/api/h5-access/enable')
+    process.env.CLAUDE_H5_TUNNEL_URL = 'https://abcd-1234.ngrok-free.app/h5/'
+
+    const response = await api('GET', '/api/h5-access')
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      settings: { publicBaseUrl: string | null }
+    }
+    expect(body.settings.publicBaseUrl).toBe('https://abcd-1234.ngrok-free.app/h5')
+  })
+
+  test('tunnel/report sets the runtime tunnel URL and reflects it in settings', async () => {
+    await api('POST', '/api/h5-access/enable')
+
+    const reportResponse = await api('POST', '/api/h5-access/tunnel/report', {
+      body: { url: 'https://abcd.trycloudflare.com', status: 'running', mode: 'quick' },
+    })
+    expect(reportResponse.status).toBe(200)
+    const reportBody = await reportResponse.json() as {
+      settings: { publicBaseUrl: string | null }
+      tunnel: { status: string; url: string | null; mode: string | null }
+    }
+    expect(reportBody.tunnel.status).toBe('running')
+    expect(reportBody.tunnel.url).toBe('https://abcd.trycloudflare.com')
+    expect(reportBody.tunnel.mode).toBe('quick')
+    expect(reportBody.settings.publicBaseUrl).toBe('https://abcd.trycloudflare.com')
+
+    const statusResponse = await api('GET', '/api/h5-access/tunnel')
+    expect(statusResponse.status).toBe(200)
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      tunnel: { status: 'running', url: 'https://abcd.trycloudflare.com' },
+    })
+  })
+
+  test('tunnel/report status-only heartbeat does not clear a running URL', async () => {
+    await api('POST', '/api/h5-access/enable')
+    await api('POST', '/api/h5-access/tunnel/report', {
+      body: { url: 'https://abcd.trycloudflare.com', status: 'running', mode: 'quick' },
+    })
+
+    // A heartbeat with no url field (and an empty-string url) must preserve the URL.
+    await api('POST', '/api/h5-access/tunnel/report', { body: { status: 'running' } })
+    const emptyResponse = await api('POST', '/api/h5-access/tunnel/report', {
+      body: { url: '', status: 'running' },
+    })
+    const body = await emptyResponse.json() as { tunnel: { url: string | null } }
+    expect(body.tunnel.url).toBe('https://abcd.trycloudflare.com')
+  })
+
+  test('tunnel/clear resets the runtime tunnel and falls back to stored URL', async () => {    await api('PUT', '/api/h5-access', { body: { publicBaseUrl: 'https://chat.example.com/app' } })
+    await api('POST', '/api/h5-access/enable')
+    await api('POST', '/api/h5-access/tunnel/report', {
+      body: { url: 'https://abcd.trycloudflare.com', status: 'running', mode: 'quick' },
+    })
+
+    const clearResponse = await api('POST', '/api/h5-access/tunnel/clear')
+    expect(clearResponse.status).toBe(200)
+    const clearBody = await clearResponse.json() as {
+      settings: { publicBaseUrl: string | null }
+      tunnel: { status: string; url: string | null }
+    }
+    expect(clearBody.tunnel.status).toBe('idle')
+    expect(clearBody.tunnel.url).toBeNull()
+    expect(clearBody.settings.publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('PUT stores the tunnel token without returning it in settings', async () => {
+    const response = await api('PUT', '/api/h5-access', {
+      body: { tunnelToken: 'cf-secret-token', tunnelMode: 'named' },
+    })
+    expect(response.status).toBe(200)
+    const raw = await response.text()
+    expect(raw).not.toContain('cf-secret-token')
   })
 })

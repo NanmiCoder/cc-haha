@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setBaseUrl } from '../api/client'
 import { browserHost } from './desktopHost/browserHost'
 import { pathToComposerAttachment, selectNativeFileAttachments } from './composerAttachments'
 
 describe('composer attachment payloads', () => {
   afterEach(() => {
     Reflect.deleteProperty(window, 'desktopHost')
+    setBaseUrl('http://127.0.0.1:3456')
   })
 
   it('keeps many selected desktop project files as paths instead of request-body data', () => {
@@ -35,6 +37,33 @@ describe('composer attachment payloads', () => {
     expect(oldInlinePayload.length).toBeGreaterThan(3 * 1024 * 1024)
     expect(pathOnlyPayload.length).toBeLessThan(3 * 1024)
     expect(pathOnlyAttachments.every((attachment) => attachment.path && !attachment.data)).toBe(true)
+  })
+
+  it('creates safe preview URLs for native image paths with spaces', () => {
+    setBaseUrl('http://127.0.0.1:4567')
+
+    const attachment = pathToComposerAttachment('C:\\Users\\Ada Lovelace\\Pictures\\chart final.PNG')
+
+    expect(attachment).toMatchObject({
+      name: 'chart final.PNG',
+      type: 'image',
+      path: 'C:\\Users\\Ada Lovelace\\Pictures\\chart final.PNG',
+      mimeType: 'image/png',
+      previewUrl: 'http://127.0.0.1:4567/api/filesystem/file?path=C%3A%5CUsers%5CAda%20Lovelace%5CPictures%5Cchart%20final.PNG',
+    })
+    expect(attachment.previewUrl).not.toContain('file://')
+  })
+
+  it('keeps non-image native paths as file chips without preview URLs', () => {
+    const attachment = pathToComposerAttachment('/workspace/notes.txt')
+
+    expect(attachment).toMatchObject({
+      name: 'notes.txt',
+      type: 'file',
+      path: '/workspace/notes.txt',
+    })
+    expect(attachment.previewUrl).toBeUndefined()
+    expect(attachment.data).toBeUndefined()
   })
 
   it('selects native file attachments through the injected desktop host', async () => {

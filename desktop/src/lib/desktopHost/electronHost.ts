@@ -76,6 +76,11 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     runtime: {
       getServerUrl: () => invoke(ELECTRON_IPC_CHANNELS.runtimeGetServerUrl),
     },
+    tunnel: {
+      start: options => invoke(ELECTRON_IPC_CHANNELS.tunnelStart, options),
+      stop: () => invoke(ELECTRON_IPC_CHANNELS.tunnelStop),
+      getStatus: () => invoke(ELECTRON_IPC_CHANNELS.tunnelGetStatus),
+    },
     app: {
       getVersion: () => invoke(ELECTRON_IPC_CHANNELS.appGetVersion),
     },

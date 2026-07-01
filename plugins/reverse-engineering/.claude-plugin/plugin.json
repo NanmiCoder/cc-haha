@@ -1,0 +1,42 @@
+{
+  "name": "reverse-engineering",
+  "version": "0.4.6",
+  "description": "Multi-platform reverse engineering toolkit. Bundles Ghidra / radare2 / JADX / apktool / Frida / GDB / LLDB MCP servers, an orchestration agent, and per-target skills (PE/ELF/Mach-O, raw firmware blobs incl. MIPS/ARM/Cortex-M/PowerPC/68k/SuperH/RISC-V, APK, iOS, Frida instrumentation, GDB/LLDB single-step debugging, crackme).",
+  "author": {
+    "name": "cc-haha"
+  },
+  "license": "MIT",
+  "keywords": [
+    "reverse-engineering",
+    "security",
+    "malware-analysis",
+    "binary-analysis",
+    "android",
+    "ios",
+    "ctf",
+    "embedded",
+    "firmware",
+    "debugger",
+    "single-step",
+    "ghidra",
+    "radare2",
+    "frida",
+    "gdb",
+    "lldb"
+  ],
+  "mcpServers": "./mcp/servers.json",
+  "userConfig": {
+    "GHIDRA_INSTALL_DIR": {
+      "type": "directory",
+      "title": "Ghidra install directory",
+      "description": "Directory containing analyzeHeadless / ghidraRun. Required by the ghidra MCP server. Leave empty to fall back to the GHIDRA_INSTALL_DIR env var.",
+      "required": false
+    },
+    "ARTIFACT_DIR": {
+      "type": "string",
+      "title": "Artifact output directory",
+      "description": "Where reports and intermediate analysis go. Resolved relative to the agent's current working directory at run time. Defaults to artifacts/re-runs.",
+      "default": "artifacts/re-runs"
+    }
+  }
+}

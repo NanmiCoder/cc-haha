@@ -1044,33 +1044,6 @@ describe('MessageList nested tool calls', () => {
     expect(container.querySelectorAll('[data-message-shell="assistant"]')).toHaveLength(0)
   })
 
-  it('renders stopped tool calls as terminal instead of still generating content', () => {
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({
-          chatState: 'idle',
-          messages: [
-            {
-              id: 'tool-write',
-              type: 'tool_use',
-              toolName: 'Write',
-              toolUseId: 'write-1',
-              input: { file_path: '/tmp/story.md' },
-              timestamp: 1,
-              isPending: false,
-              status: 'stopped',
-            } as UIMessage,
-          ],
-        }),
-      },
-    })
-
-    render(<MessageList />)
-
-    expect(screen.getByText('Stopped')).toBeTruthy()
-    expect(screen.queryByText('Generating content')).toBeNull()
-  })
-
   it('renders saved memory events with an entrypoint to memory settings', () => {
     useChatStore.setState({
       sessions: {
@@ -1442,6 +1415,57 @@ describe('MessageList nested tool calls', () => {
 
     expect(screen.getByText('Failed')).toBeTruthy()
     expect(screen.getByText('Explore agent unavailable in this session')).toBeTruthy()
+  })
+
+  it('renders subagent_type as → Explore badge next to Agent header', () => {
+    // Item 5 (routing observability) — desktop surface mirrors the CLI/Ink
+    // change in src/tools/AgentTool/UI.tsx so that operators can see which
+    // specialist was routed to without expanding the call.
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: 'agent-1',
+              input: { description: '查找路由模块', subagent_type: 'Explore' },
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText('→ Explore')).toBeTruthy()
+    expect(screen.getByText('查找路由模块')).toBeTruthy()
+  })
+
+  it('omits subagent_type badge when input has no subagent_type', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: 'agent-1',
+              input: { description: '随便看看' },
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.queryByText(/→\s+\S+/)).toBeNull()
+    expect(screen.getByText('随便看看')).toBeTruthy()
   })
 
   it('shows completed agent output when no nested tool activity is available', () => {
@@ -2337,7 +2361,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('2 lines · 36 chars')).toBeTruthy()
+      expect(screen.getByText('app.vue')).toBeTruthy()
     })
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(600)

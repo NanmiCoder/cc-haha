@@ -114,7 +114,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-haha',
-          subtitle: 'github.com/NanmiCoder/cc-haha',
+          subtitle: 'github.com/706412584/cc-haha',
           avatarFile: null,
           avatarUpdatedAt: null,
         },
@@ -152,7 +152,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-haha',
-          subtitle: 'github.com/NanmiCoder/cc-haha',
+          subtitle: 'github.com/706412584/cc-haha',
           avatarFile: 'profile/avatar.png',
           avatarUpdatedAt: '2026-05-09T12:00:00.000Z',
         },
@@ -171,7 +171,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-haha',
-          subtitle: 'github.com/NanmiCoder/cc-haha',
+          subtitle: 'github.com/706412584/cc-haha',
           avatarFile: null,
           avatarUpdatedAt: null,
         },
@@ -201,9 +201,9 @@ describe('ActivitySettings', () => {
     expect(screen.getByText('cc-haha')).toBeInTheDocument()
     expect(screen.getByAltText('cc-haha avatar')).toHaveAttribute('src', '/app-icon.png')
     expect(screen.getByAltText('cc-haha avatar')).toHaveClass('scale-[1.28]')
-    expect(screen.getByRole('link', { name: 'github.com/NanmiCoder/cc-haha' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'github.com/706412584/cc-haha' })).toHaveAttribute(
       'href',
-      'https://github.com/NanmiCoder/cc-haha',
+      'https://github.com/706412584/cc-haha',
     )
     expect(screen.getByText('Token Activity')).toBeInTheDocument()
     expect(screen.getByText('Total tokens')).toBeInTheDocument()

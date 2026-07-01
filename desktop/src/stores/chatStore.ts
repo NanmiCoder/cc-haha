@@ -6,8 +6,11 @@ import { useSessionStore } from './sessionStore'
 import { useCLITaskStore } from './cliTaskStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useTabStore } from './tabStore'
+import { useProviderCompatStore } from './providerCompatStore'
+import { useWorkspacePanelStore } from './workspacePanelStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
+import { t } from '../i18n'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { AGENT_LIFECYCLE_TYPES } from '../types/team'
 import type { ComposerAttachment } from '../lib/composerAttachments'
@@ -24,6 +27,7 @@ import type {
   ChatState,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
+  DisplayAttachmentRef,
   GoalEventAction,
   MemoryEventFile,
   StreamingFallbackState,
@@ -65,6 +69,15 @@ export type ComposerReferenceInsertion = {
 }
 
 export type ComposerPrefillMode = 'replace' | 'append'
+
+export type QueuedMessage = {
+  id: string
+  content: string
+  attachments?: AttachmentRef[]
+  displayContent?: string
+  displayAttachments?: DisplayAttachmentRef[]
+  createdAt: number
+}
 
 export type PerSessionState = {
   messages: UIMessage[]
@@ -120,6 +133,8 @@ export type PerSessionState = {
   } | null
   composerInsertion?: ComposerReferenceInsertion | null
   composerDraft?: ComposerDraftState | null
+  /** Per-session FIFO of messages queued while the agent is busy; drained on idle. */
+  messageQueue?: QueuedMessage[]
   queuedUserMessages?: QueuedUserMessage[]
 }
 
@@ -151,6 +166,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   composerPrefill: null,
   composerInsertion: null,
   composerDraft: null,
+  messageQueue: [],
   queuedUserMessages: [],
 }
 
@@ -159,6 +175,7 @@ function createDefaultSessionState(): PerSessionState {
     ...DEFAULT_SESSION_STATE,
     messages: [],
     tokenUsage: { input_tokens: 0, output_tokens: 0 },
+    messageQueue: [],
     queuedUserMessages: [],
   }
 }
@@ -173,7 +190,7 @@ type ChatStore = {
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
-    options?: { displayContent?: string; displayAttachments?: AttachmentRef[]; hideDisplayContent?: boolean },
+    options?: { displayContent?: string; displayAttachments?: DisplayAttachmentRef[]; hideDisplayContent?: boolean },
   ) => void
   respondToPermission: (
     sessionId: string,
@@ -193,6 +210,8 @@ type ChatStore = {
   ) => void
   setSessionRuntime: (sessionId: string, selection: RuntimeSelection) => void
   setSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void
+  setSessionCoordinatorMode: (sessionId: string, enabled: boolean) => void
+  setSessionSoloPipelineMode: (sessionId: string, enabled: boolean) => void
   stopGeneration: (sessionId: string) => void
   loadHistory: (sessionId: string) => Promise<void>
   reloadHistory: (sessionId: string) => Promise<void>
@@ -208,6 +227,18 @@ type ChatStore = {
   clearComposerInsertion: (sessionId: string, nonce?: number) => void
   setComposerDraft: (sessionId: string, draft: ComposerDraftState) => void
   clearComposerDraft: (sessionId: string) => void
+  enqueueMessage: (
+    sessionId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+    options?: { displayContent?: string; displayAttachments?: DisplayAttachmentRef[] },
+  ) => void
+  removeQueuedMessage: (sessionId: string, queuedId: string) => void
+  updateQueuedMessage: (sessionId: string, queuedId: string, content: string) => void
+  moveQueuedMessageToTop: (sessionId: string, queuedId: string) => void
+  sendQueuedMessageNow: (sessionId: string, queuedId: string) => void
+  clearMessageQueue: (sessionId: string) => void
+  drainMessageQueue: (sessionId: string) => void
   queueUserMessage: (
     sessionId: string,
     message: Omit<QueuedUserMessage, 'id' | 'createdAt'>,
@@ -221,8 +252,10 @@ type ChatStore = {
 
 const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TodoWrite'])
 const TASK_STOP_TOOL_NAMES = new Set(['TaskStop', 'KillShell'])
+const FILE_EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit'])
 const pendingTaskToolUseIdsBySession = new Map<string, Set<string>>()
 const pendingToolParentUseIdsBySession = new Map<string, Map<string, string>>()
+const pendingFileEditPathsBySession = new Map<string, Map<string, string>>()
 
 function addPendingTaskToolUseId(sessionId: string, toolUseId: string): void {
   const ids = pendingTaskToolUseIdsBySession.get(sessionId) ?? new Set<string>()
@@ -266,6 +299,42 @@ function consumePendingToolParentUseId(sessionId: string, toolUseId: string): st
   return parentToolUseId
 }
 
+/**
+ * Extract the absolute file path from a file-mutating tool's input.
+ * Edit / Write / MultiEdit use `file_path`; NotebookEdit uses `notebook_path`.
+ */
+function extractEditedFilePath(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null
+  const obj = input as { file_path?: unknown; notebook_path?: unknown }
+  const candidate =
+    typeof obj.file_path === 'string' && obj.file_path.length > 0
+      ? obj.file_path
+      : typeof obj.notebook_path === 'string' && obj.notebook_path.length > 0
+        ? obj.notebook_path
+        : null
+  return candidate
+}
+
+function rememberPendingFileEdit(sessionId: string, toolUseId: string, filePath: string): void {
+  if (!toolUseId) return
+  const paths = pendingFileEditPathsBySession.get(sessionId) ?? new Map<string, string>()
+  paths.set(toolUseId, filePath)
+  pendingFileEditPathsBySession.set(sessionId, paths)
+}
+
+function consumePendingFileEdit(sessionId: string, toolUseId: string): string | null {
+  const paths = pendingFileEditPathsBySession.get(sessionId)
+  const filePath = paths?.get(toolUseId)
+  if (!filePath) return null
+  paths!.delete(toolUseId)
+  if (paths!.size === 0) pendingFileEditPathsBySession.delete(sessionId)
+  return filePath
+}
+
+function clearPendingFileEdits(sessionId: string): void {
+  pendingFileEditPathsBySession.delete(sessionId)
+}
+
 function clearPendingToolParentUseIds(sessionId: string): void {
   pendingToolParentUseIdsBySession.delete(sessionId)
 }
@@ -280,6 +349,92 @@ const COMPACT_SUMMARY_CUTOFFS = [
 
 let msgCounter = 0
 const nextId = () => `msg-${++msgCounter}-${Date.now()}`
+
+// Builds a visible chat notice for when an AskUserQuestion prompt was cleared
+// by a turn-ending event (message_complete / error) before the user answered —
+// e.g. the model emitted a malformed AskUserQuestion call. Without this the
+// question card would just flash and vanish silently.
+function makeDroppedQuestionMessage(): UIMessage {
+  return {
+    id: nextId(),
+    type: 'system',
+    content: t('chat.questionDropped'),
+    timestamp: Date.now(),
+  }
+}
+
+// 方案3: detect context-compaction thrash on the desktop side. When compactions
+// keep firing only a turn or two apart, the context is effectively full and
+// compaction can no longer help — the same condition the CLI circuit breaker
+// trips on. We mirror it client-side and, once, append a visible suggestion to
+// start a fresh session. Kept as module-level state so PerSessionState (which
+// has concurrent in-progress edits) is not widened.
+const RAPID_COMPACTION_TURN_WINDOW = 2
+const RAPID_COMPACTION_SUGGEST_AFTER = 3
+type CompactionThrashState = {
+  userTurnsSinceCompact: number
+  rapidCount: number
+  suggested: boolean
+}
+const compactionThrashBySession = new Map<string, CompactionThrashState>()
+
+function getCompactionThrash(sessionId: string): CompactionThrashState {
+  let state = compactionThrashBySession.get(sessionId)
+  if (!state) {
+    // Start "infinitely far" from the last compaction so the first one is
+    // never counted as rapid.
+    state = { userTurnsSinceCompact: Number.POSITIVE_INFINITY, rapidCount: 0, suggested: false }
+    compactionThrashBySession.set(sessionId, state)
+  }
+  return state
+}
+
+// Call on each user turn so the boundary handler can tell rapid re-compaction
+// (thrash) from compactions spread across real work.
+function noteUserTurnForCompactionThrash(sessionId: string): void {
+  const state = getCompactionThrash(sessionId)
+  if (state.userTurnsSinceCompact === Number.POSITIVE_INFINITY) {
+    state.userTurnsSinceCompact = 1
+  } else {
+    state.userTurnsSinceCompact += 1
+  }
+}
+
+// Record a completed compaction; returns true exactly once, when rapid
+// re-compaction has crossed the threshold and we should suggest a new session.
+function registerCompactionAndShouldSuggest(sessionId: string): boolean {
+  const state = getCompactionThrash(sessionId)
+  if (state.userTurnsSinceCompact <= RAPID_COMPACTION_TURN_WINDOW) {
+    state.rapidCount += 1
+  } else {
+    state.rapidCount = 1
+  }
+  state.userTurnsSinceCompact = 0
+  if (state.rapidCount >= RAPID_COMPACTION_SUGGEST_AFTER && !state.suggested) {
+    state.suggested = true
+    return true
+  }
+  return false
+}
+
+function resetCompactionThrash(sessionId: string): void {
+  compactionThrashBySession.delete(sessionId)
+}
+
+/** @internal — exported for tests to avoid cross-test state pollution
+ *  in the module-level compaction-thrash map. */
+export function __resetCompactionThrashForTesting(): void {
+  compactionThrashBySession.clear()
+}
+
+function makeContextExhaustedMessage(): UIMessage {
+  return {
+    id: nextId(),
+    type: 'system',
+    content: t('chat.contextExhausted'),
+    timestamp: Date.now(),
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -356,26 +511,19 @@ function upsertToolUseMessage(
   return next
 }
 
-function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
-  let changed = false
-  const stoppedMessages = messages.map((message) => {
-    if (message.type !== 'tool_use' || !message.isPending) return message
-    changed = true
-    return {
-      ...message,
-      isPending: false,
-      status: 'stopped' as const,
-    }
-  })
-  return changed ? stoppedMessages : messages
-}
-
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
 const flushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
 const pendingToolInputDeltaBySession = new Map<string, string>()
 const toolInputFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
+
+// When the user clicks Stop, pause queue auto-draining until the user sends
+// their next message. Stop can produce multiple idle-like events (result +
+// status), so a one-shot skip is not enough — we stay paused and only clear it
+// when a fresh user message is sent (which then runs immediately, ahead of the
+// queue). The queue resumes on the idle after that message completes.
+const queueDrainPaused = new Set<string>()
 
 function consumePendingDelta(sessionId: string): string {
   const flushTimer = flushTimerBySession.get(sessionId)
@@ -878,12 +1026,17 @@ async function fetchAndMapSessionHistory(sessionId: string) {
     ...reconstructAgentNotifications(messages),
     ...agentNotificationRecordFromList(taskNotifications ?? []),
   }
+  const restoredMessageBackgroundTasks = backgroundTaskRecordFromMessages(uiMessages)
+  const restoredNotificationBackgroundTasks = backgroundTaskRecordFromNotifications(Object.values(restoredNotifications))
   return {
     rawMessages: messages,
     uiMessages,
     activeGoal: deriveActiveGoalFromMessages(uiMessages),
     restoredNotifications,
-    restoredBackgroundTasks: backgroundTaskRecordFromNotifications(Object.values(restoredNotifications)),
+    restoredBackgroundTasks: mergeBackgroundAgentTaskRecords(
+      restoredMessageBackgroundTasks,
+      restoredNotificationBackgroundTasks,
+    ),
     lastTodos: extractLastTodoWriteFromHistory(messages),
     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
     tokenUsage: summarizeTokenUsageFromHistory(messages),
@@ -920,6 +1073,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           messages: existing?.messages ?? [],
           activeGoal: existing?.activeGoal ?? null,
           composerDraft: existing?.composerDraft ?? null,
+          messageQueue: existing?.messageQueue ?? [],
           queuedUserMessages: existing?.queuedUserMessages ?? [],
         },
       },
@@ -937,6 +1091,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const runtimeSelection = useSessionRuntimeStore.getState().selections[sessionId]
     if (runtimeSelection) {
       wsManager.send(sessionId, { type: 'set_runtime_config', ...runtimeSelection })
+    }
+    // Replay the per-session orchestration toggle on (re)connect, before the
+    // first message, so the CLI launches with the right --append-system-prompt.
+    if (useSessionRuntimeStore.getState().coordinatorModes[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: true })
+    }
+    // Same replay for the Solo Pipeline mode toggle. Mutually exclusive with
+    // coordinator mode at the action layer (setSessionSoloPipelineMode), so
+    // both replay branches will never both fire in the same connect.
+    if (useSessionRuntimeStore.getState().soloPipelineModes[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'solo' })
     }
     if (!sessionId.startsWith('__') && !useTeamStore.getState().getMemberBySessionId(sessionId)) {
       wsManager.send(sessionId, { type: 'prewarm_session' })
@@ -966,6 +1131,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
+    clearPendingFileEdits(sessionId)
+    queueDrainPaused.delete(sessionId)
     wsManager.disconnect(sessionId)
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions
@@ -974,6 +1141,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   sendMessage: (sessionId, content, attachments, options) => {
+    // A fresh user send takes priority over any paused queue: clear the pause
+    // so this message fires now, and the queue resumes on the next idle.
+    queueDrainPaused.delete(sessionId)
     const isMemberSession = !!useTeamStore.getState().getMemberBySessionId(sessionId)
     const hideDisplayContent = !isMemberSession && options?.hideDisplayContent === true
     const userFacingContent =
@@ -981,6 +1151,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         ? ''
         : options?.displayContent?.trim() || content.trim()
     const modelFacingContent = buildModelContent(content, attachments)
+    const serverAttachments = stripPreviewUrlsFromAttachments(attachments)
     const visibleAttachments = options?.displayAttachments ?? attachments
     const uiAttachments: UIAttachment[] | undefined =
       visibleAttachments && visibleAttachments.length > 0
@@ -989,6 +1160,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             name: a.name || a.path || a.mimeType || a.type,
             path: a.path,
             data: a.data,
+            previewUrl: getDisplayAttachmentPreviewUrl(a),
             mimeType: a.mimeType,
             lineStart: a.lineStart,
             lineEnd: a.lineEnd,
@@ -1088,7 +1260,130 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return
     }
 
-    wsManager.send(sessionId, { type: 'user_message', content, attachments })
+    // 方案3: count this as a real user turn so rapid re-compaction (thrash)
+    // can be told apart from compactions spread across genuine work.
+    noteUserTurnForCompactionThrash(sessionId)
+
+    // 每次真实用户回合前都把服务端运行模式对齐一次。
+    // 这样即使 renderer 重连或服务端清理了内存标记，UI 里仍开启的
+    // Solo/协调模式也会在本轮消息前重新生效。
+    const runtimeModes = useSessionRuntimeStore.getState()
+    const coordinatorEnabled = runtimeModes.coordinatorModes[sessionId] ?? false
+    const soloPipelineEnabled = runtimeModes.soloPipelineModes[sessionId] ?? false
+    if (soloPipelineEnabled) {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: false })
+      wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'solo' })
+    } else if (coordinatorEnabled) {
+      wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'normal' })
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: true })
+    } else {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: false })
+      wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'normal' })
+    }
+    wsManager.send(sessionId, { type: 'user_message', content, attachments: serverAttachments })
+  },
+
+  enqueueMessage: (sessionId, content, attachments, options) => {
+    if (!content.trim() && !(attachments && attachments.length > 0)) return
+    const queued: QueuedMessage = {
+      id: nextId(),
+      content,
+      attachments,
+      displayContent: options?.displayContent,
+      displayAttachments: options?.displayAttachments,
+      createdAt: Date.now(),
+    }
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: [...(session.messageQueue ?? []), queued],
+      })),
+    }))
+    // In case the agent already went idle between the busy-check and enqueue,
+    // attempt an immediate drain (no-op if still busy).
+    get().drainMessageQueue(sessionId)
+  },
+
+  removeQueuedMessage: (sessionId, queuedId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: (session.messageQueue ?? []).filter((m) => m.id !== queuedId),
+      })),
+    }))
+  },
+
+  updateQueuedMessage: (sessionId, queuedId, content) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+        messageQueue: (session.messageQueue ?? []).map((m) =>
+          m.id === queuedId
+            ? { ...m, content, displayContent: content }
+            : m,
+        ),
+      })),
+    }))
+  },
+
+  moveQueuedMessageToTop: (sessionId, queuedId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => {
+        const queue = session.messageQueue ?? []
+        const target = queue.find((m) => m.id === queuedId)
+        if (!target) return {}
+        return {
+          messageQueue: [target, ...queue.filter((m) => m.id !== queuedId)],
+        }
+      }),
+    }))
+  },
+
+  sendQueuedMessageNow: (sessionId, queuedId) => {
+    const session = get().sessions[sessionId]
+    const target = (session?.messageQueue ?? []).find((m) => m.id === queuedId)
+    if (!target) return
+    // Plain "send now": drop it from the queue and send it immediately. We do
+    // NOT stop the running turn, do NOT promote-and-wait, and do NOT inspect
+    // chatState — the caller decided to send, so we just send.
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+        messageQueue: (sess.messageQueue ?? []).filter((m) => m.id !== queuedId),
+      })),
+    }))
+    get().sendMessage(sessionId, target.content, target.attachments, {
+      displayContent: target.displayContent,
+      displayAttachments: target.displayAttachments,
+    })
+  },
+
+  clearMessageQueue: (sessionId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, () => ({ messageQueue: [] })),
+    }))
+  },
+
+  drainMessageQueue: (sessionId) => {
+    const session = get().sessions[sessionId]
+    if (!session) return
+    // Paused by a user Stop: do not drain on any idle event. Stays paused (we
+    // do NOT clear it here) until the user sends their next message, which
+    // clears it. This survives the multiple idle events a Stop produces.
+    if (queueDrainPaused.has(sessionId)) return
+    // Only drain on a true idle turn boundary — never mid-stream, while a tool
+    // is running, or while a permission prompt is pending.
+    if (session.chatState !== 'idle') return
+    if (session.pendingPermission || session.pendingComputerUsePermission) return
+    if (session.connectionState !== 'connected') return
+    const queue = session.messageQueue ?? []
+    const next = queue[0]
+    if (!next) return
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+        messageQueue: (sess.messageQueue ?? []).slice(1),
+      })),
+    }))
+    get().sendMessage(sessionId, next.content, next.attachments, {
+      displayContent: next.displayContent,
+      displayAttachments: next.displayAttachments,
+    })
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
@@ -1131,33 +1426,76 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     wsManager.send(sessionId, { type: 'set_permission_mode', mode })
   },
 
+  setSessionCoordinatorMode: (sessionId, enabled) => {
+    // Persist the per-session preference (survives reconnect / app restart and
+    // is replayed on connect). Only push to a live session; otherwise the
+    // replay on next connect carries it.
+    useSessionRuntimeStore.getState().setCoordinatorMode(sessionId, enabled)
+    // Mutual exclusion: enabling coordinator clears any Solo Pipeline flag
+    // for the same session. The server side enforces the same exclusion in
+    // handleSetCoordinatorMode / handleSetPipelineMode, but doing it here
+    // keeps the desktop runtime store and the wire payload symmetric so the
+    // replay-on-connect path never sends both.
+    if (enabled && useSessionRuntimeStore.getState().soloPipelineModes[sessionId]) {
+      useSessionRuntimeStore.getState().setSoloPipelineMode(sessionId, false)
+      if (get().sessions[sessionId]) {
+        wsManager.send(sessionId, { type: 'set_pipeline_mode', flavor: 'normal' })
+      }
+    }
+    if (get().sessions[sessionId]) {
+      wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled })
+    }
+  },
+
+  setSessionSoloPipelineMode: (sessionId, enabled) => {
+    // Sibling of setSessionCoordinatorMode. Persists the preference, enforces
+    // mutual exclusion with coordinator mode (clears it locally + on the
+    // wire when Solo turns on), and pushes to a live session.
+    useSessionRuntimeStore.getState().setSoloPipelineMode(sessionId, enabled)
+    if (enabled && useSessionRuntimeStore.getState().coordinatorModes[sessionId]) {
+      useSessionRuntimeStore.getState().setCoordinatorMode(sessionId, false)
+      if (get().sessions[sessionId]) {
+        wsManager.send(sessionId, { type: 'set_coordinator_mode', enabled: false })
+      }
+    }
+    if (get().sessions[sessionId]) {
+      wsManager.send(sessionId, {
+        type: 'set_pipeline_mode',
+        flavor: enabled ? 'solo' : 'normal',
+      })
+    }
+  },
+
   stopGeneration: (sessionId) => {
     wsManager.send(sessionId, { type: 'stop_generation' })
-    const bufferedText = consumePendingDelta(sessionId)
+    // Pause queue draining until the user sends their next message. Stop emits
+    // multiple idle events (result + status); staying paused (rather than a
+    // one-shot skip) prevents any queued message from auto-firing, so the turn
+    // truly stops. The next user message clears this and fires immediately.
+    if ((get().sessions[sessionId]?.messageQueue?.length ?? 0) > 0) {
+      queueDrainPaused.add(sessionId)
+    }
+    // Flush any throttled content_delta buffered for THIS session into its
+    // streamingText before going idle — otherwise the partial answer that
+    // arrived between the last flush tick and the stop is silently dropped.
+    // Must append to streamingText (not discard) and must be scoped to this
+    // sessionId so a concurrent session's buffer is never touched. Regressed
+    // when an earlier refactor reduced this to a bare consume; see
+    // chatStore.test.ts "flushes throttled deltas only for the stopped
+    // session".
+    const stoppedDelta = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
-    clearPendingTaskToolUseIds(sessionId)
-    clearPendingToolParentUseIds(sessionId)
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) return s
       if (session.elapsedTimer) clearInterval(session.elapsedTimer)
-      const pendingAssistantText = `${session.streamingText}${bufferedText}`
-      const messagesWithFlushedText = pendingAssistantText.trim()
-        ? appendAssistantTextMessage(session.messages, pendingAssistantText, Date.now())
-        : session.messages
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...session,
-            messages: markPendingToolUseMessagesStopped(messagesWithFlushedText),
+            streamingText: `${session.streamingText}${stoppedDelta}`,
             chatState: 'idle',
-            activeToolUseId: null,
-            activeToolName: null,
-            activeThinkingId: null,
-            streamingText: '',
-            streamingToolInput: '',
-            statusVerb: '',
             pendingPermission: null,
             pendingComputerUsePermission: null,
             apiRetry: null,
@@ -1167,7 +1505,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       }
     })
-    useTabStore.getState().updateTabStatus(sessionId, 'idle')
   },
 
   loadHistory: async (sessionId) => {
@@ -1474,7 +1811,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   clearMessages: (sessionId) => {
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
+    clearPendingFileEdits(sessionId)
     clearPendingToolInputDelta(sessionId)
+    resetCompactionThrash(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
       activeGoal: null,
@@ -1556,6 +1895,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             clearInterval(session.elapsedTimer)
             update(() => ({ elapsedTimer: null }))
           }
+          get().drainMessageQueue(sessionId)
         }
         // Sync tab status
         useTabStore.getState().updateTabStatus(sessionId, msg.state === 'idle' ? 'idle' : 'running')
@@ -1779,6 +2119,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } else if (TASK_TOOL_NAMES.has(toolName)) {
           const useId = msg.toolUseId || session?.activeToolUseId
           if (useId) addPendingTaskToolUseId(sessionId, useId)
+        } else if (FILE_EDIT_TOOL_NAMES.has(toolName)) {
+          const useId = msg.toolUseId || session?.activeToolUseId
+          const editedPath = extractEditedFilePath(msg.input)
+          if (useId && editedPath) rememberPendingFileEdit(sessionId, useId, editedPath)
         }
         break
       }
@@ -1812,6 +2156,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         })
         if (consumePendingTaskToolUseId(sessionId, msg.toolUseId)) {
           useCLITaskStore.getState().refreshTasks(sessionId)
+        }
+        const editedPath = consumePendingFileEdit(sessionId, msg.toolUseId)
+        if (editedPath && !msg.isError) {
+          useWorkspacePanelStore.getState().notifyAgentFileEdit(sessionId, editedPath)
         }
         break
       }
@@ -1894,6 +2242,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           update(() => ({ streamingText: text }))
         }
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        // If an AskUserQuestion prompt was still pending (e.g. a malformed
+        // question call that errored out), surface a visible notice before the
+        // card is cleared so it does not vanish silently.
+        if (session.pendingPermission?.toolName === 'AskUserQuestion') {
+          update((s) => ({ messages: [...s.messages, makeDroppedQuestionMessage()] }))
+        }
         update(() => ({
           tokenUsage: msg.usage,
           chatState: 'idle',
@@ -1919,6 +2273,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
         }
         refreshCompletedTranscriptHistory(get, sessionId)
+        get().drainMessageQueue(sessionId)
         for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
           get().sendQueuedUserMessage(sessionId, queuedMessage.id)
         }
@@ -1948,6 +2303,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             newMessages = appendAssistantTextMessage(newMessages, pendingText, Date.now())
           }
           newMessages = dropTailCompactingCompactSummary(newMessages)
+          if (s.pendingPermission?.toolName === 'AskUserQuestion') {
+            newMessages = [...newMessages, makeDroppedQuestionMessage()]
+          }
           newMessages = [
             ...newMessages,
             {
@@ -1996,6 +2354,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         useSessionStore.getState().updateSessionTitle(msg.sessionId, msg.title)
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
+      case 'provider_compat_event':
+        // Server-side observed a provider-level incompatibility. Today
+        // the only kind is 'thinking_incompatible'; route to the compat
+        // store which records it, fires a one-time toast, and surfaces
+        // the badge in Settings → Provider list.
+        if (msg.kind === 'thinking_incompatible') {
+          useProviderCompatStore.getState().recordThinkingIncompatible(
+            msg.providerId,
+            msg.reason ?? '',
+          )
+        }
+        break
       case 'system_notification':
         if (msg.subtype === 'slash_commands' && Array.isArray(msg.data)) {
           const incomingCommands = normalizeSlashCommandList(msg.data)
@@ -2043,6 +2413,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           clearPendingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
           clearPendingToolParentUseIds(sessionId)
+          clearPendingFileEdits(sessionId)
           useCLITaskStore.getState().clearTasks(sessionId)
           useSessionStore.getState().updateSessionTitle(sessionId, 'New Session')
           useTabStore.getState().updateTabTitle(sessionId, 'New Session')
@@ -2050,11 +2421,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         if (msg.subtype === 'compact_boundary') {
           const metadata = compactMetadataFromUnknown(msg.data)
-          update((session) => ({
-            chatState: session.chatState === 'compacting' ? 'thinking' : session.chatState,
-            statusVerb: session.chatState === 'compacting' ? '' : session.statusVerb,
-            compactCount: (session.compactCount ?? 0) + 1,
-            messages: appendOrUpdateTailCompactSummary(
+          const shouldSuggestNewSession = registerCompactionAndShouldSuggest(sessionId)
+          update((session) => {
+            const compacted = appendOrUpdateTailCompactSummary(
               session.messages,
               {
                 title: typeof msg.message === 'string' && msg.message.trim()
@@ -2064,8 +2433,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 ...metadata,
               },
               Date.now(),
-            ),
-          }))
+            )
+            return {
+              chatState: session.chatState === 'compacting' ? 'thinking' : session.chatState,
+              statusVerb: session.chatState === 'compacting' ? '' : session.statusVerb,
+              compactCount: (session.compactCount ?? 0) + 1,
+              messages: shouldSuggestNewSession
+                ? [...compacted, makeContextExhaustedMessage()]
+                : compacted,
+            }
+          })
         }
         if (msg.subtype === 'compact_summary') {
           const summary = extractCompactSummaryContent(msg.message)
@@ -2188,6 +2565,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }))
+
+function getDisplayAttachmentPreviewUrl(attachment: AttachmentRef | DisplayAttachmentRef): string | undefined {
+  return 'previewUrl' in attachment && typeof attachment.previewUrl === 'string'
+    ? attachment.previewUrl
+    : undefined
+}
+
+function stripPreviewUrlsFromAttachments(attachments?: AttachmentRef[]): AttachmentRef[] | undefined {
+  if (!attachments) return undefined
+  return attachments.map((attachment) => ({
+    type: attachment.type,
+    name: attachment.name,
+    path: attachment.path,
+    data: attachment.data,
+    mimeType: attachment.mimeType,
+    isDirectory: attachment.isDirectory,
+    lineStart: attachment.lineStart,
+    lineEnd: attachment.lineEnd,
+    note: attachment.note,
+    quote: attachment.quote,
+  }))
+}
 
 function updateOptimisticSessionTitle(sessionId: string, content: string): void {
   const title = deriveSessionTitle(content)
@@ -2532,6 +2931,8 @@ function upsertBackgroundAgentTask(
   if (existingKey && existingKey !== event.taskId) {
     delete next[existingKey]
   }
+  const eventStartedAt = Number.isFinite(event.startedAt) ? event.startedAt : undefined
+  const eventUpdatedAt = Number.isFinite(event.updatedAt) ? event.updatedAt : undefined
   return {
     ...next,
     [event.taskId]: {
@@ -2546,8 +2947,8 @@ function upsertBackgroundAgentTask(
       lastToolName: event.lastToolName ?? existing?.lastToolName,
       outputFile: event.outputFile ?? existing?.outputFile,
       usage: event.usage ?? existing?.usage,
-      startedAt: existing?.startedAt ?? now,
-      updatedAt: now,
+      startedAt: existing?.startedAt ?? eventStartedAt ?? now,
+      updatedAt: eventUpdatedAt ?? now,
     },
   }
 }
@@ -2706,6 +3107,34 @@ function agentNotificationRecordFromList(
   return Object.fromEntries(
     notifications.map((notification) => [notification.toolUseId, notification]),
   )
+}
+
+function backgroundTaskRecordFromMessages(messages: UIMessage[]): Record<string, BackgroundAgentTask> {
+  return messages.reduce<Record<string, BackgroundAgentTask>>((tasks, message) => {
+    if (message.type !== 'background_task' || message.task.status === 'running') return tasks
+    const messageTimestamp = Number.isFinite(message.timestamp) ? message.timestamp : Date.now()
+    const startedAt = Number.isFinite(message.task.startedAt)
+      ? message.task.startedAt
+      : messageTimestamp
+    const updatedAt = Number.isFinite(message.task.updatedAt)
+      ? message.task.updatedAt
+      : messageTimestamp
+    return upsertBackgroundAgentTask(tasks, {
+      taskId: message.task.taskId,
+      toolUseId: message.task.toolUseId,
+      status: message.task.status,
+      description: message.task.description,
+      taskType: message.task.taskType,
+      workflowName: message.task.workflowName,
+      prompt: message.task.prompt,
+      summary: message.task.summary,
+      lastToolName: message.task.lastToolName,
+      outputFile: message.task.outputFile,
+      usage: message.task.usage,
+      startedAt,
+      updatedAt,
+    }, updatedAt)
+  }, {})
 }
 
 function backgroundTaskRecordFromNotifications(
@@ -3073,6 +3502,19 @@ export function mapHistoryMessagesToUiMessages(
     }
 
     const timestamp = new Date(msg.timestamp).getTime()
+    const backgroundTaskMessage = msg as unknown as { id?: string; type?: string; task?: BackgroundAgentTask }
+    if (backgroundTaskMessage.type === 'background_task') {
+      const task = backgroundTaskMessage.task
+      if (task && task.status !== 'running') {
+        uiMessages.push({
+          id: backgroundTaskMessage.id || nextId(),
+          type: 'background_task',
+          task,
+          timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        })
+      }
+      continue
+    }
     if (msg.type === 'system' && typeof msg.content === 'string') {
       if (msg.content.trim() === 'Conversation compacted' || msg.content.trim() === 'Context compacted') {
         const compactMessages = appendOrUpdateTailCompactSummary(

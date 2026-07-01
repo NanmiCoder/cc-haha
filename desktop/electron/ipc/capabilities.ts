@@ -69,6 +69,12 @@ const updateCheckOptions: Validator = value => {
   return value.proxy === undefined || (typeof value.proxy === 'string' && value.proxy.trim().length > 0)
 }
 
+const tunnelStartPayload: Validator = value =>
+  isRecord(value)
+  && (value.mode === 'quick' || value.mode === 'named')
+  && (value.token === undefined || value.token === null || typeof value.token === 'string')
+  && (value.namedUrl === undefined || value.namedUrl === null || typeof value.namedUrl === 'string')
+
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
@@ -115,6 +121,9 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,
+  [ELECTRON_IPC_CHANNELS.tunnelStart]: tunnelStartPayload,
+  [ELECTRON_IPC_CHANNELS.tunnelStop]: noPayload,
+  [ELECTRON_IPC_CHANNELS.tunnelGetStatus]: noPayload,
   [ELECTRON_IPC_CHANNELS.zoomSet]: zoomPayload,
 } satisfies Record<ElectronIpcChannel, Validator>
 

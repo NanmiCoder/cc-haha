@@ -129,7 +129,7 @@ export class WsBridge {
     const session = this.sessions.get(chatId)
     if (session) {
       if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
-      session.ws.removeAllListeners()
+      this.detachSocket(session.ws)
       session.ws.close(1000, 'session reset')
       this.sessions.delete(chatId)
     }
@@ -151,7 +151,7 @@ export class WsBridge {
     }
     for (const [, session] of this.sessions) {
       if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
-      session.ws.removeAllListeners()
+      this.detachSocket(session.ws)
       session.ws.close(1000, 'bridge destroyed')
     }
     this.sessions.clear()
@@ -161,6 +161,21 @@ export class WsBridge {
 
   // ------- internal -------
 
+  /**
+   * Detach a socket we are discarding: drop all of the bridge's listeners, but
+   * leave a single no-op 'error' handler attached.
+   *
+   * `ws` re-emits an 'error' event with no listener as an *unhandled*
+   * exception (which crashes the process / fails the test run). When we discard
+   * a socket that is still connecting, the async ECONNREFUSED/teardown error can
+   * land after we've stripped our own 'error' listener — so we keep a silent one
+   * to absorb it.
+   */
+  private detachSocket(ws: WebSocket): void {
+    ws.removeAllListeners()
+    ws.on('error', () => {})
+  }
+
   private connect(chatId: string, sessionId: string): void {
     const url = `${this.serverUrl}/ws/${sessionId}`
     const ws = new WebSocket(url)
@@ -169,7 +184,7 @@ export class WsBridge {
     const prev = this.sessions.get(chatId)
     if (prev) {
       if (prev.reconnectTimer) clearTimeout(prev.reconnectTimer)
-      prev.ws.removeAllListeners()
+      this.detachSocket(prev.ws)
     }
 
     const session: Session = {

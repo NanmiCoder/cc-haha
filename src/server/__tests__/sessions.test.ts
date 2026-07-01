@@ -2,7 +2,7 @@
  * Unit tests for SessionService and Sessions API
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
@@ -505,6 +505,36 @@ describe('SessionService', () => {
     expect(session.messageCount).toBe(2) // 1 user + 1 assistant
     expect(session.projectPath).toBe('-tmp-testproject')
     expect(session.projectRoot).toBe('/tmp/test')
+  })
+
+  it('treats a sub-directory of a git repo as its own project when it has its own projects/ entry', async () => {
+    // Regression for "subproject not appearing in sidebar": opening
+    // <repo>/tools/sub as a project must keep it as its own sidebar group
+    // and not collapse into the parent git root.
+    const repoRoot = await createCleanGitRepo(tmpDir)
+    const subDir = path.join(repoRoot, 'tools', 'sub')
+    await fs.mkdir(subDir, { recursive: true })
+    const realSubDir = await fs.realpath(subDir)
+
+    const sessionId = 'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee'
+    // Place the session under projects/<sanitize(sub)>/, mirroring what
+    // SessionService.createSession does when the user opens this folder.
+    await writeSessionFile(sanitizePath(realSubDir), sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(realSubDir),
+      makeUserEntry('Hello from sub'),
+    ])
+
+    const result = await service.listSessions()
+
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]).toMatchObject({
+      id: sessionId,
+      // The fix: projectRoot stays at the sub-dir the user opened, not the
+      // parent git root that findCanonicalGitRoot would otherwise return.
+      projectRoot: realSubDir,
+      workDir: realSubDir,
+    })
   })
 
   it('should expose the source project root for persisted worktree sessions', async () => {
@@ -1879,6 +1909,140 @@ describe('SessionService', () => {
 
     const sourceAfter = await fs.readFile(sourcePath, 'utf-8')
     expect(sourceAfter).toBe(sourceBefore)
+  })
+
+  // --------------------------------------------------------------------------
+  // readJsonlFile parse cache (Stage A read-performance optimization)
+  // --------------------------------------------------------------------------
+
+  describe('readJsonlFile parse cache', () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+    it('T1: caches parse result and skips re-read when mtime+size unchanged', async () => {
+      await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/from-meta'),
+        makeUserEntry('Hello'),
+      ])
+
+      const readSpy = spyOn(fs, 'readFile')
+      try {
+        const first = await service.getSessionWorkDir(sessionId)
+        const callsAfterFirst = readSpy.mock.calls.length
+        expect(callsAfterFirst).toBeGreaterThan(0)
+
+        const second = await service.getSessionWorkDir(sessionId)
+        expect(second).toBe(first)
+        // Second call must be served from cache: no additional fs.readFile.
+        expect(readSpy.mock.calls.length).toBe(callsAfterFirst)
+      } finally {
+        readSpy.mockRestore()
+      }
+    })
+
+    it('T2: invalidates cache when file size changes', async () => {
+      const filePath = await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/from-meta'),
+      ])
+
+      const messagesBefore = await service.getSessionMessages(sessionId)
+      expect(messagesBefore.length).toBe(0)
+
+      // Append a real message: size grows, content changes.
+      await fs.appendFile(filePath, JSON.stringify(makeUserEntry('Appended')) + '\n', 'utf-8')
+
+      const messagesAfter = await service.getSessionMessages(sessionId)
+      expect(messagesAfter.length).toBe(1)
+    })
+
+    it('T3: invalidates cache when mtime changes even if size is identical', async () => {
+      const filePath = await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/aaaa'),
+      ])
+
+      const first = await service.getSessionWorkDir(sessionId)
+      expect(first).toBe('/tmp/aaaa')
+
+      // Rewrite with same byte length (same workDir length) but newer mtime.
+      await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/bbbb'),
+      ])
+      const newTime = new Date(Date.now() + 5_000)
+      await fs.utimes(filePath, newTime, newTime)
+
+      const second = await service.getSessionWorkDir(sessionId)
+      expect(second).toBe('/tmp/bbbb')
+    })
+
+    it('T4: de-dupes concurrent reads of the same file into one disk read', async () => {
+      await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/from-meta'),
+        makeUserEntry('Hello'),
+      ])
+
+      const readSpy = spyOn(fs, 'readFile')
+      try {
+        const [a, b] = await Promise.all([
+          service.getSessionWorkDir(sessionId),
+          service.getSessionWorkDir(sessionId),
+        ])
+        expect(a).toBe('/tmp/from-meta')
+        expect(b).toBe('/tmp/from-meta')
+        // Both concurrent callers share a single in-flight read of the file.
+        const reads = readSpy.mock.calls.filter(
+          (call) => typeof call[0] === 'string' && (call[0] as string).includes(sessionId),
+        )
+        expect(reads.length).toBe(1)
+      } finally {
+        readSpy.mockRestore()
+      }
+    })
+
+    it('T5: skips caching files larger than the per-file byte limit', async () => {
+      // Build a transcript exceeding readCacheMaxFileBytes (16 MiB).
+      const filler = 'x'.repeat(200_000)
+      const entries: Record<string, unknown>[] = [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/big'),
+      ]
+      for (let i = 0; i < 90; i += 1) {
+        entries.push(makeUserEntry(`${filler}-${i}`))
+      }
+      const filePath = await writeSessionFile('-tmp-project', sessionId, entries)
+      const stat = await fs.stat(filePath)
+      expect(stat.size).toBeGreaterThan(16 * 1024 * 1024)
+
+      const readSpy = spyOn(fs, 'readFile')
+      try {
+        await service.getSessionWorkDir(sessionId)
+        const callsAfterFirst = readSpy.mock.calls.length
+        await service.getSessionWorkDir(sessionId)
+        // Oversized file is never cached, so the second call re-reads from disk.
+        expect(readSpy.mock.calls.length).toBeGreaterThan(callsAfterFirst)
+      } finally {
+        readSpy.mockRestore()
+      }
+    })
+
+    it('T7: busts cache on append/clear so the next read sees new content', async () => {
+      await writeSessionFile('-tmp-project', sessionId, [
+        makeSnapshotEntry(),
+        makeSessionMetaEntry('/tmp/from-meta'),
+        makeUserEntry('First'),
+      ])
+
+      const before = await service.getSessionMessages(sessionId)
+      expect(before.length).toBe(1)
+
+      // clearSessionTranscript rewrites the file via fs.writeFile and must bust the cache.
+      await service.clearSessionTranscript(sessionId)
+      const afterClear = await service.getSessionMessages(sessionId)
+      expect(afterClear.length).toBe(0)
+    })
   })
 })
 

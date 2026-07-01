@@ -5,6 +5,10 @@ import { join } from 'node:path'
 const html = readFileSync(join(__dirname, 'index.html'), 'utf-8')
 
 describe('desktop index startup diagnostics', () => {
+  it('uses the Code Council document title', () => {
+    expect(html).toContain('<title>Code Council</title>')
+  })
+
   it('installs a non-module startup watchdog before the app module loads', () => {
     const watchdogIndex = html.indexOf('__CC_HAHA_SHOW_STARTUP_ERROR__')
     const moduleIndex = html.indexOf('type="module"')

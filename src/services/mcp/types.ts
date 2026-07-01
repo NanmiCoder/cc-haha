@@ -25,12 +25,68 @@ export const TransportSchema = lazySchema(() =>
 )
 export type Transport = z.infer<ReturnType<typeof TransportSchema>>
 
+/**
+ * Prerequisite declaration: one host-side command this server needs.
+ * Plugin authors attach a list of these to each MCP server config so
+ * cc-haha can detect missing deps up front and guide users through
+ * install. Purely declarative — never affects server launch behavior.
+ *
+ * The `install` map is keyed by `process.platform` values (`win32` /
+ * `darwin` / `linux`); each platform lists one or more install
+ * commands the user can pick from. Display order is preserved (put
+ * the most ergonomic option first — e.g. winget on Windows).
+ */
+const McpInstallStepSchema = lazySchema(() =>
+  z.object({
+    /** Free-form label like "winget" / "scoop" / "brew" / "shell" — shown in the UI badge. */
+    manager: z.string().min(1).max(40),
+    /** Exact shell command to run. Single-line; the UI offers copy + open-in-terminal. */
+    cmd: z.string().min(1).max(500),
+  }),
+)
+
+const McpPrerequisiteSchema = lazySchema(() =>
+  z.object({
+    /** The host command name to look up via `where` / `command -v`. Required. */
+    command: z.string().min(1).max(80),
+    /** Human-readable label, e.g. "uv (Python tool runner)". Falls back to `command` when absent. */
+    label: z.string().max(120).optional(),
+    /** Documentation URL for the underlying tool. */
+    homepage: z.string().url().optional(),
+    /**
+     * Per-platform install steps. When the user is on a platform not
+     * present in this map, the modal shows a "consult homepage" hint
+     * instead of a copyable command.
+     */
+    install: z
+      .object({
+        win32: z.array(McpInstallStepSchema()).optional(),
+        darwin: z.array(McpInstallStepSchema()).optional(),
+        linux: z.array(McpInstallStepSchema()).optional(),
+      })
+      .optional(),
+  }),
+)
+
+export type McpPrerequisite = z.infer<ReturnType<typeof McpPrerequisiteSchema>>
+export type McpInstallStep = z.infer<ReturnType<typeof McpInstallStepSchema>>
+
 export const McpStdioServerConfigSchema = lazySchema(() =>
   z.object({
     type: z.literal('stdio').optional(), // Optional for backwards compatibility
     command: z.string().min(1, 'Command cannot be empty'),
     args: z.array(z.string()).default([]),
     env: z.record(z.string(), z.string()).optional(),
+    /**
+     * Optional declarative list of host commands this server expects
+     * in PATH. Read by the desktop "plugin enable" flow (see
+     * `prerequisitesService` + `PluginPrerequisitesModal`) — purely
+     * informational, does NOT affect server launch. Plugin authors
+     * declare these so cc-haha can detect missing dependencies up
+     * front and guide the user through install rather than letting
+     * the server fail to spawn with a cryptic error.
+     */
+    prerequisites: z.array(McpPrerequisiteSchema()).optional(),
   }),
 )
 

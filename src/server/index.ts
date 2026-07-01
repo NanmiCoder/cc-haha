@@ -27,6 +27,7 @@ import { ensurePersistentStorageUpgraded } from './services/persistentStorageMig
 import { handleStaticH5Request } from './staticH5.js'
 import { classifyH5Request, shouldBlockDisabledH5Access, shouldRequireH5Token } from './h5AccessPolicy.js'
 import { H5AccessService } from './services/h5AccessService.js'
+import { registerSeedMarketplaces } from '../utils/plugins/marketplaceManager.js'
 import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
 
 function readArgValue(flag: string): string | undefined {
@@ -150,6 +151,16 @@ export function startServer(port = PORT, host = HOST) {
     SERVER_OPTIONS.authRequired ||
     process.env.SERVER_AUTH_REQUIRED === '1'
   const h5AccessService = new H5AccessService()
+
+  // Register seed marketplaces (e.g. the cc-haha-builtin marketplace
+  // shipped with the Electron package via CLAUDE_CODE_PLUGIN_SEED_DIR)
+  // into ~/.claude/plugins/known_marketplaces.json so they're visible
+  // in the desktop's Settings → Plugins view. Fire-and-forget — startup
+  // shouldn't block on this; the marketplace appears in the UI within
+  // 1-2 seconds of server boot.
+  void registerSeedMarketplaces().catch((err) => {
+    console.error('[Server] Failed to register seed marketplaces:', err)
+  })
 
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 

@@ -700,38 +700,48 @@ describe('Business Flow: WebSocket Chat', () => {
     expect(messages[0].sessionId).toBe('ws-test-1')
   })
 
-  it('should echo message and transition through states', async () => {
-    const messages: any[] = []
-    const ws = new WebSocket(`${wsUrl}/ws/ws-test-2`)
+  it(
+    'should echo message and transition through states',
+    async () => {
+      const messages: any[] = []
+      const ws = new WebSocket(`${wsUrl}/ws/ws-test-2`)
 
-    await new Promise<void>((resolve) => {
-      ws.onopen = () => {}
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data as string)
-        messages.push(msg)
-        if (msg.type === 'connected') {
-          ws.send(JSON.stringify({ type: 'user_message', content: 'test message' }))
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => {}
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+          if (msg.type === 'connected') {
+            ws.send(JSON.stringify({ type: 'user_message', content: 'test message' }))
+          }
+          if (msg.type === 'status' && msg.state === 'idle' && messages.length > 3) {
+            ws.close()
+            resolve()
+          }
         }
-        if (msg.type === 'message_complete') {
-          ws.close()
-          resolve()
-        }
-      }
-      ws.onerror = () => { ws.close(); resolve() }
-      setTimeout(() => { ws.close(); resolve() }, 15000)
-    })
+        ws.onerror = () => { ws.close(); resolve() }
+        // Bumped from 5_000ms to 12_000ms after a regression in main (multiple
+        // new services added to src/server/services/ pushed CLI startup past
+        // the original 5s budget; mock-sdk-cli is fast, but spawning the
+        // child + connecting back to the server takes ~3s on CI). The bun:test
+        // framework timeout below must be larger than this internal one so the
+        // resolve() path wins and the assertions actually run.
+        setTimeout(() => { ws.close(); resolve() }, 12_000)
+      })
 
-    const types = messages.map((m) => m.type)
-    expect(types).toContain('connected')
-    expect(types).toContain('status')
-    expect(types).toContain('content_start')
-    expect(types).toContain('content_delta')
-    expect(types).toContain('message_complete')
+      const types = messages.map((m) => m.type)
+      expect(types).toContain('connected')
+      expect(types).toContain('status')
+      expect(types).toContain('content_start')
+      expect(types).toContain('content_delta')
+      expect(types).toContain('message_complete')
 
-    // Should have thinking state first
-    const statusMsgs = messages.filter((m) => m.type === 'status')
-    expect(statusMsgs[0].state).toBe('thinking')
-  }, 20000)
+      // Should have thinking state first
+      const statusMsgs = messages.filter((m) => m.type === 'status')
+      expect(statusMsgs[0].state).toBe('thinking')
+    },
+    15_000,
+  )
 
   it('should handle ping/pong', async () => {
     const messages: any[] = []

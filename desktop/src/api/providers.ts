@@ -6,6 +6,8 @@ import type {
   CreateProviderInput,
   UpdateProviderInput,
   TestProviderConfigInput,
+  FetchModelsInput,
+  FetchModelsResponse,
   ProviderTestResult,
 } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
@@ -73,5 +75,14 @@ export const providersApi = {
 
   testConfig(input: TestProviderConfigInput) {
     return api.post<TestResultResponse>('/api/providers/test', input)
+  },
+
+  /**
+   * Server-side proxy for the "Fetch Models" UI button. Bypasses
+   * mixed-content / CORS restrictions that block plain-HTTP relay
+   * URLs from being fetched directly in the renderer.
+   */
+  fetchModels(input: FetchModelsInput) {
+    return api.post<FetchModelsResponse>('/api/providers/fetch-models', input)
   },
 }

@@ -541,6 +541,24 @@ describe('ProviderService', () => {
       expect(updated.apiKey).toBe('sk-test-key-123')
     })
 
+    test('bumps the revision counter monotonically on every update so runtime overrides can detect stale snapshots', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      // New providers don't pre-populate revision (treated as 0 by readers).
+      expect(added.revision).toBeUndefined()
+
+      const r1 = await svc.updateProvider(added.id, { apiKey: 'rotated-once' })
+      expect(r1.revision).toBe(1)
+
+      const r2 = await svc.updateProvider(added.id, { baseUrl: 'https://new.example.com' })
+      expect(r2.revision).toBe(2)
+
+      // Edits that touch nothing useful still bump — the contract is
+      // "user clicked save, force any in-flight session to re-snapshot".
+      const r3 = await svc.updateProvider(added.id, { notes: 'note' })
+      expect(r3.revision).toBe(3)
+    })
+
     test('should throw 404 for non-existent provider', async () => {
       const svc = new ProviderService()
 
@@ -642,6 +660,80 @@ describe('ProviderService', () => {
       settings = await readSettings()
       env = settings.env as Record<string, string>
       expect(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBeUndefined()
+    })
+  })
+
+  // ─── markThinkingIncompatible + auto-clear on update ─────────────────────
+
+  describe('markThinkingIncompatible', () => {
+    test('sets thinkingIncompatible flag on the provider record', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+
+      const updated = await svc.markThinkingIncompatible(
+        added.id,
+        'API error 400: additionalModelRequestFields not supported',
+      )
+
+      expect(updated?.thinkingIncompatible).toBe(true)
+      expect(updated?.thinkingIncompatibleReason).toContain(
+        'additionalModelRequestFields',
+      )
+
+      // Persisted to disk so the next sidecar launch can pick it up.
+      const persisted = await readProvidersConfig()
+      const providerOnDisk = (persisted.providers as Array<Record<string, unknown>>)[0]
+      expect(providerOnDisk?.thinkingIncompatible).toBe(true)
+    })
+
+    test('truncates a chatty reason snippet so providers.json stays bounded', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      const longReason = 'x'.repeat(2000)
+
+      const updated = await svc.markThinkingIncompatible(added.id, longReason)
+      expect(updated?.thinkingIncompatibleReason?.length).toBeLessThanOrEqual(500)
+    })
+
+    test('is idempotent — re-marking the same provider with the same reason is a no-op', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      const reason = 'thinking is not supported by this model'
+
+      await svc.markThinkingIncompatible(added.id, reason)
+      const persistedFirst = await readProvidersConfig()
+      const firstWriteJson = JSON.stringify(persistedFirst)
+
+      // Re-mark — must not change disk state. Compare JSON strings since
+      // we don't have an easy mtime hook in the test setup.
+      await svc.markThinkingIncompatible(added.id, reason)
+      const persistedSecond = await readProvidersConfig()
+      expect(JSON.stringify(persistedSecond)).toBe(firstWriteJson)
+    })
+
+    test('returns null without writing for unknown provider ids', async () => {
+      const svc = new ProviderService()
+      const result = await svc.markThinkingIncompatible('non-existent', 'reason')
+      expect(result).toBeNull()
+    })
+
+    test('returns null for the openai-official provider (not user-editable)', async () => {
+      const svc = new ProviderService()
+      const result = await svc.markThinkingIncompatible('openai-official', 'reason')
+      expect(result).toBeNull()
+    })
+
+    test('updateProvider clears the thinkingIncompatible flag (re-arm on edit)', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      await svc.markThinkingIncompatible(added.id, 'rejected')
+
+      const flagged = await svc.getProvider(added.id)
+      expect(flagged.thinkingIncompatible).toBe(true)
+
+      const reedited = await svc.updateProvider(added.id, { name: 'Renamed' })
+      expect(reedited.thinkingIncompatible).toBeUndefined()
+      expect(reedited.thinkingIncompatibleReason).toBeUndefined()
     })
   })
 
@@ -1616,6 +1708,172 @@ describe('ProviderService', () => {
         expect(timeoutCalls).toEqual([180_000])
       } finally {
         AbortSignal.timeout = originalTimeout
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  // ─── fetchUpstreamModels ────────────────────────────────────────────────
+
+  describe('fetchUpstreamModels', () => {
+    test('uses Bearer auth + GET /v1/models for OpenAI-compatible providers', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ url: string; method?: string; headers: Record<string, string> }> = []
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          url: String(url),
+          method: init?.method,
+          headers: (init?.headers as Record<string, string>) || {},
+        })
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: 'gpt-4o', context_length: 128000 },
+              { id: 'gpt-4o-mini' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const { status, data } = await svc.fetchUpstreamModels({
+          baseUrl: 'http://47.116.22.0:3000',
+          apiKey: 'sk-relay',
+          apiFormat: 'openai_chat',
+        })
+
+        expect(status).toBe(200)
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.url).toBe('http://47.116.22.0:3000/v1/models')
+        expect(calls[0]!.method).toBe('GET')
+        expect(calls[0]!.headers['Authorization']).toBe('Bearer sk-relay')
+        // x-api-key must not appear when format is openai_chat
+        expect(calls[0]!.headers['x-api-key']).toBeUndefined()
+        expect(data).toEqual({
+          data: [
+            { id: 'gpt-4o', context_length: 128000 },
+            { id: 'gpt-4o-mini' },
+          ],
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('uses x-api-key + anthropic-version for Anthropic-format providers', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ url: string; headers: Record<string, string> }> = []
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          url: String(url),
+          headers: (init?.headers as Record<string, string>) || {},
+        })
+        return new Response(
+          JSON.stringify({ data: [{ id: 'claude-opus-4' }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        await svc.fetchUpstreamModels({
+          baseUrl: 'https://api.anthropic.com',
+          apiKey: 'sk-ant-key',
+          apiFormat: 'anthropic',
+        })
+
+        expect(calls[0]!.url).toBe('https://api.anthropic.com/v1/models')
+        expect(calls[0]!.headers['x-api-key']).toBe('sk-ant-key')
+        expect(calls[0]!.headers['anthropic-version']).toBe('2023-06-01')
+        // Bearer must not appear when format is anthropic
+        expect(calls[0]!.headers['Authorization']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('strips trailing slashes and avoids /v1 duplication when baseUrl already ends in /v1', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ url: string }> = []
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) })
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        await svc.fetchUpstreamModels({
+          baseUrl: 'https://api.example.com/v1/',
+          apiKey: 'sk',
+          apiFormat: 'openai_chat',
+        })
+        await svc.fetchUpstreamModels({
+          baseUrl: 'https://api.example.com////',
+          apiKey: 'sk',
+          apiFormat: 'openai_chat',
+        })
+
+        expect(calls[0]!.url).toBe('https://api.example.com/v1/models')
+        expect(calls[1]!.url).toBe('https://api.example.com/v1/models')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('throws ApiError 502 with upstream message when /v1/models returns non-200', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(async () => {
+        return new Response(
+          JSON.stringify({ error: { message: 'invalid_api_key' } }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } },
+        )
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        let caught: unknown
+        try {
+          await svc.fetchUpstreamModels({
+            baseUrl: 'https://api.example.com',
+            apiKey: 'sk-bad',
+            apiFormat: 'openai_chat',
+          })
+        } catch (err) {
+          caught = err
+        }
+        expect(caught).toBeInstanceOf(Error)
+        const message = caught instanceof Error ? caught.message : String(caught)
+        expect(message).toContain('401')
+        expect(message).toContain('invalid_api_key')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('wraps network errors as ApiError 502', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(async () => {
+        throw new Error('ECONNREFUSED')
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        let caught: unknown
+        try {
+          await svc.fetchUpstreamModels({
+            baseUrl: 'http://127.0.0.1:9',
+            apiKey: 'sk',
+            apiFormat: 'openai_chat',
+          })
+        } catch (err) {
+          caught = err
+        }
+        const message = caught instanceof Error ? caught.message : String(caught)
+        expect(message).toContain('Upstream fetch failed')
+        expect(message).toContain('ECONNREFUSED')
+      } finally {
         globalThis.fetch = originalFetch
       }
     })

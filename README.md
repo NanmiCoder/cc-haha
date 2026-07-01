@@ -1,7 +1,7 @@
-# Claude Code Haha
+# Code Council
 
 <p align="center">
-  <img src="docs/images/app-icon.png" alt="Claude Code Haha" width="240">
+  <img src="docs/images/app-icon.png" alt="Code Council" width="240">
 </p>
 
 <div align="center">
@@ -17,7 +17,7 @@
 
 </div>
 
-Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude Code 源码修复而来，现在主要是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限审批、模型提供商、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
+Code Council 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude Code 源码修复而来，现在主要是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限审批、模型提供商、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
 
 <p align="center">
   <a href="#桌面端预览">桌面端预览</a> · <a href="#安装桌面端">安装桌面端</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#更多文档">更多文档</a>
@@ -27,7 +27,7 @@ Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude C
 
 ## 桌面端预览
 
-Claude Code Haha 的桌面端把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限确认、提供商配置和远程入口集中到一个图形化工作台里，适合不想长期停留在终端里的日常开发工作流。
+Code Council 的桌面端把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限确认、提供商配置和远程入口集中到一个图形化工作台里，适合不想长期停留在终端里的日常开发工作流。
 
 <p align="center">
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_下载桌面端-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="下载桌面端"></a>
@@ -147,31 +147,6 @@ cp .env.example .env
 
 ---
 
-## ☕ 请作者喝杯咖啡
-
-如果这个项目对您有帮助，欢迎打赏支持，您的每一份支持都是我持续更新的动力 ❤️
-
-<table>
-<tr>
-<td align="center" width="33%">
-<img src="docs/images/donate/wechat_pay.jpeg" width="250" alt="微信赞赏"><br>
-<b>微信赞赏</b>
-</td>
-<td align="center" width="33%">
-<img src="docs/images/donate/zfb_pay.png" width="250" alt="支付宝"><br>
-<b>支付宝</b>
-</td>
-<td align="center" width="33%">
-<a href="https://buymeacoffee.com/relakkes" target="_blank">
-<img src="docs/images/donate/bmc_button.png" width="250" alt="Buy Me a Coffee">
-</a><br>
-<b>Buy Me a Coffee</b>
-</td>
-</tr>
-</table>
-
----
-
 ## 技术栈
 
 | 类别 | 技术 |
@@ -197,7 +172,7 @@ cp .env.example .env
 
 ## ⭐ Star 趋势图
 
-如果这个项目对您有帮助，请给个 ⭐ Star 支持一下，让更多的人看到 Claude Code Haha！
+如果这个项目对您有帮助，请给个 ⭐ Star 支持一下，让更多的人看到 Code Council！
 
 <a href="https://www.star-history.com/#NanmiCoder/cc-haha&Date">
   <picture>

@@ -332,6 +332,131 @@ describe('settingsStore network persistence', () => {
   })
 })
 
+describe('settingsStore workspace LSP persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('hydrates custom workspace LSP settings from user settings', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({
+          workspaceLsp: {
+            server: {
+              name: 'custom:typescript',
+              path: '  C:\\Program Files\\Example LSP\\server.exe  ',
+              args: ['--stdio', 123],
+              extensionToLanguage: { ts: ' typescript ', bad: '' },
+            },
+          },
+        }),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().workspaceLsp).toEqual({
+      server: {
+        name: 'custom:typescript',
+        path: 'C:\\Program Files\\Example LSP\\server.exe',
+        args: ['--stdio'],
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    })
+  })
+
+  it('persists custom workspace LSP path or bare command with args array', async () => {
+    const updateUser = vi.fn().mockResolvedValue({})
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(),
+        updateUser,
+        getPermissionMode: vi.fn(),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn(),
+        getCurrent: vi.fn(),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn(),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn(),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().setWorkspaceLsp({
+      server: {
+        path: ' C:\\Program Files\\Example LSP\\server.exe ',
+        command: 'ignored-when-path-is-set',
+        args: ['--stdio'],
+        extensionToLanguage: { '.TS': 'typescript' },
+      },
+    })
+
+    expect(useSettingsStore.getState().workspaceLsp).toEqual({
+      server: {
+        path: 'C:\\Program Files\\Example LSP\\server.exe',
+        args: ['--stdio'],
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    })
+    expect(updateUser).toHaveBeenCalledWith({
+      workspaceLsp: {
+        server: {
+          path: 'C:\\Program Files\\Example LSP\\server.exe',
+          args: ['--stdio'],
+          extensionToLanguage: { '.ts': 'typescript' },
+        },
+      },
+    })
+  })
+})
 describe('settingsStore app mode', () => {
   const installElectronAppModeHost = (appMode: Partial<typeof browserHost.appMode>) => {
     window.desktopHost = {
@@ -983,7 +1108,7 @@ describe('settingsStore theme persistence', () => {
     document.documentElement.style.colorScheme = ''
   })
 
-  it('falls back to the pure white theme when user settings have no theme', async () => {
+  it('falls back to dark when user settings have no theme', async () => {
     vi.doMock('../api/settings', () => ({
       settingsApi: {
         getUser: vi.fn().mockResolvedValue({}),
@@ -1024,10 +1149,10 @@ describe('settingsStore theme persistence', () => {
 
     await useSettingsStore.getState().fetchAll()
 
-    expect(useSettingsStore.getState().theme).toBe('white')
-    expect(useUIStore.getState().theme).toBe('white')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('white')
-    expect(document.documentElement.style.colorScheme).toBe('light')
+    expect(useSettingsStore.getState().theme).toBe('dark')
+    expect(useUIStore.getState().theme).toBe('dark')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(document.documentElement.style.colorScheme).toBe('dark')
   })
 
   it('hydrates the pure white theme from user settings', async () => {
@@ -1298,5 +1423,109 @@ describe('settingsStore H5 access behavior', () => {
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
     expect('h5AccessGeneratedToken' in useSettingsStore.getState()).toBe(false)
+  })
+
+  it('starts and stops the H5 tunnel and mirrors diagnostics state', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn(),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn(),
+        getCurrent: vi.fn(),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn(),
+        setEffort: vi.fn(),
+      },
+    }))
+    const startTunnel = vi.fn().mockResolvedValue({
+      status: 'running',
+      url: 'https://abcd.trycloudflare.com',
+      mode: 'quick',
+      error: null,
+    })
+    const stopTunnel = vi.fn().mockResolvedValue({ status: 'idle', url: null, mode: null, error: null })
+    // get() drives refreshH5DiagnosticsSilent: first call (after start) shows the
+    // running tunnel, second call (after stop) shows it cleared.
+    const get = vi.fn()
+      .mockResolvedValueOnce({
+        settings: {
+          enabled: true, token: 't', tokenPreview: 't', allowedOrigins: [],
+          publicBaseUrl: 'https://abcd.trycloudflare.com', fixedPort: null, disconnectGraceSeconds: null,
+        },
+        diagnostics: {
+          storedHostStaleness: 'unset', storedPublicBaseUrl: null,
+          effectivePublicBaseUrl: 'https://abcd.trycloudflare.com', suggestedHost: null,
+          localInterfaceHosts: [], activePort: 3456,
+          tunnel: { status: 'running', url: 'https://abcd.trycloudflare.com', mode: 'quick', error: null, hasToken: false },
+        },
+      })
+      .mockResolvedValueOnce({
+        settings: {
+          enabled: true, token: 't', tokenPreview: 't', allowedOrigins: [],
+          publicBaseUrl: null, fixedPort: null, disconnectGraceSeconds: null,
+        },
+        diagnostics: {
+          storedHostStaleness: 'unset', storedPublicBaseUrl: null,
+          effectivePublicBaseUrl: null, suggestedHost: null,
+          localInterfaceHosts: [], activePort: 3456,
+          tunnel: { status: 'idle', url: null, mode: null, error: null, hasToken: false },
+        },
+      })
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: { get, enable: vi.fn(), disable: vi.fn(), regenerate: vi.fn(), update: vi.fn(), startTunnel, stopTunnel },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().startH5Tunnel({ mode: 'quick' })
+    expect(startTunnel).toHaveBeenCalledWith({ mode: 'quick' })
+    expect(useSettingsStore.getState().h5AccessDiagnostics?.tunnel).toMatchObject({
+      status: 'running',
+      url: 'https://abcd.trycloudflare.com',
+    })
+    expect(useSettingsStore.getState().h5AccessError).toBeNull()
+
+    await useSettingsStore.getState().stopH5Tunnel()
+    expect(stopTunnel).toHaveBeenCalledTimes(1)
+    expect(useSettingsStore.getState().h5AccessDiagnostics?.tunnel?.status).toBe('idle')
+  })
+
+  it('surfaces a tunnel error from diagnostics as h5AccessError', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(), updateUser: vi.fn(), getPermissionMode: vi.fn(),
+        setPermissionMode: vi.fn(), getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: { list: vi.fn(), getCurrent: vi.fn(), setCurrent: vi.fn(), getEffort: vi.fn(), setEffort: vi.fn() },
+    }))
+    const startTunnel = vi.fn().mockResolvedValue({ status: 'error', url: null, mode: 'quick', error: 'cloudflared not found' })
+    const get = vi.fn().mockResolvedValue({
+      settings: {
+        enabled: true, token: 't', tokenPreview: 't', allowedOrigins: [],
+        publicBaseUrl: null, fixedPort: null, disconnectGraceSeconds: null,
+      },
+      diagnostics: {
+        storedHostStaleness: 'unset', storedPublicBaseUrl: null, effectivePublicBaseUrl: null,
+        suggestedHost: null, localInterfaceHosts: [], activePort: 3456,
+        tunnel: { status: 'error', url: null, mode: 'quick', error: 'cloudflared not found', hasToken: false },
+      },
+    })
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: { get, enable: vi.fn(), disable: vi.fn(), regenerate: vi.fn(), update: vi.fn(), startTunnel, stopTunnel: vi.fn() },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await expect(useSettingsStore.getState().startH5Tunnel({ mode: 'quick' })).rejects.toThrow(/cloudflared not found/)
+    expect(useSettingsStore.getState().h5AccessError).toBe('cloudflared not found')
   })
 })

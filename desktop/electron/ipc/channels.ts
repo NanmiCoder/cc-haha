@@ -44,6 +44,9 @@ export const ELECTRON_IPC_CHANNELS = {
   appModePrepareRestart: 'desktop:app-mode:prepare-restart',
   appModeRestart: 'desktop:app-mode:restart',
   adaptersRestartSidecar: 'desktop:adapters:restart-sidecar',
+  tunnelStart: 'desktop:tunnel:start',
+  tunnelStop: 'desktop:tunnel:stop',
+  tunnelGetStatus: 'desktop:tunnel:get-status',
   zoomSet: 'desktop:zoom:set',
 } as const
 

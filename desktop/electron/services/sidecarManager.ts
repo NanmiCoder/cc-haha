@@ -263,11 +263,12 @@ export function windowsPowerShellOverride(
   return base === 'pwsh' || base === 'powershell' ? trimmed : null
 }
 
-export function buildSidecarEnv(baseEnv: NodeJS.ProcessEnv, h5DistDir: string): NodeJS.ProcessEnv {
+export function buildSidecarEnv(baseEnv: NodeJS.ProcessEnv, h5DistDir: string, desktopRoot: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     CLAUDE_H5_AUTO_PUBLIC_URL: '1',
     CLAUDE_H5_DIST_DIR: h5DistDir,
+    CLAUDE_CODE_PLUGIN_SEED_DIR: path.join(desktopRoot, 'plugin-seed'),
   }
   const configDir = baseEnv.CLAUDE_CONFIG_DIR
   if (configDir) {
@@ -297,7 +298,7 @@ export function createServerPlan({
   return {
     command: resolveSidecarExecutable(desktopRoot),
     args: ['server', '--app-root', appRoot, '--host', bindHost, '--port', String(port)],
-    env: buildSidecarEnv(env, h5DistDir),
+    env: buildSidecarEnv(env, h5DistDir, desktopRoot),
   }
 }
 
@@ -320,7 +321,7 @@ export function createAdapterPlan({
     command: resolveSidecarExecutable(desktopRoot),
     args: ['adapters', '--app-root', appRoot, flag],
     env: {
-      ...buildSidecarEnv(env, h5DistDir),
+      ...buildSidecarEnv(env, h5DistDir, desktopRoot),
       ADAPTER_SERVER_URL: httpToWebSocketUrl(serverUrl),
     },
   }
@@ -335,6 +336,139 @@ export function spawnSidecar(plan: SidecarPlan, deps: SpawnSidecarDeps = {}): Si
     env: plan.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+  })
+}
+
+export type H5TunnelMode = 'quick' | 'named'
+
+// Quick-tunnel URL printed by cloudflared on stderr, e.g.
+// "https://random-words-1234.trycloudflare.com".
+export const TRYCLOUDFLARE_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
+
+/**
+ * Locate the cloudflared executable. Honors an explicit override, then PATH,
+ * then the common Windows install location. Returns null when not found so the
+ * caller can surface a friendly "install cloudflared" message.
+ */
+export function resolveCloudflaredPath(
+  env: NodeJS.ProcessEnv = process.env,
+  deps: { existsSyncFn?: typeof existsSync; platform?: NodeJS.Platform } = {},
+): string | null {
+  const exists = deps.existsSyncFn ?? existsSync
+  const platform = deps.platform ?? process.platform
+
+  const override = env.CLOUDFLARED_PATH?.trim()
+  if (override) return exists(override) ? override : null
+
+  const candidates: string[] = []
+  if (platform === 'win32') {
+    const programFilesX86 = env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+    const programFiles = env.ProgramFiles || 'C:\\Program Files'
+    candidates.push(
+      path.join(programFilesX86, 'cloudflared', 'cloudflared.exe'),
+      path.join(programFiles, 'cloudflared', 'cloudflared.exe'),
+    )
+  } else {
+    candidates.push('/usr/local/bin/cloudflared', '/usr/bin/cloudflared', '/opt/homebrew/bin/cloudflared')
+  }
+
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate
+  }
+
+  // Fall back to a bare command name; spawn will resolve it via PATH. We return
+  // it as-is (the tunnel spawner does not gate on existsSync, unlike sidecars).
+  return platform === 'win32' ? 'cloudflared.exe' : 'cloudflared'
+}
+
+/**
+ * Build the cloudflared invocation.
+ * - quick: ephemeral tunnel to a random trycloudflare.com URL (no credentials).
+ * - named: persistent tunnel bound to the user's domain via a Cloudflare token.
+ */
+export function createTunnelPlan({
+  cloudflaredPath,
+  port,
+  mode,
+  token,
+  controlHost = SERVER_CONTROL_HOST,
+  env = process.env,
+}: {
+  cloudflaredPath: string
+  port: number
+  mode: H5TunnelMode
+  token?: string | null
+  controlHost?: string
+  env?: NodeJS.ProcessEnv
+}): SidecarPlan {
+  if (mode === 'named') {
+    if (!token) {
+      throw new Error('A Cloudflare tunnel token is required for the named tunnel mode.')
+    }
+    return {
+      command: cloudflaredPath,
+      args: ['tunnel', '--no-autoupdate', 'run', '--token', token],
+      env,
+    }
+  }
+
+  return {
+    command: cloudflaredPath,
+    args: ['tunnel', '--no-autoupdate', '--url', `http://${controlHost}:${port}`],
+    env,
+  }
+}
+
+/**
+ * Spawn cloudflared without the existsSync gate (the binary may live on PATH as
+ * a bare command name). Stdio is piped so the caller can scrape the URL.
+ */
+export function spawnTunnel(plan: SidecarPlan, deps: SpawnSidecarDeps = {}): SidecarChild {
+  return (deps.spawnFn ?? spawn)(plan.command, plan.args, {
+    env: plan.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+}
+
+/**
+ * Resolve with the first quick-tunnel URL cloudflared prints on stderr. Rejects
+ * if the process exits first or the timeout elapses. Listeners are attached
+ * synchronously by the caller right after spawn to avoid missing an early line.
+ */
+export function waitForTunnelUrl(
+  child: SidecarChild,
+  options: { regex?: RegExp; timeoutMs?: number } = {},
+): Promise<string> {
+  const regex = options.regex ?? TRYCLOUDFLARE_URL_RE
+  const timeoutMs = options.timeoutMs ?? 30_000
+
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.stdout.off('data', onData)
+      child.stderr.off('data', onData)
+      child.off('exit', onExit)
+      fn()
+    }
+
+    const onData = (chunk: Buffer | string) => {
+      const match = String(chunk).match(regex)
+      if (match) finish(() => resolve(match[0]))
+    }
+    const onExit = (code: number | null) => {
+      finish(() => reject(new Error(`cloudflared exited before printing a tunnel URL (code=${code})`)))
+    }
+    const timer = setTimeout(() => {
+      finish(() => reject(new Error(`Timed out waiting for cloudflared tunnel URL after ${Math.round(timeoutMs / 1000)}s`)))
+    }, timeoutMs)
+
+    child.stdout.on('data', onData)
+    child.stderr.on('data', onData)
+    child.on('exit', onExit)
   })
 }
 

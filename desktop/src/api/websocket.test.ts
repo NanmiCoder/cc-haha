@@ -122,4 +122,12 @@ describe('wsManager reconnect buffering', () => {
       'wss://public.example.com/app/ws/s1',
     )
   })
+
+  it('preserves a tunnel URL path prefix when building websocket URLs', () => {
+    clientMocks.baseUrl = 'https://abcd-1234.ngrok-free.app/h5'
+
+    expect(buildSessionWebSocketUrl('s1')).toBe(
+      'wss://abcd-1234.ngrok-free.app/h5/ws/s1',
+    )
+  })
 })

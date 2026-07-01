@@ -39,4 +39,43 @@ describe('useTranslation', () => {
     expect(translate('jp', 'session.timeMinutes', { n: 5 })).toBe('5 分前')
     expect(translate('kr', 'session.timeMinutes', { n: 5 })).toBe('5분 전')
   })
+
+  it('resolves the recommended-skill catalog descriptions in every locale', () => {
+    // Each newly-added catalog entry must have a real, locale-specific
+    // description across all five locales — otherwise the desktop Settings →
+    // Skills "Recommended" card silently falls back to the English string the
+    // server ships. Guards the mattpocock/* + karpathy entries added with the
+    // catalog wiring.
+    const keys = [
+      'settings.skills.catalog.karpathy-guidelines.desc',
+      'settings.skills.catalog.mattpocock-grilling.desc',
+      'settings.skills.catalog.mattpocock-tdd.desc',
+      'settings.skills.catalog.mattpocock-diagnosing-bugs.desc',
+    ] as const
+    const locales = ['en', 'zh', 'zh-TW', 'jp', 'kr'] as const
+
+    for (const key of keys) {
+      for (const locale of locales) {
+        const value = translate(locale, key)
+        // A missing key returns the key itself; assert we got a real string.
+        expect(value, `${locale} / ${key}`).not.toBe(key)
+        expect(value.length, `${locale} / ${key}`).toBeGreaterThan(0)
+      }
+      // The Chinese description must be written natively, not left as English.
+      expect(translate('zh', key)).not.toBe(translate('en', key))
+    }
+  })
+
+  it('resolves the new skill category labels in every locale', () => {
+    const keys = [
+      'settings.skills.category.engineering',
+      'settings.skills.category.productivity',
+      'settings.skills.category.workflow',
+    ] as const
+    for (const key of keys) {
+      for (const locale of ['en', 'zh', 'zh-TW', 'jp', 'kr'] as const) {
+        expect(translate(locale, key), `${locale} / ${key}`).not.toBe(key)
+      }
+    }
+  })
 })

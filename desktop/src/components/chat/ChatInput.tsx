@@ -16,13 +16,14 @@ import { sessionsApi, type SessionGitInfo } from '../../api/sessions'
 import { agentsApi } from '../../api/agents'
 import { PermissionModeSelector } from '../controls/PermissionModeSelector'
 import { ModelSelector } from '../controls/ModelSelector'
-import type { AttachmentRef } from '../../types/chat'
+import type { AttachmentRef, DisplayAttachmentRef } from '../../types/chat'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
 import { ProjectContextChip } from '../shared/ProjectContextChip'
 import { RepositoryLaunchControls } from '../shared/RepositoryLaunchControls'
 import { FileSearchMenu, type FileSearchMenuHandle } from './FileSearchMenu'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
+import { SkillPickerMenu, type SkillPickerHandle } from './SkillPickerMenu'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import {
   appendAgentSlashCommands,
@@ -41,8 +42,13 @@ import {
   selectNativeFileAttachments,
   type ComposerAttachment,
 } from '../../lib/composerAttachments'
+import { compressDataUrl } from '../../lib/imageCompress'
 import { useComposerFileDrop } from './useComposerFileDrop'
 import { shouldSubmitOnEnter } from './sendShortcut'
+import {
+  COMPOSER_PREFILL_EVENT,
+  type ComposerPrefillDetail,
+} from '../welcome/WelcomeTaskCards'
 
 type GitInfo = SessionGitInfo
 
@@ -90,6 +96,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false)
+  const [pluginPickerOpen, setPluginPickerOpen] = useState(false)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [fileSearchOpen, setFileSearchOpen] = useState(false)
   const [localSlashPanel, setLocalSlashPanel] = useState<LocalSlashCommandName | null>(null)
@@ -102,6 +110,9 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const [launchBranch, setLaunchBranch] = useState<string | null>(null)
   const [launchUseWorktree, setLaunchUseWorktree] = useState(false)
   const [launchReady, setLaunchReady] = useState(true)
+  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null)
+  const [editingQueuedText, setEditingQueuedText] = useState('')
+  const [queueCollapsed, setQueueCollapsed] = useState(false)
   const [launchTransitioning, setLaunchTransitioning] = useState(false)
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [editingQueuedMessageText, setEditingQueuedMessageText] = useState('')
@@ -112,6 +123,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<FileSearchMenuHandle>(null)
+  const skillPickerRef = useRef<SkillPickerHandle>(null)
   const slashItemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const previousActiveTabIdRef = useRef<string | null>(null)
   const inputRef = useRef(input)
@@ -132,6 +144,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     stopGeneration,
     clearComposerPrefill,
     clearComposerInsertion,
+    removeQueuedMessage,
+    clearMessageQueue,
+    updateQueuedMessage,
+    sendQueuedMessageNow,
     queueUserMessage,
     updateQueuedUserMessage,
     removeQueuedUserMessage,
@@ -140,12 +156,19 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const activeTabId = useTabStore((s) => s.activeTabId)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const chatState = sessionState?.chatState ?? 'idle'
+  const messageQueue = sessionState?.messageQueue ?? []
   const slashCommands = sessionState?.slashCommands ?? []
   const composerPrefill = sessionState?.composerPrefill ?? null
   const composerInsertion = sessionState?.composerInsertion ?? null
   const queuedUserMessages = sessionState?.queuedUserMessages ?? []
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
+  )
+  const coordinatorMode = useSessionRuntimeStore((state) =>
+    activeTabId ? state.coordinatorModes[activeTabId] ?? false : false,
+  )
+  const soloPipelineMode = useSessionRuntimeStore((state) =>
+    activeTabId ? state.soloPipelineModes[activeTabId] ?? false : false,
   )
   const currentModel = useSettingsStore((state) => state.currentModel)
   const chatSendBehavior = useSettingsStore((state) => state.chatSendBehavior)
@@ -242,6 +265,29 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       if (currentActiveTabId) saveComposerDraft(currentActiveTabId)
     }
   }, [saveComposerDraft])
+
+  // Listen for welcome-screen task-card clicks dispatched from ActiveSession's
+  // empty welcome state. The card click can't directly mutate this component's
+  // useState, so it dispatches a window CustomEvent that we apply here when
+  // the sessionId matches the active tab. EmptySession doesn't need this — it
+  // owns its own composer textarea and updates state in-place.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ComposerPrefillDetail>).detail
+      if (!detail || typeof detail.text !== 'string') return
+      if (!activeTabId || detail.sessionId !== activeTabId) return
+      setComposerInput(detail.text)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        const len = el.value.length
+        el.setSelectionRange(len, len)
+      })
+    }
+    window.addEventListener(COMPOSER_PREFILL_EVENT, handler as EventListener)
+    return () => window.removeEventListener(COMPOSER_PREFILL_EVENT, handler as EventListener)
+  }, [activeTabId, setComposerInput])
 
   useEffect(() => {
     textareaRef.current?.focus()
@@ -403,6 +449,22 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [plusMenuOpen])
+
+  // Close the skill / plugin picker on outside click. We treat the textarea as
+  // "inside" so typing into it (which is what the picker filter is for in the
+  // future) does not dismiss the popover.
+  useEffect(() => {
+    if (!skillPickerOpen && !pluginPickerOpen) return
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (panelRef.current && panelRef.current.contains(target)) return
+      setSkillPickerOpen(false)
+      setPluginPickerOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [skillPickerOpen, pluginPickerOpen])
 
   useEffect(() => {
     if (!slashMenuOpen) return
@@ -639,6 +701,18 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       note: attachment.note,
       quote: attachment.quote,
     }))
+    const visibleUploadAttachmentPayload: DisplayAttachmentRef[] = attachments.map((attachment) => ({
+      type: attachment.type,
+      name: attachment.name,
+      path: attachment.path,
+      data: attachment.data,
+      previewUrl: attachment.previewUrl,
+      mimeType: attachment.mimeType,
+      lineStart: attachment.lineStart,
+      lineEnd: attachment.lineEnd,
+      note: attachment.note,
+      quote: attachment.quote,
+    }))
     const workspaceAttachmentPayload: AttachmentRef[] = workspaceReferences
       .filter((reference) => reference.kind !== 'chat-selection')
       .map((reference) => ({
@@ -651,8 +725,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
         note: reference.note,
         quote: reference.quote,
       }))
-    const visibleAttachmentPayload: AttachmentRef[] = [
-      ...uploadAttachmentPayload,
+    const visibleAttachmentPayload: DisplayAttachmentRef[] = [
+      ...visibleUploadAttachmentPayload,
       ...workspaceReferences.map((reference) => ({
         type: 'file' as const,
         name: reference.name,
@@ -749,6 +823,23 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       }
     }
 
+    // Route navigation keys to the skill / plugin picker when it is open.
+    if (skillPickerOpen || pluginPickerOpen) {
+      const key = event.key
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape') {
+        event.preventDefault()
+        if (key === 'Escape') {
+          setSkillPickerOpen(false)
+          setPluginPickerOpen(false)
+          return
+        }
+        skillPickerRef.current?.handleKeyDown(event.nativeEvent)
+        return
+      }
+      // Other keys (typing) keep flowing to the textarea.
+      return
+    }
+
     if (slashMenuOpen && filteredCommands.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -813,17 +904,20 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       const id = `att-${Date.now()}-${Math.random().toString(36).slice(2)}`
       const reader = new FileReader()
       reader.onload = () => {
-        setComposerAttachments((prev) => [
-          ...prev,
-          {
-            id,
-            name: `pasted-image-${Date.now()}.png`,
-            type: 'image',
-            mimeType: file.type || 'image/png',
-            previewUrl: reader.result as string,
-            data: reader.result as string,
-          },
-        ])
+        const rawDataUrl = reader.result as string
+        void compressDataUrl(rawDataUrl).then((compressed) => {
+          setComposerAttachments((prev) => [
+            ...prev,
+            {
+              id,
+              name: `pasted-image-${Date.now()}.png`,
+              type: 'image',
+              mimeType: 'image/jpeg',
+              previewUrl: compressed,
+              data: compressed,
+            },
+          ])
+        })
       }
       reader.readAsDataURL(file)
     }
@@ -923,6 +1017,57 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     })
   }
 
+  // Open the inline skill picker menu from the + menu. The user picks a skill
+  // and we insert a "@skill:<name> " token into the composer at the cursor — a
+  // visible reference the agent can read as "use this skill, then …".
+  const openSkillPicker = () => {
+    if (isMemberSession) return
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setLocalSlashPanel(null)
+    setPluginPickerOpen(false)
+    setSkillPickerOpen(true)
+  }
+
+  // Same idea for plugins; "@plugin:<name> " tells the agent which plugin to use.
+  const openPluginPicker = () => {
+    if (isMemberSession) return
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setLocalSlashPanel(null)
+    setSkillPickerOpen(false)
+    setPluginPickerOpen(true)
+  }
+
+  const insertReferenceToken = (token: string) => {
+    const el = textareaRef.current
+    const cursorPos = el?.selectionStart ?? input.length
+    const before = input.slice(0, cursorPos)
+    const after = input.slice(cursorPos)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after)
+    const insertion = `${needsLeadingSpace ? ' ' : ''}${token}${needsTrailingSpace ? ' ' : ' '}`
+    const next = `${before}${insertion}${after}`
+    const nextCursor = before.length + insertion.length
+    setComposerInput(next)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  const handlePickSkill = (skillName: string) => {
+    insertReferenceToken(`@skill:${skillName}`)
+    setSkillPickerOpen(false)
+  }
+
+  const handlePickPlugin = (pluginName: string) => {
+    insertReferenceToken(`@plugin:${pluginName}`)
+    setPluginPickerOpen(false)
+  }
+
   const composerPlaceholder =
     isHeroComposer
       ? t('empty.placeholder')
@@ -934,6 +1079,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
   const addFilesLabel = isHeroComposer ? t('empty.addFiles') : t('chat.addFiles')
   const slashCommandsLabel = isHeroComposer ? t('empty.slashCommands') : t('chat.slashCommands')
+  const skillsLabel = t('chat.openSkills')
+  const pluginsLabel = t('chat.openPlugins')
+  const coordinatorModeLabel = t('chat.coordinatorMode')
+  const soloPipelineModeLabel = t('chat.soloPipelineMode')
 
   return (
     <div
@@ -955,6 +1104,111 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               : `${isMobileComposer ? 'mx-0 max-w-none' : 'mx-auto max-w-[860px]'}`
         }
       >
+        {!isMemberSession && messageQueue.length > 0 && (
+          <div className="mb-2 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+            <button
+              type="button"
+              onClick={() => setQueueCollapsed((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
+                {isActive && (
+                  <span className="material-symbols-outlined animate-spin text-[14px] text-[var(--color-brand)]">progress_activity</span>
+                )}
+                {t('chat.queueTitle')}
+                <span className="rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {messageQueue.length}
+                </span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); activeTabId && clearMessageQueue(activeTabId) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); activeTabId && clearMessageQueue(activeTabId) } }}
+                  className="mr-1 text-[11px] font-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-secondary)] hover:underline"
+                >
+                  {t('chat.clearQueue')}
+                </span>
+                <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
+                  {queueCollapsed ? 'expand_less' : 'expand_more'}
+                </span>
+              </span>
+            </button>
+            {!queueCollapsed && (
+              <div className="flex max-h-[168px] flex-col gap-1 overflow-y-auto px-2 pb-2">
+                {messageQueue.map((queued, index) => {
+                  const isEditing = editingQueuedId === queued.id
+                  const commitEdit = () => {
+                    const trimmed = editingQueuedText.trim()
+                    if (activeTabId && trimmed) {
+                      updateQueuedMessage(activeTabId, queued.id, trimmed)
+                    }
+                    setEditingQueuedId(null)
+                    setEditingQueuedText('')
+                  }
+                  return (
+                    <div
+                      key={queued.id}
+                      className="group flex items-center gap-2 rounded-md bg-[var(--color-surface)] px-2 py-1.5"
+                    >
+                      <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-tertiary)]">{index + 1}.</span>
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={editingQueuedText}
+                          onChange={(e) => setEditingQueuedText(e.target.value)}
+                          onBlur={commitEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+                            else if (e.key === 'Escape') { e.preventDefault(); setEditingQueuedId(null); setEditingQueuedText('') }
+                          }}
+                          className="min-w-0 flex-1 rounded border border-[var(--color-border-focus)] bg-[var(--color-surface)] px-1.5 py-0.5 text-xs text-[var(--color-text-primary)] outline-none"
+                        />
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">
+                          {queued.displayContent || queued.content}
+                        </span>
+                      )}
+                      {!isEditing && (
+                        <button
+                          type="button"
+                          onClick={() => activeTabId && sendQueuedMessageNow(activeTabId, queued.id)}
+                          aria-label={t('chat.sendNow')}
+                          title={t('chat.sendNow')}
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">send</span>
+                        </button>
+                      )}
+                      {!isEditing && (
+                        <button
+                          type="button"
+                          onClick={() => { setEditingQueuedId(queued.id); setEditingQueuedText(queued.displayContent || queued.content) }}
+                          aria-label={t('chat.editQueued')}
+                          title={t('chat.editQueued')}
+                          className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">edit</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => activeTabId && removeQueuedMessage(activeTabId, queued.id)}
+                        aria-label={t('chat.removeFromQueue')}
+                        title={t('chat.removeFromQueue')}
+                        className="flex shrink-0 items-center justify-center rounded p-0.5 text-[var(--color-text-tertiary)] opacity-0 transition-[color,background-color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-error)] focus-visible:opacity-100 group-hover:opacity-100"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div
           ref={panelRef}
           data-testid="chat-input-panel"
@@ -1019,6 +1273,25 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                     textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos)
                   })
                 }
+              }}
+            />
+          )}
+
+          {!isMemberSession && (skillPickerOpen || pluginPickerOpen) && (
+            <SkillPickerMenu
+              ref={skillPickerRef}
+              mode={skillPickerOpen ? 'skill' : 'plugin'}
+              cwd={activeLaunchWorkDir || resolvedWorkDir || undefined}
+              onPick={(name) => {
+                if (skillPickerOpen) {
+                  handlePickSkill(name)
+                } else {
+                  handlePickPlugin(name)
+                }
+              }}
+              onClose={() => {
+                setSkillPickerOpen(false)
+                setPluginPickerOpen(false)
               }}
             />
           )}
@@ -1258,6 +1531,50 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                           <span className="w-[24px] text-center text-[18px] font-bold text-[var(--color-text-secondary)]">/</span>
                           <span className="text-sm text-[var(--color-text-primary)]">{slashCommandsLabel}</span>
                         </button>
+                        <button
+                          onClick={openSkillPicker}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">auto_awesome</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{skillsLabel}</span>
+                        </button>
+                        <button
+                          onClick={openPluginPicker}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">extension</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{pluginsLabel}</span>
+                        </button>
+                        {activeTabId && (
+                          <button
+                            onClick={() => {
+                              useChatStore.getState().setSessionCoordinatorMode(activeTabId, !coordinatorMode)
+                              setPlusMenuOpen(false)
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                          >
+                            <span className={`material-symbols-outlined text-[18px] ${coordinatorMode ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-secondary)]'}`}>hub</span>
+                            <span className="flex-1 text-sm text-[var(--color-text-primary)]">{coordinatorModeLabel}</span>
+                            {coordinatorMode && (
+                              <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)]">check</span>
+                            )}
+                          </button>
+                        )}
+                        {activeTabId && (
+                          <button
+                            onClick={() => {
+                              useChatStore.getState().setSessionSoloPipelineMode(activeTabId, !soloPipelineMode)
+                              setPlusMenuOpen(false)
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                          >
+                            <span className={`material-symbols-outlined text-[18px] ${soloPipelineMode ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-secondary)]'}`}>linear_scale</span>
+                            <span className="flex-1 text-sm text-[var(--color-text-primary)]">{soloPipelineModeLabel}</span>
+                            {soloPipelineMode && (
+                              <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)]">check</span>
+                            )}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

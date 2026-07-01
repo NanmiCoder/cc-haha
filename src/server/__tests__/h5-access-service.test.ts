@@ -6,8 +6,12 @@ import {
   classifyH5PublicBaseUrl,
   collectLocalIPv4Hosts,
   findPrivateLanAddress,
+  getRuntimeTunnelState,
   H5AccessService,
+  resetRuntimeTunnelState,
   resolveEffectiveH5PublicBaseUrl,
+  setRuntimeTunnelState,
+  setRuntimeTunnelUrl,
   validateH5PublicBaseUrl,
 } from '../services/h5AccessService.js'
 import { ProviderService } from '../services/providerService.js'
@@ -16,6 +20,7 @@ let tmpDir: string
 let originalConfigDir: string | undefined
 let originalH5PublicBaseUrl: string | undefined
 let originalH5AutoPublicUrl: string | undefined
+let originalH5TunnelUrl: string | undefined
 
 function getManagedSettingsPath(): string {
   return path.join(tmpDir, 'cc-haha', 'settings.json')
@@ -26,8 +31,10 @@ beforeEach(async () => {
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   originalH5PublicBaseUrl = process.env.CLAUDE_H5_PUBLIC_BASE_URL
   originalH5AutoPublicUrl = process.env.CLAUDE_H5_AUTO_PUBLIC_URL
+  originalH5TunnelUrl = process.env.CLAUDE_H5_TUNNEL_URL
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   delete process.env.CLAUDE_H5_AUTO_PUBLIC_URL
+  delete process.env.CLAUDE_H5_TUNNEL_URL
 })
 
 afterEach(async () => {
@@ -37,6 +44,9 @@ afterEach(async () => {
   else process.env.CLAUDE_H5_PUBLIC_BASE_URL = originalH5PublicBaseUrl
   if (originalH5AutoPublicUrl === undefined) delete process.env.CLAUDE_H5_AUTO_PUBLIC_URL
   else process.env.CLAUDE_H5_AUTO_PUBLIC_URL = originalH5AutoPublicUrl
+  if (originalH5TunnelUrl === undefined) delete process.env.CLAUDE_H5_TUNNEL_URL
+  else process.env.CLAUDE_H5_TUNNEL_URL = originalH5TunnelUrl
+  resetRuntimeTunnelState()
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -235,6 +245,158 @@ describe('H5AccessService', () => {
     const result = await service.enable()
 
     expect(result.settings.publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('runtime tunnel URL overrides stored and configured public URLs', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({
+      publicBaseUrl: 'http://127.0.0.1:5179',
+    })
+
+    // Tunnel source wins over CLAUDE_H5_PUBLIC_BASE_URL and the stored value.
+    process.env.CLAUDE_H5_PUBLIC_BASE_URL = 'https://chat.example.com/app/'
+    process.env.CLAUDE_H5_TUNNEL_URL = 'https://abcd-1234.ngrok-free.app/'
+    const result = await service.enable()
+
+    expect(result.settings.publicBaseUrl).toBe('https://abcd-1234.ngrok-free.app')
+  })
+
+  test('runtime tunnel URL keeps a path prefix intact', async () => {
+    const service = new H5AccessService()
+
+    process.env.CLAUDE_H5_TUNNEL_URL = 'https://foo.ngrok.app/h5/'
+    const result = await service.enable()
+
+    expect(result.settings.publicBaseUrl).toBe('https://foo.ngrok.app/h5')
+  })
+
+  test('malformed tunnel URL is ignored without throwing', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({
+      publicBaseUrl: 'https://chat.example.com/app',
+    })
+
+    process.env.CLAUDE_H5_TUNNEL_URL = 'not a url'
+    const result = await service.enable()
+
+    // Falls back to the stored proxy URL rather than crashing on the bad value.
+    expect(result.settings.publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('tunnel URLs are classified as proxy and accepted without LAN checks', () => {
+    expect(classifyH5PublicBaseUrl('https://abcd-1234.ngrok-free.app')).toBe('proxy')
+    expect(classifyH5PublicBaseUrl('https://foo.ngrok.app/h5')).toBe('proxy')
+
+    expect(validateH5PublicBaseUrl('https://abcd-1234.ngrok-free.app', ['192.168.0.105'])).toEqual({
+      ok: true,
+      kind: 'proxy',
+    })
+    expect(validateH5PublicBaseUrl('https://foo.ngrok.app/h5', ['10.0.0.5'])).toEqual({
+      ok: true,
+      kind: 'proxy',
+    })
+  })
+
+  test('runtime tunnel URL outranks env tunnel and configured URLs', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'http://127.0.0.1:5179' })
+
+    process.env.CLAUDE_H5_PUBLIC_BASE_URL = 'https://chat.example.com/app/'
+    process.env.CLAUDE_H5_TUNNEL_URL = 'https://env-tunnel.ngrok-free.app'
+    // Process-reported tunnel (set by the desktop main process) wins over both.
+    setRuntimeTunnelUrl('https://runtime.trycloudflare.com/')
+    const result = await service.enable()
+
+    expect(result.settings.publicBaseUrl).toBe('https://runtime.trycloudflare.com')
+  })
+
+  test('clearing the runtime tunnel URL falls back to stored/configured', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'https://chat.example.com/app' })
+
+    setRuntimeTunnelUrl('https://runtime.trycloudflare.com')
+    expect((await service.enable()).settings.publicBaseUrl).toBe('https://runtime.trycloudflare.com')
+
+    setRuntimeTunnelUrl(null)
+    expect((await service.getSettings()).publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('malformed runtime tunnel URL is ignored and keeps the previous value', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'https://chat.example.com/app' })
+
+    setRuntimeTunnelUrl('https://good.trycloudflare.com')
+    setRuntimeTunnelUrl('not a url')
+    // The bad report must not blank the good runtime value.
+    expect((await service.enable()).settings.publicBaseUrl).toBe('https://good.trycloudflare.com')
+  })
+
+  test('empty-string runtime tunnel URL does not clear a valid value (only explicit null clears)', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'https://chat.example.com/app' })
+    await service.enable()
+
+    setRuntimeTunnelUrl('https://good.trycloudflare.com')
+    // A status-only heartbeat reports an empty/blank URL: must be ignored.
+    setRuntimeTunnelUrl('')
+    expect((await service.getSettings()).publicBaseUrl).toBe('https://good.trycloudflare.com')
+
+    // Explicit null is the documented way to clear it.
+    setRuntimeTunnelUrl(null)
+    expect((await service.getSettings()).publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('setRuntimeTunnelState without a url field preserves the running URL', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'https://chat.example.com/app' })
+    await service.enable()
+
+    setRuntimeTunnelState({ status: 'running', url: 'https://good.trycloudflare.com', mode: 'quick' })
+    // Heartbeat: status-only update, no url key.
+    setRuntimeTunnelState({ status: 'running' })
+    expect((await service.getSettings()).publicBaseUrl).toBe('https://good.trycloudflare.com')
+  })
+
+  test('runtime tunnel URL does not leak while H5 access is disabled', async () => {
+    const service = new H5AccessService()
+    await service.updateSettings({ publicBaseUrl: 'https://chat.example.com/app' })
+    setRuntimeTunnelUrl('https://runtime.trycloudflare.com')
+
+    // Not enabled: effective URL stays the stored value, tunnel is suppressed.
+    expect((await service.getSettings()).publicBaseUrl).toBe('https://chat.example.com/app')
+  })
+
+  test('diagnostics report tunnel state and hasToken without exposing the token', async () => {
+    const service = new H5AccessService()
+    await service.enable()
+    await service.updateSettings({ tunnelToken: 'cf-secret-token', tunnelMode: 'named' })
+    setRuntimeTunnelState({ status: 'running', url: 'https://h5.example.com', mode: 'named' })
+
+    const diag = await service.getDiagnostics()
+    expect(diag.tunnel.status).toBe('running')
+    expect(diag.tunnel.url).toBe('https://h5.example.com')
+    expect(diag.tunnel.mode).toBe('named')
+    expect(diag.tunnel.hasToken).toBe(true)
+    // The token itself is never part of diagnostics.
+    expect(JSON.stringify(diag)).not.toContain('cf-secret-token')
+  })
+
+  test('tunnel token is stored but never returned through public settings', async () => {
+    const service = new H5AccessService()
+    const settings = await service.updateSettings({ tunnelToken: 'cf-secret-token', tunnelMode: 'named' })
+
+    // Public settings shape carries no tunnel token.
+    expect(JSON.stringify(settings)).not.toContain('cf-secret-token')
+    // But the local-only accessor can read it back for the desktop main process.
+    expect(await service.getTunnelToken()).toBe('cf-secret-token')
+  })
+
+  test('getRuntimeTunnelState reflects the latest reported state', () => {
+    setRuntimeTunnelState({ status: 'starting', mode: 'quick' })
+    expect(getRuntimeTunnelState()).toMatchObject({ status: 'starting', mode: 'quick', url: null })
+
+    setRuntimeTunnelState({ status: 'running', url: 'https://x.trycloudflare.com' })
+    expect(getRuntimeTunnelState()).toMatchObject({ status: 'running', url: 'https://x.trycloudflare.com' })
   })
 
   test('auto LAN mode fills blank or loopback URLs and refreshes manual LAN ports', () => {

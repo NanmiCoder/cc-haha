@@ -15,6 +15,11 @@ import {
 } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { sessionService } from '../services/sessionService.js'
+import {
+  formatHandoffSystemPrompt,
+  getCachedSessionSummary,
+  rebuildRecentRawForHandoff,
+} from '../services/sessionSummaryService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import { isOpenAIOfficialProviderId } from '../services/openaiOfficialProvider.js'
@@ -86,10 +91,23 @@ const sessionTitleState = new Map<string, {
   generationSeq: number
 }>()
 
-type RuntimeOverride = {
+export type RuntimeOverride = {
   providerId: string | null
   modelId: string
   effort?: string
+  thinkingEnabled?: boolean
+  /**
+   * Snapshot of the provider's `revision` at the moment this override was
+   * captured. Compared on the next `set_runtime_config` to detect that the
+   * underlying provider config (baseUrl / apiKey / apiFormat / model
+   * mapping) has changed even when the override tuple is the same — which
+   * would otherwise silently keep the running CLI on a stale env snapshot.
+   *
+   * Absent for runtime overrides loaded from older session JSONL metadata
+   * that pre-date this field; treated as 0 so any subsequent
+   * provider.update bumps it past the captured value.
+   */
+  providerRevision?: number
 }
 
 type ActiveUserTurnState = {
@@ -100,6 +118,26 @@ const runtimeOverrides = new Map<string, RuntimeOverride>()
 const activeUserTurns = new Map<string, ActiveUserTurnState>()
 const deferredRuntimeRestarts = new Map<string, RuntimeOverride>()
 const deferredPermissionModes = new Map<string, string>()
+
+// Per-session orchestration ("协调") mode. In-memory only: a transient session
+// preference, not persisted across app restart / resume (v1). Read by
+// getRuntimeSettings and threaded into the CLI as --append-system-prompt.
+const coordinatorModeSessions = new Set<string>()
+
+// Per-session Solo Pipeline mode. Same semantics as coordinatorModeSessions but
+// drives a different prompt: a 5-stage solo-agent pipeline (planner → builder →
+// tester → reviewer → integrator) instead of the multi-worker coordinator
+// directive. Mutually exclusive with coordinator mode at the WS handler level
+// (handleSetPipelineMode clears the coordinator flag, and vice versa) so the
+// CLI subprocess never sees both --append-system-prompt addenda at once.
+const soloPipelineModeSessions = new Set<string>()
+
+// Per-session pending hand-off summary text. When set, the next CLI launch
+// (or restart) appends this text via --append-system-prompt so the new
+// session starts with context from the user's previous session in this
+// project. In-memory only — applied once at startup. The cleanup-on-stop
+// path drops it so a later restart for unrelated reasons doesn't re-attach.
+const handoffSummarySessions = new Map<string, string>()
 
 const runtimeTransitionPromises = new Map<string, Promise<void>>()
 const sessionStartupPromises = new Map<string, Promise<void>>()
@@ -228,6 +266,18 @@ export const handleWebSocket = {
 
         case 'set_permission_mode':
           void handleSetPermissionMode(ws, message)
+          break
+
+        case 'set_coordinator_mode':
+          void handleSetCoordinatorMode(ws, message)
+          break
+
+        case 'set_pipeline_mode':
+          void handleSetPipelineMode(ws, message)
+          break
+
+        case 'set_handoff_summary':
+          void handleSetHandoffSummary(ws, message)
           break
 
         case 'set_runtime_config':
@@ -702,6 +752,166 @@ async function applyPermissionModeToActiveSession(
   await persistSessionPermissionMode(sessionId, mode)
 }
 
+async function handleSetCoordinatorMode(
+  ws: ServerWebSocket<WebSocketData>,
+  message: Extract<ClientMessage, { type: 'set_coordinator_mode' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  const enabled = message.enabled === true
+  const was = coordinatorModeSessions.has(sessionId)
+  if (was === enabled) return
+
+  if (enabled) coordinatorModeSessions.add(sessionId)
+  else coordinatorModeSessions.delete(sessionId)
+
+  // Orchestration mode is applied via --append-system-prompt at CLI launch, so
+  // an active session must restart to pick up (or drop) the directive. Defer
+  // until idle so we never interrupt an in-progress turn; reuses the same
+  // restart path as runtime-config changes (which re-reads getRuntimeSettings).
+  const pendingStartup = sessionStartupPromises.get(sessionId)
+  if (pendingStartup) {
+    await enqueueRuntimeTransition(sessionId, async () => {
+      await pendingStartup.catch(() => undefined)
+      if (!conversationService.hasSession(sessionId)) return
+      await scheduleRestartSessionWithRuntimeConfig(ws, sessionId)
+    })
+    return
+  }
+
+  if (!conversationService.hasSession(sessionId)) {
+    // No live process yet — the flag is recorded and applied on next start.
+    return
+  }
+
+  await enqueueRuntimeTransition(sessionId, () =>
+    scheduleRestartSessionWithRuntimeConfig(ws, sessionId),
+  )
+}
+
+/**
+ * Solo Pipeline mode toggle. Sibling of `handleSetCoordinatorMode` —
+ * the two modes are mutually exclusive (enabling Solo clears the
+ * coordinator flag for the same session), so a single CLI subprocess
+ * launches with at most one mode-specific `--append-system-prompt`.
+ *
+ * `flavor: 'solo'` enables the Solo pipeline; `flavor: 'normal'` clears
+ * it. Like coordinator mode, this is an in-memory per-session preference
+ * applied at next CLI launch (or via deferred restart of an active
+ * session).
+ */
+async function handleSetPipelineMode(
+  ws: ServerWebSocket<WebSocketData>,
+  message: Extract<ClientMessage, { type: 'set_pipeline_mode' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  const enabled = message.flavor === 'solo'
+  const was = soloPipelineModeSessions.has(sessionId)
+  // Mutual exclusion: enabling Solo clears any coordinator flag for the
+  // same session. The two modes ship different system-prompt addenda and
+  // assume distinct top-of-loop semantics; running them simultaneously
+  // would feed contradictory directives to the same CLI subprocess.
+  const willClearCoordinator =
+    enabled && coordinatorModeSessions.has(sessionId)
+  if (was === enabled && !willClearCoordinator) return
+
+  if (enabled) {
+    soloPipelineModeSessions.add(sessionId)
+    coordinatorModeSessions.delete(sessionId)
+  } else {
+    soloPipelineModeSessions.delete(sessionId)
+  }
+
+  // Same restart geometry as handleSetCoordinatorMode — the addendum is
+  // applied via --append-system-prompt at CLI launch, so an active session
+  // must restart to pick up (or drop) the directive. Defer until idle so
+  // we never interrupt an in-progress turn.
+  const pendingStartup = sessionStartupPromises.get(sessionId)
+  if (pendingStartup) {
+    await enqueueRuntimeTransition(sessionId, async () => {
+      await pendingStartup.catch(() => undefined)
+      if (!conversationService.hasSession(sessionId)) return
+      await scheduleRestartSessionWithRuntimeConfig(ws, sessionId)
+    })
+    return
+  }
+
+  if (!conversationService.hasSession(sessionId)) {
+    // No live process yet — the flag is recorded and applied on next start.
+    return
+  }
+
+  await enqueueRuntimeTransition(sessionId, () =>
+    scheduleRestartSessionWithRuntimeConfig(ws, sessionId),
+  )
+}
+
+/**
+ * Stage a hand-off summary from the user's previous session as the system
+ * prompt addendum on this session's CLI launch. Frontend dispatches this
+ * before the first user message after clicking "Continue from here".
+ *
+ * Cache-only: the frontend's "Continue from here" path always calls the
+ * HTTP `POST /api/sessions/:id/summary` endpoint first (which performs
+ * the LLM call if needed), and ONLY dispatches this WS message after the
+ * HTTP returned a successful summary. So we should always find a cached
+ * summary on disk here. If we somehow don't, fail fast and silently — the
+ * frontend has already committed to its auto-handoff path; injecting a
+ * silent retry through the LLM here would block the WS handler for tens
+ * of seconds and double-charge the user. Better to leave the new session
+ * without hand-off context (the trigger message will simply read as a
+ * normal "continue" prompt with no system-prompt addendum) than to hang.
+ */
+async function handleSetHandoffSummary(
+  ws: ServerWebSocket<WebSocketData>,
+  message: Extract<ClientMessage, { type: 'set_handoff_summary' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  const previousSessionId = message.previousSessionId
+  if (!previousSessionId || previousSessionId === sessionId) return
+
+  let summaryText: string | undefined
+  try {
+    const summary = await getCachedSessionSummary(previousSessionId)
+    if (summary) {
+      // Deep handoff: rebuild the verbatim tail with enlarged sizing
+      // (~12k tokens vs ~4k default) from the live JSONL. Keeps the
+      // cached LLM-generated main/recent so there's no extra LLM cost —
+      // we only enlarge the verbatim slice, which is pure text slicing.
+      let formattedSummary = summary
+      if (message.deep === true) {
+        const deepRaw = await rebuildRecentRawForHandoff(previousSessionId)
+        if (deepRaw) {
+          formattedSummary = { ...summary, recentRaw: deepRaw }
+        }
+      }
+      summaryText = formatHandoffSystemPrompt(formattedSummary)
+    } else {
+      console.warn(
+        `[WS] Hand-off staging: no cached summary for ${previousSessionId}; ` +
+          `the frontend should have generated it via HTTP before sending this WS message. ` +
+          `Skipping system-prompt staging — the new session will start without hand-off context.`,
+      )
+    }
+  } catch (error) {
+    console.warn(
+      `[WS] Hand-off summary read failed for ${previousSessionId}; continuing without context. Error:`,
+      error,
+    )
+  }
+
+  if (!summaryText) return
+
+  // Stash it. The next CLI launch / restart will append it via
+  // --append-system-prompt. Restart only if a CLI is already live for this
+  // session (otherwise it'll be picked up on the upcoming first start).
+  handoffSummarySessions.set(sessionId, summaryText)
+
+  if (!conversationService.hasSession(sessionId)) return
+  await enqueueRuntimeTransition(sessionId, () =>
+    scheduleRestartSessionWithRuntimeConfig(ws, sessionId),
+  )
+}
+
 async function handleSetRuntimeConfig(
   ws: ServerWebSocket<WebSocketData>,
   message: Extract<ClientMessage, { type: 'set_runtime_config' }>
@@ -726,19 +936,24 @@ async function handleSetRuntimeConfig(
     })
     return
   }
+  // Per-session thinking override. `undefined` means "inherit from global user setting"
+  // (which `resolveDesktopThinkingMode` reads in getRuntimeSettings); a concrete boolean
+  // wins over the global toggle.
+  const thinkingEnabled =
+    typeof message.thinkingEnabled === 'boolean' ? message.thinkingEnabled : undefined
 
-  const nextOverride = {
-    providerId: message.providerId ?? null,
+  const providerId = message.providerId ?? null
+  const providerRevision = await resolveProviderRevision(providerId)
+
+  const nextOverride: RuntimeOverride = {
+    providerId,
     modelId,
     ...(effortLevel ? { effort: effortLevel } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(providerRevision > 0 ? { providerRevision } : {}),
   }
   const prevOverride = runtimeOverrides.get(sessionId)
-  if (
-    prevOverride &&
-    prevOverride.providerId === nextOverride.providerId &&
-    prevOverride.modelId === nextOverride.modelId &&
-    prevOverride.effort === nextOverride.effort
-  ) {
+  if (runtimeOverridesMatch(prevOverride, nextOverride)) {
     return
   }
 
@@ -757,7 +972,7 @@ async function handleSetRuntimeConfig(
   if (conversationService.hasSession(sessionId)) {
     await enqueueRuntimeTransition(sessionId, async () => {
       await persistSessionRuntimeConfig(sessionId, nextOverride)
-      await restartSessionWithRuntimeConfig(ws, sessionId)
+      await scheduleRestartSessionWithRuntimeConfig(ws, sessionId)
     })
     return
   }
@@ -776,14 +991,12 @@ async function handleSetRuntimeConfig(
       await pendingStartup.catch(() => undefined)
       const currentOverride = runtimeOverrides.get(sessionId)
       if (
-        currentOverride?.providerId !== nextOverride.providerId ||
-        currentOverride.modelId !== nextOverride.modelId ||
-        currentOverride.effort !== nextOverride.effort ||
+        !runtimeOverridesMatch(currentOverride, nextOverride) ||
         !conversationService.hasSession(sessionId)
       ) {
         return
       }
-      await restartSessionWithRuntimeConfig(ws, sessionId)
+      await scheduleRestartSessionWithRuntimeConfig(ws, sessionId)
     })
     return
   }
@@ -852,7 +1065,7 @@ async function persistSessionPermissionMode(
 
 async function persistSessionRuntimeConfig(
   sessionId: string,
-  runtime: { providerId: string | null; modelId: string; effort?: string },
+  runtime: { providerId: string | null; modelId: string; effort?: string; thinkingEnabled?: boolean },
 ): Promise<void> {
   const workDir =
     conversationService.getSessionWorkDir(sessionId) ||
@@ -865,6 +1078,7 @@ async function persistSessionRuntimeConfig(
     runtimeProviderId: runtime.providerId,
     runtimeModelId: runtime.modelId,
     ...(runtime.effort ? { effortLevel: runtime.effort } : {}),
+    ...(runtime.thinkingEnabled !== undefined ? { thinkingEnabled: runtime.thinkingEnabled } : {}),
   })
 }
 
@@ -916,13 +1130,19 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
     // First try graceful interrupt via SDK control message
     conversationService.sendInterrupt(sessionId)
 
-    // Force-kill if still running after 3 seconds
-    setTimeout(() => {
-      if (conversationService.hasSession(sessionId)) {
-        console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
-        conversationService.stopSession(sessionId)
-      }
-    }, 3_000)
+    // Force-kill if still running after 3 seconds. Capture the exact process
+    // instance now: if the user switches provider/model in the meantime, the
+    // restart replaces this process with a new one, and we must not kill that
+    // new process during its startup (which would surface as "CLI exited
+    // during startup with code 143").
+    const instanceId = conversationService.getActiveInstanceId(sessionId)
+    if (instanceId) {
+      setTimeout(() => {
+        if (conversationService.stopSessionInstance(sessionId, instanceId)) {
+          console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
+        }
+      }, 3_000)
+    }
   }
 
   sendMessage(ws, { type: 'status', state: 'idle' })
@@ -1215,6 +1435,9 @@ function cleanupSessionRuntimeState(sessionId: string) {
   sessionSlashCommands.delete(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
+  coordinatorModeSessions.delete(sessionId)
+  soloPipelineModeSessions.delete(sessionId)
+  handoffSummarySessions.delete(sessionId)
   activeUserTurns.delete(sessionId)
   deferredRuntimeRestarts.delete(sessionId)
   deferredPermissionModes.delete(sessionId)
@@ -1326,6 +1549,105 @@ function isDuplicateOfLastApiError(
     resultMessage.includes(lastApiError.message) &&
     /CLI (?:process exited unexpectedly|exited during startup)/i.test(resultMessage)
   )
+}
+
+/**
+ * True when the message looks like an API rejection caused by the
+ * provider not being able to relay Anthropic's `thinking` field. The
+ * canonical case is Bedrock proxies that wrap unknown Anthropic params
+ * into AWS's `additionalModelRequestFields`, which Bedrock then rejects
+ * for non-thinking-aware target models.
+ *
+ * We deliberately keep the patterns narrow — only fire on phrases that
+ * unambiguously point at thinking. False positives here would
+ * permanently disable thinking on the wrong provider until the user
+ * edits its config.
+ */
+const THINKING_INCOMPAT_PATTERNS = [
+  /additionalModelRequestFields/i,
+  /\bthinking\b[^.]*\b(not supported|unsupported|invalid|disabled|rejected)\b/i,
+  /unknown.{0,40}\bthinking\b/i,
+] as const
+
+export function detectThinkingIncompatMessage(message: string | undefined | null): boolean {
+  if (!message) return false
+  return THINKING_INCOMPAT_PATTERNS.some((rx) => rx.test(message))
+}
+
+/**
+ * One-shot guard so we don't spam markThinkingIncompatible / sidecar
+ * restart on a burst of identical errors from a single failed turn.
+ * Keyed by (sessionId, providerId) — clears when the session is
+ * destroyed or when an updateProvider re-arms the provider. Process-
+ * local only; persisted state lives in providers.json.
+ */
+const recentThinkingIncompatNotifications = new Set<string>()
+
+/**
+ * If any of the just-emitted server messages is an `error` whose body
+ * matches the thinking-incompat patterns, attribute it to the currently
+ * active provider, sticky-mark the provider in providers.json, and
+ * schedule a sidecar restart so the NEXT call goes out without the
+ * thinking field. Best-effort and idempotent — repeated calls within
+ * the same session for the same provider are de-duplicated by
+ * `recentThinkingIncompatNotifications`.
+ */
+async function notifyThinkingIncompatIfMatches(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  serverMsgs: ReadonlyArray<ServerMessage>,
+): Promise<void> {
+  const errorMsg = serverMsgs.find(
+    (msg): msg is Extract<ServerMessage, { type: 'error' }> => msg.type === 'error',
+  )
+  if (!errorMsg || !detectThinkingIncompatMessage(errorMsg.message)) return
+
+  // Resolve the active provider id. Prefer the runtime override (the
+  // session may be on a non-default provider via set_runtime_config);
+  // fall back to the global active id.
+  const runtimeOverride = runtimeOverrides.get(sessionId)
+  let providerId: string | null =
+    typeof runtimeOverride?.providerId === 'string'
+      ? runtimeOverride.providerId
+      : null
+  if (!providerId) {
+    const { activeId } = await providerService.listProviders()
+    providerId = activeId
+  }
+  if (!providerId || isOpenAIOfficialProviderId(providerId)) return
+
+  const dedupKey = `${sessionId}|${providerId}`
+  if (recentThinkingIncompatNotifications.has(dedupKey)) return
+  recentThinkingIncompatNotifications.add(dedupKey)
+
+  try {
+    const updated = await providerService.markThinkingIncompatible(
+      providerId,
+      errorMsg.message,
+    )
+    if (!updated) return
+
+    sendMessage(ws, {
+      type: 'provider_compat_event',
+      providerId,
+      kind: 'thinking_incompatible',
+      reason: errorMsg.message.slice(0, 500),
+    })
+
+    // Schedule a sidecar restart so the next launch picks up
+    // CLAUDE_CODE_DISABLE_THINKING=1. Uses the same enqueue path as
+    // set_runtime_config so we don't tear down a streaming response
+    // mid-flight; the restart applies on the next idle transition.
+    if (conversationService.hasSession(sessionId)) {
+      await enqueueRuntimeTransition(sessionId, () =>
+        scheduleRestartSessionWithRuntimeConfig(ws, sessionId),
+      )
+    }
+  } catch (err) {
+    // De-dup so we don't retry endlessly on a permanent failure (e.g.
+    // disk full). Operator can re-arm by editing the provider.
+    console.warn(`[WS] markThinkingIncompatible failed for ${providerId}: ${err}`)
+  }
 }
 
 function bindPrewarmMetadataCapture(sessionId: string) {
@@ -1997,6 +2319,21 @@ function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage)
   ws.send(JSON.stringify(message))
 }
 
+// Restart the CLI subprocess to apply a runtime-config change. The override
+// values are already in `runtimeOverrides[sessionId]` (and persisted) before
+// this is called, so getRuntimeSettings will read them at restart time.
+//
+// Mid-turn protection is handled upstream by the active-turn deferral
+// (`shouldDeferRuntimeRestartForActiveTurn` + `deferredRuntimeRestarts`, drained
+// by the turn's `result` callback in `bindActiveUserTurnCompletion`), which
+// gates on the real turn lifecycle rather than on outbound status events.
+async function scheduleRestartSessionWithRuntimeConfig(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+): Promise<void> {
+  await restartSessionWithRuntimeConfig(ws, sessionId)
+}
+
 function sendError(ws: ServerWebSocket<WebSocketData>, message: string, code: string) {
   sendMessage(ws, { type: 'error', message, code })
 }
@@ -2443,6 +2780,17 @@ function bindClientSessionOutput(
       sendMessage(ws, msg)
     }
 
+    // Provider-level compatibility detection: if any of the messages
+    // we just translated is an `error` whose payload matches the
+    // thinking-incompat patterns, mark the active provider so the
+    // NEXT sidecar launch suppresses the `thinking` field. Fire the
+    // sidecar restart in the background so we don't kill the current
+    // error reporting flow — restart happens on the next idle.
+    void notifyThinkingIncompatIfMatches(ws, sessionId, serverMsgs).catch(
+      (err) => {
+        console.warn(`[WS] thinking-incompat notification failed: ${err}`)
+      },
+    )
   }
 
   clientOutputCallbacks.set(ws, { sessionId, callback })
@@ -2453,8 +2801,24 @@ type RuntimeSettings = {
   permissionMode?: string
   model?: string
   effort?: string
-  thinking?: 'disabled'
+  thinking?: 'enabled' | 'disabled'
   providerId?: string | null
+  coordinatorMode?: boolean
+  /**
+   * Solo Pipeline mode toggle. When true, the CLI is launched (or
+   * restarted) with `--append-system-prompt` carrying the 5-stage Solo
+   * prompt instead of the coordinator orchestration directive. Mutually
+   * exclusive with `coordinatorMode` (handleSetPipelineMode enforces this).
+   */
+  soloPipelineMode?: boolean
+  /**
+   * Hand-off summary system prompt addendum. When present, the CLI is
+   * launched (or restarted) with `--append-system-prompt` carrying this
+   * text. Set by handleSetHandoffSummary and consumed exactly once at the
+   * next CLI start; cleared after consumption to avoid re-attaching on
+   * unrelated restarts.
+   */
+  handoffSystemPrompt?: string
 }
 
 function isKnownRuntimeProviderId(
@@ -2467,7 +2831,61 @@ function isKnownRuntimeProviderId(
   )
 }
 
+/**
+ * Look up the current revision of a saved provider for use in
+ * {@link RuntimeOverride.providerRevision}. Returns 0 for the OpenAI Official
+ * built-in (it has no provider config to mutate), 0 for unknown / null ids,
+ * and never throws — a stale providerId is handled by the existing
+ * stale-providerId guard in {@link getRuntimeSettings}.
+ */
+async function resolveProviderRevision(
+  providerId: string | null,
+): Promise<number> {
+  if (!providerId) return 0
+  if (isOpenAIOfficialProviderId(providerId)) return 0
+  try {
+    const provider = await providerService.getProvider(providerId)
+    return provider.revision ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Pure equality check used by `handleSetRuntimeConfig`'s short-circuit.
+ * Exported for unit testing — kept here (not in a separate module) because
+ * it depends on the locally-defined RuntimeOverride shape.
+ *
+ * Returns true when the two overrides describe the same effective CLI
+ * runtime — i.e. respawning the CLI would be a no-op. Critically this
+ * includes `providerRevision`: when the user edits provider config without
+ * touching modelId/effort, the tuple appears unchanged but the spawn-time
+ * env (baseUrl / apiKey / model mapping) is stale, so we must consider
+ * that a difference and force a restart.
+ */
+export function runtimeOverridesMatch(
+  prev: RuntimeOverride | undefined,
+  next: RuntimeOverride,
+): boolean {
+  if (!prev) return false
+  return (
+    prev.providerId === next.providerId &&
+    prev.modelId === next.modelId &&
+    prev.effort === next.effort &&
+    prev.thinkingEnabled === next.thinkingEnabled &&
+    (prev.providerRevision ?? 0) === (next.providerRevision ?? 0)
+  )
+}
+
 async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> {
+  const coordinatorMode = sessionId ? coordinatorModeSessions.has(sessionId) : false
+  const soloPipelineMode = sessionId ? soloPipelineModeSessions.has(sessionId) : false
+  // Hand-off summary is one-shot: read AND remove. The next CLI start will
+  // pick it up; subsequent unrelated restarts won't re-attach a stale summary.
+  const handoffSystemPrompt = sessionId ? handoffSummarySessions.get(sessionId) : undefined
+  if (sessionId && handoffSystemPrompt) {
+    handoffSummarySessions.delete(sessionId)
+  }
   const launchInfo = sessionId
     ? await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
     : null
@@ -2480,12 +2898,16 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
           providerId: launchInfo.runtimeProviderId ?? null,
           modelId: launchInfo.runtimeModelId,
           ...(launchInfo.effortLevel ? { effort: launchInfo.effortLevel } : {}),
+          ...(launchInfo.thinkingEnabled !== undefined
+            ? { thinkingEnabled: launchInfo.thinkingEnabled }
+            : {}),
         }
       : undefined
   const runtimeOverride = sessionId
     ? runtimeOverrides.get(sessionId) ?? persistedRuntimeOverride
     : undefined
   if (runtimeOverride) {
+    let resolvedModelId = runtimeOverride.modelId
     if (typeof runtimeOverride.providerId === 'string') {
       const { providers } = await providerService.listProviders()
       const providerExists = isKnownRuntimeProviderId(runtimeOverride.providerId, providers)
@@ -2498,19 +2920,55 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
         return {
           ...defaults,
           permissionMode: sessionPermissionMode ?? defaults.permissionMode,
+          coordinatorMode,
+          soloPipelineMode,
+          ...(handoffSystemPrompt ? { handoffSystemPrompt } : {}),
+        }
+      }
+
+      // Stale-modelId guard: when the persisted runtime modelId is no longer
+      // present in any of the active provider's four model slots
+      // (main / haiku / sonnet / opus), the upstream will return 404 and we
+      // surface "There's an issue with the selected model (...)" — which is
+      // exactly the cycle a user hits when they rename a model in Settings
+      // and resume an old session. Fall back to the provider's main model
+      // instead of letting `--model <unknown>` reach the wire.
+      // Skipped for the OpenAI Official built-in (no editable mapping).
+      if (!isOpenAIOfficialProviderId(runtimeOverride.providerId)) {
+        const provider = providers.find((p) => p.id === runtimeOverride.providerId)
+        if (provider) {
+          const knownModels = new Set(
+            [
+              provider.models.main,
+              provider.models.haiku,
+              provider.models.sonnet,
+              provider.models.opus,
+            ]
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
+              .filter(Boolean),
+          )
+          if (knownModels.size > 0 && !knownModels.has(runtimeOverride.modelId)) {
+            console.warn(
+              `[WS] Persisted runtime modelId '${runtimeOverride.modelId}' is no longer in provider ${provider.id}'s model map; falling back to ${provider.models.main}`,
+            )
+            resolvedModelId = provider.models.main
+          }
         }
       }
     }
 
     const userSettings = await settingsService.getUserSettings()
-    const thinking = resolveDesktopThinkingMode(userSettings)
+    const thinking = resolveDesktopThinkingMode(userSettings, runtimeOverride.thinkingEnabled)
 
     return {
       permissionMode: sessionPermissionMode ?? await settingsService.getPermissionMode().catch(() => undefined),
-      model: runtimeOverride.modelId,
+      model: resolvedModelId,
       effort: runtimeOverride.effort,
       thinking,
       providerId: runtimeOverride.providerId,
+      coordinatorMode,
+      soloPipelineMode,
+      ...(handoffSystemPrompt ? { handoffSystemPrompt } : {}),
     }
   }
 
@@ -2519,6 +2977,9 @@ async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSettings> 
     ...defaults,
     permissionMode: sessionPermissionMode ?? defaults.permissionMode,
     effort: launchInfo?.effortLevel ?? defaults.effort,
+    coordinatorMode,
+    soloPipelineMode,
+    ...(handoffSystemPrompt ? { handoffSystemPrompt } : {}),
   }
 }
 
@@ -2584,7 +3045,14 @@ async function getDefaultRuntimeSettings(): Promise<RuntimeSettings> {
 
 function resolveDesktopThinkingMode(
   settings: Record<string, unknown>,
-): 'disabled' | undefined {
+  override?: boolean,
+): 'enabled' | 'disabled' | undefined {
+  // Per-session override wins over the global toggle. true → 'enabled' (force on),
+  // false → 'disabled' (force off). Undefined falls back to user settings, where
+  // alwaysThinkingEnabled === false explicitly maps to 'disabled' and any other
+  // value (true / undefined / missing) lets the CLI default (adaptive) apply.
+  if (override === true) return 'enabled'
+  if (override === false) return 'disabled'
   return settings.alwaysThinkingEnabled === false ? 'disabled' : undefined
 }
 

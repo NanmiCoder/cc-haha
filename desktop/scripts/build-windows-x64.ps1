@@ -127,6 +127,10 @@ try {
   }
 
   Write-Step 'Building renderer and Electron main/preload bundles...'
+  & bun run build:plugin-seed
+  if ($LASTEXITCODE -ne 0) {
+    throw "[build-windows-x64] build:plugin-seed failed (exit $LASTEXITCODE)"
+  }
   & bun run build
   if ($LASTEXITCODE -ne 0) {
     throw "[build-windows-x64] renderer build failed (exit $LASTEXITCODE)"

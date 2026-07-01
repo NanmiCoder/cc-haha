@@ -35,6 +35,10 @@ const inputSchema = lazySchema(() => z.strictObject({
 type InputSchema = ReturnType<typeof inputSchema>;
 type TaskOutputToolInput = z.infer<InputSchema>;
 
+function formatMissingTaskError(taskId: string): string {
+  return `No active task found with ID: ${taskId}. The task may have completed and been evicted, or it may belong to another process/session. If this ID came from the Agent tool, use TaskOutput only while the task is active; otherwise prefer Read on the output_file path from the Agent result or <task-notification>.`;
+}
+
 // Unified output type covering all task types
 type TaskOutput = {
   task_id: string;
@@ -197,7 +201,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     if (!task) {
       return {
         result: false,
-        message: `No task found with ID: ${task_id}`,
+        message: formatMissingTaskError(task_id),
         errorCode: 2
       };
     }
@@ -214,7 +218,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     const appState = toolUseContext.getAppState();
     const task = appState.tasks?.[task_id] as TaskState | undefined;
     if (!task) {
-      throw new Error(`No task found with ID: ${task_id}`);
+      throw new Error(formatMissingTaskError(task_id));
     }
     if (!block) {
       // Non-blocking: return current state

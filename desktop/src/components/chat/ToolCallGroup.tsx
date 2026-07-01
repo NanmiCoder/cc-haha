@@ -91,7 +91,6 @@ function isToolCallResolved(
   resultMap: Map<string, ToolResult>,
   childToolCallsByParent: Map<string, ToolCall[]>,
 ): boolean {
-  if (toolCall.status === 'stopped') return true
   if (!resultMap.has(toolCall.toolUseId)) return false
 
   return (childToolCallsByParent.get(toolCall.toolUseId) ?? []).every((childToolCall) =>
@@ -523,6 +522,7 @@ function AgentCallCard({
   const previewText = terminalTaskReport || fullOutputText || terminalTaskSummary
   const outputSummary = previewText ? getAgentOutputSummary(previewText) : ''
   const description = typeof input.description === 'string' ? input.description : ''
+  const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
 
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)]/50 bg-[var(--color-surface-container-lowest)]">
@@ -531,6 +531,14 @@ function AgentCallCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">Agent</span>
+            {subagentType && (
+              <span
+                className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-[var(--color-text-tertiary)]"
+                title={`subagent_type: ${subagentType}`}
+              >
+                → {subagentType}
+              </span>
+            )}
             {description && (
               <span className="truncate text-[12px] text-[var(--color-text-secondary)]">
                 {description}
@@ -653,7 +661,6 @@ function ToolCallTree({
         result={result ? { content: result.content, isError: result.isError } : null}
         compact={compact}
         isPending={toolCall.isPending}
-        status={toolCall.status}
         partialInput={toolCall.partialInput}
       />
       {childToolCalls.length > 0 && (

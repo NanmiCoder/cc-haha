@@ -69,6 +69,13 @@ export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 // in a single session, wasting ~250K API calls/day globally.
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 
+// 方案2: minimum turns between two automatic compactions. After a successful
+// autocompaction we reset turnCounter to 0 (query.ts); we then refuse to
+// proactively compact again until this many turns have elapsed — UNLESS the
+// context is at the hard blocking limit (where skipping would risk a
+// prompt-too-long error). Prevents "compact every couple of messages" thrash.
+const MIN_TURNS_BETWEEN_AUTO_COMPACT = 3
+
 export function getAutoCompactThreshold(model: string): number {
   const effectiveContextWindow = getEffectiveContextWindowSize(model)
 
@@ -238,6 +245,51 @@ export async function shouldAutoCompact(
   return isAboveAutoCompactThreshold
 }
 
+// 方案2 predicate (pure, exported for tests): suppress proactive autocompaction
+// for the first MIN_TURNS_BETWEEN_AUTO_COMPACT turns after a compaction, but
+// never when we're already at the hard blocking limit.
+export function shouldThrottleAutoCompact(
+  tracking: AutoCompactTrackingState | undefined,
+  isAtBlockingLimit: boolean,
+): boolean {
+  if (isAtBlockingLimit) return false
+  return (
+    tracking?.compacted === true &&
+    tracking.turnCounter < MIN_TURNS_BETWEEN_AUTO_COMPACT
+  )
+}
+
+// 方案1: a compaction is "ineffective" when, after it completes, the resulting
+// context is still at or above the autocompact threshold — i.e. the very next
+// turn would trigger autocompact again. We feed these into the same circuit
+// breaker as hard failures so a run of ineffective compactions eventually
+// stops the loop instead of re-summarizing on every turn forever (each attempt
+// burns a full summarization API call). truePostCompactTokenCount is an
+// estimate; when it's absent we conservatively treat the compaction as
+// effective so we never falsely trip the breaker.
+export function isIneffectiveCompaction(
+  compactionResult: CompactionResult,
+  model: string,
+): boolean {
+  const truePost = compactionResult.truePostCompactTokenCount
+  if (truePost === undefined) return false
+  return truePost >= getAutoCompactThreshold(model)
+}
+
+// 方案3 predicate (pure, exported for tests): the context is "exhausted" when
+// the auto-compaction circuit breaker has tripped (compaction keeps failing or
+// staying over threshold) AND the live token count is still at/over the
+// threshold. That's the signal to suggest a fresh session.
+export function isContextExhausted(
+  tracking: AutoCompactTrackingState | undefined,
+  tokenCount: number,
+  model: string,
+): boolean {
+  const circuitTripped =
+    (tracking?.consecutiveFailures ?? 0) >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
+  return circuitTripped && tokenCount >= getAutoCompactThreshold(model)
+}
+
 export async function autoCompactIfNeeded(
   messages: Message[],
   toolUseContext: ToolUseContext,
@@ -249,6 +301,11 @@ export async function autoCompactIfNeeded(
   wasCompacted: boolean
   compactionResult?: CompactionResult
   consecutiveFailures?: number
+  // 方案3: set when auto-compaction has given up (circuit breaker tripped) yet
+  // the context is still over the threshold — i.e. compaction can no longer
+  // help. The query loop surfaces this so the desktop can suggest starting a
+  // fresh session (carrying the latest summary) instead of degrading silently.
+  contextExhausted?: boolean
 }> {
   if (isEnvTruthy(process.env.DISABLE_COMPACT)) {
     return { wasCompacted: false }
@@ -261,7 +318,13 @@ export async function autoCompactIfNeeded(
     tracking?.consecutiveFailures !== undefined &&
     tracking.consecutiveFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
   ) {
-    return { wasCompacted: false }
+    const model = toolUseContext.options.mainLoopModel
+    const tokenCount =
+      tokenCountWithEstimation(messages) - (snipTokensFreed ?? 0)
+    return {
+      wasCompacted: false,
+      contextExhausted: isContextExhausted(tracking, tokenCount, model),
+    }
   }
 
   const model = toolUseContext.options.mainLoopModel
@@ -274,6 +337,23 @@ export async function autoCompactIfNeeded(
 
   if (!shouldCompact) {
     return { wasCompacted: false }
+  }
+
+  // 方案2: turn throttle. If we compacted very recently, don't compact again
+  // for a few turns — give the context a chance to settle instead of
+  // re-summarizing every message. The hard blocking limit overrides this:
+  // when we're that close to the context window we must compact regardless,
+  // otherwise the next request risks a prompt-too-long failure.
+  if (tracking?.compacted === true && tracking.turnCounter < MIN_TURNS_BETWEEN_AUTO_COMPACT) {
+    const tokenCount =
+      tokenCountWithEstimation(messages) - (snipTokensFreed ?? 0)
+    const { isAtBlockingLimit } = calculateTokenWarningState(tokenCount, model)
+    if (shouldThrottleAutoCompact(tracking, isAtBlockingLimit)) {
+      logForDebugging(
+        `autocompact: throttled (turnsSinceCompact=${tracking.turnCounter} < ${MIN_TURNS_BETWEEN_AUTO_COMPACT}, not at blocking limit)`,
+      )
+      return { wasCompacted: false }
+    }
   }
 
   const recompactionInfo: RecompactionInfo = {
@@ -306,6 +386,9 @@ export async function autoCompactIfNeeded(
     return {
       wasCompacted: true,
       compactionResult: sessionMemoryResult,
+      consecutiveFailures: isIneffectiveCompaction(sessionMemoryResult, model)
+        ? (tracking?.consecutiveFailures ?? 0) + 1
+        : 0,
     }
   }
 
@@ -325,10 +408,27 @@ export async function autoCompactIfNeeded(
     setLastSummarizedMessageId(undefined)
     runPostCompactCleanup(querySource)
 
+    // 方案1: if the compaction didn't actually get us under the threshold, count
+    // it toward the circuit breaker instead of resetting to 0. Otherwise a
+    // perpetually-over-threshold session re-compacts every single turn.
+    const ineffective = isIneffectiveCompaction(compactionResult, model)
+    if (ineffective) {
+      const nextFailures = (tracking?.consecutiveFailures ?? 0) + 1
+      logForDebugging(
+        `autocompact: ineffective compaction (postCompact=${compactionResult.truePostCompactTokenCount} >= threshold=${getAutoCompactThreshold(model)}); counting toward circuit breaker (${nextFailures}/${MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES})`,
+        { level: 'warn' },
+      )
+      return {
+        wasCompacted: true,
+        compactionResult,
+        consecutiveFailures: nextFailures,
+      }
+    }
+
     return {
       wasCompacted: true,
       compactionResult,
-      // Reset failure count on success
+      // Reset failure count on a successful, effective compaction
       consecutiveFailures: 0,
     }
   } catch (error) {

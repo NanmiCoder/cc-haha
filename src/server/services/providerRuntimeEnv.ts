@@ -27,7 +27,6 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
-  'ENABLE_TOOL_SEARCH',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES',
@@ -87,19 +86,6 @@ function isSavedProvider(value: unknown): value is SavedProvider {
   )
 }
 
-function normalizeToolSearchEnabled(value: unknown): boolean {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase()
-    if (['0', 'false', 'off', 'no'].includes(normalized)) return false
-    if (['1', 'true', 'on', 'yes', 'auto'].includes(normalized) || normalized.startsWith('auto:')) {
-      return true
-    }
-  }
-  return true
-}
-
 export function normalizeModelMapping(models: SavedProvider['models']): SavedProvider['models'] {
   const main = models.main.trim()
   return {
@@ -150,7 +136,6 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
     apiFormat: provider.apiFormat ?? 'anthropic',
     runtimeKind: provider.runtimeKind ?? 'anthropic_compatible',
     models: normalizeModelMapping(provider.models),
-    toolSearchEnabled: normalizeToolSearchEnabled(rawProvider.toolSearchEnabled),
     ...(model1mSupport !== undefined ? { model1mSupport } : {}),
   }
 }
@@ -342,8 +327,15 @@ export function buildProviderManagedEnv(
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     }),
-    ...(apiFormat === 'anthropic' && {
-      ENABLE_TOOL_SEARCH: provider.toolSearchEnabled === false ? 'false' : 'true',
+    // Sticky compatibility flag: when cc-haha previously observed this
+    // provider rejecting Anthropic's `thinking` field with a 4xx (e.g.
+    // Bedrock proxies returning "additionalModelRequestFields not
+    // supported"), force `CLAUDE_CODE_DISABLE_THINKING=1` so subsequent
+    // sidecar launches skip thinking entirely. Cleared automatically by
+    // updateProvider() so editing config gives the new setup a fresh
+    // chance.
+    ...(provider.thinkingIncompatible === true && {
+      CLAUDE_CODE_DISABLE_THINKING: '1',
     }),
     ANTHROPIC_BASE_URL: baseUrl,
     ...buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy),

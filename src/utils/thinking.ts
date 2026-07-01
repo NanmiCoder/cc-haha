@@ -109,16 +109,21 @@ export function modelSupportsThinking(model: string): boolean {
   ) {
     return !canonical.includes('claude-3-')
   }
-  if (isMiniMaxAnthropicEndpoint() && canonical.includes('minimax')) {
+  // Third-party Anthropic-compatible proxies (mimo, MiniMax, lgfzer, custom
+  // gateways, …). The user explicitly configured `apiFormat: anthropic`, so
+  // assume the proxy speaks the Anthropic protocol — including `thinking`
+  // request fields and `thinking` content blocks. The streaming response
+  // path already accumulates `thinking_delta` events unconditionally, so
+  // returning `true` here just lets cc-haha announce its intent and surface
+  // any thinking blocks the upstream emits. Per-provider opt-outs flow
+  // through `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES=none` (handled
+  // by the override above) — that's the maintainer-vetted escape hatch for
+  // gateways that don't actually support thinking.
+  if (provider === 'firstParty') {
     return true
   }
   // 3P (Bedrock/Vertex): only Opus 4+ and Sonnet 4+
   return canonical.includes('sonnet-4') || canonical.includes('opus-4')
-}
-
-function isMiniMaxAnthropicEndpoint(): boolean {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL?.toLowerCase() ?? ''
-  return baseUrl.includes('minimax') || baseUrl.includes('minimaxi')
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports adaptive thinking.

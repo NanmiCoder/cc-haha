@@ -87,7 +87,7 @@ echo "[build-linux] Building sidecars for ${TARGET_TRIPLE}..."
 (cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run build:sidecars)
 
 echo "[build-linux] Building renderer and Electron main/preload bundles..."
-(cd "${DESKTOP_DIR}" && bun run build && bun run build:electron)
+(cd "${DESKTOP_DIR}" && bun run build:plugin-seed && bun run build && bun run build:electron)
 
 if [[ "${REBUILD_NATIVE:-0}" == "1" ]]; then
   echo "[build-linux] Rebuilding native dependencies for Electron ABI..."

@@ -3,7 +3,9 @@ import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import {
   getAssistantMessageFromError,
   getImageUnsupportedErrorMessage,
+  isContextWindowExceededMessage,
   isUnsupportedImageInputErrorMessage,
+  PROMPT_TOO_LONG_ERROR_MESSAGE,
 } from './errors.js'
 
 describe('image unsupported API errors', () => {
@@ -36,5 +38,37 @@ describe('image unsupported API errors', () => {
       type: 'text',
       text: getImageUnsupportedErrorMessage(),
     })
+  })
+})
+
+describe('context-window-overflow relay errors', () => {
+  test('detects third-party relay context-overflow wording', () => {
+    const overflowErrors = [
+      'API Error: 400 {"error":{"type":"context_too_large","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}',
+      'Your input exceeds the context window of this model.',
+      'context_too_large',
+      'This model maximum context length exceeded. Please reduce your prompt.',
+    ]
+    for (const message of overflowErrors) {
+      expect(isContextWindowExceededMessage(message)).toBe(true)
+    }
+    expect(isContextWindowExceededMessage('prompt is too long')).toBe(false)
+    expect(isContextWindowExceededMessage('some unrelated 400 error')).toBe(false)
+  })
+
+  test('maps relay context_too_large to the prompt-too-long handling', () => {
+    const raw =
+      'API Error: 400 {"error":{"type":"context_too_large","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}'
+    const msg = getAssistantMessageFromError(new Error(raw), 'gpt-5.5')
+
+    expect(msg.isApiErrorMessage).toBe(true)
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.PROMPT_TOO_LONG)
+    // Reuses the canonical content string so the TUI/desktop render the
+    // actionable "Context limit reached · /compact or /clear" guidance.
+    expect(msg.message.content[0]).toMatchObject({
+      type: 'text',
+      text: PROMPT_TOO_LONG_ERROR_MESSAGE,
+    })
+    expect(msg.errorDetails).toBe(raw)
   })
 })

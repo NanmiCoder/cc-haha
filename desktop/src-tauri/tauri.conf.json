@@ -31,7 +31,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlCOUIwRDExQTc5RTFGMzYKUldRMkg1Nm5FUTJibTJ2cGlHY0pkL0dGemxXMUlzc01pVTVMM1U3WGpmWUtrUC8wK2ErSXhLKzEK",
       "endpoints": [
-        "https://github.com/NanmiCoder/cc-haha/releases/latest/download/latest.json"
+        "https://github.com/706412584/cc-haha/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

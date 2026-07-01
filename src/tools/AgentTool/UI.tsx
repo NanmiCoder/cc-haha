@@ -410,13 +410,24 @@ export function renderToolResultMessage(data: Output, progressMessagesForMessage
 }
 export function renderToolUseMessage({
   description,
-  prompt
+  prompt,
+  subagent_type
 }: Partial<{
   description: string;
   prompt: string;
+  subagent_type: string;
 }>): React.ReactNode {
   if (!description || !prompt) {
     return null;
+  }
+  // Surface routing in the transcript so users (and developers debugging
+  // routing problems) can see which specialist the main agent picked.
+  // When subagent_type is omitted, the call falls through to the
+  // general-purpose default (or fork, when the fork gate is on) — we
+  // don't try to disambiguate those two paths here, since absence of
+  // the marker is itself the signal.
+  if (subagent_type) {
+    return `${description} → ${subagent_type}`;
   }
   return description;
 }

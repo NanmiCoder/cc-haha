@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Copy, Eye, EyeOff, GripVertical, PowerOff, QrCode, RotateCw } from 'lucide-react'
 import { useSettingsStore, UI_ZOOM_DEFAULT, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP } from '../stores/settingsStore'
 import { useProviderStore } from '../stores/providerStore'
+import { useProviderCompatStore, PROVIDER_COMPAT_WARN_THRESHOLD } from '../stores/providerCompatStore'
 import { useTranslation, type TranslationKey } from '../i18n'
 import { Modal } from '../components/shared/Modal'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
@@ -48,6 +49,7 @@ import { DiagnosticsSettings } from './DiagnosticsSettings'
 import { TraceList } from './TraceList'
 import { ActivitySettings } from './ActivitySettings'
 import { MemorySettings } from './MemorySettings'
+import { ProjectRulesSettings } from './ProjectRulesSettings'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
 import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
 import { ChatGPTOfficialLogin } from '../components/settings/ChatGPTOfficialLogin'
@@ -58,6 +60,7 @@ import {
 } from '../constants/openaiOfficialProvider'
 import { useUpdateStore } from '../stores/updateStore'
 import { getBaseUrl } from '../api/client'
+import { h5AccessApi } from '../api/h5Access'
 import { formatBytes } from '../lib/formatBytes'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { getDesktopHost } from '../lib/desktopHost'
@@ -206,6 +209,7 @@ export function Settings() {
             <TabButton icon="smart_toy" label={t('settings.tab.agents')} active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} />
             <TabButton icon="auto_awesome" label={t('settings.tab.skills')} active={activeTab === 'skills'} onClick={() => setActiveTab('skills')} />
             <TabButton icon="history_edu" label={t('settings.tab.memory')} active={activeTab === 'memory'} onClick={() => setActiveTab('memory')} />
+            <TabButton icon="description" label={t('settings.tab.projectRules')} active={activeTab === 'projectRules'} onClick={() => setActiveTab('projectRules')} />
             <TabButton icon="extension" label={t('settings.tab.plugins')} active={activeTab === 'plugins'} onClick={() => setActiveTab('plugins')} />
             <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
             <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
@@ -229,6 +233,7 @@ export function Settings() {
           {activeTab === 'agents' && <AgentsSettings />}
           {activeTab === 'skills' && <SkillSettings />}
           {activeTab === 'memory' && <MemorySettings />}
+          {activeTab === 'projectRules' && <ProjectRulesSettings />}
           {activeTab === 'plugins' && <PluginSettings />}
           {activeTab === 'computerUse' && <ComputerUseSettings />}
           {activeTab === 'trace' && <TraceList />}
@@ -344,6 +349,13 @@ function ProviderSettings() {
     testProvider,
   } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
+  // Compatibility events keyed by provider id. Subscribed at this scope so a
+  // toast-triggered count change re-renders the badge in the same Settings tab
+  // the user is already looking at.
+  const compatEvents = useProviderCompatStore((s) => s.events)
+  const thinkingIncompatibleProviderIds = useProviderCompatStore(
+    (s) => s.thinkingIncompatibleProviderIds,
+  )
   const t = useTranslation()
   const [editingProvider, setEditingProvider] = useState<SavedProvider | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -517,6 +529,30 @@ function ProviderSettings() {
                       {provider.apiFormat && provider.apiFormat !== 'anthropic' && (
                         <span className="rounded bg-[var(--color-surface-container-high)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--color-warning)]">
                           {provider.apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses'}
+                        </span>
+                      )}
+                      {(() => {
+                        const compat = compatEvents[provider.id]
+                        if (!compat || compat.count < PROVIDER_COMPAT_WARN_THRESHOLD) return null
+                        return (
+                          <span
+                            data-testid={`provider-compat-badge-${provider.id}`}
+                            title={t('providerCompat.badge.tooltip', { count: String(compat.count) })}
+                            className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--color-warning)]"
+                          >
+                            <span className="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+                            {t('providerCompat.badge.label')}
+                          </span>
+                        )
+                      })()}
+                      {thinkingIncompatibleProviderIds.has(provider.id) && (
+                        <span
+                          data-testid={`provider-thinking-badge-${provider.id}`}
+                          title={t('providerCompat.thinkingBadge.tooltip')}
+                          className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--color-warning)]"
+                        >
+                          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">psychology_alt</span>
+                          {t('providerCompat.thinkingBadge.label')}
                         </span>
                       )}
                       {isActive && (
@@ -707,6 +743,93 @@ const MODEL_CONTEXT_WINDOW_MIN = 16000
 const MODEL_CONTEXT_WINDOW_MAX = 10000000
 const MODEL_1M_CONTEXT_WINDOW = 1000000
 const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
+
+// Pull `id` strings out of common /v1/models response shapes (OpenAI: { data: [{ id }] };
+// Anthropic: { data: [{ id }] }; some proxies wrap in { models: [...] } or return a bare array).
+// Also tries to lift a context-window number when the upstream advertises one — field names
+// vary by vendor (context_length, context_window, max_context_window_tokens, etc.).
+export type FetchedModelEntry = {
+  id: string
+  contextWindow?: number
+}
+
+const CONTEXT_WINDOW_KEYS = [
+  'context_length',
+  'context_window',
+  'max_context_window_tokens',
+  'max_input_tokens',
+  'max_tokens',
+  'max_model_len',
+  'context_size',
+  'token_limit',
+] as const
+
+function readContextWindow(obj: Record<string, unknown>): number | undefined {
+  // Some providers nest limits under top_provider / pricing / spec / etc.
+  const candidateContainers: Array<Record<string, unknown>> = [obj]
+  for (const nestedKey of ['top_provider', 'spec', 'limits']) {
+    const nested = obj[nestedKey]
+    if (nested && typeof nested === 'object') {
+      candidateContainers.push(nested as Record<string, unknown>)
+    }
+  }
+  for (const container of candidateContainers) {
+    for (const key of CONTEXT_WINDOW_KEYS) {
+      const raw = container[key]
+      const value = typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() && Number.isFinite(Number(raw))
+          ? Number(raw)
+          : undefined
+      if (value !== undefined && value > 0 && Number.isFinite(value)) {
+        return Math.floor(value)
+      }
+    }
+  }
+  return undefined
+}
+
+export function extractModelEntries(payload: unknown): FetchedModelEntry[] {
+  const out: FetchedModelEntry[] = []
+  const seen = new Map<string, FetchedModelEntry>()
+  const visit = (item: unknown) => {
+    if (!item || typeof item !== 'object') return
+    const obj = item as Record<string, unknown>
+    const id = typeof obj.id === 'string'
+      ? obj.id
+      : typeof obj.name === 'string'
+        ? obj.name
+        : typeof obj.model === 'string'
+          ? obj.model
+          : null
+    if (!id) return
+    const contextWindow = readContextWindow(obj)
+    const existing = seen.get(id)
+    if (existing) {
+      if (existing.contextWindow === undefined && contextWindow !== undefined) {
+        existing.contextWindow = contextWindow
+      }
+      return
+    }
+    const entry: FetchedModelEntry = { id, ...(contextWindow !== undefined ? { contextWindow } : {}) }
+    seen.set(id, entry)
+    out.push(entry)
+  }
+  if (Array.isArray(payload)) {
+    payload.forEach(visit)
+    return out
+  }
+  if (payload && typeof payload === 'object') {
+    const obj = payload as Record<string, unknown>
+    const lists = ['data', 'models', 'items', 'results']
+    for (const key of lists) {
+      const value = obj[key]
+      if (Array.isArray(value)) value.forEach(visit)
+    }
+  }
+  return out
+}
+
 const DEFAULT_MODEL_1M_SUPPORT: Model1mSupport = {
   main: false,
   haiku: false,
@@ -720,6 +843,23 @@ type ModelContextInputs = Record<ModelSlot, string>
 
 function formatContextWindow(value: number): string {
   return value.toLocaleString('en-US')
+}
+
+// Compact unit-suffixed window size for dropdown labels: 1,000,000 → "1M", 200,000 → "200K".
+// Strips trailing ".0" and keeps at most one decimal so common sizes render clean (1M / 1.5M / 128K).
+function formatContextWindowCompact(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (value >= 1_000_000) {
+    const m = value / 1_000_000
+    const rounded = Math.round(m * 10) / 10
+    return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}M`
+  }
+  if (value >= 1_000) {
+    const k = value / 1_000
+    const rounded = Math.round(k * 10) / 10
+    return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}K`
+  }
+  return String(value)
 }
 
 function getPresetAutoCompactWindow(preset: ProviderPreset): string {
@@ -1091,6 +1231,132 @@ function openExternalUrl(url: string) {
     .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
 }
 
+// Combobox-style input for provider model IDs: free-text plus a custom dropdown fed
+// by the "Fetch Models" button. Uses cchaha CSS variables so it matches the active theme,
+// and—unlike the native <datalist>—does NOT prefix-filter against the current value, so
+// users can pick a different fetched model without first clearing the input.
+function ModelComboInput({
+  label,
+  required,
+  value,
+  onChange,
+  placeholder,
+  options,
+}: {
+  label: string
+  required?: boolean
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  options: FetchedModelEntry[]
+}) {
+  const inputId = useMemo(
+    () => `model-combo-${label.toLowerCase().replace(/\s+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`,
+    [label],
+  )
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [open])
+
+  const hasOptions = options.length > 0
+
+  return (
+    <div ref={containerRef} className="relative flex flex-col gap-1">
+      <label htmlFor={inputId} className="text-sm font-medium text-[var(--color-text-primary)]">
+        {label}
+        {required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
+      </label>
+      <div className="relative">
+        <input
+          id={inputId}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => hasOptions && setOpen(true)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="
+            h-10 w-full pl-3 pr-9 rounded-[var(--radius-md)] border text-sm
+            bg-[var(--color-surface)] text-[var(--color-text-primary)]
+            placeholder:text-[var(--color-text-tertiary)]
+            transition-colors duration-150
+            border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]
+            outline-none
+          "
+        />
+        {hasOptions && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-label="Toggle model list"
+            tabIndex={-1}
+            className="absolute right-1 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          >
+            <span className="material-symbols-outlined text-[18px]">expand_more</span>
+          </button>
+        )}
+      </div>
+      {open && hasOptions && (
+        <div
+          className="
+            absolute left-0 right-0 top-full z-30 mt-1 max-h-[260px] overflow-y-auto
+            rounded-[var(--radius-md)] border border-[var(--color-border)]
+            bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]
+          "
+          role="listbox"
+        >
+          {options.map((opt) => {
+            const isSelected = opt.id === value
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(opt.id)
+                  setOpen(false)
+                }}
+                className={`
+                  flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors
+                  ${isSelected
+                    ? 'bg-[var(--color-model-option-selected-bg)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]'
+                  }
+                `}
+              >
+                <span className="min-w-0 flex-1 truncate">{opt.id}</span>
+                {opt.contextWindow !== undefined && (
+                  <span className="flex-shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
+                    {formatContextWindowCompact(opt.contextWindow)}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderFormProps) {
   const { createProvider, updateProvider, testConfig } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
@@ -1142,6 +1408,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
   const [isTesting, setIsTesting] = useState(false)
+  const [fetchedModels, setFetchedModels] = useState<FetchedModelEntry[]>([])
+  const [isFetchingModels, setIsFetchingModels] = useState(false)
+  const [fetchModelsResult, setFetchModelsResult] = useState<{ kind: 'ok' | 'error'; message: string } | null>(null)
   const [settingsJson, setSettingsJson] = useState('')
   const [settingsJsonError, setSettingsJsonError] = useState<string | null>(null)
   const jsonPastedRef = useRef(false)
@@ -1425,6 +1694,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
         await updateProvider(provider.id, input)
+        // The user just changed something about this provider (URL, key,
+        // model, etc.). Reset its fake-tool_use counter so a previous
+        // incompatibility warning doesn't stick around — if the new config
+        // is still broken, we'll re-warn after the next 3 leaks.
+        useProviderCompatStore.getState().clearProvider(provider.id)
       }
       await fetchSettings()
       onClose()
@@ -1463,6 +1737,68 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       setTestResult({ connectivity: { success: false, latencyMs: 0, error: t('settings.providers.requestFailed') } })
     } finally {
       setIsTesting(false)
+    }
+  }
+
+  const handleFetchModels = async () => {
+    const trimmedBase = baseUrl.trim()
+    if (!trimmedBase) return
+    // Reuse the saved key when editing without entering a new one.
+    const effectiveKey = apiKey.trim() || (mode === 'edit' && provider?.apiKey) || ''
+    if (requiresApiKey && !effectiveKey) {
+      setFetchModelsResult({ kind: 'error', message: t('settings.providers.fetchModelsNeedKey') })
+      return
+    }
+    setIsFetchingModels(true)
+    setFetchModelsResult(null)
+    try {
+      // Route through the local server. The previous implementation called
+      // `fetch(url)` directly here, which broke for any provider whose URL
+      // is plain `http://` (mixed-content blocked from the secure-context
+      // webview) or whose `/v1/models` returned no permissive CORS header.
+      // The server has neither restriction; it responds with the upstream
+      // JSON verbatim, which `extractModelEntries` already knows how to
+      // parse across OpenAI / Anthropic / OpenAI-compatible shapes.
+      const { providersApi } = await import('../api/providers')
+      const { data } = await providersApi.fetchModels({
+        baseUrl: trimmedBase,
+        apiKey: effectiveKey,
+        apiFormat,
+      })
+      const entries = extractModelEntries(data)
+      if (entries.length === 0) {
+        throw new Error('empty')
+      }
+      setFetchedModels(entries)
+      // Auto-fill the context-window inputs for any slot whose model id is in the fetched
+      // list AND whose current input is empty (i.e. user hasn't manually overridden).
+      // Only fills if the upstream actually advertised a context window.
+      const byId = new Map(entries.map((e) => [e.id, e]))
+      setModelContextInputs((prev) => {
+        let next = prev
+        for (const slot of MODEL_SLOTS) {
+          const id = models[slot]?.trim()
+          if (!id) continue
+          const advertised = byId.get(id)?.contextWindow
+          if (!advertised) continue
+          if (prev[slot]?.trim()) continue
+          if (next === prev) next = { ...prev }
+          next[slot] = String(advertised)
+        }
+        return next
+      })
+      setFetchModelsResult({
+        kind: 'ok',
+        message: t('settings.providers.fetchModelsOk', { count: String(entries.length) }),
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setFetchModelsResult({
+        kind: 'error',
+        message: t('settings.providers.fetchModelsFailed', { error: message }),
+      })
+    } finally {
+      setIsFetchingModels(false)
     }
   }
 
@@ -1560,7 +1896,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           </div>
         )}
 
-        <label
+        {/* ToolSearch toggle hidden: third-party providers don't support
+            the beta header and forcing it causes tool_use format degradation.
+            CLI auto-detects first-party hosts via toolSearch.ts. */}
+        {false && <label
           className={`relative flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-3 transition-colors ${
             toolSearchUnsupported
               ? 'cursor-not-allowed opacity-70'
@@ -1584,7 +1923,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               {toolSearchDescription}
             </div>
           </div>
-        </label>
+        </label>}
 
         <div className="flex flex-col gap-1">
           <label htmlFor="provider-api-key" className="text-sm font-medium text-[var(--color-text-primary)]">
@@ -1645,7 +1984,24 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
 
         {/* Model Mapping */}
         <div>
-          <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.modelMapping')}</label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.providers.modelMapping')}</label>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleFetchModels}
+              loading={isFetchingModels}
+              disabled={!baseUrl.trim() || (requiresApiKey && !apiKey.trim() && !(mode === 'edit' && provider?.apiKey))}
+              title={t('settings.providers.fetchModelsHint')}
+            >
+              {t('settings.providers.fetchModels')}
+            </Button>
+          </div>
+          {fetchModelsResult && (
+            <p className={`text-[11px] mb-2 ${fetchModelsResult.kind === 'ok' ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
+              {fetchModelsResult.message}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {MODEL_SLOTS.map((slot) => {
               const labelKey = slot === 'main'
@@ -1658,12 +2014,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               const label = t(labelKey)
               return (
                 <div key={slot} className="min-w-0">
-                  <Input
+                  <ModelComboInput
                     label={label}
                     required={slot === 'main'}
                     value={models[slot]}
-                    onChange={(e) => handleModelChange(slot, e.target.value)}
+                    onChange={(value) => handleModelChange(slot, value)}
                     placeholder={slot === 'main' ? 'Model ID' : t('settings.providers.sameAsMain')}
+                    options={fetchedModels}
                   />
                   <label className="mt-1 inline-flex h-6 w-fit cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
                     <input
@@ -1910,6 +2267,8 @@ export function GeneralSettings() {
   const {
     thinkingEnabled,
     setThinkingEnabled,
+    thinkingAutoCollapse,
+    setThinkingAutoCollapse,
     autoDreamEnabled,
     setAutoDreamEnabled,
     locale,
@@ -2073,6 +2432,7 @@ export function GeneralSettings() {
     { value: 'white', label: t('settings.general.appearance.white') },
     { value: 'light', label: t('settings.general.appearance.light') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
+    { value: 'system', label: t('settings.general.appearance.system') },
   ]
 
   const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
@@ -2580,6 +2940,21 @@ export function GeneralSettings() {
             </div>
             <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
               {t('settings.general.thinkingHint')}
+            </div>
+          </div>
+        </label>
+        <label className="mt-2 flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
+          <input
+            type="checkbox"
+            aria-label={t('settings.general.thinkingAutoCollapse')}
+            checked={thinkingAutoCollapse}
+            onChange={(e) => void setThinkingAutoCollapse(e.target.checked)}
+            className="peer sr-only"
+          />
+          <SettingsCheckboxMark checked={thinkingAutoCollapse} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.general.thinkingAutoCollapse')}
             </div>
           </div>
         </label>
@@ -3184,6 +3559,8 @@ function H5AccessSettings() {
     disableH5Access,
     regenerateH5AccessToken,
     updateH5AccessSettings,
+    startH5Tunnel,
+    stopH5Tunnel,
   } = useSettingsStore()
   const t = useTranslation()
   const addToast = useUIStore((s) => s.addToast)
@@ -3194,6 +3571,14 @@ function H5AccessSettings() {
   const [h5EnableConfirmOpen, setH5EnableConfirmOpen] = useState(false)
   const [h5QrDataUrl, setH5QrDataUrl] = useState<string | null>(null)
   const [h5ActionRunning, setH5ActionRunning] = useState(false)
+  const [h5TunnelMode, setH5TunnelMode] = useState<'quick' | 'named'>('quick')
+  const [h5TunnelTokenDraft, setH5TunnelTokenDraft] = useState('')
+  const [h5TunnelTokenVisible, setH5TunnelTokenVisible] = useState(false)
+  // One-click tunnelling spawns cloudflared in the desktop main process, so it
+  // is only available inside the Electron shell, not a browser H5 session.
+  const h5TunnelAvailable = h5AccessApi.tunnelAvailable()
+  const h5TunnelState = h5AccessDiagnostics?.tunnel
+  const h5TunnelRunning = h5TunnelState?.status === 'running'
   const h5AccessUrl = h5Access.publicBaseUrl
   // The token is persisted server-side, so the QR code and copy actions stay
   // available across desktop restarts (issue #767).
@@ -3284,6 +3669,29 @@ function H5AccessSettings() {
     addToast({
       type: copied ? 'success' : 'error',
       message: copied ? t('settings.general.h5AccessUrlCopied') : t('common.copyFailed'),
+    })
+  }
+
+  const handleH5TunnelToggle = async () => {
+    await runH5Action(async () => {
+      if (h5TunnelRunning) {
+        await stopH5Tunnel()
+        return
+      }
+      if (h5TunnelMode === 'named') {
+        const token = h5TunnelTokenDraft.trim()
+        if (token) {
+          // Persist the token so the named tunnel survives restarts.
+          await updateH5AccessSettings({ tunnelToken: token, tunnelMode: 'named' })
+        }
+        await startH5Tunnel({
+          mode: 'named',
+          token: token || undefined,
+          namedUrl: h5NextPublicBaseUrl || h5Access.publicBaseUrl || undefined,
+        })
+      } else {
+        await startH5Tunnel({ mode: 'quick' })
+      }
     })
   }
 
@@ -3484,6 +3892,87 @@ function H5AccessSettings() {
                   fixedPort: String(h5Access.fixedPort),
                   activePort: h5ActivePort ?? '',
                 })}
+              </div>
+            )}
+
+            {h5TunnelAvailable && (
+              <div
+                data-testid="h5-access-tunnel"
+                className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-3"
+              >
+                <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                  {t('settings.general.h5AccessTunnelTitle')}
+                </div>
+                <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                  {t('settings.general.h5AccessTunnelHint')}
+                </p>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <select
+                    aria-label={t('settings.general.h5AccessTunnelMode')}
+                    className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm text-[var(--color-text-primary)]"
+                    value={h5TunnelMode}
+                    disabled={h5TunnelRunning || h5ActionRunning}
+                    onChange={(event) => setH5TunnelMode(event.target.value === 'named' ? 'named' : 'quick')}
+                  >
+                    <option value="quick">{t('settings.general.h5AccessTunnelModeQuick')}</option>
+                    <option value="named">{t('settings.general.h5AccessTunnelModeNamed')}</option>
+                  </select>
+                  <Button
+                    size="sm"
+                    variant={h5TunnelRunning ? 'secondary' : 'primary'}
+                    loading={h5ActionRunning}
+                    onClick={() => void handleH5TunnelToggle()}
+                    data-testid="h5-access-tunnel-toggle"
+                  >
+                    {h5TunnelRunning
+                      ? t('settings.general.h5AccessTunnelStop')
+                      : t('settings.general.h5AccessTunnelStart')}
+                  </Button>
+                </div>
+
+                {h5TunnelMode === 'named' && !h5TunnelRunning && (
+                  <div className="mt-3">
+                    <Input
+                      id="h5-access-tunnel-token"
+                      label={t('settings.general.h5AccessTunnelToken')}
+                      type={h5TunnelTokenVisible ? 'text' : 'password'}
+                      value={h5TunnelTokenDraft}
+                      placeholder={h5TunnelState?.hasToken
+                        ? t('settings.general.h5AccessTunnelTokenStored')
+                        : t('settings.general.h5AccessTunnelTokenPlaceholder')}
+                      onChange={(event) => setH5TunnelTokenDraft(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="mt-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                      onClick={() => setH5TunnelTokenVisible((v) => !v)}
+                    >
+                      {h5TunnelTokenVisible
+                        ? t('settings.general.h5AccessHideToken')
+                        : t('settings.general.h5AccessShowToken')}
+                    </button>
+                  </div>
+                )}
+
+                {h5TunnelState && h5TunnelState.status !== 'idle' && (
+                  <div
+                    data-testid="h5-access-tunnel-status"
+                    className="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]"
+                  >
+                    {h5TunnelState.status === 'starting' && t('settings.general.h5AccessTunnelStarting')}
+                    {h5TunnelState.status === 'running' && h5TunnelState.url && (
+                      <span className="break-all">
+                        {t('settings.general.h5AccessTunnelRunning')} {h5TunnelState.url}
+                      </span>
+                    )}
+                    {h5TunnelState.status === 'error' && (
+                      <span className="text-[var(--color-error)]">
+                        {h5TunnelState.error ?? t('settings.general.h5AccessTunnelError')}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -4191,10 +4680,15 @@ function PluginSettings() {
 
 // ─── About Settings ──────────────────────────────────────
 
-const GITHUB_REPO = 'https://github.com/NanmiCoder/cc-haha'
+// Project/repo + release/update source point at this fork. Original author
+// attribution (AUTHOR_GITHUB + social links) is intentionally preserved below.
+const GITHUB_REPO = 'https://github.com/706412584/cc-haha'
+const GITHUB_REPO_NAME = '706412584/cc-haha'
 const GITHUB_ISSUES = `${GITHUB_REPO}/issues`
 const GITHUB_RELEASES = `${GITHUB_REPO}/releases`
 const AUTHOR_GITHUB = 'https://github.com/NanmiCoder'
+// Fork maintainer (credited in addition to the original author).
+const FORK_AUTHOR_GITHUB = 'https://github.com/706412584'
 const SOCIAL_LINKS = [
   { name: 'Bilibili', icon: '/icons/bilibili.svg', url: 'https://space.bilibili.com/434377496', label: '程序员阿江-Relakkes' },
   { name: 'Douyin', icon: '/icons/douyin.svg', url: 'https://www.douyin.com/user/MS4wLjABAAAATJPY7LAlaa5X-c8uNdWkvz0jUGgpw4eeXIwu_8BhvqE', label: '程序员阿江-Relakkes' },
@@ -4331,10 +4825,10 @@ function AboutSettings() {
   })()
 
   return (
-    <div className="w-full min-w-0 max-w-lg mx-auto flex flex-col items-center py-6">
+    <div className="w-full min-w-0 flex flex-col items-center py-6">
       {/* Logo + App Name + Version */}
-      <img src={publicAssetPath('app-icon.png')} alt="Claude Code Haha" className="w-20 h-20 mb-4" />
-      <h1 className="text-xl font-bold text-[var(--color-text-primary)]">Claude Code Haha</h1>
+      <img src={publicAssetPath('app-icon.png')} alt="Code Council" className="w-20 h-20 mb-4" />
+      <h1 className="text-xl font-bold text-[var(--color-text-primary)]">Code Council</h1>
       {version && (
         <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
           <span>{t('settings.about.version')} {version}</span>
@@ -4356,7 +4850,7 @@ function AboutSettings() {
         >
           <img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="w-5 h-5 opacity-70" />
           <div className="flex-1 text-left">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">NanmiCoder/cc-haha</div>
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">{GITHUB_REPO_NAME}</div>
             <div className="text-xs text-[var(--color-text-tertiary)]">{t('settings.about.starHint')}</div>
           </div>
         </button>
@@ -4562,6 +5056,22 @@ function AboutSettings() {
         >
           <img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="w-4 h-4 opacity-60" />
           <span className="text-sm text-[var(--color-text-primary)]">程序员阿江-Relakkes</span>
+          <span className="text-xs text-[var(--color-text-tertiary)] ml-auto">GitHub</span>
+        </button>
+      </div>
+
+      {/* Fork maintainer (this build is a community fork; original author credited above) */}
+      <div className="w-full mt-4">
+        <h3 className="text-xs font-medium text-[var(--color-text-tertiary)] uppercase tracking-wider mb-3">{t('settings.about.forkMaintainer')}</h3>
+        <button
+          onClick={() => openUrl(FORK_AUTHOR_GITHUB)}
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
+        >
+          <img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="w-4 h-4 opacity-60" />
+          <div className="flex-1 text-left">
+            <div className="text-sm text-[var(--color-text-primary)]">706412584</div>
+            <div className="text-xs text-[var(--color-text-tertiary)]">{t('settings.about.forkMaintainerHint')}</div>
+          </div>
           <span className="text-xs text-[var(--color-text-tertiary)] ml-auto">GitHub</span>
         </button>
       </div>

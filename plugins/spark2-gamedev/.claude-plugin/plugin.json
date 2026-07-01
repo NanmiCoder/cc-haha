@@ -1,0 +1,29 @@
+{
+  "name": "spark2-gamedev",
+  "version": "1.0.0",
+  "description": "星火 2.0 (WasiCore) 游戏开发工具包。包含 SCE 编辑器 MCP 桥接（数据编辑/触发器/调试）、11 个开发技能（3D 单位战斗、Canvas 2D、联机同步、UI 布局、物理、粒子等），和编排 agent。",
+  "author": { "name": "cc-haha" },
+  "license": "MIT",
+  "keywords": ["game-dev", "spark2", "wasicore", "sce-editor", "3d", "2d", "multiplayer", "mcp"],
+  "mcpServers": "./mcp/servers.json",
+  "userConfig": {
+    "SCE_PROJECT_DIR": {
+      "type": "directory",
+      "title": "SCE 项目目录",
+      "description": "星火编辑器项目根目录（包含 project.sce 的目录）",
+      "required": true
+    },
+    "SCE_MCP_PORT": {
+      "type": "string",
+      "title": "SCE 编辑器 MCP 端口",
+      "description": "SCE 编辑器 HTTP MCP 端口",
+      "default": "8765"
+    },
+    "SCE_RUNTIME_MCP_PORT": {
+      "type": "string",
+      "title": "Runtime MCP 端口",
+      "description": "运行时 MCP TCP 桥接端口（debug 时使用）",
+      "default": "18765"
+    }
+  }
+}

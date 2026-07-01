@@ -255,6 +255,7 @@ describe('Sidebar', () => {
       { sessionId: 'session-new-1', title: 'New Session', type: 'session', status: 'idle' },
     ])
     expect(useTabStore.getState().activeTabId).toBe('session-new-1')
+    expect(screen.getByText(/Code/)).toHaveTextContent('Code Council')
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
   })
@@ -1135,7 +1136,10 @@ describe('Sidebar', () => {
 
     render(<Sidebar />)
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    // Phase 1 UX swapped the "Loading..." string for a Skeleton grid.
+    // Each Skeleton exposes role="status" + aria-label="Loading" — assert
+    // at least one is rendered and that the empty-state copy stays hidden.
+    expect(screen.getAllByRole('status', { name: /loading/i }).length).toBeGreaterThan(0)
     expect(screen.queryByText('No sessions')).not.toBeInTheDocument()
   })
 
