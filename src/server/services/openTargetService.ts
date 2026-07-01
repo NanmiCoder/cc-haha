@@ -265,6 +265,29 @@ async function defaultPathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Returns the {@link SpawnOptions} we want for {@link defaultLaunch}.
+ *
+ * Critically, on Windows we do **not** set `windowsHide: true`. For console
+ * subsystem commands like `cmd.exe /c start ...` it would hide the brief cmd
+ * flash, but for GUI subsystem executables (VS Code's `Code.exe`,
+ * `Cursor.exe`, `explorer.exe`, ...) Windows treats `STARTUPINFO.wShowWindow
+ * = SW_HIDE` as the initial `nCmdShow` handed to the app's first
+ * `ShowWindow()` call. The process starts, the main window is created, and
+ * then it stays hidden — matching the bug report "VS Code is in Task Manager
+ * but no window appears". The brief cmd flash from the file-manager fallback
+ * (`cmd.exe /c start "" path`) is acceptable; cmd /c start exits in
+ * milliseconds.
+ *
+ * Exported for unit testing — callers should keep using {@link defaultLaunch}.
+ */
+export function getDefaultLaunchSpawnOptions(): {
+  detached: true
+  stdio: 'ignore'
+} {
+  return { detached: true, stdio: 'ignore' }
+}
+
 async function defaultLaunch(command: string, args: string[]): Promise<OpenTargetLaunchResult> {
   return await new Promise((resolveLaunch) => {
     let settled = false
@@ -275,11 +298,7 @@ async function defaultLaunch(command: string, args: string[]): Promise<OpenTarge
     }
 
     try {
-      const child = spawn(command, args, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      })
+      const child = spawn(command, args, getDefaultLaunchSpawnOptions())
 
       child.once('error', (error) => {
         settle({

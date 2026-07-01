@@ -1,0 +1,4 @@
+{
+  "description": "Reverse-engineering plugin hooks — currently empty placeholder. Add a fileCreated hook here to auto-triage drops into a samples/ directory if you run a SOC-style intake workflow.",
+  "hooks": {}
+}

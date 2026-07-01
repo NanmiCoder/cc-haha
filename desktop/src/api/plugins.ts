@@ -1,7 +1,11 @@
 import { api } from './client'
 import type {
+  AddMarketplaceResponse,
+  CatalogPlugin,
+  KnownLanguageServersResponse,
   PluginDetail,
   PluginListResponse,
+  PluginPrerequisitesResponse,
   PluginReloadSummary,
   PluginSessionReloadSummary,
   PluginScope,
@@ -23,6 +27,15 @@ export const pluginsApi = {
     const query = new URLSearchParams({ id })
     if (cwd) query.set('cwd', cwd)
     return api.get<{ detail: PluginDetail }>(`/api/plugins/detail?${query.toString()}`)
+  },
+
+  prerequisites: (id: string, cwd?: string) => {
+    const query = new URLSearchParams({ id })
+    if (cwd) query.set('cwd', cwd)
+    return api.get<PluginPrerequisitesResponse>(
+      `/api/plugins/prerequisites?${query.toString()}`,
+      { timeout: 15_000 },
+    )
   },
 
   enable: (payload: PluginActionPayload) =>
@@ -52,4 +65,39 @@ export const pluginsApi = {
       { timeout: 120_000 },
     )
   },
+
+  catalog: () =>
+    api.get<{ catalog: CatalogPlugin[] }>(`/api/plugins/catalog`),
+
+  installCatalog: (payload: { id: string; marketplace: string }) =>
+    api.post<{ ok: true; message: string; marketplaceAdded: boolean }>(
+      `/api/plugins/install`,
+      payload,
+      { timeout: 120_000 },
+    ),
+
+  addMarketplace: (input: string) =>
+    api.post<AddMarketplaceResponse>(
+      `/api/plugins/marketplace`,
+      { input },
+      { timeout: 120_000 },
+    ),
+
+  languageServers: (refresh?: boolean) =>
+    api.get<KnownLanguageServersResponse>(
+      `/api/plugins/language-servers${refresh ? '?refresh=1' : ''}`,
+      { timeout: 15_000 },
+    ),
+
+  getOptions: (id: string) => {
+    const query = new URLSearchParams({ id })
+    return api.get<{
+      pluginId: string
+      schema: Record<string, { type: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }>
+      values: Record<string, unknown>
+    }>(`/api/plugins/options?${query.toString()}`)
+  },
+
+  saveOptions: (id: string, values: Record<string, unknown>) =>
+    api.post<{ ok: true; pluginId: string }>('/api/plugins/options', { id, values }),
 }

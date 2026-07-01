@@ -1,6 +1,6 @@
-# Claude Code Haha Desktop
+# Code Council Desktop
 
-基于 Tauri 2 + React 的桌面客户端。
+基于 Tauri 2 + React 的 Code Council 桌面客户端。
 
 ## 开发
 

@@ -11,6 +11,10 @@ export type SessionListItem = {
   workDir: string | null
   workDirExists: boolean
   permissionMode?: string
+  /** Absolute path of the .jsonl file on disk. Optional so older servers /
+   *  test fixtures that omit it remain compatible; sidebar context-menu
+   *  actions fall back to a "not available" message when missing. */
+  filePath?: string
 }
 
 export type MessageUsage = {

@@ -112,7 +112,7 @@ describe('E2E: Full Flow', () => {
 
   it('should return diagnostics', async () => {
     const { data } = await api('GET', '/api/status/diagnostics')
-    expect(data.platform).toBe('darwin')
+    expect(data.platform).toBe(process.platform)
     expect(data.configDir).toBe(tmpDir)
   })
 

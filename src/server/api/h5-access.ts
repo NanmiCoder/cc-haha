@@ -1,5 +1,10 @@
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
-import { H5AccessService } from '../services/h5AccessService.js'
+import {
+  getRuntimeTunnelState,
+  H5AccessService,
+  setRuntimeTunnelState,
+  type H5TunnelMode,
+} from '../services/h5AccessService.js'
 import { refreshDisconnectGraceMs } from '../ws/disconnectGraceConfig.js'
 
 const h5AccessService = new H5AccessService()
@@ -57,6 +62,8 @@ export async function handleH5AccessApi(
             publicBaseUrl: body.publicBaseUrl as string | null | undefined,
             fixedPort: body.fixedPort as number | null | undefined,
             disconnectGraceSeconds: body.disconnectGraceSeconds as number | null | undefined,
+            tunnelToken: body.tunnelToken as string | null | undefined,
+            tunnelMode: body.tunnelMode as H5TunnelMode | null | undefined,
           })
           // Keep the synchronous disconnect-cleanup cache in step with the new value.
           await refreshDisconnectGraceMs()
@@ -94,6 +101,55 @@ export async function handleH5AccessApi(
         }
 
         return Response.json({ ok: true })
+      }
+
+      case 'tunnel': {
+        // The desktop main process owns the cloudflared lifecycle; these
+        // endpoints only mirror the resulting state into the server process so
+        // the effective publicBaseUrl / diagnostics reflect the live tunnel.
+        // The whole /api/h5-access surface (except verify) is already gated to
+        // local-trusted callers upstream, so remote browsers get 403 here.
+        const action = segments[3]
+
+        if (action === undefined) {
+          if (req.method !== 'GET') {
+            throw methodNotAllowed(req.method, '/api/h5-access/tunnel')
+          }
+          return Response.json({ tunnel: getRuntimeTunnelState() })
+        }
+
+        if (action === 'report') {
+          if (req.method !== 'POST') {
+            throw methodNotAllowed(req.method, '/api/h5-access/tunnel/report')
+          }
+          const body = await parseJsonBody(req)
+          // Only treat url as present when it is actually a string. A missing
+          // url (e.g. a status-only heartbeat) leaves the runtime URL untouched
+          // rather than clearing it — clearing is done via tunnel/clear.
+          const url = typeof body.url === 'string' ? body.url : undefined
+          const status = body.status === 'starting' || body.status === 'running'
+            || body.status === 'error' || body.status === 'idle'
+            ? body.status
+            : undefined
+          const mode = body.mode === 'quick' || body.mode === 'named'
+            ? (body.mode as H5TunnelMode)
+            : undefined
+          const error = typeof body.error === 'string' ? body.error : null
+          setRuntimeTunnelState({ url, status, mode, error })
+          const settings = await h5AccessService.getSettings()
+          return Response.json({ settings, tunnel: getRuntimeTunnelState() })
+        }
+
+        if (action === 'clear') {
+          if (req.method !== 'POST') {
+            throw methodNotAllowed(req.method, '/api/h5-access/tunnel/clear')
+          }
+          setRuntimeTunnelState({ status: 'idle', url: null, error: null })
+          const settings = await h5AccessService.getSettings()
+          return Response.json({ settings, tunnel: getRuntimeTunnelState() })
+        }
+
+        throw ApiError.notFound(`Unknown h5-access tunnel endpoint: ${action}`)
       }
 
       default:

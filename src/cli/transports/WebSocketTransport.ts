@@ -38,9 +38,21 @@ const SLEEP_DETECTION_THRESHOLD_MS = DEFAULT_MAX_RECONNECT_DELAY * 2 // 60s
 /**
  * WebSocket close codes that indicate a permanent server-side rejection.
  * The transport transitions to 'closed' immediately without retrying.
+ *
+ * NOTE on 1008 (RFC 6455 Policy Violation): cc-haha's session-ingress
+ * accepts the WebSocket handshake, then closes with `1008, 'Invalid SDK
+ * token'` if `authorizeSdkConnection` rejects the bearer. Without 1008
+ * here, the transport sees `open` first (which clears reconnectAttempts
+ * + reconnectStartTime in handleOpenEvent), then `close(1008)`, and the
+ * exponential-backoff math becomes `1000 * 2^0 = 1000ms` *every* attempt
+ * — turning a stale CLI subprocess into a 1 Hz reject storm against the
+ * server until the 10-minute give-up budget runs out (storm observed in
+ * a v0.5.13 user diagnostics bundle: 990 rejects across 3 sessions in
+ * 5m37s, ~1/sec/session).
  */
 const PERMANENT_CLOSE_CODES = new Set([
   1002, // protocol error — server rejected handshake (e.g. session reaped)
+  1008, // policy violation — server rejected the application-layer auth
   4001, // session expired / not found
   4003, // unauthorized
 ])

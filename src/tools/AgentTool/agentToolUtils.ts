@@ -37,6 +37,7 @@ import {
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message as MessageType } from '../../types/message.js'
+import { getAgentTranscriptPath } from '../../utils/sessionStorage.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isInProtectedNamespace } from '../../utils/envUtils.js'
@@ -61,6 +62,7 @@ import { getTokenCountFromUsage } from '../../utils/tokens.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import { applySentinelCorrection } from './sentinelCheck.js'
 export type ResolvedAgentTools = {
   hasWildcard: boolean
   validTools: string[]
@@ -318,6 +320,34 @@ export function finalizeAgentTool(
     }
   }
 
+  // Sentinel consistency check: review-style subagents may slip and emit
+  // a positive verdict (e.g. REVIEW: APPROVE) while listing CRITICAL or
+  // HIGH findings, contradicting their own contract. Rewrite to the
+  // negative verdict in place so the parent agent doesn't merge based on
+  // a self-contradicting report. Operates only on the last text block
+  // because the verdict must be at the end of the output.
+  if (content.length > 0) {
+    const lastIdx = content.length - 1
+    const lastBlock = content[lastIdx]!
+    const sentinelResult = applySentinelCorrection(lastBlock.text)
+    if (sentinelResult.mismatch) {
+      content = [
+        ...content.slice(0, lastIdx),
+        { type: 'text' as const, text: sentinelResult.correctedText },
+      ]
+      logEvent('tengu_agent_sentinel_mismatch', {
+        agent_type:
+          agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        sentinel_kind:
+          sentinelResult.mismatch as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        original_verdict:
+          sentinelResult.originalVerdict as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        corrected_verdict:
+          sentinelResult.correctedVerdict as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      })
+    }
+  }
+
   const totalTokens = getTokenCountFromUsage(lastAssistantMessage.message.usage)
   const totalToolUseCount = countToolUses(agentMessages)
 
@@ -368,6 +398,10 @@ export function getLastToolUseName(message: MessageType): string | undefined {
   return block?.type === 'tool_use' ? block.name : undefined
 }
 
+export function getAgentProgressOutputPath(taskId: string): string {
+  return getAgentTranscriptPath(asAgentId(taskId))
+}
+
 /**
  * Extract the tool_use / tool_result blocks from a background agent message so
  * they can be streamed to the desktop as the agent's tool activity. Skips the
@@ -416,17 +450,18 @@ export function emitTaskProgress(
   toolUseId: string | undefined,
   description: string,
   startTime: number,
-  lastToolName: string,
+  lastToolName?: string,
 ): void {
   const progress = getProgressUpdate(tracker)
   emitTaskProgressEvent({
     taskId,
     toolUseId,
-    description: progress.lastActivity?.activityDescription ?? description,
+    description: progress.lastActivity?.activityDescription ?? progress.summary ?? description,
     startTime,
     totalTokens: progress.tokenCount,
     toolUses: progress.toolUseCount,
     lastToolName,
+    summary: progress.summary ?? (lastToolName ? undefined : description),
   })
 }
 
@@ -637,7 +672,7 @@ export async function runAsyncAgentLifecycle({
         }
       }
       const lastToolName = getLastToolUseName(message)
-      if (lastToolName) {
+      if (message.type === 'assistant') {
         emitTaskProgress(
           tracker,
           taskId,
@@ -669,6 +704,7 @@ export async function runAsyncAgentLifecycle({
         toolUses: agentResult.totalToolUseCount,
         durationMs: agentResult.totalDurationMs,
       },
+      outputPath: getAgentProgressOutputPath(taskId),
       toolUseId: toolUseContext.toolUseId,
     })
 
@@ -719,6 +755,7 @@ export async function runAsyncAgentLifecycle({
         setAppState: rootSetAppState,
         toolUseId: toolUseContext.toolUseId,
         finalMessage: partialResult,
+        outputPath: getAgentProgressOutputPath(taskId),
       })
       void getWorktreeResult().catch(cleanupError =>
         logForDebugging(
@@ -736,6 +773,7 @@ export async function runAsyncAgentLifecycle({
       error: msg,
       setAppState: rootSetAppState,
       toolUseId: toolUseContext.toolUseId,
+      outputPath: getAgentProgressOutputPath(taskId),
     })
     void getWorktreeResult().catch(cleanupError =>
       logForDebugging(

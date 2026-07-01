@@ -1,0 +1,72 @@
+{
+  "name": "cc-haha-builtin",
+  "metadata": {
+    "description": "Built-in marketplace for cc-haha. Currently ships the reverse-engineering plugin (multi-platform RE toolkit). Add more plugins to the plugins[] array as the team needs them."
+  },
+  "owner": {
+    "name": "cc-haha",
+    "url": "https://github.com/cc-haha"
+  },
+  "plugins": [
+    {
+      "name": "reverse-engineering",
+      "source": "./reverse-engineering",
+      "description": "Multi-platform reverse engineering toolkit. Static (Ghidra / radare2 / JADX / apktool) + dynamic (Frida instrumentation, GDB cross-arch single-step, LLDB Apple platforms) for binaries (PE/ELF/Mach-O), Android (APK), iOS, embedded firmware (MIPS/ARM/Cortex-M/PowerPC/68k/SuperH/RISC-V), and CTF.",
+      "category": "security",
+      "tags": [
+        "reverse-engineering",
+        "security",
+        "malware-analysis",
+        "binary-analysis",
+        "android",
+        "ios",
+        "ctf",
+        "embedded",
+        "firmware",
+        "frida",
+        "ghidra",
+        "radare2",
+        "gdb",
+        "lldb",
+        "debugger",
+        "single-step"
+      ]
+    },
+    {
+      "name": "image-gen",
+      "source": "./image-gen",
+      "description": "Multi-provider image generation with automatic fallback. Supports OpenAI-compatible APIs (Agnes, GPT-image-2, Gemini image, nano-banana, DALL-E, Flux, Stable Diffusion). Configurable provider priority with compatibility fallback.",
+      "category": "creative",
+      "tags": [
+        "image-generation",
+        "ai-art",
+        "openai-compatible",
+        "multi-provider",
+        "fallback",
+        "agnes",
+        "gpt-image",
+        "gemini",
+        "dall-e",
+        "flux",
+        "stable-diffusion"
+      ]
+    },
+    {
+      "name": "spark2-gamedev",
+      "source": "./spark2-gamedev",
+      "description": "星火 2.0 (WasiCore) 游戏开发工具包。SCE 编辑器 MCP 桥接（数据/触发器/调试）+ 11 个开发技能（3D 单位战斗、Canvas 2D、联机同步、UI 布局、服务端物理、运行时粒子）。",
+      "category": "game-dev",
+      "tags": [
+        "game-dev",
+        "spark2",
+        "wasicore",
+        "sce-editor",
+        "3d",
+        "2d",
+        "multiplayer",
+        "mcp",
+        "wasi"
+      ]
+    }
+  ]
+}

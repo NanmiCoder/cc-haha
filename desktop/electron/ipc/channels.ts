@@ -6,6 +6,7 @@ export const ELECTRON_IPC_CHANNELS = {
   clipboardWriteText: 'desktop:clipboard:write-text',
   shellOpen: 'desktop:shell:open',
   shellOpenPath: 'desktop:shell:open-path',
+  shellShowItemInFolder: 'desktop:shell:show-item-in-folder',
   traceOpenWindow: 'desktop:trace:open-window',
   dialogOpen: 'desktop:dialog:open',
   dialogSave: 'desktop:dialog:save',
@@ -44,6 +45,9 @@ export const ELECTRON_IPC_CHANNELS = {
   appModePrepareRestart: 'desktop:app-mode:prepare-restart',
   appModeRestart: 'desktop:app-mode:restart',
   adaptersRestartSidecar: 'desktop:adapters:restart-sidecar',
+  tunnelStart: 'desktop:tunnel:start',
+  tunnelStop: 'desktop:tunnel:stop',
+  tunnelGetStatus: 'desktop:tunnel:get-status',
   zoomSet: 'desktop:zoom:set',
 } as const
 

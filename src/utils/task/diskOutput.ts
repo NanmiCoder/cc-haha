@@ -444,7 +444,12 @@ export function initTaskOutputAsSymlink(
         return outputPath
       } catch (error) {
         logError(error)
-        return initTaskOutput(taskId)
+        const output = getOrCreateOutput(taskId)
+        output.append(
+          `[Agent transcript symlink unavailable. Read the agent transcript directly: ${targetPath}]\n`,
+        )
+        await output.flush()
+        return getTaskOutputPath(taskId)
       }
     })(),
   )

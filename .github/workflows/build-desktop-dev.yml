@@ -103,6 +103,7 @@ jobs:
       - name: Build renderer and Electron bundles
         working-directory: desktop
         run: |
+          bun run build:plugin-seed
           bun run build
           bun run build:electron
 

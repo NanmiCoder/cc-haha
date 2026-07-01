@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import {
   clearMcpClientConfig,
   clearServerTokensFromLocalStorage,
@@ -5,7 +6,10 @@ import {
 import {
   clearServerCache,
   connectToServer,
+  fetchToolsForClient,
+  listRawToolsForServer,
   reconnectMcpServerImpl,
+  type RawMcpToolInfo,
 } from '../../services/mcp/client.js'
 import {
   addMcpConfig,
@@ -16,6 +20,16 @@ import {
   removeMcpConfig,
   setMcpServerEnabled,
 } from '../../services/mcp/config.js'
+import {
+  isMcpToolDisabled,
+  setMcpToolEnabled,
+} from '../../services/mcp/toolOverrides.js'
+import {
+  addMarketplaceSource,
+  getMarketplaceCatalog,
+  refreshMarketplaceSources,
+  removeMarketplaceSource,
+} from '../services/mcpMarketplace.js'
 import { inspectMcpHostCommand } from '../services/mcpHostPreflight.js'
 import type {
   ConfigScope,
@@ -26,10 +40,48 @@ import type {
   ScopedMcpServerConfig,
 } from '../../services/mcp/types.js'
 import { describeMcpConfigFilePath, ensureConfigScope } from '../../services/mcp/utils.js'
+import { getGlobalClaudeFile } from '../../utils/env.js'
 import { enableConfigs, getGlobalConfig } from '../../utils/config.js'
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { conversationService } from '../services/conversationService.js'
+
+/**
+ * In-memory cache for MCP server status results. Avoids re-probing servers
+ * every time the settings page is opened (probes are expensive for stdio
+ * servers that use npx/uvx — first-run downloads can take 30-60s).
+ *
+ * Cache entries are stored with a timestamp and expire after STATUS_CACHE_TTL_MS.
+ * Cleared on explicit reconnect or toggle so UI stays fresh after user actions.
+ */
+const STATUS_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+type StatusCacheEntry = {
+  status: Pick<McpServerDto, 'status' | 'statusDetail' | 'statusLabel'>
+  timestamp: number
+}
+const statusCache = new Map<string, StatusCacheEntry>()
+
+function getCachedStatus(name: string): Pick<McpServerDto, 'status' | 'statusDetail' | 'statusLabel'> | null {
+  const entry = statusCache.get(name)
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > STATUS_CACHE_TTL_MS) {
+    statusCache.delete(name)
+    return null
+  }
+  return entry.status
+}
+
+function setCachedStatus(name: string, status: Pick<McpServerDto, 'status' | 'statusDetail' | 'statusLabel'>): void {
+  statusCache.set(name, { status, timestamp: Date.now() })
+}
+
+export function clearStatusCache(name?: string): void {
+  if (name) {
+    statusCache.delete(name)
+  } else {
+    statusCache.clear()
+  }
+}
 
 type McpEditableConfigDto =
   | {
@@ -261,6 +313,7 @@ async function inspectServerStatus(
 
   const hostPreflightStatus = await getHostPreflightStatus(config, enabled)
   if (hostPreflightStatus) {
+    setCachedStatus(name, hostPreflightStatus)
     return hostPreflightStatus
   }
 
@@ -275,18 +328,22 @@ async function inspectServerStatus(
           ? 'needs-auth'
           : 'failed'
 
-    return {
+    const result = {
       status,
       statusLabel: getStatusLabel(status),
       statusDetail: 'error' in client ? client.error : undefined,
     }
+    setCachedStatus(name, result)
+    return result
   } catch (error) {
     await clearServerCache(name, config).catch(() => {})
-    return {
-      status: 'failed',
+    const result = {
+      status: 'failed' as const,
       statusLabel: getStatusLabel('failed'),
       statusDetail: error instanceof Error ? error.message : String(error),
     }
+    setCachedStatus(name, result)
+    return result
   }
 }
 
@@ -321,7 +378,9 @@ function serializeServerSnapshot(
   name: string,
   config: ScopedMcpServerConfig,
 ): McpServerDto {
-  return buildServerDto(name, config, getInitialStatus(!isMcpServerDisabled(name)))
+  const enabled = !isMcpServerDisabled(name)
+  const cached = enabled ? getCachedStatus(name) : null
+  return buildServerDto(name, config, cached ?? getInitialStatus(enabled))
 }
 
 async function serializeServerWithLiveStatus(
@@ -445,6 +504,17 @@ function listProjectPathsWithPrivateMcp(): Response {
   return Response.json({ projectPaths })
 }
 
+function getConfigFilePaths(): Response {
+  const userConfig = getGlobalClaudeFile()
+  const projectConfig = join(getCwd(), '.mcp.json')
+  return Response.json({
+    files: [
+      { scope: 'user', path: userConfig, label: 'User (~/.claude.json)' },
+      { scope: 'project', path: projectConfig, label: 'Project (.mcp.json)' },
+    ],
+  })
+}
+
 async function getServerStatus(name: string): Promise<Response> {
   const existing = await resolveServerForRuntimeAction(name)
   if (!existing) {
@@ -454,6 +524,137 @@ async function getServerStatus(name: string): Promise<Response> {
   return Response.json({
     server: await serializeServerWithLiveStatus(name, existing),
   })
+}
+
+type McpToolsResponseDto = {
+  serverName: string
+  status: 'connected' | 'needs-auth' | 'failed' | 'disabled'
+  tools: RawMcpToolInfo[]
+  error?: string
+}
+
+async function listServerTools(name: string): Promise<Response> {
+  const existing = await resolveServerForRuntimeAction(name)
+  if (!existing) {
+    throw ApiError.notFound(`MCP server not found: ${name}`)
+  }
+
+  if (isMcpServerDisabled(name)) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'disabled',
+      tools: [],
+    }
+    return Response.json(body)
+  }
+
+  // Stdio servers fail loudly on PATH issues — surface that the same way
+  // status/reconnect do, instead of letting connectToServer hang on spawn.
+  const hostPreflight = await getHostPreflightStatus(existing, true)
+  if (hostPreflight) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'failed',
+      tools: [],
+      ...(hostPreflight.statusDetail ? { error: hostPreflight.statusDetail } : {}),
+    }
+    return Response.json(body)
+  }
+
+  try {
+    const client = await connectToServer(name, existing)
+
+    if (client.type !== 'connected') {
+      const body: McpToolsResponseDto = {
+        serverName: name,
+        status: client.type === 'needs-auth' ? 'needs-auth' : 'failed',
+        tools: [],
+        ...('error' in client && client.error ? { error: client.error } : {}),
+      }
+      return Response.json(body)
+    }
+
+    const tools = await listRawToolsForServer(client)
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'connected',
+      tools,
+    }
+    return Response.json(body)
+  } catch (error) {
+    const body: McpToolsResponseDto = {
+      serverName: name,
+      status: 'failed',
+      tools: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+    return Response.json(body)
+  }
+}
+
+async function toggleServerTool(
+  serverName: string,
+  toolName: string,
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  if (!toolName) {
+    throw ApiError.badRequest('Tool name is required')
+  }
+
+  const existing = await resolveServerForRuntimeAction(serverName)
+  if (!existing) {
+    throw ApiError.notFound(`MCP server not found: ${serverName}`)
+  }
+
+  // Default to flipping the current state when the body omits `enabled`. This
+  // matches the server-level toggle endpoint's behavior and lets the UI fire a
+  // single click without having to read state first.
+  const requestedEnabled =
+    typeof body?.enabled === 'boolean'
+      ? body.enabled
+      : isMcpToolDisabled(serverName, toolName)
+
+  setMcpToolEnabled(serverName, toolName, requestedEnabled)
+
+  // Drop the cached `Tool[]` for this server so the agent loop picks up the
+  // override on next call. `connectToServer` is left alone — the underlying
+  // transport is still healthy, only the visible-tool projection changed.
+  fetchToolsForClient.cache.delete(serverName)
+
+  return Response.json({
+    serverName,
+    toolName,
+    enabled: requestedEnabled,
+  })
+}
+
+async function listMarketplace(): Promise<Response> {
+  return Response.json(await getMarketplaceCatalog())
+}
+
+async function refreshMarketplace(
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  const requested = body?.sourceIds
+  const sourceIds = Array.isArray(requested)
+    ? requested.filter((id): id is string => typeof id === 'string')
+    : undefined
+  return Response.json(await refreshMarketplaceSources(sourceIds))
+}
+
+async function createMarketplaceSource(
+  body: Record<string, unknown> | undefined,
+): Promise<Response> {
+  const url = typeof body?.url === 'string' ? body.url : ''
+  const label = typeof body?.label === 'string' ? body.label : undefined
+  const enabled = typeof body?.enabled === 'boolean' ? body.enabled : undefined
+  const source = await addMarketplaceSource({ url, label, enabled })
+  return Response.json({ source }, { status: 201 })
+}
+
+async function deleteMarketplaceSource(id: string): Promise<Response> {
+  await removeMarketplaceSource(id)
+  return Response.json({ ok: true })
 }
 
 async function assertHostPrerequisites(config: McpServerConfig) {
@@ -558,6 +759,7 @@ async function toggleServer(name: string, sessionId?: string): Promise<Response>
     throw ApiError.notFound(`MCP server not found: ${name}`)
   }
 
+  clearStatusCache(name)
   const enabled = isMcpServerDisabled(name)
   setMcpServerEnabled(name, enabled)
   const sessionSync = await syncMcpToggleToSession(sessionId, name, enabled)
@@ -598,6 +800,7 @@ async function reconnectServer(name: string): Promise<Response> {
     throw ApiError.notFound(`MCP server not found: ${name}`)
   }
 
+  clearStatusCache(name)
   const hostPreflightStatus = await getHostPreflightStatus(existing, !isMcpServerDisabled(name))
   if (hostPreflightStatus) {
     await clearServerCache(name, existing).catch(() => {})
@@ -637,8 +840,35 @@ export async function handleMcpApi(
         : undefined
 
     return await runWithCwdOverride(resolveRequestCwd(url, body), async () => {
+      // Marketplace routes share the /api/mcp prefix. Short-circuit before
+      // serverName-shaped lookups so a server literally named "marketplace"
+      // (extremely unlikely, but possible) cannot collide.
+      if (serverName === 'marketplace') {
+        if (req.method === 'GET' && !action) {
+          return listMarketplace()
+        }
+        if (req.method === 'POST' && action === 'refresh') {
+          return refreshMarketplace(body)
+        }
+        if (req.method === 'POST' && action === 'sources' && !segments[4]) {
+          return createMarketplaceSource(body)
+        }
+        if (req.method === 'DELETE' && action === 'sources' && segments[4]) {
+          return deleteMarketplaceSource(decodeURIComponent(segments[4]))
+        }
+        throw new ApiError(
+          405,
+          `Method ${req.method} not allowed on /api/mcp/marketplace`,
+          'METHOD_NOT_ALLOWED',
+        )
+      }
+
       if (req.method === 'GET' && serverName === 'project-paths' && !action) {
         return listProjectPathsWithPrivateMcp()
+      }
+
+      if (req.method === 'GET' && serverName === 'config-files' && !action) {
+        return getConfigFilePaths()
       }
 
       if (req.method === 'GET' && !serverName) {
@@ -647,6 +877,23 @@ export async function handleMcpApi(
 
       if (req.method === 'GET' && serverName && action === 'status') {
         return getServerStatus(serverName)
+      }
+
+      if (req.method === 'GET' && serverName && action === 'tools') {
+        return listServerTools(serverName)
+      }
+
+      // POST /api/mcp/:server/tools/:tool/toggle
+      // Per-tool enable/disable. Storage lives at the user/global scope, so
+      // the toggle is shared across all projects for the same MCP server.
+      if (
+        req.method === 'POST' &&
+        serverName &&
+        action === 'tools' &&
+        segments[5] === 'toggle' &&
+        segments[4]
+      ) {
+        return toggleServerTool(serverName, decodeURIComponent(segments[4]), body)
       }
 
       if (req.method === 'POST' && !serverName) {

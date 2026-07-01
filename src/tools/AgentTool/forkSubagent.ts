@@ -26,8 +26,11 @@ import type { BuiltInAgentDefinition } from './loadAgentsDir.js'
  *   `<task-notification>` interaction model
  * - `/fork <directive>` slash command is available
  *
- * Mutually exclusive with coordinator mode — coordinator already owns the
- * orchestration role and has its own delegation model.
+ * Mutually exclusive with coordinator mode by default — coordinator owns the
+ * orchestration role and has its own delegation model. The
+ * coordinator-research-fork opt-in below carves out a narrow exception for
+ * cache-sharing fan-out during research only; see
+ * `isCoordinatorResearchForkEnabled` for that path.
  */
 export function isForkSubagentEnabled(): boolean {
   if (feature('FORK_SUBAGENT')) {
@@ -37,6 +40,46 @@ export function isForkSubagentEnabled(): boolean {
   }
   return false
 }
+
+/**
+ * Coordinator-research-fork opt-in.
+ *
+ * Coordinator mode normally rejects implicit forks (the orchestrator is
+ * supposed to delegate to typed workers, not split itself across the
+ * conversation). But the dominant cost in a coordinator-driven research
+ * fan-out is per-worker prompt-prefill of the system prompt + tool
+ * schemas — easily 10-30k tokens × N workers. Fork's byte-identical API
+ * prefix bypasses that entirely (parent's prompt cache is fully reused,
+ * the only marginal cost is the directive bytes).
+ *
+ * This gate lets a coordinator opt into using `subagent_type: 'fork'` for
+ * cache-sharing research fan-out, while keeping the default behaviour
+ * (independent typed workers) unchanged. The fork child still inherits
+ * the single-shot single-output boilerplate, so it cannot spawn further
+ * subagents — and we additionally instruct it that this is a research
+ * fork (no file modifications expected; report findings only) when the
+ * mode is engaged.
+ *
+ * Off by default. Enable with CLAUDE_CODE_COORDINATOR_RESEARCH_FORK=1.
+ * The FORK_SUBAGENT feature must also be enabled (we share its plumbing).
+ */
+export function isCoordinatorResearchForkEnabled(): boolean {
+  if (!feature('FORK_SUBAGENT')) return false
+  if (!isCoordinatorMode()) return false
+  if (getIsNonInteractiveSession()) return false
+  return process.env.CLAUDE_CODE_COORDINATOR_RESEARCH_FORK === '1'
+}
+
+/**
+ * Subagent type name the coordinator uses to opt into a research fork.
+ * Re-uses the same FORK_AGENT definition under the hood. `subagent_type`
+ * is an arbitrary string in the input schema, so callers spell it
+ * literally — this constant is the single source of truth.
+ */
+export const COORDINATOR_RESEARCH_FORK_SUBAGENT_TYPE = 'fork'
+
+/** Fork instantiation context — controls boilerplate variations. */
+export type ForkMode = 'normal' | 'coordinator-research'
 
 /** Synthetic agent type name used for analytics when the fork path fires. */
 export const FORK_SUBAGENT_TYPE = 'fork'
@@ -103,10 +146,17 @@ const FORK_PLACEHOLDER_RESULT = 'Fork started — processing in background'
  *
  * Result: [...history, assistant(all_tool_uses), user(placeholder_results..., directive)]
  * Only the final text block differs per child, maximizing cache hits.
+ *
+ * The optional `mode` parameter selects the boilerplate variant for the
+ * directive. Defaults to `'normal'`. `'coordinator-research'` adds a
+ * single sentence telling the child this is a research-only fork (no
+ * file modifications). The boilerplate framing tag is unchanged so the
+ * recursive-fork guard in `isInForkChild` keeps working across modes.
  */
 export function buildForkedMessages(
   directive: string,
   assistantMessage: AssistantMessage,
+  mode: ForkMode = 'normal',
 ): MessageType[] {
   // Clone the assistant message to avoid mutating the original, keeping all
   // content blocks (thinking, text, and every tool_use)
@@ -132,7 +182,7 @@ export function buildForkedMessages(
     return [
       createUserMessage({
         content: [
-          { type: 'text' as const, text: buildChildMessage(directive) },
+          { type: 'text' as const, text: buildChildMessage(directive, mode) },
         ],
       }),
     ]
@@ -160,7 +210,7 @@ export function buildForkedMessages(
       ...toolResultBlocks,
       {
         type: 'text' as const,
-        text: buildChildMessage(directive),
+        text: buildChildMessage(directive, mode),
       },
     ],
   })
@@ -168,7 +218,18 @@ export function buildForkedMessages(
   return [fullAssistantMessage, toolResultMessage]
 }
 
-export function buildChildMessage(directive: string): string {
+export function buildChildMessage(
+  directive: string,
+  mode: ForkMode = 'normal',
+): string {
+  // Coordinator-research mode adds one extra rule constraining the fork
+  // to read-only investigation. Inserted as a numbered rule so the
+  // existing structure (10 rules + output format) survives unchanged —
+  // and so the boilerplate tag at the top still matches isInForkChild.
+  const researchOnlyRule =
+    mode === 'coordinator-research'
+      ? `\n11. RESEARCH FORK: this fork is for investigation only. Do NOT modify files. If your directive seems to require modifications, report your findings instead — the coordinator will dispatch an implementation worker separately.`
+      : ''
   return `<${FORK_BOILERPLATE_TAG}>
 STOP. READ THIS FIRST.
 
@@ -184,7 +245,7 @@ RULES (non-negotiable):
 7. Stay strictly within your directive's scope. If you discover related systems outside your scope, mention them in one sentence at most — other workers cover those areas.
 8. Keep your report under 500 words unless the directive specifies otherwise. Be factual and concise.
 9. Your response MUST begin with "Scope:". No preamble, no thinking-out-loud.
-10. REPORT structured facts, then stop
+10. REPORT structured facts, then stop${researchOnlyRule}
 
 Output format (plain text labels, not markdown headers):
   Scope: <echo back your assigned scope in one sentence>

@@ -93,7 +93,7 @@ const diffStyles = {
     },
   },
   diffContainer: {
-    borderRadius: '0',
+    borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
     fontSize: '12px',
     lineHeight: '1.45',
     fontFamily: 'var(--font-mono)',

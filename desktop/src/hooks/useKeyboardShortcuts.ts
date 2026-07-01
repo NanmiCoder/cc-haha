@@ -12,6 +12,8 @@ import { useSettingsStore } from '../stores/settingsStore'
 export function useKeyboardShortcuts() {
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
@@ -50,6 +52,13 @@ export function useKeyboardShortcuts() {
         setActiveView('code')
       }
 
+      // Cmd+B / Ctrl+B — Toggle sidebar
+      if (meta && e.key === 'b') {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
+
       // Cmd+K — Open global session search
       if (meta && e.key === 'k') {
         e.preventDefault()
@@ -74,5 +83,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, openModal, setActiveSession, setActiveView, setUiZoom, stopGeneration])
+  }, [closeModal, openModal, setActiveSession, setActiveView, setSidebarOpen, toggleSidebar, setUiZoom, stopGeneration])
 }

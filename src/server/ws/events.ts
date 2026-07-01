@@ -26,7 +26,10 @@ export type ClientMessage =
       response: ComputerUsePermissionResponse
     }
   | { type: 'set_permission_mode'; mode: string }
-  | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string }
+  | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string; thinkingEnabled?: boolean }
+  | { type: 'set_coordinator_mode'; enabled: boolean }
+  | { type: 'set_pipeline_mode'; flavor: 'solo' | 'normal' }
+  | { type: 'set_handoff_summary'; previousSessionId: string; deep?: boolean }
   | { type: 'stop_generation' }
   | { type: 'ping' }
 
@@ -90,6 +93,22 @@ export type ServerMessage =
   | { type: 'team_deleted'; teamName: string }
   | { type: 'task_update'; taskId: string; status: string; progress?: string }
   | { type: 'session_title_updated'; sessionId: string; title: string }
+  /**
+   * Provider-level compatibility event. Sent when cc-haha's WS handler
+   * observes a provider-level incompatibility — e.g. the active
+   * provider returned a 4xx like "additionalModelRequestFields not
+   * supported", which is the giveaway pattern for a Bedrock proxy
+   * that can't relay Anthropic's `thinking` field. The desktop
+   * `providerCompatStore` records this against the provider id and
+   * shows a "思考不兼容" badge in Settings; cleared on next
+   * provider edit.
+   */
+  | {
+      type: 'provider_compat_event'
+      providerId: string
+      kind: 'thinking_incompatible'
+      reason?: string
+    }
 
 export type TokenUsage = {
   input_tokens: number

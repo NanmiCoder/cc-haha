@@ -103,8 +103,11 @@ export const TodoWriteTool = buildTool({
   },
   mapToolResultToToolResultBlockParam({ verificationNudgeNeeded }, toolUseID) {
     const base = `Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable`
+    // Avoid `key="value"` shapes — see src/tools/AgentTool/specialistRouter.ts
+    // for the regression where embedded attribute syntax made models switch
+    // to textual `<tool_use ...>` blocks instead of real tool calls.
     const nudge = verificationNudgeNeeded
-      ? `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type="${VERIFICATION_AGENT_TYPE}"). You cannot self-assign PARTIAL by listing caveats in your summary \u2014 only the verifier issues a verdict.`
+      ? `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (call the Agent tool with the subagent_type parameter set to ${VERIFICATION_AGENT_TYPE}). You cannot self-assign PARTIAL by listing caveats in your summary \u2014 only the verifier issues a verdict.`
       : ''
     return {
       tool_use_id: toolUseID,

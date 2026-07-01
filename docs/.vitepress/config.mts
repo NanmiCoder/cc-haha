@@ -186,7 +186,7 @@ const enSidebar = [
 ]
 
 export default withMermaid(defineConfig({
-  title: 'Claude Code Haha',
+  title: 'Code Council',
   description: '基于 Claude Code 泄露源码修复的本地可运行版本，支持接入任意 Anthropic 兼容 API',
   lastUpdated: true,
   base: '/',
@@ -257,7 +257,7 @@ export default withMermaid(defineConfig({
     ],
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright 2026 Claude Code Haha Contributors',
+      copyright: 'Copyright 2026 Code Council Contributors',
     },
   },
 }))

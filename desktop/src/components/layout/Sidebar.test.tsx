@@ -71,6 +71,14 @@ vi.mock('../../i18n', () => ({
       'common.cancel': 'Cancel',
       'common.delete': 'Delete',
       'common.rename': 'Rename',
+      'common.copyFailed': 'Copy failed.',
+      'sidebar.exportSession': 'Export as JSONL',
+      'sidebar.copySessionPath': 'Copy file path',
+      'sidebar.copySessionPathSuccess': 'Session file path copied.',
+      'sidebar.copySessionPathUnavailable': 'Session file path is unavailable.',
+      'sidebar.revealSession': 'Open in file manager',
+      'sidebar.revealSessionUnsupported': 'Opening in file manager is not supported in this environment.',
+      'sidebar.revealSessionFailure': 'Failed to open file manager: {error}',
       'sidebar.timeGroup.today': 'Today',
       'sidebar.timeGroup.yesterday': 'Yesterday',
       'sidebar.timeGroup.last7days': 'Last 7 Days',
@@ -255,6 +263,7 @@ describe('Sidebar', () => {
       { sessionId: 'session-new-1', title: 'New Session', type: 'session', status: 'idle' },
     ])
     expect(useTabStore.getState().activeTabId).toBe('session-new-1')
+    expect(screen.getByText(/Code/)).toHaveTextContent('Code Council')
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
   })
@@ -1135,7 +1144,10 @@ describe('Sidebar', () => {
 
     render(<Sidebar />)
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    // Phase 1 UX swapped the "Loading..." string for a Skeleton grid.
+    // Each Skeleton exposes role="status" + aria-label="Loading" — assert
+    // at least one is rendered and that the empty-state copy stays hidden.
+    expect(screen.getAllByRole('status', { name: /loading/i }).length).toBeGreaterThan(0)
     expect(screen.queryByText('No sessions')).not.toBeInTheDocument()
   })
 
@@ -1201,6 +1213,100 @@ describe('Sidebar', () => {
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
       value: originalVisibility,
+    })
+  })
+
+  it('copies the session jsonl file path from the right-click menu', async () => {
+    const writeTextSpy = vi.fn().mockResolvedValue(undefined)
+    const originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextSpy },
+    })
+
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session-9',
+          title: 'Tunnel Session',
+          createdAt: new Date().toISOString(),
+          modifiedAt: new Date().toISOString(),
+          messageCount: 1,
+          projectPath: '/workspace/project',
+          workDir: '/workspace/project',
+          workDirExists: true,
+          filePath: '/home/u/.claude/projects/-workspace-project/session-9.jsonl',
+        },
+      ],
+    })
+
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Tunnel Session/ }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy file path' }))
+    })
+
+    expect(writeTextSpy).toHaveBeenCalledWith('/home/u/.claude/projects/-workspace-project/session-9.jsonl')
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: originalClipboard,
+    })
+  })
+
+  it('hides the "open in file manager" entry when the host cannot reveal files', async () => {
+    // The default test host is browserHost, whose shell slot has no
+    // showItemInFolder — so the menu item must not render. This keeps the
+    // sidebar feature-detection contract honest.
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session-10',
+          title: 'Local Only Session',
+          createdAt: new Date().toISOString(),
+          modifiedAt: new Date().toISOString(),
+          messageCount: 1,
+          projectPath: '/workspace/project',
+          workDir: '/workspace/project',
+          workDirExists: true,
+          filePath: '/home/u/.claude/projects/-workspace-project/session-10.jsonl',
+        },
+      ],
+    })
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Local Only Session/ }))
+
+    expect(screen.getByRole('button', { name: 'Copy file path' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open in file manager' })).toBeNull()
+  })
+
+  it('reports a friendly error when the session has no file path on disk', async () => {
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session-11',
+          title: 'Pathless Session',
+          createdAt: new Date().toISOString(),
+          modifiedAt: new Date().toISOString(),
+          messageCount: 1,
+          projectPath: '/workspace/project',
+          workDir: '/workspace/project',
+          workDirExists: true,
+          // filePath intentionally omitted to simulate an older server payload.
+        },
+      ],
+    })
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Pathless Session/ }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy file path' }))
+    })
+
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Session file path is unavailable.',
     })
   })
 })

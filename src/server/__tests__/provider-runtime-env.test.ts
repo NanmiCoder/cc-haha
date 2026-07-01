@@ -52,7 +52,6 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://api.example.com/anthropic',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-active',
-      ENABLE_TOOL_SEARCH: 'true',
       ANTHROPIC_MODEL: 'active-main',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'active-main',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'active-sonnet',
@@ -96,7 +95,6 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://sub2api.example.com',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-sub2api',
-      ENABLE_TOOL_SEARCH: 'true',
       ANTHROPIC_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.5',
@@ -105,88 +103,59 @@ describe('providerRuntimeEnv', () => {
     })
   })
 
-  test('honors disabled tool search for native Anthropic providers', async () => {
+  test('injects CLAUDE_CODE_DISABLE_THINKING when the provider is flagged thinkingIncompatible', async () => {
     await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
       activeId: 'provider-1',
       providers: [
         {
           id: 'provider-1',
           presetId: 'custom',
-          name: 'Tool Search Off',
+          name: 'Bedrock Proxy',
           apiKey: 'sk-active',
           authStrategy: 'auth_token',
-          baseUrl: 'https://api.example.com/anthropic',
+          baseUrl: 'https://bedrock-proxy.example.com',
           apiFormat: 'anthropic',
-          toolSearchEnabled: false,
           models: {
             main: 'active-main',
-            haiku: 'active-main',
-            sonnet: 'active-main',
-            opus: 'active-main',
+            haiku: 'active-haiku',
+            sonnet: 'active-sonnet',
+            opus: 'active-opus',
           },
+          thinkingIncompatible: true,
+          thinkingIncompatibleReason: 'additionalModelRequestFields not supported',
         },
       ],
     })
 
     const env = readActiveProviderManagedEnv(tmpDir)
-
-    expect(env.ENABLE_TOOL_SEARCH).toBe('false')
+    expect(env?.CLAUDE_CODE_DISABLE_THINKING).toBe('1')
   })
 
-  test('keeps providers readable when stored tool search values are stringly typed', async () => {
+  test('does NOT inject CLAUDE_CODE_DISABLE_THINKING when the flag is absent (back-compat with v0.5.7 providers.json)', async () => {
     await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
       activeId: 'provider-1',
       providers: [
         {
           id: 'provider-1',
           presetId: 'custom',
-          name: 'String Tool Search',
+          name: 'Healthy Provider',
           apiKey: 'sk-active',
           authStrategy: 'auth_token',
-          baseUrl: 'https://api.example.com/anthropic',
+          baseUrl: 'https://api.example.com',
           apiFormat: 'anthropic',
-          toolSearchEnabled: 'false',
           models: {
             main: 'active-main',
-            haiku: 'active-main',
-            sonnet: 'active-main',
-            opus: 'active-main',
+            haiku: 'active-haiku',
+            sonnet: 'active-sonnet',
+            opus: 'active-opus',
           },
+          // thinkingIncompatible intentionally absent to mirror legacy
+          // providers.json files written by older cc-haha versions.
         },
       ],
     })
 
     const env = readActiveProviderManagedEnv(tmpDir)
-
-    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com/anthropic')
-    expect(env.ENABLE_TOOL_SEARCH).toBe('false')
-  })
-
-  test('does not write tool search env for OpenAI proxy providers', async () => {
-    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
-      activeId: 'provider-1',
-      providers: [
-        {
-          id: 'provider-1',
-          presetId: 'custom',
-          name: 'OpenAI Proxy Provider',
-          apiKey: 'sk-active',
-          authStrategy: 'auth_token',
-          baseUrl: 'https://api.example.com/openai',
-          apiFormat: 'openai_chat',
-          toolSearchEnabled: true,
-          models: {
-            main: 'active-main',
-            haiku: 'active-main',
-            sonnet: 'active-main',
-            opus: 'active-main',
-          },
-        },
-      ],
-    })
-
-    const env = readActiveProviderManagedEnv(tmpDir)
-
-    expect(env.ENABLE_TOOL_SEARCH).toBeUndefined()
+    expect(env?.CLAUDE_CODE_DISABLE_THINKING).toBeUndefined()
   })
 })

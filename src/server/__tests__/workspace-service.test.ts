@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as os from 'node:os'
@@ -81,6 +81,9 @@ afterEach(async () => {
 })
 
 describe('WorkspaceService outside-workspace preview', () => {
+  beforeEach(() => {
+    clearFilesystemAccessRootsForTests()
+  })
   afterEach(() => {
     clearFilesystemAccessRootsForTests()
   })

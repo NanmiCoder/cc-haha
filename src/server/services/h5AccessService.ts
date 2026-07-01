@@ -51,6 +51,18 @@ export type H5AccessDiagnostics = {
   localInterfaceHosts: string[]
   /** Port the running server is actually bound to. Lets the UI flag a fixedPort that has not taken effect yet. */
   activePort: number
+  /**
+   * Live Cloudflare tunnel state. `hasToken` reflects whether a named-tunnel
+   * token is stored without ever exposing the token itself — the secret stays
+   * in settings.json and is read only by the local desktop main process.
+   */
+  tunnel: {
+    status: H5TunnelStatus
+    url: string | null
+    mode: H5TunnelMode | null
+    error: string | null
+    hasToken: boolean
+  }
 }
 
 export type H5PublicBaseUrlClassification = 'plain-lan' | 'proxy'
@@ -61,6 +73,14 @@ export type H5PublicBaseUrlValidationResult =
 
 type StoredH5AccessSettings = H5AccessSettings & {
   tokenHash: string | null
+  /**
+   * Cloudflare named-tunnel token. Persisted so a one-click tunnel survives
+   * restarts. Only ever read by the local desktop main process to launch
+   * cloudflared; never returned to remote callers (see toPublicSettings, which
+   * does not expose it, and the local-only /api/h5-access GET gate).
+   */
+  tunnelToken: string | null
+  tunnelMode: H5TunnelMode | null
 }
 
 const DEFAULT_STORED_SETTINGS: StoredH5AccessSettings = {
@@ -72,6 +92,8 @@ const DEFAULT_STORED_SETTINGS: StoredH5AccessSettings = {
   publicBaseUrl: null,
   fixedPort: null,
   disconnectGraceSeconds: null,
+  tunnelToken: null,
+  tunnelMode: null,
 }
 
 const TOKEN_HASH_RE = /^[a-f0-9]{64}$/
@@ -147,6 +169,13 @@ function describeH5AccessDiagnostics(stored: StoredH5AccessSettings): H5AccessDi
     suggestedHost,
     localInterfaceHosts,
     activePort: ProviderService.getServerPort(),
+    tunnel: {
+      status: tunnelRuntime.status,
+      url: tunnelRuntime.url,
+      mode: tunnelRuntime.mode ?? stored.tunnelMode,
+      error: tunnelRuntime.error,
+      hasToken: !!stored.tunnelToken,
+    },
   }
 }
 
@@ -228,13 +257,87 @@ function normalizePublicBaseUrl(input: unknown): string | null {
   return `${parsed.origin}${normalizedPath === '/' ? '' : normalizedPath}`
 }
 
+export type H5TunnelMode = 'quick' | 'named'
+export type H5TunnelStatus = 'idle' | 'starting' | 'running' | 'error'
+
+export type H5TunnelRuntimeState = {
+  status: H5TunnelStatus
+  url: string | null
+  mode: H5TunnelMode | null
+  error: string | null
+}
+
+// Process-local tunnel state. The desktop main process spawns cloudflared and
+// reports the resulting public URL here via the tunnel API; it is intentionally
+// never persisted to settings.json because the URL only lives as long as the
+// tunnel process does (a quick tunnel URL even changes on every restart).
+const tunnelRuntime: H5TunnelRuntimeState = {
+  status: 'idle',
+  url: null,
+  mode: null,
+  error: null,
+}
+
+/**
+ * Report the live tunnel's public URL (or clear it with an explicit null). The
+ * URL becomes the highest-priority source for the effective publicBaseUrl.
+ * Empty strings and malformed values are ignored so a status-only heartbeat or
+ * a bad report can never blank out a still-valid runtime override — only an
+ * explicit `null` clears it.
+ */
+export function setRuntimeTunnelUrl(url: string | null, mode?: H5TunnelMode): void {
+  if (url === null) {
+    tunnelRuntime.url = null
+    return
+  }
+  try {
+    const normalized = normalizePublicBaseUrl(url)
+    // normalizePublicBaseUrl returns null for '' (and other empties): treat that
+    // as "no URL in this report", not as an instruction to clear a good value.
+    if (normalized === null) return
+    tunnelRuntime.url = normalized
+    if (mode) tunnelRuntime.mode = mode
+  } catch {
+    // Ignore an invalid reported URL; keep the previous runtime value intact.
+  }
+}
+
+export function setRuntimeTunnelState(next: Partial<H5TunnelRuntimeState>): void {
+  if (next.status !== undefined) tunnelRuntime.status = next.status
+  if (next.mode !== undefined) tunnelRuntime.mode = next.mode
+  if (next.error !== undefined) tunnelRuntime.error = next.error
+  if (next.url !== undefined) setRuntimeTunnelUrl(next.url, next.mode ?? undefined)
+}
+
+export function getRuntimeTunnelState(): H5TunnelRuntimeState {
+  return { ...tunnelRuntime }
+}
+
+export function resetRuntimeTunnelState(): void {
+  tunnelRuntime.status = 'idle'
+  tunnelRuntime.url = null
+  tunnelRuntime.mode = null
+  tunnelRuntime.error = null
+}
+
 function resolveConfiguredPublicBaseUrl(): string | null {
-  const configured = process.env.CLAUDE_H5_PUBLIC_BASE_URL
-  if (configured) {
+  // A live tunnel (ngrok/frp/cloudflared) takes precedence over a statically
+  // configured base URL: it reflects the address that is actually reachable
+  // right now. None of these are persisted to settings.
+  // Priority: process-reported runtime tunnel > env tunnel > env public URL.
+  const candidates = [
+    tunnelRuntime.url,
+    process.env.CLAUDE_H5_TUNNEL_URL,
+    process.env.CLAUDE_H5_PUBLIC_BASE_URL,
+  ]
+
+  for (const candidate of candidates) {
+    if (!candidate) continue
     try {
-      return normalizePublicBaseUrl(configured)
+      return normalizePublicBaseUrl(candidate)
     } catch {
-      return null
+      // Ignore an invalid override and fall through to the next source so a
+      // malformed tunnel value can't blank out a valid configured URL.
     }
   }
 
@@ -587,6 +690,12 @@ function normalizeStoredSettings(value: unknown): StoredH5AccessSettings {
     ? createTokenPreview(token)
     : tokenHash && typeof value.tokenPreview === 'string' ? value.tokenPreview : null
 
+  const tunnelToken = typeof value.tunnelToken === 'string' && value.tunnelToken.trim()
+    ? value.tunnelToken.trim()
+    : null
+  const tunnelMode: H5TunnelMode | null =
+    value.tunnelMode === 'quick' || value.tunnelMode === 'named' ? value.tunnelMode : null
+
   return {
     enabled: value.enabled === true && tokenHash !== null,
     token,
@@ -596,6 +705,8 @@ function normalizeStoredSettings(value: unknown): StoredH5AccessSettings {
     publicBaseUrl,
     fixedPort: normalizeFixedPort(value.fixedPort),
     disconnectGraceSeconds: normalizeDisconnectGraceSeconds(value.disconnectGraceSeconds),
+    tunnelToken,
+    tunnelMode,
   }
 }
 
@@ -690,6 +801,8 @@ export class H5AccessService {
     publicBaseUrl?: string | null
     fixedPort?: number | null
     disconnectGraceSeconds?: number | null
+    tunnelToken?: string | null
+    tunnelMode?: H5TunnelMode | null
   }): Promise<H5AccessSettings> {
     return this.managedSettingsService.updateSettings(async (current) => {
       const h5Access = normalizeStoredSettings(current.h5Access)
@@ -742,6 +855,10 @@ export class H5AccessService {
         publicBaseUrl: nextPublicBaseUrl,
         fixedPort: nextFixedPort,
         disconnectGraceSeconds: nextDisconnectGraceSeconds,
+        tunnelToken: input.tunnelToken === undefined
+          ? h5Access.tunnelToken
+          : (input.tunnelToken && input.tunnelToken.trim() ? input.tunnelToken.trim() : null),
+        tunnelMode: input.tunnelMode === undefined ? h5Access.tunnelMode : input.tunnelMode,
       }
 
       return {
@@ -757,6 +874,15 @@ export class H5AccessService {
   async getDiagnostics(): Promise<H5AccessDiagnostics> {
     const { h5Access } = await this.readStoredSettings()
     return describeH5AccessDiagnostics(h5Access)
+  }
+
+  /**
+   * Local-only: the stored Cloudflare named-tunnel token. Used by the desktop
+   * main process to launch cloudflared. Never exposed through public settings.
+   */
+  async getTunnelToken(): Promise<string | null> {
+    const { h5Access } = await this.readStoredSettings()
+    return h5Access.tunnelToken
   }
 
   /**

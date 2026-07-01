@@ -100,7 +100,7 @@ echo "[build-macos-arm64] Building sidecars for ${TARGET_TRIPLE}..."
 (cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run build:sidecars)
 
 echo "[build-macos-arm64] Building renderer and Electron main/preload bundles..."
-(cd "${DESKTOP_DIR}" && bun run build && bun run build:electron)
+(cd "${DESKTOP_DIR}" && bun run build:plugin-seed && bun run build && bun run build:electron)
 
 if [[ "${REBUILD_NATIVE:-0}" == "1" ]]; then
   echo "[build-macos-arm64] Rebuilding native dependencies for Electron ABI..."

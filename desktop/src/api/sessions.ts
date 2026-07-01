@@ -3,6 +3,7 @@ import type { AgentTaskNotification } from '../types/chat'
 import type { SessionListItem, MessageEntry } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import type { TraceCallRecord, TraceSession } from '../types/trace'
+import type { WorkspaceLspDiagnostic, WorkspaceLspState } from '../types/lsp'
 
 type SessionsResponse = { sessions: SessionListItem[]; total: number }
 type MessagesResponse = {
@@ -277,6 +278,44 @@ export type WorkspaceDiffResult = {
   error?: string
 }
 
+export type SaveWorkspaceFileInput = {
+  path: string
+  content: string
+  expectedBaseHash: string
+  bom: 'none' | 'utf-8'
+  lineEnding: 'LF' | 'CRLF' | 'CR'
+}
+
+export type SaveWorkspaceFileResult =
+  | { ok: true; hash: string; bytes: number; timestamp: number }
+  | { ok: false; error: string; message: string; details?: Record<string, unknown> }
+
+export type WorkspaceLspDiagnosticsResult = {
+  state: WorkspaceLspState['state']
+  diagnostics: WorkspaceLspDiagnostic[]
+  diagnosticsTotal: number
+  diagnosticsTruncated: boolean
+  error?: string
+}
+
+export type WorkspaceLspSyncInput = {
+  path: string
+  content?: string
+  event?: 'open' | 'change' | 'save'
+}
+
+export type WorkspaceLspCustomServerInput = {
+  name?: string
+  path?: string
+  command?: string
+  args?: string[]
+  extensionToLanguage?: Record<string, string>
+}
+
+export type WorkspaceLspConfigInput = {
+  server?: WorkspaceLspCustomServerInput
+}
+
 export type SessionTurnCheckpoint = {
   target: SessionRewindResponse['target']
   conversation?: SessionRewindResponse['conversation']
@@ -305,6 +344,23 @@ function buildWorkspacePath(
 
   const qs = query.toString()
   return `/api/sessions/${sessionId}/workspace/${resource}${qs ? `?${qs}` : ''}`
+}
+
+function buildLspPath(
+  sessionId: string,
+  resource: 'state' | 'diagnostics',
+  workspacePath?: string,
+  refresh?: boolean,
+  hasConfig?: boolean,
+) {
+  const query = new URLSearchParams()
+  if (typeof workspacePath === 'string' && workspacePath.length > 0) {
+    query.set('path', workspacePath)
+  }
+  if (refresh) query.set('refresh', '1')
+  if (hasConfig) query.set('config', '1')
+  const qs = query.toString()
+  return `/api/sessions/${sessionId}/lsp/${resource}${qs ? `?${qs}` : ''}`
 }
 
 export const sessionsApi = {
@@ -396,8 +452,38 @@ export const sessionsApi = {
     return api.get<WorkspaceReadFileResult>(buildWorkspacePath(sessionId, 'file', workspacePath))
   },
 
+  saveWorkspaceFile(sessionId: string, input: SaveWorkspaceFileInput) {
+    return api.post<SaveWorkspaceFileResult>(`/api/sessions/${sessionId}/workspace/file`, input)
+  },
+
   getWorkspaceDiff(sessionId: string, workspacePath: string) {
     return api.get<WorkspaceDiffResult>(buildWorkspacePath(sessionId, 'diff', workspacePath))
+  },
+
+  getWorkspaceLspState(sessionId: string, workspacePath?: string, config?: WorkspaceLspConfigInput) {
+    const path = buildLspPath(sessionId, 'state', workspacePath, false, Boolean(config?.server))
+    return config?.server
+      ? api.post<{ state: WorkspaceLspState }>(path, config)
+      : api.get<{ state: WorkspaceLspState }>(path)
+  },
+
+  getWorkspaceLspDiagnostics(
+    sessionId: string,
+    workspacePath: string,
+    options?: { refresh?: boolean; config?: WorkspaceLspConfigInput },
+  ) {
+    const path = buildLspPath(sessionId, 'diagnostics', workspacePath, options?.refresh, Boolean(options?.config?.server))
+    return options?.config?.server
+      ? api.post<WorkspaceLspDiagnosticsResult>(path, options.config)
+      : api.get<WorkspaceLspDiagnosticsResult>(path)
+  },
+
+  syncWorkspaceLsp(sessionId: string, input: WorkspaceLspSyncInput & WorkspaceLspConfigInput) {
+    return api.post<{ state: WorkspaceLspState }>(`/api/sessions/${sessionId}/lsp/sync`, input)
+  },
+
+  restartWorkspaceLsp(sessionId: string, input: ({ path?: string } & WorkspaceLspConfigInput) = {}) {
+    return api.post<{ state: WorkspaceLspState }>(`/api/sessions/${sessionId}/lsp/restart`, input)
   },
 
   getTurnCheckpoints(sessionId: string) {

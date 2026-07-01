@@ -105,6 +105,37 @@ describe('provider-aware thinking support', () => {
     expect(modelSupportsMaxEffort('MiniMax-M3')).toBe(false)
   })
 
+  test('any Anthropic-compatible third-party proxy defaults to thinking-capable for unknown model names', () => {
+    // Keeps cc-haha forward-compatible with new gateways/providers (mimo,
+    // lgfzer, custom). The streaming response path renders any thinking
+    // blocks the upstream actually emits; sending the request field is
+    // harmless when the upstream ignores it.
+    const cases: Array<{ baseUrl: string; model: string }> = [
+      { baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic', model: 'mimo-v2.5-pro' },
+      { baseUrl: 'https://aiapi.lgfzer.com', model: 'gpt-5.5-high' },
+      { baseUrl: 'https://api.brand-new-gateway.example/v1', model: 'whatever-2025' },
+      { baseUrl: 'http://127.0.0.1:5580', model: 'claude-opus-4.7' },
+    ]
+    for (const { baseUrl, model } of cases) {
+      process.env.ANTHROPIC_BASE_URL = baseUrl
+      delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES
+      clearCapabilityCache()
+      expect(modelSupportsThinking(model)).toBe(true)
+    }
+  })
+
+  test('third-party proxy can opt a model OUT of thinking via SUPPORTED_CAPABILITIES', () => {
+    // Escape hatch for proxies that genuinely don't support thinking — set
+    // the env override to anything that doesn't include 'thinking'. This
+    // is the same mechanism MiniMax / 3P providers already use.
+    process.env.ANTHROPIC_BASE_URL = 'https://api.example-no-thinking.com/anthropic'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'pinned-model-id'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES = 'none'
+    clearCapabilityCache()
+
+    expect(modelSupportsThinking('pinned-model-id')).toBe(false)
+  })
+
   test('third-party base URLs do not default unknown model names to effort support', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://api.moonshot.cn/anthropic'
     delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES

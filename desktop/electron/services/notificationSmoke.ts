@@ -98,7 +98,7 @@ export function scheduleNotificationSmoke({
   const sessionId = env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_SESSION_ID?.trim()
   if (!sessionId) return false
 
-  const title = env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_TITLE?.trim() || 'Claude Code Haha notification smoke'
+  const title = env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_TITLE?.trim() || 'Code Council notification smoke'
   const body = env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_BODY?.trim() || 'Click to return to the target session.'
   const delayMs = parseNotificationSmokeDelay(env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_DELAY_MS)
   const triggerSyntheticAction = shouldTriggerSyntheticAction(env.CC_HAHA_ELECTRON_NOTIFICATION_SMOKE_TRIGGER_ACTION)

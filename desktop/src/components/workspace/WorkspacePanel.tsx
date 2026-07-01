@@ -29,6 +29,11 @@ import {
   workspacePrismTheme,
 } from './WorkspaceCodeSurface'
 import { WorkspaceFileOpenWith } from './WorkspaceFileOpenWith'
+import { WorkspaceEditor, saveWorkspaceBuffer } from './WorkspaceEditor'
+import { UnsavedChangesModal } from './UnsavedChangesModal'
+import { LspStatusIndicator } from './LspStatusIndicator'
+import { errorCountFromDiagnostics, toLegacyLspState } from '../../lib/lspStateMap'
+import { sessionsApi } from '../../api/sessions'
 
 type WorkspacePanelProps = {
   sessionId: string
@@ -65,6 +70,37 @@ type FileContextMenuState = {
   isDirectory: boolean
   x: number
   y: number
+}
+
+type FilePreviewMode = 'preview' | 'edit'
+
+type PendingPreviewClose = {
+  tabId: string
+  scope: WorkspacePreviewCloseScope
+  dirtyTabIds: string[]
+}
+
+function getClosingPreviewTabIds(
+  tabs: WorkspacePreviewTab[],
+  tabId: string,
+  scope: WorkspacePreviewCloseScope,
+) {
+  const index = tabs.findIndex((tab) => tab.id === tabId)
+  if (index < 0) return [tabId]
+
+  switch (scope) {
+    case 'others':
+      return tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id)
+    case 'left':
+      return tabs.slice(0, index).map((tab) => tab.id)
+    case 'right':
+      return tabs.slice(index + 1).map((tab) => tab.id)
+    case 'all':
+      return tabs.map((tab) => tab.id)
+    case 'current':
+    default:
+      return [tabId]
+  }
 }
 
 const FILE_STATUS_META: Record<WorkspaceFileStatus, { label: string; className: string }> = {
@@ -925,6 +961,11 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
   const [previewTabContextMenu, setPreviewTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null)
+  const [unsupportedEditorPaths, setUnsupportedEditorPaths] = useState<Set<string>>(() => new Set())
+  const [filePreviewModes, setFilePreviewModes] = useState<Record<string, FilePreviewMode>>({})
+  const [pendingPreviewClose, setPendingPreviewClose] = useState<PendingPreviewClose | null>(null)
+  const [isSavingPendingClose, setIsSavingPendingClose] = useState(false)
+  const [pendingCloseError, setPendingCloseError] = useState<string | null>(null)
   const width = useWorkspacePanelStore((state) => state.width)
   const isOpen = useWorkspacePanelStore((state) => state.isPanelOpen(sessionId))
   const activeView = useWorkspacePanelStore((state) => state.getActiveView(sessionId))
@@ -946,8 +987,11 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
   const loadTree = useWorkspacePanelStore((state) => state.loadTree)
   const toggleTreeNode = useWorkspacePanelStore((state) => state.toggleTreeNode)
   const openPreview = useWorkspacePanelStore((state) => state.openPreview)
-  const closePreview = useWorkspacePanelStore((state) => state.closePreview)
   const closePreviewTabs = useWorkspacePanelStore((state) => state.closePreviewTabs)
+  const initBuffer = useWorkspacePanelStore((state) => state.initBuffer)
+  const syncLsp = useWorkspacePanelStore((state) => state.syncLsp)
+  const loadLspState = useWorkspacePanelStore((state) => state.loadLspState)
+  const bufferStateByTabId = useWorkspacePanelStore((state) => state.bufferStateByTabId)
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const addWorkspaceReference = useWorkspaceChatContextStore((state) => state.addReference)
   const chatState = useChatStore((state) => state.sessions[sessionId]?.chatState ?? 'idle')
@@ -988,6 +1032,13 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
   const activePreviewError = useWorkspacePanelStore((state) =>
     activePreviewRequestKey ? state.errors.previewByTabId[activePreviewRequestKey] ?? null : null,
   )
+  const activeLspKey = activePreviewTab?.kind === 'file'
+    ? makeTreeStateKey(sessionId, activePreviewTab.path)
+    : null
+  const activeLspDiagnostics = useWorkspacePanelStore((state) =>
+    activeLspKey ? state.lspDiagnosticsBySessionPath[activeLspKey] : undefined,
+  )
+  const lspState = useWorkspacePanelStore((state) => state.lspStateBySession[sessionId])
 
   useEffect(() => {
     const previous = refreshLifecycleRef.current
@@ -1109,10 +1160,83 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
     setFileContextMenu({ path, isDirectory, x: event.clientX, y: event.clientY })
   }
 
+  const handleWorkspaceFileSaved = () => {
+    void loadStatus(sessionId)
+    if (activeView === 'all') {
+      void loadTree(sessionId, '')
+    }
+  }
+
+  const requestClosePreviewTabs = (tabId: string, scope: WorkspacePreviewCloseScope) => {
+    const closingTabIds = getClosingPreviewTabIds(previewTabs, tabId, scope)
+    const dirtyTabIds = closingTabIds.filter((id) => bufferStateByTabId[id]?.isDirty)
+    if (dirtyTabIds.length === 0) {
+      closePreviewTabs(sessionId, tabId, scope)
+      return
+    }
+
+    setPendingCloseError(null)
+    setPendingPreviewClose({ tabId, scope, dirtyTabIds })
+  }
+
+  const handlePendingCloseCancel = () => {
+    setPendingPreviewClose(null)
+    setPendingCloseError(null)
+  }
+
+  const handlePendingCloseDiscard = () => {
+    if (!pendingPreviewClose) return
+    closePreviewTabs(sessionId, pendingPreviewClose.tabId, pendingPreviewClose.scope)
+    setPendingPreviewClose(null)
+    setPendingCloseError(null)
+  }
+
+  const handlePendingCloseSave = async () => {
+    if (!pendingPreviewClose) return
+    setIsSavingPendingClose(true)
+    setPendingCloseError(null)
+
+    for (const tabId of pendingPreviewClose.dirtyTabIds) {
+      const buffer = bufferStateByTabId[tabId]
+      if (!buffer?.isDirty) continue
+      const result = await saveWorkspaceBuffer(sessionId, buffer, initBuffer)
+      if (!result.ok) {
+        setPendingCloseError(result.message)
+        setIsSavingPendingClose(false)
+        return
+      }
+      try {
+        void syncLsp(sessionId, { path: buffer.path, content: buffer.currentContent, event: 'save' }).catch(() => undefined)
+      } catch {
+        // Preserve close behavior when LSP save sync is unavailable.
+      }
+    }
+
+    closePreviewTabs(sessionId, pendingPreviewClose.tabId, pendingPreviewClose.scope)
+    setPendingPreviewClose(null)
+    setPendingCloseError(null)
+    setIsSavingPendingClose(false)
+    handleWorkspaceFileSaved()
+  }
+
+  const handlePendingCloseTimeout = () => {
+    setPendingPreviewClose(null)
+    setPendingCloseError('Close prompt timed out — buffers kept dirty')
+  }
+
   const handleClosePreviewTabs = (scope: WorkspacePreviewCloseScope) => {
     if (!previewTabContextMenu) return
-    closePreviewTabs(sessionId, previewTabContextMenu.tabId, scope)
+    requestClosePreviewTabs(previewTabContextMenu.tabId, scope)
     setPreviewTabContextMenu(null)
+  }
+
+  const handleUnsupportedEditorEncoding = (path: string) => {
+    setUnsupportedEditorPaths((current) => {
+      if (current.has(path)) return current
+      const next = new Set(current)
+      next.add(path)
+      return next
+    })
   }
 
   const copyWorkspacePath = async (path: string, mode: 'relative' | 'absolute' = 'relative') => {
@@ -1252,14 +1376,38 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
               </span>
             </span>
           ))}
-          <button
-            type="button"
-            onClick={() => addWorkspacePathToChat(activePreviewTab.path)}
-            className="ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[14px]">person_add</span>
-            <span>{t('workspace.addToChat')}</span>
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {activePreviewTab.kind === 'file' && (
+              <LspStatusIndicator
+                state={toLegacyLspState(
+                  lspState,
+                  errorCountFromDiagnostics(activeLspDiagnostics?.diagnostics),
+                  sessionId,
+                )}
+                diagnostics={activeLspDiagnostics?.diagnostics ?? []}
+                onRetryClick={() => {
+                  // Server-side LspManager keeps `unavailable` workspaces
+                  // sticky until an explicit restart, so this round-trips
+                  // through /lsp/restart and then re-reads state.
+                  void sessionsApi
+                    .restartWorkspaceLsp(sessionId, { path: activePreviewTab.path })
+                    .catch(() => undefined)
+                    .then(() => loadLspState(sessionId, activePreviewTab.path))
+                }}
+                onDiagnosticOpen={(diagnostic) => {
+                  void openPreview(sessionId, diagnostic.path, 'file')
+                }}
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => addWorkspacePathToChat(activePreviewTab.path)}
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">person_add</span>
+              <span>{t('workspace.addToChat')}</span>
+            </button>
+          </div>
           <span className="shrink-0 rounded-[5px] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-tertiary)]">
             {kindLabel}
           </span>
@@ -1274,10 +1422,50 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
             value={activePreviewTab.diff ?? ''}
             path={activePreviewTab.path}
           />
-        ) : state === 'ok' && isMarkdownPreview(activePreviewTab) ? (
-          <MarkdownSurface
-            value={activePreviewTab.content ?? ''}
-            onAddSelection={(selection) => addSelectionToChat(activePreviewTab.path, selection)}
+        ) : state === 'ok' && activePreviewTab.kind === 'file' && isMarkdownPreview(activePreviewTab) ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-[var(--color-border)] px-3">
+              {(['preview', 'edit'] as const).map((mode) => {
+                const activeMode = filePreviewModes[activePreviewTab.id] ?? 'preview'
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-testid={`workspace-markdown-${mode}-toggle`}
+                    onClick={() => setFilePreviewModes((current) => ({ ...current, [activePreviewTab.id]: mode }))}
+                    className={`rounded-[6px] px-2.5 py-1 text-[12px] transition-colors ${
+                      activeMode === mode
+                        ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    {mode === 'preview' ? 'Preview' : 'Edit'}
+                  </button>
+                )
+              })}
+            </div>
+            {(filePreviewModes[activePreviewTab.id] ?? 'preview') === 'edit' && !unsupportedEditorPaths.has(activePreviewTab.path) ? (
+              <WorkspaceEditor
+                sessionId={sessionId}
+                tab={activePreviewTab}
+                onUnsupportedEncoding={handleUnsupportedEditorEncoding}
+                onSaved={handleWorkspaceFileSaved}
+                onClose={() => closePreviewTabs(sessionId, activePreviewTab.id, 'current')}
+              />
+            ) : (
+              <MarkdownSurface
+                value={bufferStateByTabId[activePreviewTab.id]?.currentContent ?? activePreviewTab.content ?? ''}
+                onAddSelection={(selection) => addSelectionToChat(activePreviewTab.path, selection)}
+              />
+            )}
+          </div>
+        ) : state === 'ok' && activePreviewTab.kind === 'file' && !unsupportedEditorPaths.has(activePreviewTab.path) ? (
+          <WorkspaceEditor
+            sessionId={sessionId}
+            tab={activePreviewTab}
+            onUnsupportedEncoding={handleUnsupportedEditorEncoding}
+            onSaved={handleWorkspaceFileSaved}
+            onClose={() => closePreviewTabs(sessionId, activePreviewTab.id, 'current')}
           />
         ) : state === 'ok' ? (
           <CodeSurface
@@ -1341,13 +1529,15 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
                     ) : (
                       <FileTypeBadge name={tab.title} subtle={!isActive} />
                     )}
-                    <span className="min-w-0 flex-1 truncate">{tab.title}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {bufferStateByTabId[tab.id]?.isDirty ? '● ' : ''}{tab.title}
+                    </span>
                   </button>
                   <button
                     type="button"
                     aria-label={`${t('workspace.closeTab')} ${tab.title} ${kindLabel}`}
                     onClick={() => {
-                      closePreview(sessionId, tab.id)
+                      requestClosePreviewTabs(tab.id, 'current')
                     }}
                     className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[var(--color-text-tertiary)] opacity-0 transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] group-hover:opacity-100 focus-visible:opacity-100"
                   >
@@ -1355,8 +1545,8 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
                   </button>
                 </div>
               )
-            })
-          )}
+          })
+        )}
         </div>
         <ToolbarIconButton
           icon={isNavigatorVisible ? 'right_panel_close' : 'account_tree'}
@@ -1507,6 +1697,27 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
           </div>
         </div>
       )}
+
+      {pendingCloseError && (
+        <div
+          role="alert"
+          className="fixed bottom-5 left-1/2 z-[61] -translate-x-1/2 rounded-[10px] border border-[var(--color-error-border)] bg-[var(--color-error-surface)] px-3 py-2 text-[12px] text-[var(--color-error-text)] shadow-[var(--shadow-dropdown)]"
+        >
+          {pendingCloseError}
+        </div>
+      )}
+
+      <UnsavedChangesModal
+        open={pendingPreviewClose !== null}
+        filePath={pendingPreviewClose?.dirtyTabIds.length === 1
+          ? bufferStateByTabId[pendingPreviewClose.dirtyTabIds[0]!]?.path ?? 'Unsaved file'
+          : `${pendingPreviewClose?.dirtyTabIds.length ?? 0} unsaved files`}
+        isSaving={isSavingPendingClose}
+        onDiscard={handlePendingCloseDiscard}
+        onSave={handlePendingCloseSave}
+        onCancel={handlePendingCloseCancel}
+        onTimeout={handlePendingCloseTimeout}
+      />
 
       {fileContextMenu && (
         <div

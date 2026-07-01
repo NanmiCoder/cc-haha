@@ -1,3 +1,5 @@
+import { appendFileSync } from 'node:fs'
+
 const args = process.argv.slice(2)
 
 function getArg(name: string): string | undefined {
@@ -31,6 +33,7 @@ const exitAfterOpenMs = Number(process.env.MOCK_SDK_EXIT_AFTER_OPEN_MS || '0')
 const exitAfterFirstUserMs = Number(process.env.MOCK_SDK_EXIT_AFTER_FIRST_USER_MS || '0')
 const mcpStatusDelayMs = Number(process.env.MOCK_SDK_MCP_STATUS_DELAY_MS || '0')
 const startupStdout = process.env.MOCK_SDK_STARTUP_STDOUT || ''
+const startupArgsLog = process.env.MOCK_SDK_STARTUP_ARGS_LOG || ''
 const exitBeforeSdkMs = Number(process.env.MOCK_SDK_EXIT_BEFORE_SDK_MS || '0')
 let initSent = false
 let firstUserExitScheduled = false
@@ -42,6 +45,10 @@ if (!sdkUrl) {
 
 if (startupStdout) {
   console.log(startupStdout)
+}
+
+if (startupArgsLog) {
+  appendFileSync(startupArgsLog, `${JSON.stringify(args)}\n`)
 }
 
 if (exitBeforeSdkMs > 0) {

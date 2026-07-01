@@ -24,6 +24,9 @@ import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { closeSessionConnection, getSlashCommands } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService } from '../services/workspaceService.js'
+import { WorkspaceFileService } from '../services/workspaceFileService.js'
+import { WorkspaceLspService, type WorkspaceLspConfigInput, type WorkspaceLspSyncInput } from '../services/workspaceLspService.js'
+import { isLspFeatureEnabled } from '../services/lspFeatureFlag.js'
 import {
   getRepositoryContext,
   type CreateSessionRepositoryOptions,
@@ -41,6 +44,11 @@ import {
   SessionBranchingError,
 } from '../../utils/sessionBranching.js'
 import { registerChangedFileAccessRoot, registerFilesystemAccessRoot } from '../services/filesystemAccessRoots.js'
+import {
+  getSessionSummary,
+  invalidateSessionSummary,
+  type SessionSummary,
+} from '../services/sessionSummaryService.js'
 import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCaptureService.js'
 
 const workspaceService = new WorkspaceService(
@@ -51,6 +59,15 @@ const workspaceService = new WorkspaceService(
   async (sessionId) => sessionService.getSessionMessages(sessionId),
   async (sessionId) => sessionService.getSessionFileHistorySnapshots(sessionId),
 )
+
+const workspaceFileService = new WorkspaceFileService(
+  async (sessionId) => (
+    conversationService.getSessionWorkDir(sessionId) ||
+    await sessionService.getSessionWorkDir(sessionId)
+  ),
+)
+
+const workspaceLspService = new WorkspaceLspService()
 
 export async function handleSessionsApi(
   req: Request,
@@ -188,6 +205,9 @@ export async function handleSessionsApi(
     }
 
     if (subResource === 'workspace') {
+      if (req.method === 'POST') {
+        return await handleSessionWorkspacePost(req, sessionId, segments[4])
+      }
       if (req.method !== 'GET') {
         return Response.json(
           { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
@@ -195,6 +215,20 @@ export async function handleSessionsApi(
         )
       }
       return await handleSessionWorkspaceRoute(sessionId, url, segments[4])
+    }
+
+    if (subResource === 'lsp') {
+      if (!['GET', 'POST'].includes(req.method)) {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      return await handleSessionLspRoute(req, url, sessionId, segments[4])
+    }
+
+    if (subResource === 'summary') {
+      return await handleSessionSummaryRoute(req, sessionId, url)
     }
 
     // Route to conversations handler if sub-resource is 'chat'
@@ -265,6 +299,49 @@ async function getSessionMessages(sessionId: string): Promise<Response> {
   return Response.json({ messages, taskNotifications })
 }
 
+async function handleSessionSummaryRoute(
+  req: Request,
+  sessionId: string,
+  url: URL,
+): Promise<Response> {
+  // GET /api/sessions/:id/summary?staleAt=<msgCount>  → cached or null
+  // POST /api/sessions/:id/summary?force=1            → force-regenerate
+  // DELETE /api/sessions/:id/summary                  → invalidate cache
+  if (req.method === 'GET') {
+    const staleAtRaw = url.searchParams.get('staleAt')
+    const staleAt = staleAtRaw ? Number.parseInt(staleAtRaw, 10) : undefined
+    const summary: SessionSummary | null = await getSessionSummary(sessionId, {
+      ...(typeof staleAt === 'number' && Number.isFinite(staleAt) ? { staleAt } : {}),
+    })
+    return Response.json({ summary })
+  }
+  if (req.method === 'POST') {
+    const force = url.searchParams.get('force') === '1'
+    const staleAtRaw = url.searchParams.get('staleAt')
+    const staleAt = staleAtRaw ? Number.parseInt(staleAtRaw, 10) : undefined
+    const summary: SessionSummary | null = await getSessionSummary(sessionId, {
+      ...(force ? { forceRefresh: true } : {}),
+      ...(typeof staleAt === 'number' && Number.isFinite(staleAt) ? { staleAt } : {}),
+    })
+    if (!summary) {
+      throw new ApiError(
+        503,
+        'Could not generate session summary (no provider configured, generation failed, or transcript empty).',
+        'SUMMARY_UNAVAILABLE',
+      )
+    }
+    return Response.json({ summary })
+  }
+  if (req.method === 'DELETE') {
+    await invalidateSessionSummary(sessionId)
+    return Response.json({ ok: true })
+  }
+  return Response.json(
+    { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+    { status: 405 },
+  )
+}
+
 async function getSessionTrace(sessionId: string): Promise<Response> {
   const [trace, session] = await Promise.all([
     traceCaptureService.getSessionTrace(sessionId),
@@ -324,6 +401,116 @@ async function handleSessionWorkspaceRoute(
     default:
       throw ApiError.notFound(`Unknown workspace resource: ${workspaceResource || 'workspace'}`)
   }
+}
+
+async function handleSessionLspRoute(
+  req: Request,
+  url: URL,
+  sessionId: string,
+  lspResource?: string,
+): Promise<Response> {
+  if (!isLspFeatureEnabled()) {
+    return Response.json(
+      { error: 'FEATURE_DISABLED', message: 'LSP feature is not enabled in this environment' },
+      { status: 404 },
+    )
+  }
+
+  const workspaceRoot = await requireSessionWorkspace(sessionId)
+
+  try {
+    switch (lspResource) {
+      case 'state': {
+        if (!['GET', 'POST'].includes(req.method)) return methodNotAllowed(req.method)
+        const config = req.method === 'POST'
+          ? await readJsonBody() as WorkspaceLspConfigInput
+          : undefined
+        const state = config?.server
+          ? await workspaceLspService.restart(sessionId, workspaceRoot, url.searchParams.get('path') || undefined, config)
+          : await workspaceLspService.getState(sessionId, workspaceRoot, url.searchParams.get('path') || undefined)
+        return Response.json({ state })
+      }
+      case 'diagnostics': {
+        if (!['GET', 'POST'].includes(req.method)) return methodNotAllowed(req.method)
+        const requestedPath = url.searchParams.get('path')
+        if (!requestedPath) throw ApiError.badRequest('path query parameter is required for lsp diagnostics')
+        const refresh = url.searchParams.get('refresh') === '1'
+        const config = req.method === 'POST'
+          ? await readJsonBody() as WorkspaceLspConfigInput
+          : undefined
+        return Response.json(await workspaceLspService.getDiagnostics(sessionId, workspaceRoot, requestedPath, { refresh, config }))
+      }
+      case 'sync': {
+        if (req.method !== 'POST') return methodNotAllowed(req.method)
+        const body = await readJsonBody() as WorkspaceLspSyncInput & WorkspaceLspConfigInput
+        return Response.json({ state: await workspaceLspService.sync(sessionId, workspaceRoot, body, body) })
+      }
+      case 'restart': {
+        if (req.method !== 'POST') return methodNotAllowed(req.method)
+        const body = await readJsonBody() as { path?: string } & WorkspaceLspConfigInput
+        return Response.json({ state: await workspaceLspService.restart(sessionId, workspaceRoot, body.path, body) })
+      }
+      default:
+        return Response.json(
+          { error: 'NOT_FOUND', message: `Unknown lsp resource: ${lspResource ?? ''}` },
+          { status: 404 },
+        )
+    }
+  } catch (error) {
+    if (isOutsideWorkspaceError(error)) {
+      throw new ApiError(403, error.message, 'FORBIDDEN')
+    }
+    throw error
+  }
+
+  async function readJsonBody(): Promise<unknown> {
+    try {
+      return await req.json()
+    } catch {
+      throw ApiError.badRequest('Request body must be valid JSON')
+    }
+  }
+}
+
+function methodNotAllowed(method: string): Response {
+  return Response.json(
+    { error: 'METHOD_NOT_ALLOWED', message: `Method ${method} not allowed` },
+    { status: 405 },
+  )
+}
+
+async function handleSessionWorkspacePost(
+  req: Request,
+  sessionId: string,
+  workspaceResource?: string,
+): Promise<Response> {
+  if (workspaceResource !== 'file') {
+    return Response.json(
+      { error: 'METHOD_NOT_ALLOWED', message: `POST not supported for workspace/${workspaceResource ?? ''}` },
+      { status: 405 },
+    )
+  }
+
+  await requireSessionWorkspace(sessionId)
+
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json(
+      { error: 'INVALID_JSON', message: 'Request body must be valid JSON' },
+      { status: 400 },
+    )
+  }
+
+  const result = await workspaceFileService.writeFile(sessionId, body)
+  if (result.ok) {
+    return Response.json({ ok: true, hash: result.hash, bytes: result.bytes, timestamp: result.timestamp })
+  }
+  return Response.json(
+    { ok: false, error: result.error, message: result.message, ...(result.details ? { details: result.details } : {}) },
+    { status: result.status },
+  )
 }
 
 async function createSession(req: Request): Promise<Response> {

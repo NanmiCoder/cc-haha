@@ -129,8 +129,12 @@ export function StreamingIndicator() {
   }
 
   return (
-    <div className="mb-2 flex w-fit items-center gap-2 rounded-full border border-[var(--color-border)]/40 bg-[var(--color-surface-container-low)] px-3 py-1">
-      <span className="text-[var(--color-brand)] animate-shimmer text-xs">✦</span>
+    <div
+      role="status"
+      aria-live="polite"
+      className="mb-2 flex w-fit items-center gap-2 rounded-full border border-[var(--color-border)]/40 bg-[var(--color-surface-container-low)] px-3 py-1"
+    >
+      <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)] animate-shimmer" aria-hidden="true">auto_awesome</span>
       <span className="text-xs font-medium text-[var(--color-text-secondary)]">{verb}...</span>
       {elapsedSeconds > 0 && (
         <span className="text-[10px] text-[var(--color-text-tertiary)]">

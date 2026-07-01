@@ -72,6 +72,43 @@ export const SavedProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   notes: z.string().optional(),
+  /**
+   * Sticky compatibility marker: set to true when cc-haha observes this
+   * provider rejecting Anthropic's `thinking` field via a 4xx like
+   * "additionalModelRequestFields not supported" (typical for Bedrock
+   * proxies that wrap unknown Anthropic params into AWS's
+   * additionalModelRequestFields). When true, `buildProviderManagedEnv`
+   * injects `CLAUDE_CODE_DISABLE_THINKING=1` so subsequent sidecar
+   * launches stop sending thinking entirely. Cleared automatically on
+   * any updateProvider() so users get a fresh chance after editing
+   * config — matches the desktop providerCompatStore re-arm semantics
+   * for fake tool_use detection.
+   */
+  thinkingIncompatible: z.boolean().optional(),
+  /**
+   * Optional last-seen 4xx message from the provider, surfaced in the
+   * Settings tooltip so the user understands WHY the badge appeared.
+   * Truncated to 500 chars on persist so a chatty proxy can't blow the
+   * providers.json file.
+   */
+  thinkingIncompatibleReason: z.string().max(500).optional(),
+  /**
+   * Monotonically-increasing counter bumped on every {@link updateProvider}.
+   * The runtime layer captures this value alongside the per-session
+   * `runtimeOverride` at session start, and the next `set_runtime_config`
+   * compares revisions to decide whether to force a CLI restart even when
+   * the (providerId, modelId, effort, thinkingEnabled) tuple is unchanged.
+   *
+   * This catches "user changed baseUrl / apiKey / apiFormat / model mapping
+   * but the override tuple still matches" — without it, the CLI keeps its
+   * spawn-time `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env until the
+   * subprocess is killed for some other reason, which makes provider
+   * config edits feel "stuck".
+   *
+   * Optional for backwards compatibility with providers.json files written
+   * before this field existed; absent reads as 0.
+   */
+  revision: z.number().int().nonnegative().optional(),
 })
 
 export const ProvidersIndexSchema = z.object({
@@ -120,6 +157,21 @@ export const TestProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
 })
 
+/**
+ * Input for `POST /api/providers/fetch-models`. The model list is fetched
+ * server-side to bypass the renderer's secure-context restrictions — most
+ * webviews block plain `http://` requests as mixed content (the desktop
+ * UI runs at `tauri://localhost` / `https://...`), and many self-hosted
+ * relay providers also do not return `Access-Control-Allow-Origin` for
+ * `/v1/models`. Either failure mode kills the previous browser-side
+ * `fetch()`. Server-side has neither restriction.
+ */
+export const FetchModelsSchema = z.object({
+  baseUrl: z.string().url(),
+  apiKey: z.string().min(1),
+  apiFormat: ApiFormatSchema.default('anthropic'),
+})
+
 export const ReorderProvidersSchema = z.object({
   // A permutation of the display provider ids, including built-in official providers.
   // The legacy saved-provider-only permutation is still accepted by ProviderService.
@@ -134,6 +186,7 @@ export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>
 export type UpdateProviderInput = z.infer<typeof UpdateProviderSchema>
 export type TestProviderInput = z.infer<typeof TestProviderSchema>
+export type FetchModelsInput = z.infer<typeof FetchModelsSchema>
 export type ReorderProvidersInput = z.infer<typeof ReorderProvidersSchema>
 
 export interface ProviderTestStepResult {

@@ -1151,7 +1151,7 @@ function getMessageMetricSignature(message: UIMessage): string {
     case 'system':
       return `${message.type}:${message.content.length}`
     case 'tool_use':
-      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}:${message.status ?? ''}`
+      return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}`
     case 'tool_result':
       return `${message.type}:${message.toolUseId}:${message.isError ? 1 : 0}`
     case 'compact_summary':
@@ -1974,6 +1974,11 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
       <div
         ref={scrollContainerRef}
         onScroll={updateAutoScrollState}
+        role="log"
+        aria-live="polite"
+        aria-label={t('chat.messageLog')}
+        aria-relevant="additions"
+        aria-atomic="false"
         className={`${CHAT_SCROLL_AREA_CLASS} h-full overflow-y-auto ${compact ? 'px-3 py-3 pb-5' : 'px-4 py-4'}`}
       >
         <div
@@ -2147,7 +2152,6 @@ export const MessageBlock = memo(function MessageBlock({
           input={message.input}
           result={toolResult}
           isPending={message.isPending}
-          status={message.status}
           partialInput={message.partialInput}
           agentTaskNotification={
             message.toolName === 'Agent'

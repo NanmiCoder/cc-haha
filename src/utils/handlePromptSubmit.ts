@@ -1,4 +1,5 @@
 import type { UUID } from 'crypto'
+import { feature } from 'bun:bundle'
 import { logEvent } from 'src/services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/metadata.js'
 import { type Command, getCommandName, isCommandEnabled } from '../commands.js'
@@ -25,6 +26,11 @@ import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
 import { enqueue } from './messageQueueManager.js'
+import {
+  analyzeFirstMessageForMode,
+  formatModeAdviceBanner,
+  type SuggestedMode,
+} from './modeAdvice.js'
 import { resolveSkillModelOverride } from './model/model.js'
 import type { ProcessUserInputContext } from './processUserInput/processUserInput.js'
 import { processUserInput } from './processUserInput/processUserInput.js'
@@ -34,6 +40,70 @@ import { runWithWorkload } from './workloadContext.js'
 
 function exit(): void {
   gracefulShutdownSync(0)
+}
+
+/**
+ * Surface a one-time mode-advice banner on the FIRST prompt of a fresh
+ * session. Compares the heuristic recommendation (modeAdvice) against the
+ * mode the CLI was launched in; if they disagree, shows an advisory
+ * notification. Fires at most once per session (gated on empty message
+ * history) and never for slash commands or remote/bridge clients.
+ *
+ * Coordinator mode in the CLI is selected at launch via
+ * CLAUDE_CODE_COORDINATOR_MODE — there is no in-session toggle — so this is
+ * informational ("next session, consider the other mode"), not an action
+ * prompt. Best-effort: any failure is swallowed so it can never block a
+ * user's prompt.
+ */
+function maybeNotifyModeAdvice(params: {
+  input: string
+  messages: Message[]
+  skipSlashCommands?: boolean
+  addNotification?: (notification: {
+    key: string
+    text: string
+    priority: 'low' | 'medium' | 'high' | 'immediate'
+  }) => void
+}): void {
+  try {
+    // Only on a brand-new session's first prompt.
+    if (params.messages.length > 0) return
+    // Remote/bridge clients can't relaunch the CLI; don't nag them.
+    if (params.skipSlashCommands) return
+    if (!params.addNotification) return
+    // Advice is only meaningful when coordinator mode is a real option.
+    if (!feature('COORDINATOR_MODE')) return
+
+    const text = params.input.trim()
+    if (text === '' || text.startsWith('/')) return
+
+    let currentMode: SuggestedMode = 'normal'
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { isCoordinatorMode } =
+      require('../coordinator/coordinatorMode.js') as typeof import('../coordinator/coordinatorMode.js')
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    currentMode = isCoordinatorMode() ? 'coordinator' : 'normal'
+
+    const advice = analyzeFirstMessageForMode(text)
+    const banner = formatModeAdviceBanner(currentMode, advice)
+    if (!banner || !advice) return
+
+    params.addNotification({
+      key: 'mode-advice',
+      text: banner,
+      priority: 'medium',
+    })
+    logEvent('tengu_mode_advice_shown', {
+      suggested:
+        advice.suggestedMode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      current:
+        currentMode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      confidence:
+        advice.confidence as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    })
+  } catch (e) {
+    logForDebugging(`maybeNotifyModeAdvice failed: ${String(e)}`)
+  }
 }
 
 type BaseExecutionParams = {
@@ -188,6 +258,16 @@ export async function handlePromptSubmit(
   if (input.trim() === '') {
     return
   }
+
+  // First-prompt mode advice (coordinator vs normal). Best-effort, fires at
+  // most once per fresh session; gated internally on message history,
+  // slash/bridge input, and COORDINATOR_MODE availability.
+  maybeNotifyModeAdvice({
+    input,
+    messages,
+    skipSlashCommands,
+    addNotification: params.addNotification,
+  })
 
   // Handle exit commands by triggering the exit command instead of direct process.exit
   // Skip for remote bridge messages — "exit" typed on iOS shouldn't kill the local session

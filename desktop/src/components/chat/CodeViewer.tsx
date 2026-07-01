@@ -7,7 +7,6 @@ type Props = {
   language?: string
   maxLines?: number
   showLineNumbers?: boolean
-  wrapLongLines?: boolean
 }
 
 const warmPrismTheme: PrismTheme = {
@@ -125,17 +124,7 @@ function loadShikiRuntime(): Promise<ShikiRuntime | null> {
   return shikiRuntimePromise
 }
 
-function PrismCodeContent({
-  code,
-  language,
-  showLineNumbers,
-  wrapLongLines,
-}: {
-  code: string
-  language?: string
-  showLineNumbers: boolean
-  wrapLongLines: boolean
-}) {
+function PrismCodeContent({ code, language, showLineNumbers }: { code: string; language?: string; showLineNumbers: boolean }) {
   return (
     <Highlight
       theme={warmPrismTheme}
@@ -152,8 +141,8 @@ function PrismCodeContent({
             fontFamily: 'var(--font-mono)',
             fontSize: '12px',
             lineHeight: String(CODE_LINE_HEIGHT),
-            whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
-            wordBreak: wrapLongLines ? 'break-word' : 'normal',
+            whiteSpace: 'pre',
+            wordBreak: 'normal',
             color: 'var(--color-code-fg)',
           }}
         >
@@ -179,17 +168,7 @@ function PrismCodeContent({
   )
 }
 
-function CodeArea({
-  code,
-  language,
-  showLineNumbers,
-  wrapLongLines,
-}: {
-  code: string
-  language?: string
-  showLineNumbers: boolean
-  wrapLongLines: boolean
-}) {
+function CodeArea({ code, language, showLineNumbers }: { code: string; language?: string; showLineNumbers: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [runtime, setRuntime] = useState<ShikiRuntime | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -238,16 +217,16 @@ function CodeArea({
           code={code}
           language={language}
           showLineNumbers={showLineNumbers}
-          wrapLongLines={wrapLongLines}
         />
       )}
       {ShikiHighlighter && (
         <div
           data-code-viewer-content=""
           data-highlight-engine="shiki"
+          className="transition-opacity duration-150 ease-in-out"
           style={
             loaded
-              ? { padding: CODE_AREA_PADDING }
+              ? { padding: CODE_AREA_PADDING, opacity: 1 }
               : {
                   position: 'absolute',
                   inset: 0,
@@ -269,8 +248,7 @@ function CodeArea({
               fontFamily: 'var(--font-mono)',
               fontSize: '12px',
               lineHeight: String(CODE_LINE_HEIGHT),
-              whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLongLines ? 'break-word' : 'normal',
+              whiteSpace: 'pre',
             }}
           >
             {code}
@@ -281,7 +259,7 @@ function CodeArea({
   )
 }
 
-export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = false, wrapLongLines = false }: Props) {
+export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = false }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   const allLines = code.split('\n')
@@ -312,7 +290,6 @@ export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = fa
         code={visibleCode}
         language={language}
         showLineNumbers={effectiveShowLineNumbers}
-        wrapLongLines={wrapLongLines}
       />
 
       {/* Expand/collapse toggle */}

@@ -505,6 +505,12 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
     releaseMode,
   )
   addPresenceCheck(report, rootDir, 'macOS node-pty package.json', join(nodePtyDir, 'package.json'))
+  addPresenceCheck(
+    report,
+    rootDir,
+    'macOS unpacked cc-haha-builtin plugin seed',
+    join(unpackedDir, 'plugin-seed', 'marketplaces', 'cc-haha-builtin', '.claude-plugin', 'marketplace.json'),
+  )
   addMatchCheck(
     report,
     rootDir,
@@ -592,6 +598,12 @@ function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport) {
       releaseMode,
     )
     addPresenceCheck(report, rootDir, 'Windows node-pty package.json', join(nodePtyDir, 'package.json'))
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Windows unpacked cc-haha-builtin plugin seed',
+      join(unpackedResourcesDir, 'plugin-seed', 'marketplaces', 'cc-haha-builtin', '.claude-plugin', 'marketplace.json'),
+    )
     addMatchCheck(
       report,
       rootDir,
@@ -680,6 +692,12 @@ function inspectLinuxArtifacts(rootDir: string, report: PackageSmokeReport) {
       releaseMode,
     )
     addPresenceCheck(report, rootDir, 'Linux node-pty package.json', join(nodePtyDir, 'package.json'))
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Linux unpacked cc-haha-builtin plugin seed',
+      join(unpackedResourcesDir, 'plugin-seed', 'marketplaces', 'cc-haha-builtin', '.claude-plugin', 'marketplace.json'),
+    )
     addMatchCheck(
       report,
       rootDir,

@@ -214,6 +214,80 @@ export function TerminalSettings({
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(host)
+
+    // Clipboard wiring. xterm itself ships no copy/paste — without this,
+    // Ctrl+C only sends SIGINT and there's no way to lift selected text out.
+    // Conventions follow VS Code / GNOME Terminal on Windows + Linux:
+    //   - Ctrl+Shift+C / Ctrl+Insert  → copy current selection
+    //   - Ctrl+Shift+V / Shift+Insert → paste clipboard into the PTY
+    //   - Ctrl+C with an active selection → copy (then clear selection) so the
+    //     muscle-memory shortcut works; with no selection it falls through to
+    //     the shell as SIGINT, unchanged.
+    //   - right-click → copy selection if any, else paste
+    const writeToPty = (data: string) => {
+      const sessionId = runtime.nativeSessionId
+      if (sessionId) void terminalApi.write(sessionId, data).catch(() => {})
+    }
+    const copySelection = (): boolean => {
+      const selection = terminal.getSelection()
+      if (!selection) return false
+      void navigator.clipboard?.writeText(selection).catch(() => {})
+      return true
+    }
+    const pasteClipboard = () => {
+      void navigator.clipboard?.readText().then((text) => {
+        if (text) writeToPty(text)
+      }).catch(() => {})
+    }
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true
+      const ctrl = event.ctrlKey
+      const shift = event.shiftKey
+      const key = event.key
+
+      if (ctrl && shift && (key === 'C' || key === 'c')) {
+        copySelection()
+        return false
+      }
+      if (ctrl && shift && (key === 'V' || key === 'v')) {
+        pasteClipboard()
+        return false
+      }
+      // Ctrl+Insert / Shift+Insert mirror the classic terminal bindings.
+      if (ctrl && key === 'Insert') {
+        copySelection()
+        return false
+      }
+      if (shift && key === 'Insert') {
+        pasteClipboard()
+        return false
+      }
+      // Bare Ctrl+C: copy when something is selected, else let SIGINT through.
+      if (ctrl && !shift && (key === 'C' || key === 'c') && terminal.hasSelection()) {
+        copySelection()
+        terminal.clearSelection()
+        return false
+      }
+      return true
+    })
+
+    // startTerminal can run again (restart button) against the *same* host
+    // node, so remove any contextmenu handler bound by a previous run before
+    // attaching a fresh one — otherwise they stack and fire N times.
+    const hostWithHandler = host as HTMLDivElement & {
+      __ccCopyMenuHandler?: (event: MouseEvent) => void
+    }
+    if (hostWithHandler.__ccCopyMenuHandler) {
+      host.removeEventListener('contextmenu', hostWithHandler.__ccCopyMenuHandler)
+    }
+    const contextMenuHandler = (event: MouseEvent) => {
+      event.preventDefault()
+      if (!copySelection()) pasteClipboard()
+    }
+    hostWithHandler.__ccCopyMenuHandler = contextMenuHandler
+    host.addEventListener('contextmenu', contextMenuHandler)
+
     updateTerminalRuntime(runtime, { terminal, fit })
     fit.fit()
 

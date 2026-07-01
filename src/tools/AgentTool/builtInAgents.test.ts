@@ -6,6 +6,8 @@ import {
   areExplorePlanAgentsEnabled,
   getBuiltInAgents,
 } from './builtInAgents.js'
+import { PLAN_CRITIC_AGENT } from './built-in/planCriticAgent.js'
+import { PLAN_REVIEWER_AGENT } from './built-in/planReviewerAgent.js'
 
 const originalDisableBuiltIns =
   process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
@@ -39,6 +41,81 @@ describe('built-in agents', () => {
     expect(agentTypes).toContain('Explore')
     expect(agentTypes).toContain('Plan')
     expect(agentTypes).toContain('verification')
+    expect(agentTypes).toContain('test-author')
+    expect(agentTypes).toContain('code-reviewer')
+    expect(agentTypes).toContain('debugger')
+    expect(agentTypes).toContain('security-reviewer')
+    expect(agentTypes).toContain('refactor')
+    expect(agentTypes).toContain('migration')
+    expect(agentTypes).toContain('docs-writer')
+    expect(agentTypes).toContain('performance')
+    expect(agentTypes).toContain('commit-pr')
+    expect(agentTypes).toContain('plan-critic')
+    expect(agentTypes).toContain('plan-reviewer')
+    // game-developer is a project-level agent (.claude/agents), not a built-in.
+    expect(agentTypes).not.toContain('game-developer')
+  })
+
+  test('always includes the new specialized agents regardless of Explore/Plan gating', () => {
+    setIsInteractive(true)
+
+    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
+
+    // These live in the base array, so they ship even when other optional
+    // built-ins are toggled off.
+    expect(agentTypes).toContain('test-author')
+    expect(agentTypes).toContain('code-reviewer')
+    expect(agentTypes).toContain('debugger')
+    expect(agentTypes).toContain('security-reviewer')
+    expect(agentTypes).toContain('refactor')
+    expect(agentTypes).toContain('migration')
+    expect(agentTypes).toContain('docs-writer')
+    expect(agentTypes).toContain('performance')
+    expect(agentTypes).toContain('commit-pr')
+    expect(agentTypes).toContain('plan-critic')
+    expect(agentTypes).toContain('plan-reviewer')
+  })
+
+  test('plan-critic is read-only and returns a parseable verdict', () => {
+    expect(PLAN_CRITIC_AGENT.agentType).toBe('plan-critic')
+    expect(PLAN_CRITIC_AGENT.disallowedTools).toEqual(expect.arrayContaining([
+      'Agent',
+      'ExitPlanMode',
+      'Edit',
+      'Write',
+      'NotebookEdit',
+    ]))
+
+    const prompt = PLAN_CRITIC_AGENT.getSystemPrompt({} as never)
+    expect(prompt).toContain('READ-ONLY plan critique task')
+    expect(prompt).toContain('SOLO_COUNCIL_REVIEW_JSON')
+    expect(prompt).toContain('"role":"critic"')
+    expect(prompt).toContain('PLAN_REVIEW: APPROVE')
+    expect(prompt).toContain('PLAN_REVIEW: CHANGES_NEEDED')
+    expect(prompt).toContain('smaller or safer path')
+    expect(PLAN_CRITIC_AGENT.criticalSystemReminder_EXPERIMENTAL).toContain('PLAN_REVIEW: APPROVE')
+  })
+
+  test('plan-reviewer is read-only and returns a parseable verdict', () => {
+    expect(PLAN_REVIEWER_AGENT.agentType).toBe('plan-reviewer')
+    expect(PLAN_REVIEWER_AGENT.disallowedTools).toEqual(expect.arrayContaining([
+      'Agent',
+      'ExitPlanMode',
+      'Edit',
+      'Write',
+      'NotebookEdit',
+    ]))
+
+    const prompt = PLAN_REVIEWER_AGENT.getSystemPrompt({} as never)
+    expect(prompt).toContain('READ-ONLY plan review task')
+    expect(prompt).toContain('SOLO_COUNCIL_REVIEW_JSON')
+    expect(prompt).toContain('"role":"reviewer"')
+    expect(prompt).toContain('PLAN_REVIEWER: APPROVE')
+    expect(prompt).toContain('PLAN_REVIEWER: CHANGES_NEEDED')
+    expect(prompt).toContain('Completeness')
+    expect(prompt).toContain('Feasibility')
+    expect(prompt).toContain('Safety and scope')
+    expect(PLAN_REVIEWER_AGENT.criticalSystemReminder_EXPERIMENTAL).toContain('PLAN_REVIEWER: APPROVE')
   })
 
   test('preserves SDK opt-out in noninteractive sessions', () => {

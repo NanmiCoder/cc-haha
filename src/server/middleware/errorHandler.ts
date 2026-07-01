@@ -29,6 +29,10 @@ export class ApiError extends Error {
   static internal(message: string) {
     return new ApiError(500, message, 'INTERNAL_ERROR')
   }
+
+  static badGateway(message: string) {
+    return new ApiError(502, message, 'UPSTREAM_FAILED')
+  }
 }
 
 export function errorResponse(error: unknown): Response {

@@ -16,6 +16,18 @@ let originalPngDimensions: { width?: number; height?: number; format?: string } 
 let outputForOperations: (operations: Operation[]) => Buffer = () =>
   Buffer.from('resized-image')
 
+// PNG magic header (89 50 4E 47 0D 0A 1A 0A). `readImageWithTokenBudget`
+// validates magic bytes before doing anything else, so test fixtures that
+// pretend to be `.png` files must start with a real signature even when the
+// rest of the bytes are filler. The buffer's total length is preserved
+// because the test cases reason about size, not pixel content.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+function makeFakePngBufferWithMagic(size: number, fillByte: number): Buffer {
+  const buf = Buffer.alloc(size, fillByte)
+  PNG_MAGIC.copy(buf, 0)
+  return buf
+}
+
 type Operation =
   | { type: 'resize'; width: number; height: number }
   | { type: 'jpeg'; quality?: number }
@@ -320,7 +332,7 @@ describe('readImageWithTokenBudget', () => {
   test('does not recompress readable screenshots just because their base64 text would exceed maxTokens', async () => {
     originalPngDimensions = { width: 1920, height: 1080, format: 'png' }
     outputForOperations = () => Buffer.from('compressed-image')
-    const imageBuffer = Buffer.alloc(200_000, 1)
+    const imageBuffer = makeFakePngBufferWithMagic(200_000, 1)
     const imagePath = join(tmpdir(), `cc-haha-image-budget-${Date.now()}.png`)
     await writeFile(imagePath, imageBuffer)
 
@@ -356,7 +368,7 @@ describe('readImageWithTokenBudget', () => {
       }
       return Buffer.alloc(6 * 1024 * 1024, 8)
     }
-    const imageBuffer = Buffer.alloc(200_000, 1)
+    const imageBuffer = makeFakePngBufferWithMagic(200_000, 1)
     const imagePath = join(
       tmpdir(),
       `cc-haha-image-vision-budget-${Date.now()}.png`,

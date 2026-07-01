@@ -57,6 +57,12 @@ describe('release desktop workflow', () => {
         expect(workflow).toContain(electronBuilderCli)
       }
       expect(workflow).toContain('smoke_platform')
+      // The packaged app must ship the cc-haha-builtin plugin seed. The
+      // release build inlines electron:build's steps rather than calling the
+      // script, so build:plugin-seed has to be listed explicitly here — a
+      // prior drift dropped it and shipped seedless v0.5.12/v0.5.13 packages
+      // (reverse-engineering / image-gen "not found in marketplace").
+      expect(workflow).toContain('bun run build:plugin-seed')
       expect(workflow).toContain('bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --package-kind release --artifacts-dir desktop/build-artifacts/electron')
       expect(workflow).not.toContain('tauri-apps/tauri-action@v0')
     }
@@ -95,7 +101,11 @@ describe('release desktop workflow', () => {
     }
 
     expect(desktopPackage.description).toBeTruthy()
-    expect(desktopPackage.homepage).toBe('https://github.com/NanmiCoder/cc-haha')
+    // This fork (706412584/cc-haha) republishes desktop builds under its own
+    // GitHub homepage while keeping NanmiCoder's author attribution. Upstream
+    // (NanmiCoder/cc-haha) uses its own homepage; both are valid release-time
+    // shapes, so accept either.
+    expect(desktopPackage.homepage).toMatch(/^https:\/\/github\.com\/[^/]+\/cc-haha$/)
     expect(desktopPackage.author?.name).toBe('NanmiCoder')
     expect(desktopPackage.author?.email).toBe('relakkes@gmail.com')
     expect(desktopPackage.build?.linux?.maintainer).toBe('NanmiCoder <relakkes@gmail.com>')
@@ -399,13 +409,18 @@ describe('release desktop workflow', () => {
       }
     }
 
-    expect(desktopPackage.build.publish).toEqual([
-      {
+    // The fork (706412584/cc-haha) republishes desktop builds under its own
+    // GitHub owner; upstream (NanmiCoder/cc-haha) uses its own. Both are
+    // valid release-time shapes — we only require that publish is pinned to
+    // GitHub with explicit owner/repo (no autodetect from git remote).
+    expect(desktopPackage.build.publish).toHaveLength(1)
+    expect(desktopPackage.build.publish?.[0]).toEqual(
+      expect.objectContaining({
         provider: 'github',
-        owner: 'NanmiCoder',
+        owner: expect.stringMatching(/^[\w-]+$/),
         repo: 'cc-haha',
-      },
-    ])
+      }),
+    )
     expect(desktopPackage.build.mac?.publish).toBeUndefined()
     expect(desktopPackage.build.win?.publish).toBeUndefined()
     expect(desktopPackage.build.linux?.publish).toBeUndefined()

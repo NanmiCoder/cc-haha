@@ -92,3 +92,17 @@ export const PDF_AT_MENTION_INLINE_THRESHOLD = 10
  * We validate client-side to provide a clear error message.
  */
 export const API_MAX_MEDIA_PER_REQUEST = 100
+
+/**
+ * Maximum total base64-encoded media size budget per API request (bytes).
+ *
+ * The API has a ~20 MB total request size limit. Conversations accumulate
+ * base64 images (from the Read tool viewing local files and from image-gen
+ * plugin results) that never get evicted by toolResultStorage because
+ * hasImageBlock() skips both persistence and budget eviction for image blocks.
+ *
+ * We enforce a 12 MB media budget to leave headroom for the rest of the
+ * conversation context (system prompt, text messages, tool definitions).
+ * When over budget, the oldest media blocks are replaced with text placeholders.
+ */
+export const API_MAX_MEDIA_BYTES_BUDGET = 12 * 1024 * 1024 // 12 MB

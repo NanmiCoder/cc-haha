@@ -5,13 +5,20 @@ export function planResize(w: number, h: number, maxEdge: number): { width: numb
   return { width: Math.round(w * scale), height: Math.round(h * scale) }
 }
 
-/** 浏览器内：把 dataUrl 缩放到 maxEdge 内并以 quality 重新编码。 */
-export async function compressDataUrl(dataUrl: string, maxEdge = 1600, quality = 0.85): Promise<string> {
+/**
+ * Compress a data:URL image by resizing to maxEdge and re-encoding as JPEG.
+ * GIFs pass through unchanged (would lose animation).
+ * Small images (≤ maxEdge both sides) still re-encode to reduce payload.
+ */
+export async function compressDataUrl(dataUrl: string, maxEdge = 1568, quality = 0.85): Promise<string> {
+  if (!dataUrl.startsWith('data:')) return dataUrl
+  if (dataUrl.startsWith('data:image/gif')) return dataUrl
+
   const img = new Image()
   await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error('load')); img.src = dataUrl })
   const { width, height } = planResize(img.naturalWidth, img.naturalHeight, maxEdge)
   const canvas = document.createElement('canvas')
   canvas.width = width; canvas.height = height
   canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
-  return canvas.toDataURL('image/png', quality)
+  return canvas.toDataURL('image/jpeg', quality)
 }

@@ -24,6 +24,9 @@ export type ClientMessage =
     }
   | { type: 'set_permission_mode'; mode: PermissionMode }
   | ({ type: 'set_runtime_config' } & RuntimeSelection)
+  | { type: 'set_coordinator_mode'; enabled: boolean }
+  | { type: 'set_pipeline_mode'; flavor: 'solo' | 'normal' }
+  | { type: 'set_handoff_summary'; previousSessionId: string; deep?: boolean }
   | { type: 'stop_generation' }
   | { type: 'ping' }
 
@@ -38,6 +41,11 @@ export type AttachmentRef = {
   lineEnd?: number
   note?: string
   quote?: string
+}
+
+export type DisplayAttachmentRef = AttachmentRef & {
+  /** UI-only preview URL. Never send to the websocket/server/model payload. */
+  previewUrl?: string
 }
 
 export type PermissionUpdate =
@@ -63,6 +71,7 @@ export type UIAttachment = {
   name: string
   path?: string
   data?: string
+  previewUrl?: string
   mimeType?: string
   isDirectory?: boolean
   lineStart?: number
@@ -118,6 +127,21 @@ export type ServerMessage =
   | { type: 'team_deleted'; teamName: string }
   | { type: 'task_update'; taskId: string; status: string; progress?: string }
   | { type: 'session_title_updated'; sessionId: string; title: string }
+  /**
+   * Provider-level compatibility event. Sent when the server-side WS
+   * handler observes a provider rejecting an Anthropic-protocol field
+   * with a 4xx — current detection: thinking-incompatible Bedrock
+   * proxies returning "additionalModelRequestFields not supported".
+   * The desktop providerCompatStore records this against the
+   * provider id and shows a "思考不兼容" badge in Settings; cleared
+   * on next provider edit.
+   */
+  | {
+      type: 'provider_compat_event'
+      providerId: string
+      kind: 'thinking_incompatible'
+      reason?: string
+    }
 
 export type TokenUsage = {
   input_tokens: number
@@ -277,7 +301,6 @@ export type UIMessage =
       timestamp: number
       parentToolUseId?: string
       isPending?: boolean
-      status?: 'stopped'
       partialInput?: string
     }
   | { id: string; type: 'tool_result'; toolUseId: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }

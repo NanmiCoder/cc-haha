@@ -2,10 +2,15 @@ import { create } from 'zustand'
 import {
   sessionsApi,
   type WorkspaceDiffResult,
+  type WorkspaceLspConfigInput,
   type WorkspaceReadFileResult,
+  type WorkspaceLspDiagnosticsResult,
+  type WorkspaceLspSyncInput,
   type WorkspaceStatusResult,
   type WorkspaceTreeResult,
 } from '../api/sessions'
+import type { WorkspaceLspState } from '../types/lsp'
+import { useSettingsStore } from './settingsStore'
 
 export const WORKSPACE_PANEL_DEFAULT_WIDTH = 860
 export const WORKSPACE_PANEL_MIN_WIDTH = 640
@@ -42,6 +47,52 @@ export type WorkspacePanelSessionState = {
   hasUserSelectedView?: boolean
 }
 
+export type WorkspaceFileEncoding = 'utf-8' | 'utf-8-bom'
+export type WorkspaceFileLineEnding = 'LF' | 'CRLF' | 'CR'
+
+export type WorkspaceConflictSource = 'user' | 'agent'
+
+export type WorkspaceBufferConflict = {
+  source: WorkspaceConflictSource
+  hash: string
+  timestamp: number
+  actor?: string
+}
+
+/**
+ * Editable-buffer state for a single open file tab.
+ *
+ * `baseHash` / `baseContent` capture the snapshot the editor opened with.
+ * `currentContent` tracks the in-memory edits. `conflict` is set when the
+ * file has been modified externally (another window saving the same path
+ * for `source: 'user'`, or an agent edit for `source: 'agent'`). Phase 2
+ * (this PR) populates `'user'` only — agent-source events ship in PR-4.
+ */
+export type WorkspaceBufferState = {
+  tabId: string
+  path: string
+  baseHash: string
+  baseContent: string
+  currentContent: string
+  isDirty: boolean
+  encoding: WorkspaceFileEncoding
+  lineEnding: WorkspaceFileLineEnding
+  conflict: WorkspaceBufferConflict | null
+}
+
+export type WorkspaceBufferInit = Omit<
+  WorkspaceBufferState,
+  'currentContent' | 'isDirty' | 'conflict'
+>
+
+export type WorkspaceExternalSavePayload = {
+  source: WorkspaceConflictSource
+  hash: string
+  timestamp: number
+  actor?: string
+  content?: string
+}
+
 type WorkspacePanelLoadingState = {
   statusBySession: Record<string, boolean | undefined>
   treeBySessionPath: Record<string, boolean | undefined>
@@ -63,6 +114,9 @@ type WorkspacePanelStore = {
   treeBySessionPath: Record<string, Record<string, WorkspaceTreeResult | undefined> | undefined>
   previewTabsBySession: Record<string, WorkspacePreviewTab[] | undefined>
   activePreviewTabIdBySession: Record<string, string | null | undefined>
+  bufferStateByTabId: Record<string, WorkspaceBufferState | undefined>
+  lspStateBySession: Record<string, WorkspaceLspState | undefined>
+  lspDiagnosticsBySessionPath: Record<string, WorkspaceLspDiagnosticsResult | undefined>
   loading: WorkspacePanelLoadingState
   errors: WorkspacePanelErrorState
 
@@ -81,13 +135,30 @@ type WorkspacePanelStore = {
   openPreview: (sessionId: string, path: string, kind: WorkspacePreviewKind) => Promise<void>
   closePreview: (sessionId: string, tabId: string) => void
   closePreviewTabs: (sessionId: string, tabId: string, scope: WorkspacePreviewCloseScope) => void
+  initBuffer: (init: WorkspaceBufferInit) => void
+  setBufferState: (tabId: string, content: string) => void
+  applyExternalSave: (tabId: string, event: WorkspaceExternalSavePayload) => void
+  acknowledgeConflict: (tabId: string, action: 'reload' | 'keepMine' | 'openConflict') => void
+  syncLsp: (sessionId: string, input: WorkspaceLspSyncInput) => Promise<void>
+  loadLspState: (sessionId: string, path?: string) => Promise<void>
+  loadLspDiagnostics: (sessionId: string, path: string, refresh?: boolean) => Promise<void>
+  /**
+   * React to an agent (CLI) file edit observed via the chat tool stream.
+   * Unlike `applyExternalSave`, no content hash is available — the agent
+   * edit is surfaced through the tool_result event, not a workspace save
+   * round-trip. So we (a) refresh the workspace status/diagnostics and
+   * (b) flag any open buffer for the same path with an agent-source
+   * conflict so the editor offers a reload.
+   */
+  notifyAgentFileEdit: (sessionId: string, absolutePath: string) => void
+  clearBuffer: (tabId: string) => void
   clearSession: (sessionId: string) => void
   resetSessionUi: (sessionId: string) => void
 }
 
 const DEFAULT_PANEL_STATE: WorkspacePanelSessionState = {
   isOpen: false,
-  activeView: 'changed',
+  activeView: 'all',
 }
 
 const DEFAULT_WORKBENCH_MODE: WorkbenchMode = 'workspace'
@@ -95,6 +166,7 @@ const DEFAULT_WORKBENCH_MODE: WorkbenchMode = 'workspace'
 const statusRequestIds = new Map<string, number>()
 const treeRequestIds = new Map<string, number>()
 const previewRequestIds = new Map<string, number>()
+const lspRequestIds = new Map<string, number>()
 
 function nextRequestId(store: Map<string, number>, key: string) {
   const requestId = (store.get(key) ?? 0) + 1
@@ -131,8 +203,39 @@ export function getWorkspacePreviewTabId(path: string, kind: WorkspacePreviewKin
   return `${kind}:${path}`
 }
 
+/**
+ * Sentinel hash for agent-originated edits. Agent edits are observed through
+ * the chat tool stream (tool_result), which carries no file content hash, so
+ * we can't compare against a buffer's baseHash. This sentinel is chosen to
+ * never collide with a real sha-256 hex digest, guaranteeing the conflict
+ * banner surfaces for an open buffer.
+ */
+export const AGENT_EDIT_SENTINEL_HASH = 'agent-edit'
+
+/** Normalize a path for agent-edit suffix matching: forward slashes, no trailing slash. */
+function normalizeAgentEditPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+/**
+ * Whether an agent's (absolute) edited path refers to the same file as an
+ * open buffer's (workspace-relative) path. The agent reports an absolute
+ * path while buffers store workspace-relative paths, so we match by suffix
+ * on a normalized segment boundary to avoid `foo/bar.ts` matching
+ * `otherbar.ts`.
+ */
+function agentEditMatchesBufferPath(normalizedAbs: string, bufferPath: string): boolean {
+  const normalizedBuffer = normalizeAgentEditPath(bufferPath)
+  if (normalizedAbs === normalizedBuffer) return true
+  return normalizedAbs.endsWith(`/${normalizedBuffer}`)
+}
+
 function makePreviewKey(sessionId: string, tabId: string) {
   return `${sessionId}::${tabId}`
+}
+
+function makeLspPathKey(sessionId: string, path: string) {
+  return `${sessionId}::${path}`
 }
 
 function getPathTitle(path: string) {
@@ -186,6 +289,15 @@ function upsertPreviewTab(
   return nextTabs
 }
 
+function resolveWorkspaceLspConfig(): WorkspaceLspConfigInput | undefined {
+  try {
+    const config = useSettingsStore.getState().workspaceLsp
+    return config.server ? config : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => ({
   panelBySession: {},
   modeBySession: {},
@@ -195,6 +307,9 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
   treeBySessionPath: {},
   previewTabsBySession: {},
   activePreviewTabIdBySession: {},
+  bufferStateByTabId: {},
+  lspStateBySession: {},
+  lspDiagnosticsBySessionPath: {},
   loading: {
     statusBySession: {},
     treeBySessionPath: {},
@@ -294,17 +409,12 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
 
       set((state) => {
         const panel = getSessionPanelState(state.panelBySession, sessionId)
-        const nextActiveView =
-          !panel.hasUserSelectedView && result.state === 'ok'
-            ? result.changedFiles.length > 0 ? 'changed' : 'all'
-            : panel.activeView
 
         return {
           panelBySession: {
             ...state.panelBySession,
             [sessionId]: {
               ...panel,
-              activeView: nextActiveView,
             },
           },
           statusBySession: {
@@ -641,6 +751,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
         const requestKey = makePreviewKey(sessionId, tabId)
         invalidateRequest(previewRequestIds, requestKey)
         return {
+          bufferStateByTabId: removeRecordKey(state.bufferStateByTabId, tabId),
           loading: {
             ...state.loading,
             previewByTabId: removeRecordKey(state.loading.previewByTabId, requestKey),
@@ -708,6 +819,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
           ...state.activePreviewTabIdBySession,
           [sessionId]: nextActiveTabId,
         },
+        bufferStateByTabId: removeRecordKeys(state.bufferStateByTabId, closingTabIds),
         loading: {
           ...state.loading,
           previewByTabId: removeRecordKeys(state.loading.previewByTabId, requestKeys),
@@ -720,30 +832,279 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
     })
   },
 
+  initBuffer: (init) =>
+    set((state) => ({
+      bufferStateByTabId: {
+        ...state.bufferStateByTabId,
+        [init.tabId]: {
+          ...init,
+          currentContent: init.baseContent,
+          isDirty: false,
+          conflict: null,
+        },
+      },
+    })),
+
+  setBufferState: (tabId, content) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing) return state
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            currentContent: content,
+            isDirty: content !== existing.baseContent,
+          },
+        },
+      }
+    }),
+
+  applyExternalSave: (tabId, event) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing) return state
+      // Same hash as our base — nothing to do (echo of our own save).
+      if (event.hash === existing.baseHash) return state
+
+      // Clean buffer: silently rebase to the new content if provided; otherwise
+      // surface a single-button "Reload" banner so the editor refetches.
+      if (!existing.isDirty && typeof event.content === 'string') {
+        return {
+          bufferStateByTabId: {
+            ...state.bufferStateByTabId,
+            [tabId]: {
+              ...existing,
+              baseHash: event.hash,
+              baseContent: event.content,
+              currentContent: event.content,
+              isDirty: false,
+              conflict: null,
+            },
+          },
+        }
+      }
+
+      // Dirty buffer (or clean buffer without content): surface conflict banner.
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            conflict: {
+              source: event.source,
+              hash: event.hash,
+              timestamp: event.timestamp,
+              actor: event.actor,
+            },
+          },
+        },
+      }
+    }),
+
+  acknowledgeConflict: (tabId, action) =>
+    set((state) => {
+      const existing = state.bufferStateByTabId[tabId]
+      if (!existing || !existing.conflict) return state
+
+      // 'reload' clears conflict + dirty marker — caller is expected to
+      // refetch and re-init the buffer with fresh base content/hash.
+      // 'keepMine' clears conflict but keeps dirty marker so the user can
+      // overwrite on next save (with stale-base 409 risk acknowledged).
+      // 'openConflict' is a UI-routing action; the store just dismisses the
+      // banner so the caller can drive a side-by-side diff view.
+      if (action === 'reload') {
+        return {
+          bufferStateByTabId: {
+            ...state.bufferStateByTabId,
+            [tabId]: {
+              ...existing,
+              currentContent: existing.baseContent,
+              isDirty: false,
+              conflict: null,
+            },
+          },
+        }
+      }
+
+      return {
+        bufferStateByTabId: {
+          ...state.bufferStateByTabId,
+          [tabId]: {
+            ...existing,
+            conflict: null,
+          },
+        },
+      }
+    }),
+
+  loadLspDiagnostics: async (sessionId, path, refresh = false) => {
+    const lspKey = makeLspPathKey(sessionId, path)
+    const requestId = nextRequestId(lspRequestIds, lspKey)
+    try {
+      const result = await sessionsApi.getWorkspaceLspDiagnostics(sessionId, path, {
+        refresh,
+        config: resolveWorkspaceLspConfig(),
+      })
+      if (!isLatestRequest(lspRequestIds, lspKey, requestId)) return
+      set((state) => ({
+        lspDiagnosticsBySessionPath: {
+          ...state.lspDiagnosticsBySessionPath,
+          [lspKey]: result,
+        },
+      }))
+    } catch (error) {
+      if (!isLatestRequest(lspRequestIds, lspKey, requestId)) return
+      set((state) => ({
+        lspDiagnosticsBySessionPath: {
+          ...state.lspDiagnosticsBySessionPath,
+          [lspKey]: {
+            state: 'unavailable',
+            diagnostics: [],
+            diagnosticsTotal: 0,
+            diagnosticsTruncated: false,
+            error: error instanceof Error ? error.message : 'Failed to load LSP diagnostics',
+          },
+        },
+      }))
+    }
+  },
+
+  loadLspState: async (sessionId, path) => {
+    try {
+      const result = await sessionsApi.getWorkspaceLspState(sessionId, path, resolveWorkspaceLspConfig())
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: result.state,
+        },
+      }))
+    } catch (error) {
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: {
+            state: 'unavailable',
+            path: path ?? null,
+            serverName: null,
+            command: null,
+            error: error instanceof Error ? error.message : 'Failed to load LSP state',
+          },
+        },
+      }))
+    }
+  },
+
+  syncLsp: async (sessionId, input) => {
+    try {
+      const result = await sessionsApi.syncWorkspaceLsp(sessionId, {
+        ...input,
+        ...resolveWorkspaceLspConfig(),
+      })
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: result.state,
+        },
+      }))
+      if (input.path) {
+        void get().loadLspDiagnostics(sessionId, input.path, false)
+      }
+    } catch (error) {
+      set((state) => ({
+        lspStateBySession: {
+          ...state.lspStateBySession,
+          [sessionId]: {
+            state: 'unavailable',
+            path: input.path,
+            serverName: null,
+            command: null,
+            error: error instanceof Error ? error.message : 'Failed to sync LSP document',
+          },
+        },
+      }))
+    }
+  },
+
+  notifyAgentFileEdit: (sessionId, absolutePath) => {
+    // Refresh status/diagnostics for the session regardless of whether the
+    // edited file is open — the file tree + changed set may have moved.
+    if (get().isPanelOpen(sessionId)) {
+      void get().loadStatus(sessionId)
+      void get().syncLsp(sessionId, { path: absolutePath, event: 'change' })
+    }
+
+    // Flag any open buffer for the same path with an agent-source conflict.
+    // Agent edits arrive without a content hash (they come from the chat
+    // tool stream, not a workspace save), so we use a sentinel hash that can
+    // never equal a real base hash — guaranteeing the conflict surfaces.
+    const normalizedAbs = normalizeAgentEditPath(absolutePath)
+    set((state) => {
+      let changed = false
+      const nextBuffers: Record<string, WorkspaceBufferState | undefined> = {
+        ...state.bufferStateByTabId,
+      }
+      for (const [tabId, buffer] of Object.entries(state.bufferStateByTabId)) {
+        if (!buffer) continue
+        if (!agentEditMatchesBufferPath(normalizedAbs, buffer.path)) continue
+        // Already showing a conflict — don't clobber the existing one.
+        if (buffer.conflict) continue
+        changed = true
+        nextBuffers[tabId] = {
+          ...buffer,
+          conflict: {
+            source: 'agent',
+            hash: AGENT_EDIT_SENTINEL_HASH,
+            timestamp: Date.now(),
+          },
+        }
+      }
+      return changed ? { bufferStateByTabId: nextBuffers } : state
+    })
+  },
+
+  clearBuffer: (tabId) =>
+    set((state) => ({
+      bufferStateByTabId: removeRecordKey(state.bufferStateByTabId, tabId),
+    })),
+
   clearSession: (sessionId) => {
     invalidateRequest(statusRequestIds, sessionId)
     invalidateSessionScopedRequests(treeRequestIds, sessionId)
     invalidateSessionScopedRequests(previewRequestIds, sessionId)
 
-    set((state) => ({
-      panelBySession: removeRecordKey(state.panelBySession, sessionId),
-      modeBySession: removeRecordKey(state.modeBySession, sessionId),
-      statusBySession: removeRecordKey(state.statusBySession, sessionId),
-      expandedPathsBySession: removeRecordKey(state.expandedPathsBySession, sessionId),
-      treeBySessionPath: removeRecordKey(state.treeBySessionPath, sessionId),
-      previewTabsBySession: removeRecordKey(state.previewTabsBySession, sessionId),
-      activePreviewTabIdBySession: removeRecordKey(state.activePreviewTabIdBySession, sessionId),
-      loading: {
-        statusBySession: removeRecordKey(state.loading.statusBySession, sessionId),
-        treeBySessionPath: stripSessionKeys(state.loading.treeBySessionPath, sessionId),
-        previewByTabId: stripSessionKeys(state.loading.previewByTabId, sessionId),
-      },
-      errors: {
-        statusBySession: removeRecordKey(state.errors.statusBySession, sessionId),
-        treeBySessionPath: stripSessionKeys(state.errors.treeBySessionPath, sessionId),
-        previewByTabId: stripSessionKeys(state.errors.previewByTabId, sessionId),
-      },
-    }))
+    set((state) => {
+      const sessionTabs = state.previewTabsBySession[sessionId] ?? []
+      const tabIdsToDrop = new Set(sessionTabs.map((tab) => tab.id))
+      const nextBufferStateByTabId: Record<string, WorkspaceBufferState | undefined> = {}
+      for (const [tabId, buffer] of Object.entries(state.bufferStateByTabId)) {
+        if (!tabIdsToDrop.has(tabId)) nextBufferStateByTabId[tabId] = buffer
+      }
+
+      return {
+        panelBySession: removeRecordKey(state.panelBySession, sessionId),
+        modeBySession: removeRecordKey(state.modeBySession, sessionId),
+        statusBySession: removeRecordKey(state.statusBySession, sessionId),
+        expandedPathsBySession: removeRecordKey(state.expandedPathsBySession, sessionId),
+        treeBySessionPath: removeRecordKey(state.treeBySessionPath, sessionId),
+        previewTabsBySession: removeRecordKey(state.previewTabsBySession, sessionId),
+        activePreviewTabIdBySession: removeRecordKey(state.activePreviewTabIdBySession, sessionId),
+        bufferStateByTabId: nextBufferStateByTabId,
+        lspStateBySession: removeRecordKey(state.lspStateBySession, sessionId),
+        lspDiagnosticsBySessionPath: stripSessionKeys(state.lspDiagnosticsBySessionPath, sessionId),
+        loading: {
+          statusBySession: removeRecordKey(state.loading.statusBySession, sessionId),
+          treeBySessionPath: stripSessionKeys(state.loading.treeBySessionPath, sessionId),
+          previewByTabId: stripSessionKeys(state.loading.previewByTabId, sessionId),
+        },
+        errors: {
+          statusBySession: removeRecordKey(state.errors.statusBySession, sessionId),
+          treeBySessionPath: stripSessionKeys(state.errors.treeBySessionPath, sessionId),
+          previewByTabId: stripSessionKeys(state.errors.previewByTabId, sessionId),
+        },
+      }
+    })
   },
 
   resetSessionUi: (sessionId) => {

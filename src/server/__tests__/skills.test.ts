@@ -35,6 +35,23 @@ function makePluginReloadRequest(): { req: Request; url: URL; segments: string[]
   }
 }
 
+function makePostRequest(
+  urlStr: string,
+  body: unknown,
+): { req: Request; url: URL; segments: string[] } {
+  const url = new URL(urlStr, 'http://localhost:3456')
+  const req = new Request(url.toString(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return {
+    req,
+    url,
+    segments: url.pathname.split('/').filter(Boolean),
+  }
+}
+
 async function writeSkill(root: string, skillName: string, content: string): Promise<void> {
   const skillDir = path.join(root, skillName)
   await fs.mkdir(skillDir, { recursive: true })
@@ -107,6 +124,98 @@ describe('Skills API', () => {
     const body = await res.json() as { skills: Array<{ name: string; source: string }> }
     expect(body.skills).toContainEqual(expect.objectContaining({ name: 'user-skill', source: 'user' }))
     expect(body.skills).toContainEqual(expect.objectContaining({ name: 'project-skill', source: 'project' }))
+  })
+
+  it('GET /api/skills/catalog returns curated entries with installed=false initially', async () => {
+    const { req, url, segments } = makeRequest('/api/skills/catalog')
+    const res = await handleSkillsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      catalog: Array<{ name: string; installed: boolean; files?: unknown }>
+    }
+    expect(body.catalog.length).toBeGreaterThan(0)
+    const coderabbit = body.catalog.find((entry) => entry.name === 'coderabbit-review')
+    expect(coderabbit).toBeDefined()
+    expect(coderabbit?.installed).toBe(false)
+    // The catalog API must not leak the embedded file contents.
+    expect(coderabbit).not.toHaveProperty('files')
+  })
+
+  it('POST /api/skills/install writes the skill into the user skills dir and is idempotent', async () => {
+    const skillDir = path.join(tmpHome, '.claude', 'skills', 'coderabbit-review')
+
+    const first = makePostRequest('/api/skills/install', { name: 'coderabbit-review' })
+    const firstRes = await handleSkillsApi(first.req, first.url, first.segments)
+    expect(firstRes.status).toBe(200)
+    expect(await firstRes.json()).toEqual({ ok: true, installed: true })
+
+    const installed = await fs.readFile(path.join(skillDir, 'SKILL.md'), 'utf-8')
+    expect(installed).toContain('name: code-review')
+
+    // Reinstalling must not overwrite and must report alreadyInstalled.
+    const second = makePostRequest('/api/skills/install', { name: 'coderabbit-review' })
+    const secondRes = await handleSkillsApi(second.req, second.url, second.segments)
+    expect(secondRes.status).toBe(200)
+    expect(await secondRes.json()).toEqual({ ok: true, alreadyInstalled: true })
+
+    // Catalog now reports it installed.
+    const catalog = makeRequest('/api/skills/catalog')
+    const catalogRes = await handleSkillsApi(catalog.req, catalog.url, catalog.segments)
+    const catalogBody = (await catalogRes.json()) as {
+      catalog: Array<{ name: string; installed: boolean }>
+    }
+    expect(
+      catalogBody.catalog.find((entry) => entry.name === 'coderabbit-review')?.installed,
+    ).toBe(true)
+  })
+
+  it('POST /api/skills/install writes all companion files for a multi-file skill', async () => {
+    const skillDir = path.join(tmpHome, '.claude', 'skills', 'stripe-best-practices')
+
+    const res0 = makePostRequest('/api/skills/install', { name: 'stripe-best-practices' })
+    const res = await handleSkillsApi(res0.req, res0.url, res0.segments)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, installed: true })
+
+    const skillMd = await fs.readFile(path.join(skillDir, 'SKILL.md'), 'utf-8')
+    expect(skillMd).toContain('name: stripe-best-practices')
+    // Companion reference files land in the references/ subdirectory.
+    for (const ref of ['payments.md', 'connect.md', 'billing.md', 'treasury.md']) {
+      const refContent = await fs.readFile(
+        path.join(skillDir, 'references', ref),
+        'utf-8',
+      )
+      expect(refContent.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('POST /api/skills/install writes a large reference set (supabase) under references/', async () => {
+    const skillDir = path.join(tmpHome, '.claude', 'skills', 'supabase-best-practices')
+
+    const r = makePostRequest('/api/skills/install', { name: 'supabase-best-practices' })
+    const res = await handleSkillsApi(r.req, r.url, r.segments)
+    expect(res.status).toBe(200)
+
+    const refs = await fs.readdir(path.join(skillDir, 'references'))
+    // _sections.md plus the per-rule files across all 8 categories.
+    expect(refs.length).toBeGreaterThanOrEqual(30)
+    expect(refs).toContain('security-rls-performance.md')
+    const rls = await fs.readFile(
+      path.join(skillDir, 'references', 'security-rls-performance.md'),
+      'utf-8',
+    )
+    expect(rls).toContain('Optimize RLS Policies')
+  })
+
+  it('POST /api/skills/install rejects unknown and missing skill names', async () => {
+    const unknown = makePostRequest('/api/skills/install', { name: 'does-not-exist' })
+    const unknownRes = await handleSkillsApi(unknown.req, unknown.url, unknown.segments)
+    expect(unknownRes.status).toBe(404)
+
+    const missing = makePostRequest('/api/skills/install', {})
+    const missingRes = await handleSkillsApi(missing.req, missing.url, missing.segments)
+    expect(missingRes.status).toBe(400)
   })
 
   it('lists user skills installed through a directory symlink or junction', async () => {

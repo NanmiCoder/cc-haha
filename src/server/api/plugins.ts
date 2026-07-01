@@ -1,8 +1,18 @@
 import type { PluginScope } from '../../utils/plugins/schemas.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { PluginService } from '../services/pluginService.js'
+import {
+  clearKnownLanguageServerCache,
+  getKnownLanguageServerStatuses,
+} from '../services/knownLanguageServers.js'
 import { conversationService } from '../services/conversationService.js'
 import { updateSessionSlashCommands } from '../ws/handler.js'
+import {
+  loadPluginOptions,
+  savePluginOptions,
+  clearPluginOptionsCache,
+} from '../../utils/plugins/pluginOptionsStorage.js'
+import type { PluginManifest } from '../../utils/plugins/schemas.js'
 
 const pluginService = new PluginService()
 
@@ -31,6 +41,12 @@ export async function handlePluginsApi(
       return Response.json(await pluginService.listPlugins(cwd))
     }
 
+    if (method === 'GET' && sub === 'catalog') {
+      return Response.json({
+        catalog: await pluginService.getCatalog(),
+      })
+    }
+
     if (method === 'GET' && sub === 'detail') {
       const pluginId = url.searchParams.get('id')
       if (!pluginId) {
@@ -38,6 +54,76 @@ export async function handlePluginsApi(
       }
       return Response.json({
         detail: await pluginService.getPluginDetail(pluginId, cwd),
+      })
+    }
+
+    if (method === 'GET' && sub === 'prerequisites') {
+      const pluginId = url.searchParams.get('id')
+      if (!pluginId) {
+        throw ApiError.badRequest('Missing required "id" query parameter')
+      }
+      return Response.json(
+        await pluginService.checkPluginPrerequisites(pluginId, cwd),
+      )
+    }
+
+    if (method === 'GET' && sub === 'options') {
+      const pluginId = url.searchParams.get('id')
+      if (!pluginId) {
+        throw ApiError.badRequest('Missing required "id" query parameter')
+      }
+      const detail = await pluginService.getPluginDetail(pluginId, cwd)
+      const userConfig = (detail as Record<string, unknown>).userConfig as PluginManifest['userConfig'] | undefined
+      const options = loadPluginOptions(pluginId)
+      // Mask sensitive values — frontend only needs to know they exist
+      const masked: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(options)) {
+        if (userConfig?.[key]?.sensitive === true) {
+          masked[key] = typeof value === 'string' && value.length > 0 ? '********' : ''
+        } else {
+          masked[key] = value
+        }
+      }
+      return Response.json({
+        pluginId,
+        schema: userConfig ?? {},
+        values: masked,
+      })
+    }
+
+    if (method === 'POST' && sub === 'options') {
+      const body = await parseJsonBody(req)
+      const pluginId = asString(body.id)
+      if (!pluginId) {
+        throw ApiError.badRequest('Missing required "id" field')
+      }
+      const values = body.values as Record<string, unknown> | undefined
+      if (!values || typeof values !== 'object') {
+        throw ApiError.badRequest('Missing required "values" field')
+      }
+      const detail = await pluginService.getPluginDetail(pluginId, cwd)
+      const userConfig = (detail as Record<string, unknown>).userConfig as PluginManifest['userConfig'] | undefined
+      if (!userConfig || Object.keys(userConfig).length === 0) {
+        throw ApiError.badRequest('Plugin has no userConfig options')
+      }
+      // Filter to only schema-declared keys (prevent injection of arbitrary keys)
+      const filtered: Record<string, unknown> = {}
+      for (const key of Object.keys(userConfig)) {
+        if (key in values) {
+          filtered[key] = values[key]
+        }
+      }
+      savePluginOptions(pluginId, filtered, userConfig)
+      clearPluginOptionsCache()
+      return Response.json({ ok: true, pluginId })
+    }
+
+    if (method === 'GET' && sub === 'language-servers') {
+      if (url.searchParams.get('refresh')) {
+        clearKnownLanguageServerCache()
+      }
+      return Response.json({
+        servers: await getKnownLanguageServerStatuses(),
       })
     }
 
@@ -52,6 +138,29 @@ export async function handlePluginsApi(
         ...response,
         session: await reloadSessionPlugins(sessionId),
       })
+    }
+
+    if (method === 'POST' && sub === 'install') {
+      const body = await parseJsonBody(req)
+      const id = asString(body.id)
+      const marketplace = asString(body.marketplace)
+      if (!id || !marketplace) {
+        throw ApiError.badRequest(
+          'Missing required fields: "id" and "marketplace"',
+        )
+      }
+      return Response.json(
+        await pluginService.installCatalogPlugin(id, marketplace),
+      )
+    }
+
+    if (method === 'POST' && sub === 'marketplace') {
+      const body = await parseJsonBody(req)
+      const input = asString(body.input)
+      if (!input) {
+        throw ApiError.badRequest('Missing required field: "input"')
+      }
+      return Response.json(await pluginService.addMarketplaceFromInput(input))
     }
 
     if (method === 'POST' && sub) {

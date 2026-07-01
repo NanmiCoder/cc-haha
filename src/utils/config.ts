@@ -122,6 +122,10 @@ export type ProjectConfig = {
   disabledMcpServers?: string[]
   // Opt-in list for built-in MCP servers that default to disabled
   enabledMcpServers?: string[]
+  // Skills that are always injected into the system prompt for this project.
+  // Values are skill install-directory names. Merged with global activeSkills
+  // (duplicates are deduplicated — project entries take precedence).
+  activeSkills?: string[]
   // Worktree session management
   activeWorktreeSession?: {
     originalCwd: string
@@ -575,6 +579,18 @@ export type GlobalConfig = {
   // CURRENT_MIGRATION_VERSION, runMigrations() skips all sync migrations
   // (avoiding 11× saveGlobalConfig lock+re-read on every startup).
   migrationVersion?: number
+
+  // Per-server tool override list. Keyed by MCP server name; each value is
+  // the set of tool names that should be hidden from the agent loop. Lives
+  // at the user/global scope (not per-project) so a "never use this tool"
+  // preference persists across all projects. Servers themselves are still
+  // disabled via the per-project `disabledMcpServers` (see MCPProjectConfig).
+  disabledMcpTools?: Record<string, string[]>
+
+  // Skills that are always injected into the system prompt at conversation
+  // start. Values are skill install-directory names (e.g. 'karpathy-guidelines').
+  // Global active skills apply to all projects unless overridden at project level.
+  activeSkills?: string[]
 }
 
 /**

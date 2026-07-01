@@ -58,6 +58,12 @@ export type SessionListItem = {
   workDir: string | null
   workDirExists: boolean
   permissionMode?: string
+  /**
+   * Absolute path of the JSONL file that backs this session on disk. Lets the
+   * UI offer "copy file path" / "reveal in file manager" actions and pass the
+   * path to external tools (e.g. another AI that can read the transcript).
+   */
+  filePath: string
 }
 
 export type DeleteSessionFailure = {
@@ -87,6 +93,7 @@ export type SessionLaunchInfo = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  thinkingEnabled?: boolean
 }
 
 export type TrimSessionResult = {
@@ -282,6 +289,7 @@ type SessionListSummary = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  thinkingEnabled?: boolean
   repository?: PreparedSessionWorkspace['repository']
   worktreeSession?: PersistedWorktreeSession | null
 }
@@ -319,6 +327,24 @@ export class SessionService {
     result: { sessions: SessionListItem[]; total: number }
   }>()
 
+  // readJsonlFile parse cache. Keyed by absolute filePath, invalidated by
+  // mtimeMs+size mismatch on each access (append-only JSONL means size alone
+  // catches almost every change; mtimeMs covers truncate/rewrite). Bounded by
+  // total cached bytes (insertion-order LRU). Files larger than
+  // READ_CACHE_MAX_FILE_BYTES skip the cache to avoid heap blowup on huge
+  // transcripts. In-flight reads are de-duped so concurrent callers of the
+  // same file (e.g. getSessionMessages + getSessionTaskNotifications in one
+  // request) share a single read+parse.
+  private readonly readCacheMaxFileBytes = 16 * 1024 * 1024
+  private readonly readCacheMaxTotalBytes = 64 * 1024 * 1024
+  private readCacheTotalBytes = 0
+  private readonly readJsonlCache = new Map<string, {
+    mtimeMs: number
+    size: number
+    entries: RawEntry[]
+  }>()
+  private readonly readJsonlInFlight = new Map<string, Promise<RawEntry[]>>()
+
   private sessionListCacheKey(options?: {
     project?: string
     limit?: number
@@ -340,6 +366,38 @@ export class SessionService {
 
   private invalidateSessionListCache(): void {
     this.sessionListCache.clear()
+  }
+
+  /**
+   * Drop a single file from the readJsonlFile parse cache. Called from every
+   * server-side write path so a subsequent read never returns stale entries,
+   * even in the rare case where mtimeMs+size happen to match after a rewrite.
+   */
+  private invalidateReadCache(filePath: string): void {
+    const existing = this.readJsonlCache.get(filePath)
+    if (existing) {
+      this.readCacheTotalBytes -= existing.size
+      this.readJsonlCache.delete(filePath)
+    }
+  }
+
+  /** Insert/refresh a cache entry and evict oldest entries beyond the byte budget. */
+  private storeReadCache(filePath: string, mtimeMs: number, size: number, entries: RawEntry[]): void {
+    const previous = this.readJsonlCache.get(filePath)
+    if (previous) {
+      this.readCacheTotalBytes -= previous.size
+      // Delete so the re-insert moves this key to the LRU tail (insertion order).
+      this.readJsonlCache.delete(filePath)
+    }
+    this.readJsonlCache.set(filePath, { mtimeMs, size, entries })
+    this.readCacheTotalBytes += size
+    while (this.readCacheTotalBytes > this.readCacheMaxTotalBytes) {
+      const oldest = this.readJsonlCache.keys().next().value
+      if (typeof oldest !== 'string') break
+      const evicted = this.readJsonlCache.get(oldest)
+      this.readJsonlCache.delete(oldest)
+      if (evicted) this.readCacheTotalBytes -= evicted.size
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -367,16 +425,70 @@ export class SessionService {
   // --------------------------------------------------------------------------
 
   private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
-    let content: string
+    let stat: { mtimeMs: number; size: number }
     try {
-      content = await fs.readFile(filePath, 'utf-8')
+      stat = await fs.stat(filePath)
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Do not cache: the file may be created shortly after.
+        this.invalidateReadCache(filePath)
         return []
       }
       throw err
     }
 
+    const cached = this.readJsonlCache.get(filePath)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      // Return a shallow copy so callers can't mutate the cached array's
+      // length/order. Entry objects are shared — verified that no caller
+      // mutates entries in place.
+      return cached.entries.slice()
+    }
+
+    const inFlight = this.readJsonlInFlight.get(filePath)
+    if (inFlight) {
+      return (await inFlight).slice()
+    }
+
+    const readPromise = this.readAndParseJsonl(filePath, stat)
+    this.readJsonlInFlight.set(filePath, readPromise)
+    try {
+      const entries = await readPromise
+      return entries.slice()
+    } finally {
+      this.readJsonlInFlight.delete(filePath)
+    }
+  }
+
+  /** Read + parse a JSONL file from disk and populate the parse cache. */
+  private async readAndParseJsonl(
+    filePath: string,
+    stat: { mtimeMs: number; size: number },
+  ): Promise<RawEntry[]> {
+    let content: string
+    try {
+      content = await fs.readFile(filePath, 'utf-8')
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.invalidateReadCache(filePath)
+        return []
+      }
+      throw err
+    }
+
+    const entries = this.parseJsonlContent(content)
+
+    // Skip caching very large transcripts to keep heap bounded.
+    if (stat.size <= this.readCacheMaxFileBytes) {
+      this.storeReadCache(filePath, stat.mtimeMs, stat.size, entries)
+    } else {
+      this.invalidateReadCache(filePath)
+    }
+
+    return entries
+  }
+
+  private parseJsonlContent(content: string): RawEntry[] {
     const entries: RawEntry[] = []
     for (const line of content.split('\n')) {
       const trimmed = line.trim()
@@ -408,6 +520,7 @@ export class SessionService {
     let runtimeProviderId: string | null | undefined
     let runtimeModelId: string | undefined
     let effortLevel: string | undefined
+    let thinkingEnabled: boolean | undefined
     let repository: PreparedSessionWorkspace['repository'] | undefined
     let worktreeSession: PersistedWorktreeSession | null | undefined
 
@@ -467,6 +580,9 @@ export class SessionService {
             VALID_SESSION_EFFORT_LEVELS.has((entry as Record<string, unknown>).effortLevel as string)
           ) {
             effortLevel = (entry as Record<string, unknown>).effortLevel as string
+          }
+          if (typeof (entry as Record<string, unknown>).thinkingEnabled === 'boolean') {
+            thinkingEnabled = (entry as Record<string, unknown>).thinkingEnabled as boolean
           }
         }
 
@@ -532,6 +648,7 @@ export class SessionService {
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
       ...(effortLevel ? { effortLevel } : {}),
+      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
       ...(repository ? { repository } : {}),
       ...(worktreeSession !== undefined ? { worktreeSession } : {}),
     }
@@ -564,6 +681,7 @@ export class SessionService {
   private async appendJsonlEntry(filePath: string, entry: Record<string, unknown>): Promise<void> {
     const line = JSON.stringify(entry) + '\n'
     await fs.appendFile(filePath, line, 'utf-8')
+    this.invalidateReadCache(filePath)
   }
 
   private resolveWorkDirFromEntries(
@@ -665,6 +783,18 @@ export class SessionService {
     if (!candidate) return null
 
     const canonicalCandidate = await this.canonicalizeProjectPath(candidate)
+
+    // If the user explicitly opened this exact directory as a project (the
+    // desktop "Use existing folder" flow stores a session under
+    // ~/.claude/projects/<sanitize(workDir)>/), respect their choice rather
+    // than escalating to a parent git root. Without this, opening a
+    // sub-directory of an existing repo (e.g. `repo/tools/layout-editor`)
+    // collapses into the parent project group and the sub-project disappears
+    // from the sidebar — see GH issue, "subproject not appearing in list".
+    if (await this.candidateHasOwnProjectDir(canonicalCandidate)) {
+      return canonicalCandidate
+    }
+
     const gitRoot = findCanonicalGitRoot(canonicalCandidate)
     if (gitRoot) return gitRoot
 
@@ -675,6 +805,23 @@ export class SessionService {
     }
 
     return canonicalCandidate
+  }
+
+  /**
+   * Does ~/.claude/projects/<sanitize(candidate)>/ exist as a real directory?
+   * Used as a "user explicitly treats this path as a project" signal so a
+   * sub-directory of a git repo is allowed to be its own sidebar entry.
+   */
+  private async candidateHasOwnProjectDir(candidatePath: string): Promise<boolean> {
+    try {
+      const sanitizedId = this.sanitizePath(candidatePath)
+      if (!sanitizedId) return false
+      const projectDir = path.join(this.getProjectsDir(), sanitizedId)
+      const stat = await fs.stat(projectDir)
+      return stat.isDirectory()
+    } catch {
+      return false
+    }
   }
 
   private async canonicalizeProjectPath(projectPath: string): Promise<string> {
@@ -1479,6 +1626,24 @@ export class SessionService {
     if (!found) return null
 
     const entries = await this.readJsonlFile(found.filePath)
+
+    // After a compaction the transcript still holds the full pre-compact
+    // history, but the live context only contains messages after the latest
+    // compact boundary. Scope the estimate to post-boundary entries so the
+    // indicator doesn't report a stale ~100% — both the whole-transcript token
+    // estimate AND the summarization call's huge input_tokens would otherwise
+    // keep it pinned near full until the next real turn lands.
+    let boundaryIndex = -1
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]!
+      if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+        boundaryIndex = i
+        break
+      }
+    }
+    const scopedEntries =
+      boundaryIndex >= 0 ? entries.slice(boundaryIndex + 1) : entries
+
     let latest: {
       model: string
       inputTokens: number
@@ -1487,7 +1652,7 @@ export class SessionService {
       cacheCreationInputTokens: number
     } | null = null
 
-    for (const entry of entries) {
+    for (const entry of scopedEntries) {
       const usage = entry.message?.usage
       const model = entry.message?.model
       if (!usage || typeof model !== 'string') continue
@@ -1508,11 +1673,31 @@ export class SessionService {
       }
     }
 
-    if (!latest) return null
+    // Resolve the model even when the post-compact segment has no usage yet
+    // (compaction just happened, no real turn since): we still want a valid
+    // post-compact estimate rather than null.
+    let model = latest?.model
+    if (!model) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const candidate = entries[i]?.message?.model
+        if (typeof candidate === 'string') {
+          model = candidate
+          break
+        }
+      }
+    }
+    if (!model) return null
 
-    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, latest.model)
-    const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
-    const transcriptMessages = entries.filter(entry =>
+    const usage = latest ?? {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    }
+
+    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, model)
+    const promptTokens = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
+    const transcriptMessages = scopedEntries.filter(entry =>
       entry.type === 'user' || entry.type === 'assistant' || entry.type === 'attachment',
     ) as Parameters<typeof roughTokenCountEstimationForMessages>[0]
     const estimatedTokens =
@@ -1520,12 +1705,16 @@ export class SessionService {
     const contextBudget = calculateContextBudget({
       estimatedTokens,
       contextWindow: rawMaxTokens,
-      currentUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-      },
+      // Without a post-compact API turn yet, there's no trustworthy provider
+      // usage to anchor to — fall back to the pure message-token estimate.
+      currentUsage: latest
+        ? {
+            input_tokens: latest.inputTokens,
+            output_tokens: latest.outputTokens,
+            cache_read_input_tokens: latest.cacheReadInputTokens,
+            cache_creation_input_tokens: latest.cacheCreationInputTokens,
+          }
+        : undefined,
       usageTrust: getProviderUsageTrust({
         isFirstPartyAnthropic: isFirstPartyAnthropicBaseUrl(),
       }),
@@ -1534,10 +1723,10 @@ export class SessionService {
     const totalTokens = contextBudget.usedTokens
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
     const usageCategories: TranscriptContextEstimate['categories'] = [
-      { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
-      { name: 'Cache read', tokens: latest.cacheReadInputTokens, color: '#0f5c8f' },
-      { name: 'Cache write', tokens: latest.cacheCreationInputTokens, color: '#7c3aed' },
-      { name: 'Output tokens', tokens: latest.outputTokens, color: '#2f7d32' },
+      { name: 'Input tokens', tokens: usage.inputTokens, color: '#8f3217' },
+      { name: 'Cache read', tokens: usage.cacheReadInputTokens, color: '#0f5c8f' },
+      { name: 'Cache write', tokens: usage.cacheCreationInputTokens, color: '#7c3aed' },
+      { name: 'Output tokens', tokens: usage.outputTokens, color: '#2f7d32' },
     ]
     const contextCategories: TranscriptContextEstimate['categories'] =
       contextBudget.ignoredUsageReason === 'low_trust_media_usage'
@@ -1571,15 +1760,15 @@ export class SessionService {
       rawMaxTokens,
       percentage,
       gridRows,
-      model: latest.model,
+      model,
       memoryFiles: [],
       mcpTools: [],
       agents: [],
       apiUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        cache_creation_input_tokens: usage.cacheCreationInputTokens,
+        cache_read_input_tokens: usage.cacheReadInputTokens,
       },
     }
   }
@@ -1767,6 +1956,7 @@ export class SessionService {
           workDir,
           workDirExists,
           permissionMode: summary.permissionMode,
+          filePath,
         })
       } catch {
         // Skip unreadable files
@@ -1822,6 +2012,7 @@ export class SessionService {
       workDir,
       workDirExists,
       permissionMode,
+      filePath,
       messages,
     }
   }
@@ -1908,6 +2099,7 @@ export class SessionService {
     }
 
     await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
+    this.invalidateReadCache(filePath)
     this.invalidateSessionListCache()
 
     return { sessionId, workDir: absWorkDir }
@@ -1923,6 +2115,7 @@ export class SessionService {
     }
 
     await fs.unlink(found.filePath)
+    this.invalidateReadCache(found.filePath)
     this.invalidateSessionListCache()
   }
 
@@ -2052,6 +2245,7 @@ export class SessionService {
     let runtimeProviderId: string | null | undefined
     let runtimeModelId: string | undefined
     let effortLevel: string | undefined
+    let thinkingEnabled: boolean | undefined
 
     for (const entry of entries) {
       if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
@@ -2071,6 +2265,9 @@ export class SessionService {
         ) {
           effortLevel = record.effortLevel
         }
+        if (typeof record.thinkingEnabled === 'boolean') {
+          thinkingEnabled = record.thinkingEnabled
+        }
       }
     }
     const transcriptMessageCount = this.countTranscriptMessages(entries)
@@ -2087,6 +2284,7 @@ export class SessionService {
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
       ...(effortLevel ? { effortLevel } : {}),
+      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
     }
   }
 
@@ -2094,6 +2292,7 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return
     await fs.unlink(found.filePath)
+    this.invalidateReadCache(found.filePath)
     this.invalidateSessionListCache()
   }
 
@@ -2142,6 +2341,7 @@ export class SessionService {
       `${JSON.stringify(initialEntry)}\n${JSON.stringify(metaEntry)}\n`,
       'utf-8',
     )
+    this.invalidateReadCache(found.filePath)
     this.invalidateSessionListCache()
   }
 
@@ -2155,6 +2355,7 @@ export class SessionService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
+      thinkingEnabled?: boolean
     }
   ): Promise<void> {
     const matches = await this.findSessionFiles(sessionId)
@@ -2190,6 +2391,9 @@ export class SessionService {
       ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
       ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
         ? { effortLevel: metadata.effortLevel }
+        : {}),
+      ...(metadata.thinkingEnabled !== undefined
+        ? { thinkingEnabled: metadata.thinkingEnabled }
         : {}),
       timestamp: new Date().toISOString(),
     })
@@ -2231,6 +2435,7 @@ export class SessionService {
       if (this.countTranscriptMessages(entries) > 0) continue
 
       await fs.rm(filePath, { force: true })
+      this.invalidateReadCache(filePath)
       removed += 1
     }
     if (removed > 0) this.invalidateSessionListCache()
@@ -2287,6 +2492,7 @@ export class SessionService {
         ? filteredEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
         : ''
     await fs.writeFile(found.filePath, content, 'utf-8')
+    this.invalidateReadCache(found.filePath)
     this.invalidateSessionListCache()
 
     return {

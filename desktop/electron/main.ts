@@ -3,9 +3,9 @@ import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import { isElectronIpcChannel, validateElectronIpcPayload } from './ipc/capabilities'
-import { ElectronServerRuntime } from './services/serverRuntime'
+import { ElectronServerRuntime, type TunnelStartOptions } from './services/serverRuntime'
 import { openDialog, saveDialog } from './services/dialogs'
-import { openExternalUrl, openSystemPath, openSystemSettingsUrl } from './services/shell'
+import { openExternalUrl, openSystemPath, openSystemSettingsUrl, showItemInFolder } from './services/shell'
 import {
   notificationPermissionState,
   requestNotificationPermission,
@@ -160,6 +160,7 @@ function getUpdaterService() {
     },
   }, {
     updateConfigPath: !smokeUpdater && app.isPackaged ? path.join(process.resourcesPath, 'app-update.yml') : undefined,
+    currentVersion: app.getVersion(),
   })
   return updaterService
 }
@@ -261,6 +262,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardWriteText, (_event, payload) => clipboard.writeText(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.shellOpen, (_event, payload) => openExternalUrl(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.shellOpenPath, (_event, payload) => openSystemPath(String(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.shellShowItemInFolder, (_event, payload) => showItemInFolder(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.traceOpenWindow, (_event, payload) => openTraceWindow(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.dialogOpen, (event, payload) =>
     openDialog(currentWindow(event), payload as Parameters<typeof openDialog>[1]))
@@ -338,6 +340,9 @@ function registerIpcHandlers() {
     app.quit()
   })
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.tunnelStart, (_event, payload) => getServerRuntime().startTunnel(payload as TunnelStartOptions))
+  registerHandler(ELECTRON_IPC_CHANNELS.tunnelStop, () => getServerRuntime().stopTunnel())
+  registerHandler(ELECTRON_IPC_CHANNELS.tunnelGetStatus, () => getServerRuntime().getTunnelStatus())
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => currentWindow(event).webContents.setZoomFactor(normalizeZoomFactor(payload)))
 }
 

@@ -3,10 +3,21 @@ import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { CLAUDE_CODE_GUIDE_AGENT } from './built-in/claudeCodeGuideAgent.js'
+import { CODE_REVIEWER_AGENT } from './built-in/codeReviewerAgent.js'
+import { COMMIT_PR_AGENT } from './built-in/commitPrAgent.js'
+import { DEBUGGER_AGENT } from './built-in/debuggerAgent.js'
+import { DOCS_WRITER_AGENT } from './built-in/docsWriterAgent.js'
 import { EXPLORE_AGENT } from './built-in/exploreAgent.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
+import { MIGRATION_AGENT } from './built-in/migrationAgent.js'
+import { PERFORMANCE_AGENT } from './built-in/performanceAgent.js'
 import { PLAN_AGENT } from './built-in/planAgent.js'
+import { PLAN_CRITIC_AGENT } from './built-in/planCriticAgent.js'
+import { PLAN_REVIEWER_AGENT } from './built-in/planReviewerAgent.js'
+import { REFACTOR_AGENT } from './built-in/refactorAgent.js'
+import { SECURITY_REVIEWER_AGENT } from './built-in/securityReviewerAgent.js'
 import { STATUSLINE_SETUP_AGENT } from './built-in/statuslineSetup.js'
+import { TEST_AUTHOR_AGENT } from './built-in/testAuthorAgent.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 
@@ -58,6 +69,17 @@ export function getBuiltInAgents(): AgentDefinition[] {
   const agents: AgentDefinition[] = [
     GENERAL_PURPOSE_AGENT,
     STATUSLINE_SETUP_AGENT,
+    TEST_AUTHOR_AGENT,
+    CODE_REVIEWER_AGENT,
+    DEBUGGER_AGENT,
+    SECURITY_REVIEWER_AGENT,
+    REFACTOR_AGENT,
+    MIGRATION_AGENT,
+    DOCS_WRITER_AGENT,
+    PERFORMANCE_AGENT,
+    COMMIT_PR_AGENT,
+    PLAN_CRITIC_AGENT,
+    PLAN_REVIEWER_AGENT,
   ]
 
   if (areExplorePlanAgentsEnabled()) {

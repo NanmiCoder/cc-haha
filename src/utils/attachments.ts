@@ -699,6 +699,13 @@ export type Attachment =
       showConcurrencyNote: boolean
     }
   | {
+      type: 'verification_gate_reminder'
+      /** Number of file-edit tool uses since the last verification subagent invocation. */
+      editCount: number
+      /** Threshold that triggered this reminder. */
+      threshold: number
+    }
+  | {
       type: 'mcp_instructions_delta'
       addedNames: string[]
       addedBlocks: string[]
@@ -890,6 +897,9 @@ export async function getAttachments(
       isTodoV2Enabled()
         ? getTaskReminderAttachments(messages, toolUseContext)
         : getTodoReminderAttachments(messages, toolUseContext),
+    ),
+    maybe('verification_gate_reminder', () =>
+      getVerificationGateReminderAttachment(messages, toolUseContext),
     ),
     ...(isAgentSwarmsEnabled()
       ? [
@@ -3425,6 +3435,137 @@ async function getTaskReminderAttachments(
   }
 
   return []
+}
+
+/**
+ * Threshold of file-edit tool uses by the main agent that, when crossed
+ * without invoking the `verification` subagent, triggers a one-shot
+ * reminder. Three matches AGENTS.md's "non-trivial = 3+ file edits"
+ * heuristic. Tunable via env in case projects want a tighter or looser gate.
+ */
+const VERIFICATION_GATE_DEFAULT_THRESHOLD = 3
+
+const FILE_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'Edit',
+  'Write',
+  'NotebookEdit',
+])
+
+/**
+ * Walk message history backwards. Counts file-mutating tool uses by the
+ * main agent until either:
+ * - a `Agent`/`Task` tool use with `subagent_type === 'verification'` is
+ *   found (resets the count, since we just verified), or
+ * - the start of history is reached.
+ *
+ * Also reports whether a `verification_gate_reminder` already fired since
+ * that reset point so we don't spam the model every turn.
+ *
+ * Exported for unit testing.
+ */
+export function getVerificationGateState(messages: Message[]): {
+  editsSinceVerification: number
+  reminderAlreadyFired: boolean
+} {
+  let edits = 0
+  let reminderFired = false
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!m) continue
+
+    if (
+      m.type === 'attachment' &&
+      m.attachment.type === 'verification_gate_reminder'
+    ) {
+      reminderFired = true
+      continue
+    }
+
+    if (m.type !== 'assistant') continue
+    if (!('message' in m) || !Array.isArray(m.message?.content)) continue
+
+    for (const block of m.message.content) {
+      if (block.type !== 'tool_use') continue
+
+      // Verification subagent invocation resets the counter — we only care
+      // about edits that have not yet been independently verified.
+      if (
+        (block.name === 'Agent' || block.name === 'Task') &&
+        typeof block.input === 'object' &&
+        block.input !== null &&
+        (block.input as { subagent_type?: unknown }).subagent_type ===
+          'verification'
+      ) {
+        // Carry forward any reminder we already saw on the way back: the
+        // reminder lives at i+1..messages.length-1 (newer than this verify),
+        // so it was emitted for the post-verify edits. Resetting it to false
+        // here would cause a fresh reminder to be injected on every turn
+        // once the post-verify edit count crosses the threshold again,
+        // ballooning context. Preserve the accumulated flag instead.
+        return {
+          editsSinceVerification: edits,
+          reminderAlreadyFired: reminderFired,
+        }
+      }
+
+      if (FILE_MUTATING_TOOL_NAMES.has(block.name)) {
+        edits++
+      }
+    }
+  }
+
+  return {
+    editsSinceVerification: edits,
+    reminderAlreadyFired: reminderFired,
+  }
+}
+
+async function getVerificationGateReminderAttachment(
+  messages: Message[] | undefined,
+  toolUseContext: ToolUseContext,
+): Promise<Attachment[]> {
+  // Opt out via env. Default-on so the gate provides value out of the box.
+  if (isEnvTruthy(process.env.CLAUDE_CODE_VERIFICATION_GATE_OFF)) {
+    return []
+  }
+
+  if (!messages || messages.length === 0) return []
+
+  // Subagents shouldn't get this reminder — only the main thread is
+  // responsible for invoking verification on its own work.
+  if (toolUseContext.agentId) return []
+
+  // Don't fire if the verification agent isn't even available in this
+  // session (e.g. SDK build with built-ins disabled, GrowthBook gate off).
+  const hasVerificationAgent =
+    toolUseContext.options.agentDefinitions.activeAgents.some(
+      a => a.agentType === 'verification',
+    )
+  if (!hasVerificationAgent) return []
+
+  const threshold = (() => {
+    const raw = process.env.CLAUDE_CODE_VERIFICATION_GATE_THRESHOLD
+    if (!raw) return VERIFICATION_GATE_DEFAULT_THRESHOLD
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : VERIFICATION_GATE_DEFAULT_THRESHOLD
+  })()
+
+  const { editsSinceVerification, reminderAlreadyFired } =
+    getVerificationGateState(messages)
+
+  if (editsSinceVerification < threshold) return []
+  if (reminderAlreadyFired) return []
+
+  return [
+    {
+      type: 'verification_gate_reminder',
+      editCount: editsSinceVerification,
+      threshold,
+    },
+  ]
 }
 
 /**

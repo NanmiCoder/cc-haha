@@ -21,6 +21,8 @@ describe('Electron IPC capabilities', () => {
   it('validates structured payloads before they reach ipcRenderer.invoke', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.shellOpen, 'https://example.com')).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.shellOpen, { url: 'https://example.com' })).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.shellShowItemInFolder, '/home/u/.claude/projects/p/s.jsonl')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.shellShowItemInFolder, { path: '/x' })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.clipboardReadText, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.clipboardWriteText, 'paste me')).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.clipboardWriteText, { text: 'paste me' })).toBe(false)

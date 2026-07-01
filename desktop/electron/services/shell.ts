@@ -98,3 +98,13 @@ export async function openSystemPath(target: string): Promise<void> {
   const error = await shell.openPath(normalizeOpenPath(target))
   if (error) throw new Error(error)
 }
+
+/**
+ * Reveal a file in the OS file manager (Finder / Explorer / xdg-open) with the
+ * file itself selected. Unlike openPath, this targets the file's parent
+ * directory and highlights the file — preferred for "show me where this is".
+ */
+export async function showItemInFolder(target: string): Promise<void> {
+  const { shell } = await import('electron')
+  shell.showItemInFolder(normalizeOpenPath(target))
+}

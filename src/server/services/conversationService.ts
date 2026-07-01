@@ -28,6 +28,7 @@ import {
 } from '../../utils/desktopBundledCli.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
+import { ORCHESTRATION_SYSTEM_PROMPT } from '../orchestrationPrompt.js'
 import { sanitizePath } from '../../utils/path.js'
 import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
 import { attributionHeaderEnvForModel } from './attributionHeaderPolicy.js'
@@ -94,6 +95,10 @@ type MaterializedAttachments = {
 }
 
 type SessionProcess = {
+  // Identifies this specific spawned process. A `sessionId` is reused across
+  // restarts (e.g. provider/model switches), so callers that captured a stop
+  // intent for one process must not act on a later restart's process.
+  instanceId: string
   proc: ReturnType<typeof Bun.spawn>
   outputCallbacks: Array<(msg: any) => void>
   workDir: string
@@ -136,6 +141,21 @@ type SessionStartOptions = {
   effort?: string
   thinking?: 'enabled' | 'adaptive' | 'disabled'
   providerId?: string | null
+  coordinatorMode?: boolean
+  /**
+   * Solo Pipeline mode toggle. When true, the CLI is launched (or
+   * restarted) with `--append-system-prompt` carrying the 5-stage
+   * Solo prompt. Mutually exclusive with `coordinatorMode` — the WS
+   * handler enforces that exclusion before this field is read.
+   */
+  soloPipelineMode?: boolean
+  /**
+   * If set, append this exact text to the system prompt via
+   * `--append-system-prompt`. Used by the welcome-screen "Continue from
+   * here" flow to inject a hand-off summary of the previous session.
+   * Stored separately from coordinatorMode so both can be active at once.
+   */
+  handoffSystemPrompt?: string
   resumeInterruptedTurn?: boolean
 }
 
@@ -160,6 +180,7 @@ export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
+  private instanceCounter = 0
 
   private buildSessionCliArgs(
     sessionId: string,
@@ -323,6 +344,7 @@ export class ConversationService {
     }
 
     const session: SessionProcess = {
+      instanceId: `${sessionId}#${++this.instanceCounter}`,
       proc,
       outputCallbacks: [],
       workDir: launchWorkDir,
@@ -788,6 +810,31 @@ export class ConversationService {
     this.killProcess(sessionId, session)
   }
 
+  /**
+   * Identifies the live process backing `sessionId`, or null if none is running.
+   * Capture this before scheduling a deferred kill so the kill can be skipped
+   * when a restart (provider/model switch) has since replaced the process.
+   */
+  getActiveInstanceId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.instanceId ?? null
+  }
+
+  /**
+   * Force-kill a session only if it is still the same process instance that
+   * `instanceId` refers to. Returns true if it killed that instance. Used by
+   * the stop-generation force-kill fallback so a stale timer never kills a
+   * freshly restarted process (which would surface as a "CLI exited during
+   * startup with code 143" error).
+   */
+  stopSessionInstance(sessionId: string, instanceId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.instanceId !== instanceId) return false
+
+    this.sessions.delete(sessionId)
+    this.killProcess(sessionId, session)
+    return true
+  }
+
   async stopSessionAndWait(
     sessionId: string,
     timeoutMs = DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
@@ -1027,6 +1074,29 @@ export class ConversationService {
 
     if (options?.thinking) {
       args.push('--thinking', options.thinking)
+    }
+
+    if (options?.coordinatorMode) {
+      args.push('--append-system-prompt', ORCHESTRATION_SYSTEM_PROMPT)
+    }
+
+    // Solo Pipeline mode appends a different prompt addendum than
+    // coordinator mode (5-stage solo workflow). The WS handler keeps the
+    // two modes mutually exclusive, so at most one branch fires here.
+    if (options?.soloPipelineMode) {
+      // Lazy require to avoid pulling the prompt module into builds that
+      // don't enable the COORDINATOR_MODE feature flag (the flag gates
+      // both coordinator and Solo wiring at the moment).
+      const { getSoloPipelineSystemPrompt } =
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../../coordinator/soloPipelinePrompt.js') as typeof import('../../coordinator/soloPipelinePrompt.js')
+      args.push('--append-system-prompt', getSoloPipelineSystemPrompt())
+    }
+
+    // Hand-off context from the previous session (welcome screen "Continue
+    // from here"). Independent of orchestration; both can be active.
+    if (options?.handoffSystemPrompt) {
+      args.push('--append-system-prompt', options.handoffSystemPrompt)
     }
 
     return args

@@ -13,6 +13,7 @@
  * POST   /api/providers/official     — activate official (clear env)
  * POST   /api/providers/:id/test     — test a saved provider
  * POST   /api/providers/test         — test unsaved config
+ * POST   /api/providers/fetch-models — server-side fetch upstream /v1/models (bypasses CORS / mixed-content)
  */
 
 import { z } from 'zod'
@@ -22,6 +23,7 @@ import {
   CreateProviderSchema,
   UpdateProviderSchema,
   TestProviderSchema,
+  FetchModelsSchema,
   ReorderProvidersSchema,
 } from '../types/provider.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -41,6 +43,11 @@ export async function handleProvidersApi(
     // POST /api/providers/test
     if (id === 'test' && req.method === 'POST') {
       return await handleTestUnsaved(req)
+    }
+
+    // POST /api/providers/fetch-models
+    if (id === 'fetch-models' && req.method === 'POST') {
+      return await handleFetchModels(req)
     }
 
     // GET /api/providers/presets
@@ -211,6 +218,37 @@ async function handleTestUnsaved(req: Request): Promise<Response> {
       })
     }
     if (err instanceof z.ZodError) throw ApiError.badRequest(err.issues.map((i) => i.message).join('; '))
+    throw err
+  }
+}
+
+/**
+ * POST /api/providers/fetch-models
+ *
+ * Server-side proxy for the desktop "Fetch Models" button. The renderer
+ * cannot reliably call upstream `/v1/models` directly: HTTP-only relay
+ * URLs are mixed-content-blocked from the secure-context webview, and
+ * many self-hosted relays do not return permissive CORS headers.
+ * Routing through the server bypasses both.
+ */
+async function handleFetchModels(req: Request): Promise<Response> {
+  const body = await parseJsonBody(req)
+  try {
+    const input = FetchModelsSchema.parse(body)
+    const { status, data } = await providerService.fetchUpstreamModels(input)
+    return Response.json({ status, data })
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      throw ApiError.badRequest(err.issues.map((i) => i.message).join('; '))
+    }
+    if (!(err instanceof ApiError)) {
+      void diagnosticsService.recordEvent({
+        type: 'provider_fetch_models_failed',
+        severity: 'warn',
+        summary: err instanceof Error ? err.message : String(err),
+        details: { error: err },
+      })
+    }
     throw err
   }
 }

@@ -13,6 +13,7 @@ import {
   type DesktopTerminalStartupShell,
   type H5AccessDiagnostics,
   type H5AccessSettings,
+  type H5TunnelMode,
   type NetworkSettings,
   type OutputStyleOption,
   type OutputStylesResponse,
@@ -23,6 +24,7 @@ import {
   type UpdateProxyMode,
   type UpdateProxySettings,
   type WebSearchSettings,
+  type WorkspaceLspSettings,
 } from '../types/settings'
 import type { TraceCaptureSettings } from '../types/trace'
 import { getDesktopHost } from '../lib/desktopHost'
@@ -60,6 +62,7 @@ type SettingsStore = {
   currentModel: ModelInfo | null
   effortLevel: EffortLevel
   thinkingEnabled: boolean
+  thinkingAutoCollapse: boolean
   autoDreamEnabled: boolean
   availableModels: ModelInfo[]
   activeProviderName: string | null
@@ -75,6 +78,7 @@ type SettingsStore = {
   skipWebFetchPreflight: boolean
   desktopNotificationsEnabled: boolean
   desktopTerminal: DesktopTerminalSettings
+  workspaceLsp: WorkspaceLspSettings
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
@@ -96,6 +100,7 @@ type SettingsStore = {
   setModel: (modelId: string) => Promise<void>
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
+  setThinkingAutoCollapse: (enabled: boolean) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
   setLocale: (locale: Locale) => void
   setTheme: (theme: ThemeMode) => Promise<void>
@@ -105,6 +110,7 @@ type SettingsStore = {
   setSkipWebFetchPreflight: (enabled: boolean) => Promise<void>
   setDesktopNotificationsEnabled: (enabled: boolean) => Promise<void>
   setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
+  setWorkspaceLsp: (settings: WorkspaceLspSettings) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
@@ -117,7 +123,11 @@ type SettingsStore = {
     publicBaseUrl?: string | null
     fixedPort?: number | null
     disconnectGraceSeconds?: number | null
+    tunnelToken?: string | null
+    tunnelMode?: H5TunnelMode | null
   }) => Promise<void>
+  startH5Tunnel: (options: { mode: H5TunnelMode; token?: string | null; namedUrl?: string | null }) => Promise<void>
+  stopH5Tunnel: () => Promise<void>
   setResponseLanguage: (language: string) => Promise<void>
   fetchAppMode: () => Promise<void>
   setAppMode: (mode: AppMode, portableDir?: string | null) => Promise<void>
@@ -176,6 +186,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   currentModel: null,
   effortLevel: 'max',
   thinkingEnabled: true,
+  thinkingAutoCollapse: true,
   autoDreamEnabled: false,
   availableModels: [],
   activeProviderName: null,
@@ -191,6 +202,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   skipWebFetchPreflight: true,
   desktopNotificationsEnabled: false,
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
+  workspaceLsp: {},
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
@@ -230,7 +242,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         loadH5AccessSettings(previousH5Access),
         loadTraceCaptureSettings(),
       ])
-      const theme = isThemeMode(userSettings.theme) ? userSettings.theme : 'white'
+      const serverTheme = isThemeMode(userSettings.theme) ? userSettings.theme : 'dark'
+      // 'system' is a desktop-only logical mode that never gets persisted to the
+      // server (the server rejects it). If the user previously chose 'system' and
+      // it was stored locally, honour the local value instead of overwriting it
+      // with whatever concrete theme the server last saw.
+      const localTheme = useUIStore.getState().theme
+      const theme = localTheme === 'system' ? 'system' : serverTheme
       useUIStore.getState().setTheme(theme)
       set({
         permissionMode: mode,
@@ -239,6 +257,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         currentModel: model,
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
+        thinkingAutoCollapse: userSettings.thinkingAutoCollapse !== false,
         autoDreamEnabled: userSettings.autoDreamEnabled === true,
         theme,
         chatSendBehavior: normalizeChatSendBehavior(userSettings.chatSendBehavior),
@@ -246,6 +265,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         skipWebFetchPreflight: userSettings.skipWebFetchPreflight !== false,
         desktopNotificationsEnabled: userSettings.desktopNotificationsEnabled === true,
         desktopTerminal: normalizeDesktopTerminalSettings(userSettings.desktopTerminal),
+        workspaceLsp: normalizeWorkspaceLspSettings(userSettings.workspaceLsp),
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
@@ -310,6 +330,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setThinkingAutoCollapse: async (enabled) => {
+    const prev = get().thinkingAutoCollapse
+    set({ thinkingAutoCollapse: enabled })
+    try {
+      await settingsApi.updateUser({ thinkingAutoCollapse: enabled })
+    } catch {
+      set({ thinkingAutoCollapse: prev })
+    }
+  },
+
   setAutoDreamEnabled: async (enabled) => {
     const prev = get().autoDreamEnabled
     set({ autoDreamEnabled: enabled })
@@ -330,6 +360,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const prev = get().theme
     set({ theme })
     useUIStore.getState().setTheme(theme)
+    // 'system' is a desktop-only logical mode (resolves to light/dark via OS preference).
+    // The server only persists concrete themes; skip the round-trip to avoid validation errors.
+    if (theme === 'system') return
     try {
       await settingsApi.updateUser({ theme })
     } catch {
@@ -444,6 +477,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setWorkspaceLsp: async (settings) => {
+    const prev = get().workspaceLsp
+    const next = normalizeWorkspaceLspSettings(settings)
+    set({ workspaceLsp: next })
+    try {
+      await settingsApi.updateUser({ workspaceLsp: next })
+    } catch (error) {
+      set({ workspaceLsp: prev })
+      throw error
+    }
+  },
+
   setWebSearch: async (webSearch) => {
     const prev = get().webSearch
     const next = normalizeWebSearchSettings(webSearch)
@@ -549,6 +594,35 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await refreshH5DiagnosticsSilent(set)
     } catch (error) {
       set({ h5AccessError: getErrorMessage(error, 'Failed to update H5 access settings.') })
+      throw error
+    }
+  },
+
+  startH5Tunnel: async (options) => {
+    set({ h5AccessError: null })
+    try {
+      await h5AccessApi.startTunnel(options)
+      // The main process reports the tunnel URL back to the server, so a
+      // diagnostics refresh picks up the new effective publicBaseUrl + status.
+      await refreshH5DiagnosticsSilent(set)
+      const error = get().h5AccessDiagnostics?.tunnel?.error
+      if (error) {
+        set({ h5AccessError: error })
+        throw new Error(error)
+      }
+    } catch (error) {
+      set({ h5AccessError: getErrorMessage(error, 'Failed to start the tunnel.') })
+      throw error
+    }
+  },
+
+  stopH5Tunnel: async () => {
+    set({ h5AccessError: null })
+    try {
+      await h5AccessApi.stopTunnel()
+      await refreshH5DiagnosticsSilent(set)
+    } catch (error) {
+      set({ h5AccessError: getErrorMessage(error, 'Failed to stop the tunnel.') })
       throw error
     }
   },
@@ -690,6 +764,54 @@ function normalizeDesktopTerminalSettings(
       ? settings.customShellPath
       : DEFAULT_DESKTOP_TERMINAL_SETTINGS.customShellPath,
   }
+}
+
+function normalizeWorkspaceLspSettings(
+  settings: WorkspaceLspSettings | undefined,
+): WorkspaceLspSettings {
+  const server = settings?.server
+  if (!server || typeof server !== 'object') return {}
+
+  const normalizedServer: NonNullable<WorkspaceLspSettings['server']> = {}
+  const name = typeof server.name === 'string' ? server.name.trim() : ''
+  if (name) normalizedServer.name = name
+
+  const pathValue = typeof server.path === 'string' ? server.path.trim() : ''
+  const commandValue = typeof server.command === 'string' ? server.command.trim() : ''
+  if (pathValue) normalizedServer.path = pathValue
+  if (!pathValue && commandValue && isBareWorkspaceLspCommand(commandValue)) {
+    normalizedServer.command = commandValue
+  }
+
+  if (Array.isArray(server.args)) {
+    normalizedServer.args = server.args.filter((arg): arg is string => typeof arg === 'string')
+  }
+
+  const extensionToLanguage = normalizeWorkspaceLspExtensionMap(server.extensionToLanguage)
+  if (extensionToLanguage) normalizedServer.extensionToLanguage = extensionToLanguage
+
+  return normalizedServer.path || normalizedServer.command || normalizedServer.extensionToLanguage
+    ? { server: normalizedServer }
+    : {}
+}
+
+function isBareWorkspaceLspCommand(command: string): boolean {
+  return !/[\s"'`$&|;<>()]/.test(command)
+}
+
+function normalizeWorkspaceLspExtensionMap(
+  mapping: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return undefined
+  const normalized: Record<string, string> = {}
+  for (const [rawExt, rawLanguage] of Object.entries(mapping)) {
+    if (typeof rawLanguage !== 'string') continue
+    const ext = rawExt.startsWith('.') ? rawExt.toLowerCase() : `.${rawExt.toLowerCase()}`
+    const language = rawLanguage.trim()
+    if (!/^\.[A-Za-z0-9_+-]+$/.test(ext) || !language) continue
+    normalized[ext] = language
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 function normalizeH5AccessSettings(settings: H5AccessSettings | undefined): H5AccessSettings {
