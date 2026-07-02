@@ -761,6 +761,33 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText('local_agent')).toBeNull()
   })
 
+  it('does not render auto-dream background task events as separate transcript cards', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [{
+            id: 'background-task-dream-hidden',
+            type: 'background_task',
+            timestamp: 2,
+            task: {
+              taskId: 'dream-task-hidden',
+              status: 'running',
+              taskType: 'dream',
+              description: 'dreaming',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          }],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.queryByTestId('background-task-event-card')).toBeNull()
+    expect(screen.queryByText('dreaming')).toBeNull()
+  })
+
   it('renders the historical window when scrolling away from latest', async () => {
     useChatStore.setState({
       sessions: {

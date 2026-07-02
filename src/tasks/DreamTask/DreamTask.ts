@@ -7,6 +7,7 @@ import { rollbackConsolidationLock } from '../../services/autoDream/consolidatio
 import type { SetAppState, Task, TaskStateBase } from '../../Task.js'
 import { createTaskStateBase, generateTaskId } from '../../Task.js'
 import { registerTask, updateTaskState } from '../../utils/task/framework.js'
+import { emitTaskTerminatedSdk } from '../../utils/sdkEventQueue.js'
 
 // Keep only the N most recent turns for live display.
 const MAX_TURNS = 30
@@ -107,26 +108,44 @@ export function completeDreamTask(
   taskId: string,
   setAppState: SetAppState,
 ): void {
+  let shouldEmit = false
   // notified: true immediately — dream has no model-facing notification path
   // (it's UI-only), and eviction requires terminal + notified. The inline
   // appendSystemMessage completion note IS the user surface.
-  updateTaskState<DreamTaskState>(taskId, setAppState, task => ({
-    ...task,
-    status: 'completed',
-    endTime: Date.now(),
-    notified: true,
-    abortController: undefined,
-  }))
+  updateTaskState<DreamTaskState>(taskId, setAppState, task => {
+    shouldEmit = true
+    return {
+      ...task,
+      status: 'completed',
+      endTime: Date.now(),
+      notified: true,
+      abortController: undefined,
+    }
+  })
+  if (shouldEmit) {
+    emitTaskTerminatedSdk(taskId, 'completed', {
+      summary: 'Auto-dream completed',
+    })
+  }
 }
 
 export function failDreamTask(taskId: string, setAppState: SetAppState): void {
-  updateTaskState<DreamTaskState>(taskId, setAppState, task => ({
-    ...task,
-    status: 'failed',
-    endTime: Date.now(),
-    notified: true,
-    abortController: undefined,
-  }))
+  let shouldEmit = false
+  updateTaskState<DreamTaskState>(taskId, setAppState, task => {
+    shouldEmit = true
+    return {
+      ...task,
+      status: 'failed',
+      endTime: Date.now(),
+      notified: true,
+      abortController: undefined,
+    }
+  })
+  if (shouldEmit) {
+    emitTaskTerminatedSdk(taskId, 'failed', {
+      summary: 'Auto-dream failed',
+    })
+  }
 }
 
 export const DreamTask: Task = {
@@ -135,10 +154,12 @@ export const DreamTask: Task = {
 
   async kill(taskId, setAppState) {
     let priorMtime: number | undefined
+    let shouldEmit = false
     updateTaskState<DreamTaskState>(taskId, setAppState, task => {
       if (task.status !== 'running') return task
       task.abortController?.abort()
       priorMtime = task.priorMtime
+      shouldEmit = true
       return {
         ...task,
         status: 'killed',
@@ -147,6 +168,11 @@ export const DreamTask: Task = {
         abortController: undefined,
       }
     })
+    if (shouldEmit) {
+      emitTaskTerminatedSdk(taskId, 'stopped', {
+        summary: 'Auto-dream stopped',
+      })
+    }
     // Rewind the lock mtime so the next session can retry. Same path as the
     // fork-failure catch in autoDream.ts. If updateTaskState was a no-op
     // (already terminal), priorMtime stays undefined and we skip.

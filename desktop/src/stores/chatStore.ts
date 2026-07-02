@@ -671,7 +671,7 @@ function mergeBackgroundTaskMessages(
 }
 
 function isAgentBackgroundTask(task: Pick<BackgroundAgentTask, 'taskType' | 'summary'>): boolean {
-  if (task.taskType === 'local_agent' || task.taskType === 'remote_agent') {
+  if (task.taskType === 'local_agent' || task.taskType === 'remote_agent' || task.taskType === 'dream') {
     return true
   }
   return /^Agent (?:(?:"[^"]+" )?(completed|was stopped)|(?:"[^"]+" )?failed(?::|$))/.test(
