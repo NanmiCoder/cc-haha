@@ -43,6 +43,7 @@ import {
 } from '../../lib/composerAttachments'
 import { useComposerFileDrop } from './useComposerFileDrop'
 import { shouldSubmitOnEnter } from './sendShortcut'
+import { useVoiceInput } from '../../hooks/useVoiceInput'
 
 type GitInfo = SessionGitInfo
 
@@ -180,6 +181,23 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const invalidatePendingPastes = useCallback(() => {
     pasteGenerationRef.current += 1
   }, [])
+
+  const insertTextAtCaret = useCallback((text: string) => {
+    const el = textareaRef.current
+    const current = inputRef.current
+    const start = el?.selectionStart ?? current.length
+    const end = el?.selectionEnd ?? start
+    const next = insertComposerTokenAtRange(current, start, end, text)
+    setComposerInput(next.value)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(next.cursorPos, next.cursorPos)
+    })
+  }, [setComposerInput])
+
+  const { status: voiceStatus, error: voiceError } = useVoiceInput({
+    onTranscript: insertTextAtCaret,
+  })
 
   const isMemberSession = !!memberInfo
   const isActive = chatState !== 'idle'
@@ -1247,6 +1265,25 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               useCompactControls ? '-mx-3 -mb-3 gap-2 px-2.5 py-2' : '-mx-4 -mb-4 px-3 py-3'
             }`}>
             <div className="flex min-w-0 items-center gap-2">
+              {voiceStatus !== 'idle' && (
+                <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  {voiceStatus === 'error' ? (
+                    <span className="max-w-[200px] truncate text-[var(--color-error)]" title={voiceError ?? undefined}>
+                      {voiceError}
+                    </span>
+                  ) : voiceStatus === 'transcribing' ? (
+                    <>
+                      <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                      <span>{t('chat.voice.transcribing')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-error)] animate-pulse-dot" />
+                      <span>{t('chat.voice.recording')}</span>
+                    </>
+                  )}
+                </div>
+              )}
               {!isMemberSession && (
                 <>
                   <div ref={plusMenuRef} className="relative">

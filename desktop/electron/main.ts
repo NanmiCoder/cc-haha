@@ -380,6 +380,28 @@ async function createMainWindow() {
     writeWindowSmokeSnapshot(mainWindow, `did-fail-load:${errorCode}:${errorDescription}:${validatedURL}`)
   })
 
+  // The default application menu (which registers the Ctrl+Shift+I / F12
+  // DevTools accelerators) is replaced by a custom menu on macOS/Linux and
+  // nulled entirely on Windows, so those shortcuts stop working. Restore them
+  // in dev builds so the renderer can be debugged. F12 / Ctrl+Shift+I /
+  // Cmd+Opt+I toggle DevTools (opened detached so it doesn't squeeze the UI).
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('before-input-event', (_e, input) => {
+      if (input.type !== 'keyDown') return
+      const key = input.key.toLowerCase()
+      const isToggle =
+        key === 'f12' ||
+        (input.control && input.shift && key === 'i') ||
+        (process.platform === 'darwin' && input.meta && input.alt && key === 'i')
+      if (!isToggle) return
+      if (mainWindow?.webContents.isDevToolsOpened()) {
+        mainWindow?.webContents.closeDevTools()
+      } else {
+        mainWindow?.webContents.openDevTools({ mode: 'detach' })
+      }
+    })
+  }
+
   writeWindowSmokeSnapshot(mainWindow, 'after-create')
 
   await loadRendererEntry(mainWindow)

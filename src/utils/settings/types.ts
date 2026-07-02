@@ -671,6 +671,25 @@ export const SettingsSchema = lazySchema(() =>
         })
         .optional()
         .describe('Configures native and external WebSearch backends'),
+      voiceInput: z
+        .object({
+          endpoint: z
+            .string()
+            .optional()
+            .describe(
+              'Speech-to-text transcription endpoint URL (e.g. Zhipu GLM-ASR audio/transcriptions)',
+            ),
+          apiKey: z
+            .string()
+            .optional()
+            .describe('API key for the speech-to-text provider'),
+          model: z
+            .string()
+            .optional()
+            .describe('Speech-to-text model id, e.g. glm-asr-2512'),
+        })
+        .optional()
+        .describe('Voice input (speech-to-text) configuration'),
       sandbox: SandboxSettingsSchema().optional(),
       feedbackSurveyRate: z
         .number()
