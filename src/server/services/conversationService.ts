@@ -694,11 +694,21 @@ export class ConversationService {
     return true
   }
 
-  detachSdkConnection(sessionId: string): void {
+  detachSdkConnection(
+    sessionId: string,
+    socket?: { send(data: string): void },
+  ): void {
     const session = this.sessions.get(sessionId)
-    if (session) {
-      session.sdkSocket = null
+    if (!session) return
+    // Only clear sdkSocket when the closing socket is the one currently
+    // attached. During a restart transition the old CLI's WS close event
+    // can arrive AFTER the new CLI has already connected its own SDK WS —
+    // blindly nulling here would clobber the fresh connection and leave
+    // outbound messages stranded in pendingOutbound forever.
+    if (socket && session.sdkSocket && session.sdkSocket !== socket) {
+      return
     }
+    session.sdkSocket = null
   }
 
   handleSdkPayload(sessionId: string, rawPayload: string): void {
