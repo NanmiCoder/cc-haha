@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { normalizeClawHubList, normalizeClawHubScan } from '../services/skillMarket/clawhubAdapter.js'
+import { createSkillMarketService } from '../services/skillMarket/service.js'
 import { normalizeSkillHubDetail, normalizeSkillHubList } from '../services/skillMarket/skillhubAdapter.js'
 import {
   CLAWHUB_SCAN_RESPONSE,
@@ -384,5 +385,132 @@ describe('skill market source normalization', () => {
       trustState: 'blocked',
       trustSummary: 'Credential exfiltration detected.',
     })
+  })
+})
+
+describe('skill market service source selection', () => {
+  it('uses ClawHub only in auto mode when ClawHub succeeds and marks installed skills', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(['skill-vetter']),
+    })
+
+    const result = await service.listSkills({ source: 'auto', limit: 12, query: 'vetter', cursor: 'next-page' })
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
+    expect(fetchCalls[0]).toContain('sort=downloads')
+    expect(fetchCalls[0]).toContain('nonSuspiciousOnly=true')
+    expect(fetchCalls[0]).toContain('limit=12')
+    expect(fetchCalls[0]).toContain('query=vetter')
+    expect(fetchCalls[0]).toContain('cursor=next-page')
+    expect(result).toMatchObject({
+      source: 'clawhub',
+      sourceStatus: 'ok',
+      items: [
+        {
+          source: 'clawhub',
+          slug: 'skill-vetter',
+          installed: true,
+        },
+      ],
+    })
+  })
+
+  it('falls back to SkillHub in auto mode when ClawHub fails and marks installed skills', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        if (String(url).startsWith('https://clawhub.ai/')) {
+          return new Response('temporarily unavailable', { status: 503 })
+        }
+        return Response.json(SKILLHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: new Set(['skill-vetter']),
+    })
+
+    const result = await service.listSkills({ source: 'auto', limit: 10, query: 'vetter', cursor: '3' })
+
+    expect(fetchCalls).toHaveLength(2)
+    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
+    expect(fetchCalls[1]).toStartWith('https://api.skillhub.cn/api/skills')
+    expect(fetchCalls[1]).toContain('sortBy=downloads')
+    expect(fetchCalls[1]).toContain('order=desc')
+    expect(fetchCalls[1]).toContain('limit=10')
+    expect(fetchCalls[1]).toContain('query=vetter')
+    expect(fetchCalls[1]).toContain('cursor=3')
+    expect(result.source).toBe('skillhub')
+    expect(result.sourceStatus).toBe('fallback')
+    expect(result.message).toContain('ClawHub unavailable')
+    expect(result.items[0]).toMatchObject({
+      source: 'skillhub',
+      slug: 'skill-vetter',
+      installed: true,
+    })
+  })
+
+  it("does not fallback to SkillHub when source is 'clawhub'", async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return new Response('temporarily unavailable', { status: 503 })
+      },
+      installedSkillNames: async () => new Set(),
+    })
+
+    await expect(service.listSkills({ source: 'clawhub' })).rejects.toThrow('ClawHub request failed')
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
+  })
+
+  it("uses SkillHub only when source is 'skillhub'", async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(SKILLHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(),
+    })
+
+    const result = await service.listSkills({ source: 'skillhub', limit: 6, query: 'vetter', cursor: '2' })
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toStartWith('https://api.skillhub.cn/api/skills')
+    expect(fetchCalls[0]).toContain('sortBy=downloads')
+    expect(fetchCalls[0]).toContain('order=desc')
+    expect(fetchCalls[0]).toContain('limit=6')
+    expect(fetchCalls[0]).toContain('query=vetter')
+    expect(fetchCalls[0]).toContain('cursor=2')
+    expect(result.source).toBe('skillhub')
+    expect(result.items[0]).toMatchObject({
+      source: 'skillhub',
+      slug: 'skill-vetter',
+      installed: false,
+    })
+  })
+
+  it('rejects unsupported v1 sources instead of treating them as auto', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(),
+    })
+
+    await expect(
+      service.listSkills({ source: 'anthropic-github' as 'auto' }),
+    ).rejects.toThrow('Unsupported skill market source')
+
+    expect(fetchCalls).toHaveLength(0)
   })
 })
