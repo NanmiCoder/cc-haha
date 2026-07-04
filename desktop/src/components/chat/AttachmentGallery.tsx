@@ -19,9 +19,10 @@ type Props = {
   attachments: AttachmentPreview[]
   variant?: 'composer' | 'message'
   onRemove?: (id: string) => void
+  onAnnotate?: (attachment: AttachmentPreview) => void
 }
 
-export function AttachmentGallery({ attachments, variant = 'message', onRemove }: Props) {
+export function AttachmentGallery({ attachments, variant = 'message', onRemove, onAnnotate }: Props) {
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null)
 
   const images = useMemo(
@@ -114,6 +115,20 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                       </span>
                     </span>
                   </>
+                )}
+                {isComposer && onAnnotate && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onAnnotate(attachment)
+                    }}
+                    className="absolute -bottom-1 -left-1 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)] shadow-sm ring-1 ring-[var(--color-border)] transition-colors hover:text-[var(--color-brand)]"
+                    aria-label={`Annotate ${attachment.name}`}
+                    title="标注图片"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">draw</span>
+                  </button>
                 )}
                 {onRemove && attachment.id && (
                   <button

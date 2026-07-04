@@ -18,6 +18,7 @@ import { PermissionModeSelector } from '../controls/PermissionModeSelector'
 import { ModelSelector } from '../controls/ModelSelector'
 import type { AttachmentRef, DisplayAttachmentRef } from '../../types/chat'
 import { AttachmentGallery } from './AttachmentGallery'
+import { ImageAnnotationModal } from './ImageAnnotationModal'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
 import { ProjectContextChip } from '../shared/ProjectContextChip'
 import { RepositoryLaunchControls } from '../shared/RepositoryLaunchControls'
@@ -95,6 +96,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const isMobileComposer = useMobileViewport() && !isDesktopRuntime()
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [annotationTarget, setAnnotationTarget] = useState<Attachment | null>(null)
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const [skillPickerOpen, setSkillPickerOpen] = useState(false)
   const [pluginPickerOpen, setPluginPickerOpen] = useState(false)
@@ -981,6 +983,23 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const removeAttachment = (id: string) => {
     setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
     if (activeTabId) removeWorkspaceReference(activeTabId, id)
+    if (annotationTarget?.id === id) setAnnotationTarget(null)
+  }
+
+  const saveAnnotatedImage = (dataUrl: string) => {
+    if (!annotationTarget?.id) return
+    setComposerAttachments((prev) => prev.map((attachment) => {
+      if (attachment.id !== annotationTarget.id) return attachment
+      return {
+        ...attachment,
+        name: attachment.name.replace(/(\.[^.]+)?$/, '-annotated.png'),
+        path: undefined,
+        data: dataUrl,
+        previewUrl: dataUrl,
+        mimeType: 'image/png',
+      }
+    }))
+    setAnnotationTarget(null)
   }
 
   const startEditingQueuedMessage = (messageId: string, content: string) => {
@@ -1456,10 +1475,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
           {composerAttachments.length > 0 && (
             isHeroComposer ? (
-              <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} />
+              <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} onAnnotate={(attachment) => setAnnotationTarget(attachment as Attachment)} />
             ) : (
               <div className="px-3 pt-3">
-                <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} />
+                <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} onAnnotate={(attachment) => setAnnotationTarget(attachment as Attachment)} />
               </div>
             )
           )}
@@ -1646,6 +1665,13 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
         </div>
 
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+
+        <ImageAnnotationModal
+          open={!!annotationTarget}
+          image={annotationTarget ? { src: annotationTarget.previewUrl || annotationTarget.data || '', name: annotationTarget.name } : null}
+          onClose={() => setAnnotationTarget(null)}
+          onSave={saveAnnotatedImage}
+        />
 
         {!isMemberSession && !embedLaunchControlsInHero && (
           <div className={useCompactControls ? 'mt-2 flex min-w-0 px-1' : 'mt-3 px-1'}>
