@@ -76,6 +76,7 @@ import { semanticNumber } from '../../utils/semanticNumber.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 import { getDefaultFileReadingLimits } from './limits.js'
+import { getImageProcessor } from './imageProcessor.js'
 import {
   DESCRIPTION,
   FILE_READ_TOOL_NAME,
@@ -1269,14 +1270,7 @@ export async function readImageWithTokenBudget(
       logError(e)
       // Fallback: heavily compressed version from the SAME buffer
       try {
-        const sharpModule = await import('sharp')
-        const sharp =
-          (
-            sharpModule as {
-              default?: typeof sharpModule
-            } & typeof sharpModule
-          ).default || sharpModule
-
+        const sharp = await getImageProcessor()
         const fallbackBuffer = await sharp(imageBuffer)
           .resize(400, 400, {
             fit: 'inside',

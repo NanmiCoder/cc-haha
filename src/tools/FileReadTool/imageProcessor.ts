@@ -1,5 +1,6 @@
 import type { Buffer } from 'buffer'
 import { isInBundledMode } from '../../utils/bundledMode.js'
+import { errorMessage } from '../../utils/errors.js'
 
 export type SharpInstance = {
   metadata(): Promise<{ width: number; height: number; format: string }>
@@ -34,6 +35,11 @@ type SharpCreator = (options: SharpCreatorOptions) => SharpInstance
 let imageProcessorModule: { default: SharpFunction } | null = null
 let imageCreatorModule: { default: SharpCreator } | null = null
 
+export function resetImageProcessorForTests(): void {
+  imageProcessorModule = null
+  imageCreatorModule = null
+}
+
 export async function getImageProcessor(): Promise<SharpFunction> {
   if (imageProcessorModule) {
     return imageProcessorModule.default
@@ -47,16 +53,14 @@ export async function getImageProcessor(): Promise<SharpFunction> {
       const sharp = imageProcessor.sharp || imageProcessor.default
       imageProcessorModule = { default: sharp }
       return sharp
-    } catch {
-      // Fall back to sharp if native module is not available
-      // biome-ignore lint/suspicious/noConsole: intentional warning
-      console.warn(
-        'Native image processor not available, falling back to sharp',
+    } catch (error) {
+      throw new Error(
+        `Native image processor module not available in bundled mode: ${errorMessage(error)}`,
       )
     }
   }
 
-  // Use sharp for non-bundled builds or as fallback.
+  // Use sharp for non-bundled builds.
   // Single structural cast: our SharpFunction is a subset of sharp's actual type surface.
   const imported = (await import(
     'sharp'

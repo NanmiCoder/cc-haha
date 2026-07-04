@@ -12,6 +12,10 @@
  */
 
 import { createInterface } from 'readline'
+import { randomUUID } from 'crypto'
+import { mkdir, writeFile } from 'fs/promises'
+import path from 'path'
+import { pathToFileURL } from 'url'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -176,6 +180,43 @@ function pickError(data, fallback) {
   }
   if (typeof data?.message === 'string') return data.message
   return fallback
+}
+
+function extensionFromMime(mimeType) {
+  switch (mimeType) {
+    case 'image/jpeg':
+      return 'jpg'
+    case 'image/webp':
+      return 'webp'
+    case 'image/png':
+    default:
+      return 'png'
+  }
+}
+
+async function saveImageBuffer(buffer, outputDir, mimeType = 'image/png') {
+  if (!outputDir || typeof outputDir !== 'string' || outputDir.trim() === '') return null
+  const dir = path.resolve(outputDir)
+  await mkdir(dir, { recursive: true })
+  const filename = `image-${Date.now()}-${randomUUID()}.${extensionFromMime(mimeType)}`
+  const filePath = path.join(dir, filename)
+  await writeFile(filePath, buffer)
+  return filePath
+}
+
+async function saveBase64Image(base64, outputDir, mimeType = 'image/png') {
+  return saveImageBuffer(Buffer.from(base64, 'base64'), outputDir, mimeType)
+}
+
+async function saveUrlImage(imageUrl, outputDir) {
+  if (!outputDir || typeof outputDir !== 'string' || outputDir.trim() === '') return null
+  validateUrlSafety(imageUrl, 'image_url')
+  const res = await fetchWithTimeout(imageUrl, { method: 'GET' }, 30_000)
+  if (!res.ok) throw new Error(`下载生成图失败: HTTP ${res.status}`)
+  const mimeType = res.headers.get('content-type')?.split(';')[0] || 'image/png'
+  if (!mimeType.startsWith('image/')) throw new Error(`下载生成图失败: 响应不是图片 (${mimeType})`)
+  const buffer = Buffer.from(await res.arrayBuffer())
+  return saveImageBuffer(buffer, outputDir, mimeType)
 }
 
 // ─── Compatibility fallback (from spriteflow) ─────────────────────────────────
@@ -477,6 +518,10 @@ const TOOLS = [
           description: 'Request transparent background (not supported by all providers). Default: false',
           default: false,
         },
+        output_dir: {
+          type: 'string',
+          description: 'Optional local directory to save generated images. When omitted, images are returned without saving to disk.',
+        },
       },
       required: ['prompt'],
     },
@@ -510,6 +555,10 @@ const TOOLS = [
           description: 'Request transparent background. Default: false',
           default: false,
         },
+        output_dir: {
+          type: 'string',
+          description: 'Optional local directory to save edited images. When omitted, images are returned without saving to disk.',
+        },
       },
       required: ['prompt', 'image_url'],
     },
@@ -539,7 +588,7 @@ const TOOLS = [
 
 // ─── MCP JSON-RPC server ──────────────────────────────────────────────────────
 
-function formatResult(result) {
+async function formatResult(result, outputDir) {
   if (result.type === 'error') {
     return {
       content: [{ type: 'text', text: result.error }],
@@ -548,16 +597,28 @@ function formatResult(result) {
   }
 
   const parts = []
+  const meta = []
+  let savedPath = null
 
   if (result.type === 'base64') {
-    parts.push({
-      type: 'image',
-      data: result.data,
-      mimeType: 'image/png',
-    })
+    savedPath = await saveBase64Image(result.data, outputDir, 'image/png')
+    if (savedPath) {
+      parts.push({
+        type: 'text',
+        text: `![generated-image](${pathToFileURL(savedPath).href})`,
+      })
+    } else {
+      parts.push({
+        type: 'image',
+        data: result.data,
+        mimeType: 'image/png',
+      })
+    }
   }
 
   if (result.type === 'url') {
+    savedPath = await saveUrlImage(result.data, outputDir)
+    const displayUrl = savedPath ? pathToFileURL(savedPath).href : result.data
     // MCP content schema only allows text/image/audio/resource/resource_link.
     // We return the URL in a standard text block. The CLI MCP client layer
     // (transformResultContent) detects image URLs and converts them to
@@ -567,15 +628,15 @@ function formatResult(result) {
     // embedded in the _meta field for inline rendering.
     parts.push({
       type: 'text',
-      text: `![generated-image](${result.data})`,
+      text: `![generated-image](${displayUrl})`,
     })
   }
 
-  const meta = []
   if (result.provider) meta.push(`Provider: ${result.provider}`)
   if (result.model) meta.push(`Model: ${result.model}`)
   if (result.warnings?.length) meta.push(...result.warnings)
   if (result.type === 'url') meta.push(`URL: ${result.data}`)
+  if (savedPath) meta.push(`Saved to: ${savedPath}`)
   if (meta.length) parts.push({ type: 'text', text: meta.join('\n') })
 
   // Attach image_url annotation for Desktop inline rendering (non-standard
@@ -585,7 +646,7 @@ function formatResult(result) {
     return {
       content: parts,
       isError: false,
-      _meta: { imageUrls: [result.data] },
+      _meta: { imageUrls: [savedPath ? pathToFileURL(savedPath).href : result.data] },
     }
   }
 
@@ -627,7 +688,7 @@ async function handleToolCall(name, args) {
         args.transparent,
         providers,
       )
-      return formatResult(result)
+      return await formatResult(result, args.output_dir)
     }
 
     case 'edit_image': {
@@ -652,7 +713,7 @@ async function handleToolCall(name, args) {
         args.transparent,
         editProviders,
       )
-      return formatResult(result)
+      return await formatResult(result, args.output_dir)
     }
 
     case 'list_providers': {

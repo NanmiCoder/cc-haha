@@ -436,7 +436,10 @@ export function initTaskOutputAsSymlink(
 
         try {
           await symlink(targetPath, outputPath)
-        } catch {
+        } catch (error) {
+          if (getErrnoCode(error) !== 'EEXIST') {
+            throw error
+          }
           await unlink(outputPath)
           await symlink(targetPath, outputPath)
         }
