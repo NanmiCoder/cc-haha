@@ -54,7 +54,8 @@ describe('initTaskOutputAsSymlink', () => {
         getProjectTempDir: () => '/tmp/cc-haha-task-output-test',
       }))
 
-      const { initTaskOutputAsSymlink, _clearOutputsForTest, _resetTaskOutputDirForTest } = await import('./src/utils/task/diskOutput.js')
+      const modulePath = './src/utils/task/' + 'diskOutput.js'
+      const { initTaskOutputAsSymlink, _clearOutputsForTest, _resetTaskOutputDirForTest } = await import(modulePath)
       _resetTaskOutputDirForTest()
       await initTaskOutputAsSymlink('task-id', '/tmp/transcript.jsonl')
       await _clearOutputsForTest()

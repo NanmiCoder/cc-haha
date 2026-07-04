@@ -44,7 +44,8 @@ describe('getImageProcessor', () => {
         }
       })
 
-      const { getImageProcessor, resetImageProcessorForTests } = await import('./src/tools/FileReadTool/imageProcessor.js')
+      const modulePath = './src/tools/FileReadTool/' + 'imageProcessor.js'
+      const { getImageProcessor, resetImageProcessorForTests } = await import(modulePath)
       resetImageProcessorForTests()
 
       try {
