@@ -363,6 +363,18 @@ function mergeLcovRecordsByFile(records: LcovRecord[]): LcovRecord[] {
       }
       merged.set(record.file, existing)
     }
+    if (record.lineHits.size === 0) {
+      existing.linesTotal = Math.max(existing.linesTotal, record.linesTotal)
+      existing.linesCovered = Math.max(existing.linesCovered, record.linesCovered)
+    }
+    if (record.functionHits.size === 0) {
+      existing.functionsTotal = Math.max(existing.functionsTotal, record.functionsTotal)
+      existing.functionsCovered = Math.max(existing.functionsCovered, record.functionsCovered)
+    }
+    if (record.branchHits.size === 0) {
+      existing.branchesTotal = Math.max(existing.branchesTotal, record.branchesTotal)
+      existing.branchesCovered = Math.max(existing.branchesCovered, record.branchesCovered)
+    }
     for (const [line, hits] of record.lineHits) {
       existing.lineHits.set(line, (existing.lineHits.get(line) ?? 0) + hits)
     }
@@ -375,12 +387,18 @@ function mergeLcovRecordsByFile(records: LcovRecord[]): LcovRecord[] {
   }
 
   for (const record of merged.values()) {
-    record.linesTotal = record.lineHits.size
-    record.linesCovered = [...record.lineHits.values()].filter(hits => hits > 0).length
-    record.functionsTotal = record.functionHits.size
-    record.functionsCovered = [...record.functionHits.values()].filter(hits => hits > 0).length
-    record.branchesTotal = record.branchHits.size
-    record.branchesCovered = [...record.branchHits.values()].filter(hits => hits > 0).length
+    if (record.lineHits.size > 0) {
+      record.linesTotal = record.lineHits.size
+      record.linesCovered = [...record.lineHits.values()].filter(hits => hits > 0).length
+    }
+    if (record.functionHits.size > 0) {
+      record.functionsTotal = record.functionHits.size
+      record.functionsCovered = [...record.functionHits.values()].filter(hits => hits > 0).length
+    }
+    if (record.branchHits.size > 0) {
+      record.branchesTotal = record.branchHits.size
+      record.branchesCovered = [...record.branchHits.values()].filter(hits => hits > 0).length
+    }
   }
 
   return [...merged.values()]
@@ -904,10 +922,18 @@ export async function runCoverageGate(options: {
     }
   }
 
-  const desktop = await runSuite(
-    'desktop',
-    'Desktop React',
-    [
+  const desktopSuiteDir = join(outputDir, 'desktop')
+  const desktopLogPath = join(desktopSuiteDir, 'coverage.log')
+  mkdirSync(desktopSuiteDir, { recursive: true })
+  writeFileSync(desktopLogPath, '')
+  const desktopCommands: string[][] = []
+  const desktopLcovPaths: string[] = []
+  let desktopExitCode = 0
+  let desktopDurationMs = 0
+
+  async function runDesktopCoverage(label: string, args: string[]) {
+    const suiteDir = join(desktopSuiteDir, label)
+    const command = [
       'bun',
       'run',
       'test',
@@ -916,17 +942,41 @@ export async function runCoverageGate(options: {
       '--coverage',
       '--coverage.reporter=json-summary',
       '--coverage.reporter=lcov',
-      `--coverage.reportsDirectory=${join(outputDir, 'desktop')}`,
+      `--coverage.reportsDirectory=${suiteDir}`,
       '--testTimeout=20000',
-    ],
-    join(rootDir, 'desktop'),
-    join(outputDir, 'desktop'),
-    () => parseVitestSummary(join(outputDir, 'desktop', 'coverage-summary.json')),
-  )
+      ...args,
+    ]
+    const logPath = join(suiteDir, 'coverage.log')
+    const result = await runCommand(command, join(rootDir, 'desktop'), logPath)
+    appendFileSync(desktopLogPath, `\n[coverage] ${label}\n${readFileSync(logPath, 'utf8')}`)
+    desktopCommands.push(command)
+    desktopDurationMs += result.durationMs
+    if (result.exitCode !== 0) desktopExitCode = result.exitCode
+    desktopLcovPaths.push(join(suiteDir, 'lcov.info'))
+  }
+
+  await runDesktopCoverage('empty-session', ['src/pages/EmptySession.test.tsx'])
+  await runDesktopCoverage('batch', ['--exclude', 'src/pages/EmptySession.test.tsx'])
+
+  const desktopLcov = desktopExitCode === 0
+    ? prefixRelativeLcovSourcePaths(mergeLcovFiles(desktopLcovPaths), 'desktop')
+    : ''
+  if (desktopExitCode === 0) {
+    writeFileSync(join(desktopSuiteDir, 'lcov.info'), desktopLcov)
+  }
+  const desktopSummary = desktopExitCode === 0 ? parseLcov(desktopLcov, { rootDir, scope: DESKTOP_SCOPE }) : undefined
+  const desktop: SuiteCoverage = {
+    id: 'desktop',
+    title: 'Desktop React',
+    status: desktopExitCode === 0 ? 'passed' : 'failed',
+    command: desktopCommands.flatMap((command, index) => index === 0 ? command : ['&&', ...command]),
+    durationMs: desktopDurationMs,
+    logPath: desktopLogPath,
+    ...(desktopSummary ? { summary: desktopSummary } : {}),
+    ...(desktopExitCode !== 0 ? { error: `coverage command exited with ${desktopExitCode}` } : {}),
+  }
   suites.push(desktop)
-  const desktopLcovPath = join(outputDir, 'desktop', 'lcov.info')
-  if (desktop.status === 'passed' && existsSync(desktopLcovPath)) {
-    const desktopLcov = prefixRelativeLcovSourcePaths(readFileSync(desktopLcovPath, 'utf8'), 'desktop')
+  if (desktop.status === 'passed') {
     for (const [file, coverage] of lcovLineCoverage(desktopLcov, 'desktop', DESKTOP_SCOPE, rootDir)) {
       coverageByFile.set(file, coverage)
     }
