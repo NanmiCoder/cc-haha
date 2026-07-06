@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     io::{Error as IoError, ErrorKind, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpStream},
     path::PathBuf,
     process::{Command as StdCommand, Stdio},
     str,
@@ -231,6 +231,7 @@ struct ServerState(Mutex<ServerStatus>);
 
 struct ServerRuntime {
     url: String,
+    access_token: String,
     child: CommandChild,
 }
 
@@ -304,6 +305,23 @@ fn get_server_url(state: State<'_, ServerState>) -> Result<String, String> {
 
     if let Some(runtime) = guard.runtime.as_ref() {
         return Ok(runtime.url.clone());
+    }
+
+    Err(guard
+        .startup_error
+        .clone()
+        .unwrap_or_else(|| "desktop server did not start".to_string()))
+}
+
+#[tauri::command]
+fn get_server_access_token(state: State<'_, ServerState>) -> Result<String, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "desktop server state is unavailable".to_string())?;
+
+    if let Some(runtime) = guard.runtime.as_ref() {
+        return Ok(runtime.access_token.clone());
     }
 
     Err(guard
@@ -1040,17 +1058,6 @@ fn default_shell() -> String {
     }
 }
 
-fn reserve_local_port() -> Result<u16, String> {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|err| format!("bind local port: {err}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|err| format!("read local port: {err}"))?
-        .port();
-    drop(listener);
-    Ok(port)
-}
-
 fn wait_for_server(url_host: &str, port: u16) -> Result<(), String> {
     let addr: SocketAddr = format!("{url_host}:{port}")
         .parse()
@@ -1116,10 +1123,77 @@ fn resolve_app_root(_app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn env_string(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_server_bind_host() -> String {
+    env_string("CC_HAHA_DESKTOP_SERVER_HOST")
+        .or_else(|| env_string("SERVER_HOST"))
+        .unwrap_or_else(|| "0.0.0.0".to_string())
+}
+
+fn resolve_server_local_host(bind_host: &str) -> String {
+    if bind_host == "0.0.0.0" || bind_host == "::" {
+        "127.0.0.1".to_string()
+    } else {
+        bind_host.to_string()
+    }
+}
+
+fn resolve_server_port() -> Result<u16, String> {
+    if let Some(raw) = env_string("CC_HAHA_DESKTOP_SERVER_PORT").or_else(|| env_string("SERVER_PORT")) {
+        return raw
+            .parse::<u16>()
+            .map_err(|err| format!("parse desktop server port {raw:?}: {err}"));
+    }
+
+    Ok(3456)
+}
+
+fn resolve_server_access_token() -> String {
+    env_string("CC_HAHA_SERVER_ACCESS_TOKEN")
+        .or_else(|| env_string("SERVER_ACCESS_TOKEN"))
+        .unwrap_or_else(|| "cc-haha-123456".to_string())
+}
+
+fn resolve_shared_config_dir() -> Result<PathBuf, String> {
+    if let Some(raw) = env_string("CC_HAHA_SHARED_CONFIG_DIR") {
+        return Ok(PathBuf::from(raw));
+    }
+
+    let exe = std::env::current_exe().map_err(|err| format!("resolve current exe path: {err}"))?;
+    let mut current = exe.parent();
+    while let Some(dir) = current {
+        if dir.file_name().and_then(|name| name.to_str()) == Some("desktop") {
+            if let Some(repo_root) = dir.parent() {
+                return Ok(repo_root.join(".runtime").join("android-claude-config"));
+            }
+        }
+        current = dir.parent();
+    }
+
+    if let Some(raw) = env_string("CLAUDE_CONFIG_DIR") {
+        return Ok(PathBuf::from(raw));
+    }
+
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "USERPROFILE/HOME is not set".to_string())?;
+    Ok(PathBuf::from(home).join(".claude"))
+}
+
 fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
-    let host = "127.0.0.1";
-    let port = reserve_local_port()?;
-    let url = format!("http://{host}:{port}");
+    let bind_host = resolve_server_bind_host();
+    let local_host = resolve_server_local_host(&bind_host);
+    let port = resolve_server_port()?;
+    let url = format!("http://{local_host}:{port}");
+    let access_token = resolve_server_access_token();
+    let config_dir = resolve_shared_config_dir()?;
+    let config_dir_arg = config_dir.to_string_lossy().to_string();
     let app_root = resolve_app_root(app)?;
     let app_root_arg = app_root.to_string_lossy().to_string();
 
@@ -1131,12 +1205,15 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     for (key, value) in terminal_environment(&default_shell()) {
         sidecar = sidecar.env(key, value);
     }
+    sidecar = sidecar
+        .env("SERVER_ACCESS_TOKEN", &access_token)
+        .env("CLAUDE_CONFIG_DIR", &config_dir_arg);
     let sidecar = sidecar.args([
         "server",
         "--app-root",
         &app_root_arg,
         "--host",
-        host,
+        &bind_host,
         "--port",
         &port.to_string(),
     ]);
@@ -1176,12 +1253,12 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
         }
     });
 
-    if let Err(err) = wait_for_server(host, port) {
+    if let Err(err) = wait_for_server(&local_host, port) {
         let _ = child.kill();
         return Err(format_server_startup_error(&err, &startup_logs));
     }
 
-    Ok(ServerRuntime { url, child })
+    Ok(ServerRuntime { url, access_token, child })
 }
 
 fn stop_server_sidecar(app: &AppHandle) {
@@ -1207,8 +1284,8 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
     let app_root = resolve_app_root(app)?;
     let app_root_arg = app_root.to_string_lossy().to_string();
 
-    // adapter 内部的 WsBridge 默认连 ws://127.0.0.1:3456，但桌面端的 server
-    // 用的是 reserve_local_port() 拿到的动态端口。这里把实际端口通过
+    // adapter 内部的 WsBridge 默认连 ws://127.0.0.1:3456。这里把桌面端
+    // 实际启动的共享 server URL 通过
     // ADAPTER_SERVER_URL env var 传过去 —— adapters/common/config.ts 的
     // loadConfig() 会读它。
     //
@@ -1544,6 +1621,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_server_url,
+            get_server_access_token,
             restart_adapters_sidecar,
             prepare_for_update_install,
             cancel_update_install,
@@ -1643,7 +1721,7 @@ pub fn run() {
 
             // server 起来之后再起 adapter sidecar —— start_adapters_sidecar
             // 内部会从 ServerState 读 server URL 注入 ADAPTER_SERVER_URL env，
-            // 让 adapter 连上动态端口。
+            // 让 adapter 连上桌面端启动的共享 server。
             spawn_and_track_adapters_sidecar(&app.handle());
 
             Ok(())

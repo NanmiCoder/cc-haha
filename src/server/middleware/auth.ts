@@ -1,9 +1,27 @@
 /**
  * Authentication middleware
  *
- * 本地桌面应用场景下，使用 Anthropic API Key 做简单鉴权。
- * 验证请求头中的 Authorization: Bearer <key> 与 .env 中的 ANTHROPIC_API_KEY 是否匹配。
+ * 支持两种访问模式：
+ * 1. 本地桌面应用：绑定 localhost，无需认证
+ * 2. 公网/局域网访问：需要 SERVER_ACCESS_TOKEN 或 ANTHROPIC_API_KEY 认证
  */
+
+// 获取有效的访问 token
+function getValidAccessToken(): string | null {
+  // 优先使用专用的访问 token
+  const serverToken = process.env.SERVER_ACCESS_TOKEN
+  if (serverToken && serverToken.trim().length > 0) {
+    return serverToken
+  }
+  
+  // 降级使用 Anthropic API Key
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (apiKey && apiKey.trim().length > 0) {
+    return apiKey
+  }
+  
+  return null
+}
 
 export function validateAuth(req: Request): { valid: boolean; error?: string } {
   const authHeader = req.headers.get('Authorization')
@@ -18,13 +36,14 @@ export function validateAuth(req: Request): { valid: boolean; error?: string } {
     return { valid: false, error: 'Invalid Authorization format. Use: Bearer <token>' }
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return { valid: false, error: 'Server ANTHROPIC_API_KEY not configured' }
+  const validToken = getValidAccessToken()
+  
+  if (!validToken) {
+    return { valid: false, error: 'Server not configured for authenticated access. Set SERVER_ACCESS_TOKEN or ANTHROPIC_API_KEY in environment.' }
   }
 
-  if (token !== apiKey) {
-    return { valid: false, error: 'Invalid API key' }
+  if (token !== validToken) {
+    return { valid: false, error: 'Invalid access token' }
   }
 
   return { valid: true }
@@ -39,4 +58,12 @@ export function requireAuth(req: Request): Response | null {
     return Response.json({ error: 'Unauthorized', message: error }, { status: 401 })
   }
   return null
+}
+
+/**
+ * Check if we need to skip auth for health check endpoint
+ */
+export function shouldSkipAuth(url: URL): boolean {
+  // Health check should always be accessible for monitoring
+  return url.pathname === '/health'
 }

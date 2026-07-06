@@ -1,4 +1,4 @@
-import { getDefaultBaseUrl, setBaseUrl } from '../api/client'
+import { getDefaultBaseUrl, setAccessToken, setBaseUrl } from '../api/client'
 
 export function isTauriRuntime() {
   if (typeof window === 'undefined') return false
@@ -22,7 +22,9 @@ export async function initializeDesktopServerUrl() {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const serverUrl = await invoke<string>('get_server_url')
+    const token = await invoke<string>('get_server_access_token').catch(() => '')
     setBaseUrl(serverUrl)
+    setAccessToken(token)
     await waitForHealth(serverUrl)
     return serverUrl
   } catch (error) {

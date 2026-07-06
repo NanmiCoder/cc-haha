@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+  [switch]$NoBundle,
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$TauriArgs
 )
@@ -14,6 +15,7 @@ $repoRoot = (Resolve-Path (Join-Path $desktopDir '..')).Path
 $targetTriple = 'x86_64-pc-windows-msvc'
 $tauriTargetDir = Join-Path $desktopDir 'src-tauri\target'
 $canonicalOutputDir = Join-Path $desktopDir 'build-artifacts\windows-x64'
+$debugOutputDir = Join-Path $desktopDir 'build-artifacts\windows-x64-debug'
 $activeOutputDir = $canonicalOutputDir
 $appVersion = (Get-Content -Path (Join-Path $desktopDir 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
 
@@ -149,7 +151,6 @@ Import-VsDevEnvironment
 
 Assert-Command cargo
 Assert-Command rustc
-Assert-Command bunx
 
 if ($env:SKIP_INSTALL -ne '1') {
   Write-Step 'Installing root dependencies...'
@@ -194,10 +195,14 @@ $tauriBuildArgs = @(
   'build',
   '--target',
   $targetTriple,
-  '--bundles',
-  'msi',
   '--ci'
 )
+
+if ($NoBundle) {
+  $tauriBuildArgs += '--no-bundle'
+} else {
+  $tauriBuildArgs += @('--bundles', 'msi')
+}
 
 $tempConfigPath = $null
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
@@ -224,7 +229,7 @@ Write-Step "Building Windows desktop app for $targetTriple"
 Push-Location $desktopDir
 try {
   $env:TAURI_ENV_TARGET_TRIPLE = $targetTriple
-  & bunx @tauriBuildArgs
+  & bun x @tauriBuildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "[build-windows-x64] tauri build failed (exit $LASTEXITCODE)"
   }
@@ -233,6 +238,32 @@ try {
   if ($tempConfigPath -and (Test-Path $tempConfigPath)) {
     Remove-Item -LiteralPath $tempConfigPath -Force
   }
+}
+
+if ($NoBundle) {
+  $activeOutputDir = Resolve-OutputDirectory -PreferredPath $debugOutputDir
+  $exeRoots = @(
+    (Join-Path $tauriTargetDir "$targetTriple\release"),
+    (Join-Path $tauriTargetDir 'release')
+  )
+  $exeArtifact = Get-LatestArtifact -SearchRoots $exeRoots -Patterns @('claude-code-desktop.exe')
+  if (-not $exeArtifact) {
+    throw '[build-windows-x64] Build succeeded but main desktop executable was not found.'
+  }
+  $exeDestination = Join-Path $activeOutputDir $exeArtifact.Name
+  Copy-Item -LiteralPath $exeArtifact.FullName -Destination $exeDestination -Force
+  Write-Step "Copied desktop executable to $exeDestination"
+
+  $sidecarSource = Join-Path $desktopDir "src-tauri\binaries\claude-sidecar-$targetTriple.exe"
+  if (-not (Test-Path $sidecarSource)) {
+    throw "[build-windows-x64] Sidecar binary not found: $sidecarSource"
+  }
+  $sidecarDestination = Join-Path $activeOutputDir 'claude-sidecar.exe'
+  Copy-Item -LiteralPath $sidecarSource -Destination $sidecarDestination -Force
+  Write-Step "Copied sidecar executable to $sidecarDestination"
+
+  Write-Step "Windows no-bundle build artifacts are ready in $activeOutputDir"
+  exit 0
 }
 
 $activeOutputDir = Resolve-OutputDirectory -PreferredPath $canonicalOutputDir

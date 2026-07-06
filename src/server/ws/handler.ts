@@ -98,8 +98,67 @@ export type WebSocketData = {
   serverHost: string
 }
 
-// Active WebSocket sessions
-const activeSessions = new Map<string, ServerWebSocket<WebSocketData>>()
+// Active WebSocket clients grouped by session. Desktop and Android may watch
+// the same session at the same time, so a session can have multiple clients.
+const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
+
+function getSessionClients(sessionId: string): Set<ServerWebSocket<WebSocketData>> {
+  let clients = activeSessions.get(sessionId)
+  if (!clients) {
+    clients = new Set()
+    activeSessions.set(sessionId, clients)
+  }
+  return clients
+}
+
+function addSessionClient(sessionId: string, ws: ServerWebSocket<WebSocketData>) {
+  getSessionClients(sessionId).add(ws)
+}
+
+function removeSessionClient(sessionId: string, ws: ServerWebSocket<WebSocketData>): boolean {
+  const clients = activeSessions.get(sessionId)
+  if (!clients) return false
+  const removed = clients.delete(ws)
+  if (clients.size === 0) {
+    activeSessions.delete(sessionId)
+  }
+  return removed
+}
+
+function hasSessionClients(sessionId: string): boolean {
+  return (activeSessions.get(sessionId)?.size ?? 0) > 0
+}
+
+function broadcastToSession(sessionId: string, message: ServerMessage): number {
+  const payload = JSON.stringify(message)
+  const clients = activeSessions.get(sessionId)
+  if (!clients) return 0
+
+  let sent = 0
+  for (const client of clients) {
+    client.send(payload)
+    sent++
+  }
+  return sent
+}
+
+function broadcastToSessionExcept(
+  sessionId: string,
+  except: ServerWebSocket<WebSocketData>,
+  message: ServerMessage,
+): number {
+  const payload = JSON.stringify(message)
+  const clients = activeSessions.get(sessionId)
+  if (!clients) return 0
+
+  let sent = 0
+  for (const client of clients) {
+    if (client === except) continue
+    client.send(payload)
+    sent++
+  }
+  return sent
+}
 
 export const handleWebSocket = {
   open(ws: ServerWebSocket<WebSocketData>) {
@@ -126,11 +185,11 @@ export const handleWebSocket = {
       sessionCleanupTimers.delete(sessionId)
     }
 
-    activeSessions.set(sessionId, ws)
+    addSessionClient(sessionId, ws)
     if (prewarmedSessions.has(sessionId)) {
       bindPrewarmMetadataCapture(sessionId)
     } else {
-      rebindSessionOutput(sessionId, ws)
+      rebindSessionOutput(sessionId)
     }
 
     const msg: ServerMessage = { type: 'connected', sessionId }
@@ -209,19 +268,22 @@ export const handleWebSocket = {
     }
 
     console.log(`[WS] Client disconnected from session: ${sessionId} (${code}: ${reason})`)
-    if (activeSessions.get(sessionId) !== ws) {
+    if (!removeSessionClient(sessionId, ws)) {
       console.log(`[WS] Ignoring stale client disconnect for session: ${sessionId}`)
       return
     }
+    if (hasSessionClients(sessionId)) {
+      console.log(`[WS] Session ${sessionId} still has active clients; keeping CLI subprocess attached`)
+      return
+    }
     computerUseApprovalService.cancelSession(sessionId)
-    activeSessions.delete(sessionId)
     conversationService.clearOutputCallbacks(sessionId)
 
     // Schedule delayed cleanup: if the client doesn't reconnect within 30 seconds,
     // stop the CLI subprocess to avoid leaking resources.
     const cleanupTimer = setTimeout(() => {
       sessionCleanupTimers.delete(sessionId)
-      if (!activeSessions.has(sessionId)) {
+      if (!hasSessionClients(sessionId)) {
         console.log(`[WS] Session ${sessionId} not reconnected after 30s, stopping CLI subprocess`)
         conversationService.stopSession(sessionId)
         cleanupSessionRuntimeState(sessionId)
@@ -265,6 +327,12 @@ async function handleUserMessage(
     return
   }
 
+  broadcastToSessionExcept(sessionId, ws, {
+    type: 'user_message_received',
+    content: message.content,
+    ...(message.attachments ? { attachments: message.attachments } : {}),
+  })
+
   // Send thinking status
   sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
 
@@ -291,7 +359,7 @@ async function handleUserMessage(
   if (titleState.userMessageCount === 1) {
     titleState.firstUserMessage = message.content
   }
-  triggerTitleGeneration(ws, sessionId)
+  triggerTitleGeneration(sessionId)
 
   // 启动 CLI 子进程（如果还没有）
   try {
@@ -326,7 +394,7 @@ async function handleUserMessage(
   // any pre-turn SDK chatter as fresh chat history.
   let userMessageSent = false
 
-  rebindSessionOutput(sessionId, ws, {
+  rebindSessionOutput(sessionId, {
     shouldForward: (cliMsg) => userMessageSent || (cliMsg.type === 'result' && cliMsg.is_error),
   })
 
@@ -633,7 +701,7 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
 // Title generation
 // ============================================================================
 
-function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: string): void {
+function triggerTitleGeneration(sessionId: string): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle) return
 
@@ -661,7 +729,7 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
             state.hasCustomTitle = true
             return
           }
-          sendMessage(ws, { type: 'session_title_updated', sessionId, title: placeholder })
+          broadcastToSession(sessionId, { type: 'session_title_updated', sessionId, title: placeholder })
         }
       }
 
@@ -673,7 +741,7 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
           state.hasCustomTitle = true
           return
         }
-        sendMessage(ws, { type: 'session_title_updated', sessionId, title: aiTitle })
+        broadcastToSession(sessionId, { type: 'session_title_updated', sessionId, title: aiTitle })
       }
     } catch (err) {
       console.error(`[Title] Failed to generate title for ${sessionId}:`, err)
@@ -1314,7 +1382,6 @@ function getCompactBoundaryMessage(cliMsg: any): string {
 
 function rebindSessionOutput(
   sessionId: string,
-  ws: ServerWebSocket<WebSocketData>,
   options?: {
     shouldForward?: (cliMsg: any) => boolean
   },
@@ -1329,11 +1396,11 @@ function rebindSessionOutput(
 
     const serverMsgs = translateCliMessage(cliMsg, sessionId)
     for (const msg of serverMsgs) {
-      sendMessage(ws, msg)
+      broadcastToSession(sessionId, msg)
     }
 
     if (cliMsg.type === 'result') {
-      triggerTitleGeneration(ws, sessionId)
+      triggerTitleGeneration(sessionId)
     }
   })
 }
@@ -1549,10 +1616,7 @@ async function waitForRuntimeTransitionBeforeUserTurn(
  * Send a message to a specific session's WebSocket (for use by services)
  */
 export function sendToSession(sessionId: string, message: ServerMessage): boolean {
-  const ws = activeSessions.get(sessionId)
-  if (!ws) return false
-  ws.send(JSON.stringify(message))
-  return true
+  return broadcastToSession(sessionId, message) > 0
 }
 
 export function closeSessionConnection(sessionId: string, reason = 'session closed'): boolean {
@@ -1565,11 +1629,13 @@ export function closeSessionConnection(sessionId: string, reason = 'session clos
   conversationService.clearOutputCallbacks(sessionId)
   cleanupSessionRuntimeState(sessionId)
 
-  const ws = activeSessions.get(sessionId)
-  if (!ws) return false
+  const clients = activeSessions.get(sessionId)
+  if (!clients || clients.size === 0) return false
 
   activeSessions.delete(sessionId)
-  ws.close(1000, reason)
+  for (const ws of clients) {
+    ws.close(1000, reason)
+  }
   return true
 }
 

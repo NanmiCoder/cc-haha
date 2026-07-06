@@ -605,6 +605,46 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       case 'connected':
         break
 
+      case 'user_message_received': {
+        const uiAttachments = msg.attachments && msg.attachments.length > 0
+          ? msg.attachments.map((attachment) => ({
+              type: attachment.type,
+              name: attachment.name || attachment.path || attachment.mimeType || attachment.type,
+              path: attachment.path,
+              data: attachment.data,
+              mimeType: attachment.mimeType,
+              lineStart: attachment.lineStart,
+              lineEnd: attachment.lineEnd,
+              note: attachment.note,
+              quote: attachment.quote,
+            }))
+          : undefined
+
+        update((session) => {
+          const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
+          const messages = pendingText.trim()
+            ? appendAssistantTextMessage(session.messages, pendingText, Date.now())
+            : session.messages
+
+          return {
+            messages: [
+              ...messages,
+              {
+                id: nextId(),
+                type: 'user_text',
+                content: msg.content,
+                ...(uiAttachments ? { attachments: uiAttachments } : {}),
+                timestamp: Date.now(),
+              },
+            ],
+            streamingText: '',
+            chatState: 'thinking',
+            activeThinkingId: null,
+          }
+        })
+        break
+      }
+
       case 'status':
         update((session) => {
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`

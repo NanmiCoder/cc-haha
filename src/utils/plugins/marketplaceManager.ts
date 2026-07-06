@@ -1718,11 +1718,14 @@ async function loadAndCacheMarketplace(
         `Marketplace name '${marketplace.name}' resolves to a path outside the cache directory`,
       )
     }
-    // Don't rename if it's a local file or directory, or already has the right name
-    if (
-      temporaryCachePath !== finalCachePath &&
-      !isLocalMarketplaceSource(source)
-    ) {
+    // Don't rename if it's a local file or directory, or already has the right name.
+    // On Windows (case-insensitive fs), compare paths case-insensitively to avoid
+    // fs.rm + fs.rename failures when only the case differs.
+    const pathsDiffer =
+      process.platform === 'win32'
+        ? temporaryCachePath.toLowerCase() !== finalCachePath.toLowerCase()
+        : temporaryCachePath !== finalCachePath
+    if (pathsDiffer && !isLocalMarketplaceSource(source)) {
       try {
         // Remove the destination if it already exists, then rename
         try {
@@ -1744,6 +1747,11 @@ async function loadAndCacheMarketplace(
           `Failed to finalize marketplace cache. Please manually delete the directory at ${finalCachePath} if it exists and try again.\n\nTechnical details: ${errorMsg}`,
         )
       }
+    } else if (!pathsDiffer && process.platform === 'win32') {
+      // On case-insensitive Windows, temp and final paths differ only by case.
+      // No rename needed — the directory already IS the final location.
+      temporaryCachePath = finalCachePath
+      cleanupNeeded = false
     }
 
     return { marketplace, cachePath: temporaryCachePath }

@@ -8,6 +8,7 @@ const ENV_BASE_URL =
 const DEFAULT_BASE_URL = ENV_BASE_URL || 'http://127.0.0.1:3456'
 
 let baseUrl = DEFAULT_BASE_URL
+let accessToken = ''
 const DIAGNOSTICS_PATH = '/api/diagnostics/events'
 
 function getErrorMessage(status: number, body: unknown) {
@@ -30,6 +31,14 @@ export function getBaseUrl() {
   return baseUrl
 }
 
+export function setAccessToken(token: string) {
+  accessToken = token.trim()
+}
+
+export function getAccessToken() {
+  return accessToken
+}
+
 export function getDefaultBaseUrl() {
   return DEFAULT_BASE_URL
 }
@@ -48,6 +57,9 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   const url = `${baseUrl}${path}`
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+  }
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
   }
 
   const controller = new AbortController()
@@ -113,7 +125,10 @@ export function rawRecordDiagnosticEvent(event: {
 }) {
   return fetch(`${baseUrl}${DIAGNOSTICS_PATH}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
     body: JSON.stringify(event),
   }).catch(() => undefined)
 }

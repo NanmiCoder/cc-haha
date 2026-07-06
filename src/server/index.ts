@@ -8,7 +8,7 @@
 import { handleApiRequest } from './router.js'
 import { handleWebSocket, type WebSocketData } from './ws/handler.js'
 import { corsHeaders } from './middleware/cors.js'
-import { requireAuth } from './middleware/auth.js'
+import { requireAuth, shouldSkipAuth } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
@@ -90,13 +90,34 @@ export function startServer(port = PORT, host = HOST) {
       if (url.pathname.startsWith('/ws/')) {
         // Enforce authentication when required
         if (authRequired) {
-          const authError = requireAuth(req)
-          if (authError) {
-            const headers = new Headers(authError.headers)
-            for (const [key, value] of Object.entries(corsHeaders(origin))) {
-              headers.set(key, value)
+          // 检查认证头或查询参数（WebSocket 无法设置自定义 headers）
+          const tokenFromQuery = url.searchParams.get('token')
+          
+          if (tokenFromQuery) {
+            // 如果有查询参数的 token，模拟一个带认证头的请求进行验证
+            const reqWithQueryAuth = new Request(req.url, {
+              ...req,
+              headers: new Headers(req.headers)
+            })
+            reqWithQueryAuth.headers.set('Authorization', `Bearer ${tokenFromQuery}`)
+            const authError = requireAuth(reqWithQueryAuth)
+            if (authError) {
+              const headers = new Headers(authError.headers)
+              for (const [key, value] of Object.entries(corsHeaders(origin))) {
+                headers.set(key, value)
+              }
+              return new Response(authError.body, { status: authError.status, headers })
             }
-            return new Response(authError.body, { status: authError.status, headers })
+          } else {
+            // 没有查询参数 token，检查标准认证头
+            const authError = requireAuth(req)
+            if (authError) {
+              const headers = new Headers(authError.headers)
+              for (const [key, value] of Object.entries(corsHeaders(origin))) {
+                headers.set(key, value)
+              }
+              return new Response(authError.body, { status: authError.status, headers })
+            }
           }
         }
 
@@ -150,7 +171,7 @@ export function startServer(port = PORT, host = HOST) {
       // REST API
       if (url.pathname.startsWith('/api/')) {
         // Enforce authentication when required
-        if (authRequired) {
+        if (authRequired && !shouldSkipAuth(url)) {
           const authError = requireAuth(req)
           if (authError) {
             const headers = new Headers(authError.headers)
@@ -251,7 +272,25 @@ export function startServer(port = PORT, host = HOST) {
     )
   })
 
-  console.log(`[Server] Claude Code API server running at http://${host}:${port}`)
+  // 显示启动信息
+  console.log('═' .repeat(60))
+  console.log('[Server] Claude Code API Server')
+  console.log('═' .repeat(60))
+  console.log(`[Server] Listening at: http://${host}:${port}`)
+  console.log(`[Server] Authentication: ${authRequired ? 'ENABLED' : 'DISABLED'}`)
+  
+  if (authRequired) {
+    const hasServerToken = process.env.SERVER_ACCESS_TOKEN && process.env.SERVER_ACCESS_TOKEN.trim().length > 0
+    console.log(`[Server] Token type: ${hasServerToken ? 'SERVER_ACCESS_TOKEN' : 'ANTHROPIC_API_KEY'}`)
+  }
+  
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    console.log('[Server] Public/Network access enabled')
+    console.log('[Server] Make sure to configure your firewall!')
+  }
+  
+  console.log('═' .repeat(60))
+  
   return server
 }
 

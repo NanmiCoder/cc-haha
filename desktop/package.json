@@ -9,6 +9,7 @@
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
     "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
+    "build:windows-x64:debug": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1 -NoBundle",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",

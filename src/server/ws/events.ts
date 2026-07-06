@@ -42,6 +42,7 @@ export type AttachmentRef = {
 
 export type ServerMessage =
   | { type: 'connected'; sessionId: string }
+  | { type: 'user_message_received'; content: string; attachments?: AttachmentRef[] }
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; parentToolUseId?: string }
   | { type: 'content_delta'; text?: string; toolInput?: string }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; input: unknown; parentToolUseId?: string }

@@ -267,10 +267,15 @@ http://127.0.0.1:2024
 | [IM 接入](docs/im/) | 通过 Telegram / 飞书 / 微信 / 钉钉远程对话、切换项目和审批权限 |
 | [Computer Use](docs/features/computer-use.md) | 桌面控制功能（截屏、鼠标、键盘）— [架构解析](docs/features/computer-use-architecture.md) |
 | [桌面端](docs/desktop/) | Tauri 2 + React 图形化客户端 — [快速上手](docs/desktop/01-quick-start.md) \| [架构设计](docs/desktop/02-architecture.md) \| [安装指南](docs/desktop/04-installation.md) |
+| [Android 客户端](android/) | Expo + React Native 移动端，支持跨端同步 |
 | [全局使用](docs/guide/global-usage.md) | 在任意目录启动 claude-haha |
 | [常见问题](docs/guide/faq.md) | 常见错误排查 |
 | [源码修复记录](docs/reference/fixes.md) | 相对于原始泄露源码的修复内容 |
 | [项目结构](docs/reference/project-structure.md) | 代码目录结构说明 |
+| [公网部署指南](PUBLIC_NETWORK_DEPLOYMENT.md) | 局域网/公网访问配置，云服务器部署 |
+| [移动客户端定制指南](MOBILE_CUSTOMIZATION_GUIDE.md) | Android 客户端开发指南 |
+| [Windows 构建指南](WINDOWS_BUILD_GUIDE.md) | Windows 桌面端打包与发布 |
+| [开发总结](DEVELOPMENT_SUMMARY.md) | 本次开发工作内容总结 |
 
 ---
 
