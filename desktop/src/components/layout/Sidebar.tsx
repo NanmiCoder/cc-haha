@@ -12,7 +12,6 @@ import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { publicAssetPath } from '../../lib/publicAsset'
-import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 
 const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
@@ -69,7 +68,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
-  const chatSessions = useChatStore((s) => s.sessions)
+  const chatRunningSessionIds = useChatStore((s) => s.runningSessionIds)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -136,17 +135,12 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
     [sessions],
   )
   const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>()
+    const ids = new Set<string>(chatRunningSessionIds)
     for (const tab of tabs) {
       if (tab.type === 'session' && tab.status === 'running') ids.add(tab.sessionId)
     }
-    for (const [sessionId, sessionState] of Object.entries(chatSessions)) {
-      if (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks)) {
-        ids.add(sessionId)
-      }
-    }
     return ids
-  }, [chatSessions, tabs])
+  }, [chatRunningSessionIds, tabs])
   const pendingBatchDeleteSessions = useMemo(
     () => (pendingBatchDeleteSessionIds ?? [])
       .map((sessionId) => sessionsById.get(sessionId))
