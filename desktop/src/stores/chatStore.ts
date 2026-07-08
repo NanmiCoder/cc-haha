@@ -168,6 +168,7 @@ function createDefaultSessionState(): PerSessionState {
 
 type ChatStore = {
   sessions: Record<string, PerSessionState>
+  runningSessionIds: Set<string>
 
   getSession: (sessionId: string) => PerSessionState
   connectToSession: (sessionId: string) => void
@@ -845,6 +846,24 @@ function updateSessionIn(
   return { ...sessions, [sessionId]: { ...session, ...updater(session) } }
 }
 
+/**
+ * Recompute runningSessionIds from sessions. Returns the previous Set
+ * reference if the content hasn't changed, so that Zustand's Object.is
+ * comparison skips unnecessary re-renders in Sidebar/TabBar.
+ */
+function recomputeRunning(
+  sessions: Record<string, PerSessionState>,
+  prev: Set<string>,
+): Set<string> {
+  const next = new Set<string>()
+  for (const [id, st] of Object.entries(sessions)) {
+    if (st.chatState !== 'idle' || hasRunningBackgroundTasks(st.backgroundAgentTasks))
+      next.add(id)
+  }
+  if (next.size === prev.size && [...next].every(id => prev.has(id))) return prev
+  return next
+}
+
 type SlashCommandState = PerSessionState['slashCommands'][number]
 
 function normalizeSlashCommand(command: unknown): SlashCommandState | null {
@@ -939,6 +958,7 @@ function shouldPrewarmSession(sessionId: string): boolean {
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   sessions: {},
+  runningSessionIds: new Set<string>(),
 
   getSession: (sessionId) => get().sessions[sessionId] ?? createDefaultSessionState(),
 
@@ -2337,6 +2357,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }))
+
+// Keep runningSessionIds stable: recompute on every sessions change, but
+// return the previous Set reference when content is unchanged. This ensures
+// Sidebar/TabBar — which subscribe to runningSessionIds instead of sessions —
+// only re-render when a session actually enters/exits a running state, not on
+// every streaming token flush.
+useChatStore.subscribe((state) => {
+  const next = recomputeRunning(state.sessions, state.runningSessionIds)
+  if (next !== state.runningSessionIds) {
+    useChatStore.setState({ runningSessionIds: next })
+  }
+})
 
 function updateOptimisticSessionTitle(sessionId: string, content: string): void {
   const title = deriveSessionTitle(content)
