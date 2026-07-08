@@ -1,5 +1,4 @@
 import { forwardRef, useMemo, useRef, useState, useEffect, useCallback } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
@@ -17,7 +16,6 @@ import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { useTerminalPanelStore } from '../../stores/terminalPanelStore'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
-import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
 import { Folder, FolderOpen, SquareTerminal } from 'lucide-react'
@@ -56,17 +54,7 @@ export function TabBar() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const closeTab = useTabStore((s) => s.closeTab)
-  const sessionTabIds = useMemo(
-    () => tabs.filter((tab) => isSessionTab(tab)).map((tab) => tab.sessionId),
-    [tabs],
-  )
-  const activeChatSessionIds = useChatStore(useShallow((s) =>
-    sessionTabIds.filter((sessionId) => {
-      const sessionState = s.sessions[sessionId]
-      return !!sessionState &&
-        (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))
-    })
-  ))
+  const chatRunningSessionIds = useChatStore((s) => s.runningSessionIds)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId) ?? null
   const isActiveSessionTab = isSessionTab(activeTab) || isSessionTabId(activeTabId)
@@ -105,15 +93,12 @@ export function TabBar() {
   const tabRefs = useRef(new Map<string, HTMLDivElement | null>())
   const t = useTranslation()
   const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>()
+    const ids = new Set<string>(chatRunningSessionIds)
     for (const tab of tabs) {
       if (isSessionTab(tab) && tab.status === 'running') ids.add(tab.sessionId)
     }
-    for (const sessionId of activeChatSessionIds) {
-      ids.add(sessionId)
-    }
     return ids
-  }, [activeChatSessionIds, tabs])
+  }, [chatRunningSessionIds, tabs])
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current
@@ -172,13 +157,12 @@ export function TabBar() {
   }, [closeTab])
 
   const getRunningSessionIds = useCallback((targetTabs: Tab[]) => {
-    const chatSessions = useChatStore.getState().sessions
+    const { runningSessionIds, sessions } = useChatStore.getState()
     return targetTabs
       .filter((tab) => isSessionTab(tab))
       .filter((tab) => {
-        const sessionState = chatSessions[tab.sessionId]
-        return !!sessionState &&
-          (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))
+        const sessionState = sessions[tab.sessionId]
+        return !!sessionState && runningSessionIds.has(tab.sessionId)
       })
       .map((tab) => tab.sessionId)
   }, [])
