@@ -772,9 +772,9 @@ export function ActivitySettings() {
                   style={{ animationDelay: `${index * 45}ms` }}
                 >
                   <div className="flex min-h-[68px] flex-col items-center justify-center gap-1.5">
-                    <div className={`activity-summary-value max-w-full truncate font-semibold leading-none tracking-tight text-[var(--color-text-primary)] tabular-nums ${
+                    <div className={`activity-summary-value max-w-full min-w-0 font-semibold leading-none tracking-tight text-[var(--color-text-primary)] tabular-nums ${
                       isPrimary ? 'text-[23px]' : 'text-[22px]'
-                    }`}>
+                    }`} style={{ overflow: 'visible', whiteSpace: 'normal', textOverflow: 'clip' }}>
                       {metric.value}
                     </div>
                     <div className="min-w-0 truncate text-[13px] font-medium leading-tight text-[var(--color-text-secondary)]">
