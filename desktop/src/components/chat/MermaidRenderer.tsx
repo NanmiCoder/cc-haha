@@ -40,7 +40,7 @@ type MermaidThemeColors = {
 
 const FLOWCHART_START = /^\s*(?:graph|flowchart)\b/i
 const FLOWCHART_NODE_START = /^([A-Za-z][\w-]*)\[/
-const UNQUOTED_FLOWCHART_LABEL_UNSAFE = /<br\s*\/?>|[{}[\]*]/i
+const UNQUOTED_FLOWCHART_LABEL_UNSAFE = /<br\s*\/?>|[{}[\]*\/]/i
 
 function isFlowchartDiagram(code: string) {
   const firstMeaningfulLine = code
