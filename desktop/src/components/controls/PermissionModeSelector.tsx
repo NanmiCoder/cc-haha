@@ -36,6 +36,10 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
   const setSessionPermissionMode = useChatStore((s) => s.setSessionPermissionMode)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const sessions = useSessionStore((s) => s.sessions)
+  const chatState = useChatStore((s) =>
+    activeTabId ? s.sessions[activeTabId]?.chatState ?? 'idle' : 'idle',
+  )
+  const isTurnActive = chatState !== 'idle'
   const [open, setOpen] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -179,15 +183,16 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => { if (!isTurnActive) setOpen(!open) }}
+        disabled={isTurnActive}
         aria-label={MODE_LABELS[currentMode]}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        title={compact ? MODE_LABELS[currentMode] : undefined}
-        className={`flex items-center bg-[var(--color-surface-container-low)] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] ${
-          compactButtonClass
-        }`}
+        title={isTurnActive ? t('permMode.disabledDuringTurn') : (compact ? MODE_LABELS[currentMode] : undefined)}
+        className={`flex items-center bg-[var(--color-surface-container-low)] font-medium text-[var(--color-text-secondary)] transition-colors ${
+          isTurnActive ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[var(--color-surface-hover)]'
+        } ${compactButtonClass}`}
       >
         <span className="material-symbols-outlined text-[14px]">{MODE_ICONS[currentMode]}</span>
         {!compact && (

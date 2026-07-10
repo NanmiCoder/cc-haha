@@ -38,6 +38,7 @@ vi.mock('../../i18n', () => ({
     'permMode.permShell': 'Run shell commands',
     'permMode.permPackages': 'Install packages',
     'permMode.enableBypassBtn': 'Enable bypass',
+    'permMode.disabledDuringTurn': 'Cannot switch permissions while session is active',
     'common.cancel': 'Cancel',
     'tabs.close': 'Close',
   }[key] ?? key),
@@ -158,5 +159,47 @@ describe('PermissionModeSelector', () => {
     expect(screen.getByRole('dialog', { name: 'Enable bypass mode' })).toBeInTheDocument()
     expect(screen.getByText('C:\\Users\\LinTan\\MyScript\\test5')).toBeInTheDocument()
     expect(screen.queryByText('C:\\Users\\LinTan')).not.toBeInTheDocument()
+  })
+
+  it('disables the trigger button when the session turn is active', () => {
+    const setSessionPermissionMode = vi.fn()
+    useChatStore.setState({
+      setSessionPermissionMode,
+      sessions: {
+        'current-tab': { chatState: 'thinking' },
+      },
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      activeSessionId: 'current-tab',
+      sessions: [
+        {
+          id: 'current-tab',
+          title: 'Current',
+          createdAt: '2026-05-24T00:00:00.000Z',
+          modifiedAt: '2026-05-24T00:00:00.000Z',
+          messageCount: 1,
+          projectPath: '/repo',
+          projectRoot: '/repo',
+          workDir: '/repo',
+          workDirExists: true,
+          permissionMode: 'default',
+        },
+      ],
+    })
+    useTabStore.setState({
+      activeTabId: 'current-tab',
+      tabs: [{ sessionId: 'current-tab', title: 'Current', type: 'session', status: 'idle' }],
+    })
+
+    render(<PermissionModeSelector />)
+
+    const trigger = screen.getByRole('button', { name: 'Ask permissions' })
+    expect(trigger).toBeDisabled()
+    expect(trigger).toHaveAttribute('title', 'Cannot switch permissions while session is active')
+
+    fireEvent.click(trigger)
+    // Menu should not open when disabled
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(setSessionPermissionMode).not.toHaveBeenCalled()
   })
 })
