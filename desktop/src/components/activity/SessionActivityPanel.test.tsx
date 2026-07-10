@@ -24,6 +24,8 @@ vi.mock('../../i18n', () => ({
       'session.activity.openTeamMember': 'Open team member {name}',
       'session.activity.openRun': 'Open run {name}',
       'session.activity.openBackgroundTask': 'Open background task {name}',
+      'session.activity.stopBackgroundTask': 'Stop background task {name}',
+      'session.activity.stoppingBackgroundTask': 'Stopping background task {name}',
       'session.activity.details.title': 'Details',
       'session.activity.details.type': 'Type',
       'session.activity.details.description': 'Description',
@@ -255,6 +257,92 @@ describe('SessionActivityPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
 
     expect(onClearFinishedBackgroundTasks).toHaveBeenCalledWith(['bash-task-1:completed:1000'])
+  })
+
+  it('stops running background tasks and disables repeat requests while stopping', () => {
+    const onStopBackgroundTask = vi.fn()
+    const runningModel = model({
+      sections: {
+        ...model().sections,
+        tasks: { id: 'tasks', title: 'Tasks', emptyLabel: 'No tasks', rows: [] },
+        subagents: { id: 'subagents', title: 'SubAgents', emptyLabel: 'No SubAgents', rows: [] },
+        backgroundTasks: {
+          id: 'backgroundTasks',
+          title: 'Background Tasks',
+          emptyLabel: 'No background tasks',
+          rows: [{
+            id: 'bash-task-1',
+            section: 'backgroundTasks',
+            label: 'Sleep for 300 seconds',
+            status: 'running',
+            taskId: 'bash-task-1',
+            taskType: 'local_bash',
+            openable: true,
+          }],
+        },
+      },
+    })
+
+    const { rerender } = render(
+      <SessionActivityPanel
+        model={runningModel}
+        open
+        onClose={vi.fn()}
+        onOpenSubagent={vi.fn()}
+        onStopBackgroundTask={onStopBackgroundTask}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop background task Sleep for 300 seconds' }))
+    expect(onStopBackgroundTask).toHaveBeenCalledWith('bash-task-1')
+
+    rerender(
+      <SessionActivityPanel
+        model={runningModel}
+        open
+        onClose={vi.fn()}
+        onOpenSubagent={vi.fn()}
+        onStopBackgroundTask={onStopBackgroundTask}
+        stoppingBackgroundTaskIds={{ 'bash-task-1': true }}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Stopping background task Sleep for 300 seconds' })).toBeDisabled()
+  })
+
+  it('offers the same stop control for a running background SubAgent', () => {
+    const onStopBackgroundTask = vi.fn()
+    render(
+      <SessionActivityPanel
+        model={model({
+          sections: {
+            ...model().sections,
+            tasks: { id: 'tasks', title: 'Tasks', emptyLabel: 'No tasks', rows: [] },
+            subagents: {
+              id: 'subagents',
+              title: 'SubAgents',
+              emptyLabel: 'No SubAgents',
+              rows: [{
+                id: 'agent-task-1',
+                section: 'subagents',
+                label: 'Background reviewer',
+                status: 'running',
+                taskId: 'agent-task-1',
+                toolUseId: 'agent-tool-1',
+                openable: true,
+              }],
+            },
+          },
+        })}
+        open
+        onClose={vi.fn()}
+        onOpenSubagent={vi.fn()}
+        onStopBackgroundTask={onStopBackgroundTask}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop background task Background reviewer' }))
+    expect(onStopBackgroundTask).toHaveBeenCalledWith('agent-task-1')
   })
 
   it('keeps SubAgent rows to name and status instead of result previews', () => {

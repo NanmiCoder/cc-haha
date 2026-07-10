@@ -268,6 +268,60 @@ describe('WebSocket handler session isolation', () => {
     })
   })
 
+  it('forwards background task stop requests to the CLI control channel', async () => {
+    const sessionId = `stop-background-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const requestControl = spyOn(conversationService, 'requestControl').mockResolvedValue({})
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'stop_background_task',
+      taskId: 'bash-task-1',
+    }))
+    await Promise.resolve()
+
+    expect(requestControl).toHaveBeenCalledWith(sessionId, {
+      subtype: 'stop_task',
+      task_id: 'bash-task-1',
+    })
+  })
+
+  it('reports a task-scoped failure when the CLI rejects a background stop', async () => {
+    const sessionId = `stop-background-failed-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(conversationService, 'requestControl').mockRejectedValue(new Error('Task is not running'))
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'stop_background_task',
+      taskId: 'bash-task-1',
+    }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'background_task_stop_failed',
+      taskId: 'bash-task-1',
+      message: 'Task is not running',
+    })
+  })
+
+  it('rejects malformed background task ids without throwing from the async handler', async () => {
+    const ws = makeClientSocket(`stop-background-invalid-${crypto.randomUUID()}`)
+    const requestControl = spyOn(conversationService, 'requestControl').mockResolvedValue({})
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'stop_background_task',
+      taskId: 42,
+    }))
+    await Promise.resolve()
+
+    expect(requestControl).not.toHaveBeenCalled()
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'background_task_stop_failed',
+      taskId: '',
+      message: 'Background task id is required',
+    })
+  })
+
   it('broadcasts tool and Computer Use permission resolutions to every client', () => {
     const sessionId = `permission-resolution-${crypto.randomUUID()}`
     const first = makeClientSocket(sessionId)

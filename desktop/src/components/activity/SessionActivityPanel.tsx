@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronRight, Circle, FileText, LoaderCircle, Terminal, Users, X } from 'lucide-react'
+import { Check, ChevronRight, Circle, FileText, LoaderCircle, Square, Terminal, Users, X } from 'lucide-react'
 import { AgentMascot } from './AgentMascot'
 import { getVisibleActivitySections, type ActivityRow, type ActivitySectionId, type SessionActivityModel } from './sessionActivityModel'
 import { useTranslation } from '../../i18n'
@@ -245,12 +245,48 @@ function ActivityStatusIndicator({
   )
 }
 
+function BackgroundTaskStopButton({
+  row,
+  stopping,
+  onStop,
+}: {
+  row: ActivityRow
+  stopping: boolean
+  onStop: (taskId: string) => void
+}) {
+  const t = useTranslation()
+  if (row.status !== 'running' || !row.taskId) return null
+
+  const label = stopping
+    ? t('session.activity.stoppingBackgroundTask', { name: row.label })
+    : t('session.activity.stopBackgroundTask', { name: row.label })
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={stopping}
+      onClick={() => onStop(row.taskId!)}
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[var(--color-error)]/10 hover:text-[var(--color-error)] active:translate-y-px disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+    >
+      {stopping ? (
+        <LoaderCircle size={14} strokeWidth={2.2} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
+      ) : (
+        <Square size={12} strokeWidth={2.4} aria-hidden="true" />
+      )}
+    </button>
+  )
+}
+
 function ActivityRowView({
   row,
   sessionId,
   onOpenSubagent,
   onOpenMember,
   onOpenBackgroundTask,
+  onStopBackgroundTask,
+  stoppingBackgroundTask,
   selected,
 }: {
   row: ActivityRow
@@ -258,6 +294,8 @@ function ActivityRowView({
   onOpenSubagent: (payload: OpenSubagentPayload) => void
   onOpenMember?: (member: TeamMember) => void
   onOpenBackgroundTask?: (row: ActivityRow) => void
+  onStopBackgroundTask?: (taskId: string) => void
+  stoppingBackgroundTask?: boolean
   selected?: boolean
 }) {
   const t = useTranslation()
@@ -312,7 +350,14 @@ function ActivityRowView({
     </>
   )
   const interactiveRowClassName =
-    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    'flex min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  const stopButton = onStopBackgroundTask ? (
+    <BackgroundTaskStopButton
+      row={row}
+      stopping={Boolean(stoppingBackgroundTask)}
+      onStop={onStopBackgroundTask}
+    />
+  ) : null
 
   if (row.section === 'team' && row.member && onOpenMember) {
     return (
@@ -320,7 +365,7 @@ function ActivityRowView({
         type="button"
         aria-label={t('session.activity.openTeamMember', { name: row.label })}
         onClick={() => onOpenMember(row.member!)}
-        className={interactiveRowClassName}
+        className={`${interactiveRowClassName} w-full`}
       >
         {content}
       </button>
@@ -329,30 +374,54 @@ function ActivityRowView({
 
   if (row.section === 'subagents' && row.openable && row.toolUseId) {
     const statusLabel = getActivityStatusLabel(row.status, t)
-
-    return (
+    const openButton = (
       <button
         type="button"
         aria-label={`${t('session.activity.openRun', { name: row.label })} · ${statusLabel}`}
         onClick={() => onOpenSubagent({ sessionId, toolUseId: row.toolUseId!, title: row.label })}
-        className={interactiveRowClassName}
+        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'}`}
       >
         {content}
       </button>
     )
+
+    return stopButton ? (
+      <div className="flex w-full items-center gap-1">
+        {openButton}
+        {stopButton}
+      </div>
+    ) : openButton
   }
 
   if (row.section === 'backgroundTasks' && onOpenBackgroundTask && hasBackgroundTaskDetails(row)) {
-    return (
+    const openButton = (
       <button
         type="button"
         aria-label={t('session.activity.openBackgroundTask', { name: row.label })}
         aria-expanded={selected}
         onClick={() => onOpenBackgroundTask(row)}
-        className={`${interactiveRowClassName} ${selected ? 'bg-[var(--color-surface-container)]' : ''}`}
+        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'bg-[var(--color-surface-container)]' : ''}`}
       >
         {content}
       </button>
+    )
+
+    return stopButton ? (
+      <div className="flex w-full items-center gap-1">
+        {openButton}
+        {stopButton}
+      </div>
+    ) : openButton
+  }
+
+  if (stopButton) {
+    return (
+      <div className="flex w-full items-center gap-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2.5">
+          {content}
+        </div>
+        {stopButton}
+      </div>
     )
   }
 
@@ -420,6 +489,8 @@ export function SessionActivityPanel({
   onOpenSubagent,
   onClearFinishedBackgroundTasks,
   onOpenMember,
+  onStopBackgroundTask,
+  stoppingBackgroundTaskIds,
   placement = 'overlay',
 }: {
   model: SessionActivityModel
@@ -428,6 +499,8 @@ export function SessionActivityPanel({
   onOpenSubagent: (payload: OpenSubagentPayload) => void
   onClearFinishedBackgroundTasks?: (taskKeys: string[]) => void
   onOpenMember?: (member: TeamMember) => void
+  onStopBackgroundTask?: (taskId: string) => void
+  stoppingBackgroundTaskIds?: Record<string, boolean>
   placement?: SessionActivityPanelPlacement
 }) {
   const t = useTranslation()
@@ -544,6 +617,8 @@ export function SessionActivityPanel({
                       sessionId={model.sessionId}
                       onOpenSubagent={onOpenSubagent}
                       onOpenMember={onOpenMember}
+                      onStopBackgroundTask={onStopBackgroundTask}
+                      stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
                       onOpenBackgroundTask={(backgroundRow) => {
                         setSelectedBackgroundTaskId((current) => (
                           current === backgroundRow.id ? null : backgroundRow.id

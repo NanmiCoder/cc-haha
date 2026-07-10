@@ -297,6 +297,10 @@ export const handleWebSocket = {
           handleStopGeneration(ws)
           break
 
+        case 'stop_background_task':
+          void handleStopBackgroundTask(ws, message)
+          break
+
         case 'ping':
           ws.send(JSON.stringify({ type: 'pong' } satisfies ServerMessage))
           break
@@ -1005,6 +1009,36 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
   }
 
   sendMessage(ws, { type: 'status', state: 'idle' })
+}
+
+async function handleStopBackgroundTask(
+  ws: ServerWebSocket<WebSocketData>,
+  message: Extract<ClientMessage, { type: 'stop_background_task' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  const taskId = typeof message.taskId === 'string' ? message.taskId.trim() : ''
+
+  if (!taskId) {
+    sendMessage(ws, {
+      type: 'background_task_stop_failed',
+      taskId,
+      message: 'Background task id is required',
+    })
+    return
+  }
+
+  try {
+    await conversationService.requestControl(sessionId, {
+      subtype: 'stop_task',
+      task_id: taskId,
+    })
+  } catch (error) {
+    sendMessage(ws, {
+      type: 'background_task_stop_failed',
+      taskId,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 // ============================================================================
@@ -1963,13 +1997,17 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         }]
       }
       if (subtype === 'task_started') {
+        const notification: ServerMessage = {
+          type: 'system_notification',
+          subtype: 'task_started',
+          message: cliMsg.message || cliMsg.description || 'Task started',
+          data: cliMsg,
+        }
+        // AutoDream is detached maintenance work. Keep it visible in Activity,
+        // but do not revive the already-completed foreground turn.
+        if (cliMsg.task_type === 'dream') return [notification]
         return [
-          {
-            type: 'system_notification',
-            subtype: 'task_started',
-            message: cliMsg.message || cliMsg.description || 'Task started',
-            data: cliMsg,
-          },
+          notification,
           {
             type: 'status',
             state: 'tool_executing',

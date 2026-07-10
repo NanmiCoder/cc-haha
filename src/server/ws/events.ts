@@ -29,6 +29,7 @@ export type ClientMessage =
   | { type: 'set_permission_mode'; mode: string }
   | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string }
   | { type: 'stop_generation' }
+  | { type: 'stop_background_task'; taskId: string }
   | { type: 'ping' }
 
 export type AttachmentRef = {
@@ -97,6 +98,7 @@ export type ServerMessage =
   // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
+  | { type: 'background_task_stop_failed'; taskId: string; message: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
   | { type: 'team_update'; teamName: string; members: TeamMemberStatus[] }

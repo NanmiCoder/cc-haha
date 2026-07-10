@@ -26,6 +26,7 @@ export type ClientMessage =
   | { type: 'set_permission_mode'; mode: PermissionMode }
   | ({ type: 'set_runtime_config' } & RuntimeSelection)
   | { type: 'stop_generation' }
+  | { type: 'stop_background_task'; taskId: string }
   | { type: 'ping' }
 
 export type AttachmentRef = {
@@ -125,6 +126,7 @@ export type ServerMessage =
   // 流式请求失败后的恢复状态：可能安全重试流，也可能降级为非流式请求。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
+  | { type: 'background_task_stop_failed'; taskId: string; message: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
   | { type: 'team_update'; teamName: string; members: TeamMemberStatus[] }

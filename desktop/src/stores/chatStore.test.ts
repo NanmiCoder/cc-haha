@@ -3344,6 +3344,114 @@ describe('chatStore history mapping', () => {
     vi.useRealTimers()
   })
 
+  it('requests a background task stop and waits for the terminal event', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          backgroundAgentTasks: {
+            'bash-task-1': {
+              taskId: 'bash-task-1',
+              taskType: 'local_bash',
+              status: 'running',
+              startedAt: 1,
+              updatedAt: 1,
+            },
+          },
+        }),
+      },
+    })
+
+    useChatStore.getState().stopBackgroundTask(TEST_SESSION_ID, 'bash-task-1')
+
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, {
+      type: 'stop_background_task',
+      taskId: 'bash-task-1',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.stoppingBackgroundTaskIds).toEqual({
+      'bash-task-1': true,
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.backgroundAgentTasks?.['bash-task-1']?.status).toBe('running')
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: {
+        task_id: 'bash-task-1',
+        status: 'stopped',
+        summary: 'Sleep stopped',
+      },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.backgroundAgentTasks?.['bash-task-1']?.status).toBe('stopped')
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.stoppingBackgroundTaskIds).toEqual({})
+  })
+
+  it('clears the pending stop marker when the server rejects the request', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          backgroundAgentTasks: {
+            'bash-task-1': {
+              taskId: 'bash-task-1',
+              taskType: 'local_bash',
+              status: 'running',
+              startedAt: 1,
+              updatedAt: 1,
+            },
+          },
+          stoppingBackgroundTaskIds: { 'bash-task-1': true },
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'background_task_stop_failed',
+      taskId: 'bash-task-1',
+      message: 'Task is not running',
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.stoppingBackgroundTaskIds).toEqual({})
+    expect(session?.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'STOP_BACKGROUND_TASK_FAILED',
+      message: 'Task is not running',
+    })
+  })
+
+  it('does not surface a stop error when the task already finished naturally', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          messages: [{ id: 'done', type: 'assistant_text', content: 'Done', timestamp: 1 }],
+          backgroundAgentTasks: {
+            'bash-task-1': {
+              taskId: 'bash-task-1',
+              taskType: 'local_bash',
+              status: 'completed',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+          stoppingBackgroundTaskIds: { 'bash-task-1': true },
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'background_task_stop_failed',
+      taskId: 'bash-task-1',
+      message: 'Task is not running',
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.stoppingBackgroundTaskIds).toEqual({})
+    expect(session?.messages).toHaveLength(1)
+  })
+
   it('clears local desktop chat state when the server confirms /clear', () => {
     vi.useFakeTimers()
 

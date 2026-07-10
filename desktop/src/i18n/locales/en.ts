@@ -1699,6 +1699,8 @@ export const en = {
   'session.activity.openTeamMember': 'Open team member {name}',
   'session.activity.openRun': 'Open run {name}',
   'session.activity.openBackgroundTask': 'Open background task {name}',
+  'session.activity.stopBackgroundTask': 'Stop background task {name}',
+  'session.activity.stoppingBackgroundTask': 'Stopping background task {name}',
   'session.activity.details.title': 'Details',
   'session.activity.details.type': 'Type',
   'session.activity.details.description': 'Description',

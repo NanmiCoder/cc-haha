@@ -1701,6 +1701,8 @@ export const kr: Record<TranslationKey, string> = {
   'session.activity.openTeamMember': '팀 멤버 {name} 열기',
   'session.activity.openRun': '실행 {name} 열기',
   'session.activity.openBackgroundTask': '백그라운드 작업 {name} 열기',
+  'session.activity.stopBackgroundTask': '백그라운드 작업 {name} 중지',
+  'session.activity.stoppingBackgroundTask': '백그라운드 작업 {name} 중지 중',
   'session.activity.details.title': '세부 정보',
   'session.activity.details.type': '유형',
   'session.activity.details.description': '설명',

@@ -1701,6 +1701,8 @@ export const jp: Record<TranslationKey, string> = {
   'session.activity.openTeamMember': 'チームメンバー {name} を開く',
   'session.activity.openRun': '実行 {name} を開く',
   'session.activity.openBackgroundTask': 'バックグラウンドタスク {name} を開く',
+  'session.activity.stopBackgroundTask': 'バックグラウンドタスク {name} を停止',
+  'session.activity.stoppingBackgroundTask': 'バックグラウンドタスク {name} を停止中',
   'session.activity.details.title': '詳細',
   'session.activity.details.type': '種類',
   'session.activity.details.description': '説明',

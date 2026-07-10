@@ -127,6 +127,7 @@ export type PerSessionState = {
   slashCommands: Array<{ name: string; description: string; argumentHint?: string }>
   agentTaskNotifications: Record<string, AgentTaskNotification>
   backgroundAgentTasks?: Record<string, BackgroundAgentTask>
+  stoppingBackgroundTaskIds?: Record<string, boolean>
   suppressNextTaskNotificationResponse?: boolean
   activeGoal?: ActiveGoalState | null
   elapsedTimer: ReturnType<typeof setInterval> | null
@@ -166,6 +167,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   slashCommands: [],
   agentTaskNotifications: {},
   backgroundAgentTasks: {},
+  stoppingBackgroundTaskIds: {},
   suppressNextTaskNotificationResponse: false,
   activeGoal: null,
   elapsedTimer: null,
@@ -282,6 +284,7 @@ type ChatStore = {
   setSessionRuntime: (sessionId: string, selection: RuntimeSelection) => void
   setSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void
   stopGeneration: (sessionId: string) => void
+  stopBackgroundTask: (sessionId: string, taskId: string) => void
   loadHistory: (sessionId: string) => Promise<void>
   reloadHistory: (
     sessionId: string,
@@ -1343,6 +1346,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     })
     useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
+  },
+
+  stopBackgroundTask: (sessionId, taskId) => {
+    const session = get().sessions[sessionId]
+    const task = session?.backgroundAgentTasks?.[taskId]
+    if (!task || task.status !== 'running' || session?.stoppingBackgroundTaskIds?.[taskId]) return
+
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+        stoppingBackgroundTaskIds: {
+          ...current.stoppingBackgroundTaskIds,
+          [taskId]: true,
+        },
+      })),
+    }))
+    wsManager.send(sessionId, { type: 'stop_background_task', taskId })
   },
 
   loadHistory: async (sessionId) => {
@@ -2487,6 +2506,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         break
 
+      case 'background_task_stop_failed':
+        update((session) => {
+          const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
+          delete stoppingBackgroundTaskIds[msg.taskId]
+          const taskAlreadyFinished = session.backgroundAgentTasks?.[msg.taskId]?.status !== 'running'
+          return {
+            stoppingBackgroundTaskIds,
+            ...(taskAlreadyFinished ? {} : {
+              messages: [
+                ...session.messages,
+                {
+                  id: nextId(),
+                  type: 'error',
+                  message: msg.message,
+                  code: 'STOP_BACKGROUND_TASK_FAILED',
+                  timestamp: Date.now(),
+                },
+              ],
+            }),
+          }
+        })
+        break
+
       case 'team_created':
         useTeamStore.getState().handleTeamCreated(msg.teamName)
         break
@@ -2546,6 +2588,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             slashCommands: [],
             activeGoal: null,
             backgroundAgentTasks: {},
+            stoppingBackgroundTaskIds: {},
             agentTaskNotifications: {},
           }))
           clearPendingDelta(sessionId)
@@ -2681,8 +2724,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   taskEvent.status === 'failed' ||
                   taskEvent.status === 'stopped') &&
                 shouldSuppressTaskNotificationResponse(session)
+              const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
+              delete stoppingBackgroundTaskIds[taskEvent.taskId]
               return {
                 ...buildBackgroundTaskSessionUpdate(session, backgroundAgentTasks, task, now),
+                stoppingBackgroundTaskIds,
                 ...(suppressNotificationResponse ? { suppressNextTaskNotificationResponse: true } : {}),
                 agentTaskNotifications: {
                   ...session.agentTaskNotifications,

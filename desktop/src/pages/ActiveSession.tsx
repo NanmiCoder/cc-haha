@@ -293,6 +293,7 @@ export function ActiveSession() {
   const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === s.activeTabId)?.type ?? null)
   const sessions = useSessionStore((s) => s.sessions)
   const connectToSession = useChatStore((s) => s.connectToSession)
+  const stopBackgroundTask = useChatStore((s) => s.stopBackgroundTask)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const pendingComputerUsePermission = sessionState?.pendingComputerUsePermission ?? null
   const fetchSessionTasks = useCLITaskStore((s) => s.fetchSessionTasks)
@@ -314,6 +315,7 @@ export function ActiveSession() {
   const chatState = sessionState?.chatState ?? 'idle'
   const tokenUsage = sessionState?.tokenUsage ?? { input_tokens: 0, output_tokens: 0 }
   const hasRunningBackgroundTasks = hasAnyRunningBackgroundTasks(sessionState?.backgroundAgentTasks)
+  const stoppingBackgroundTaskIds = sessionState?.stoppingBackgroundTaskIds
 
   const session = sessions.find((s) => s.id === activeTabId)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -485,6 +487,10 @@ export function ActiveSession() {
     if (!activeTabId || taskKeys.length === 0) return
     dismissBackgroundTaskKeys(activeTabId, taskKeys)
   }, [activeTabId, dismissBackgroundTaskKeys])
+  const handleStopBackgroundTask = useCallback((taskId: string) => {
+    if (!activeTabId) return
+    stopBackgroundTask(activeTabId, taskId)
+  }, [activeTabId, stopBackgroundTask])
 
   const lastUpdated = useMemo(() => {
     if (!session?.modifiedAt) return ''
@@ -680,6 +686,8 @@ export function ActiveSession() {
               onOpenSubagent={handleOpenSubagentRun}
               onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
               onOpenMember={handleOpenTeamMember}
+              onStopBackgroundTask={handleStopBackgroundTask}
+              stoppingBackgroundTaskIds={stoppingBackgroundTaskIds}
               placement="overlay"
             />
           ) : null}
@@ -725,6 +733,8 @@ export function ActiveSession() {
             onOpenSubagent={handleOpenSubagentRun}
             onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
             onOpenMember={handleOpenTeamMember}
+            onStopBackgroundTask={handleStopBackgroundTask}
+            stoppingBackgroundTaskIds={stoppingBackgroundTaskIds}
             placement="rail"
           />
         ) : null}

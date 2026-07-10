@@ -4,7 +4,11 @@ import type { TranslationKey } from '../i18n'
 type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string
 
 export function hasRunningBackgroundTasks(tasks?: Record<string, BackgroundAgentTask>): boolean {
-  return Object.values(tasks ?? {}).some((task) => task.status === 'running')
+  // AutoDream is detached maintenance work: it remains visible and stoppable
+  // in Activity, but must not keep the foreground conversation marked busy.
+  return Object.values(tasks ?? {}).some(
+    (task) => task.status === 'running' && task.taskType !== 'dream',
+  )
 }
 
 export function createBackgroundTaskDismissKey(task: BackgroundAgentTask): string {

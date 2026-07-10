@@ -1701,6 +1701,8 @@ export const zh: Record<TranslationKey, string> = {
   'session.activity.openTeamMember': '開啟團隊成員 {name}',
   'session.activity.openRun': '開啟執行 {name}',
   'session.activity.openBackgroundTask': '開啟後台任務 {name}',
+  'session.activity.stopBackgroundTask': '停止後台任務 {name}',
+  'session.activity.stoppingBackgroundTask': '正在停止後台任務 {name}',
   'session.activity.details.title': '詳情',
   'session.activity.details.type': '類型',
   'session.activity.details.description': '描述',

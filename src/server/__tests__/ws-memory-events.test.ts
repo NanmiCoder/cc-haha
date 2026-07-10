@@ -452,6 +452,23 @@ describe('WebSocket background task events', () => {
       },
     ])
   })
+
+  it('keeps AutoDream lifecycle visible without reviving foreground activity', () => {
+    const started = {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'dream-task-1',
+      description: 'dreaming',
+      task_type: 'dream',
+    }
+
+    expect(translateCliMessage(started, 'session-1')).toEqual([{
+      type: 'system_notification',
+      subtype: 'task_started',
+      message: 'dreaming',
+      data: started,
+    }])
+  })
 })
 
 describe('WebSocket goal command events', () => {
