@@ -5,10 +5,10 @@ import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
 import { GlobalSearchModal } from '../search/GlobalSearchModal'
-import { FindInPageModal } from '../search/FindInPageModal'
 import type { SessionListItem } from '../../types/session'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -70,7 +70,14 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
-  const chatSessions = useChatStore((s) => s.sessions)
+  const chatRunningSessionIds = useChatStore(useShallow((s) =>
+    Object.entries(s.sessions)
+      .filter(([, st]) =>
+        st.chatState !== 'idle' || hasRunningBackgroundTasks(st.backgroundAgentTasks),
+      )
+      .map(([id]) => id)
+      .sort(),
+  ))
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -137,17 +144,12 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
     [sessions],
   )
   const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>()
+    const ids = new Set<string>(chatRunningSessionIds)
     for (const tab of tabs) {
       if (tab.type === 'session' && tab.status === 'running') ids.add(tab.sessionId)
     }
-    for (const [sessionId, sessionState] of Object.entries(chatSessions)) {
-      if (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks)) {
-        ids.add(sessionId)
-      }
-    }
     return ids
-  }, [chatSessions, tabs])
+  }, [chatRunningSessionIds, tabs])
   const pendingBatchDeleteSessions = useMemo(
     () => (pendingBatchDeleteSessionIds ?? [])
       .map((sessionId) => sessionsById.get(sessionId))
@@ -1222,7 +1224,6 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
       />
 
       <GlobalSearchModal open={activeModal === 'globalSearch'} onClose={closeModal} />
-      <FindInPageModal open={activeModal === 'findInPage'} onClose={closeModal} />
     </aside>
   )
 }
