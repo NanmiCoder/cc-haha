@@ -5,6 +5,7 @@ export type ModelCapabilityOverride =
   | 'effort'
   | 'max_effort'
   | 'thinking'
+  | 'required_thinking'
   | 'adaptive_thinking'
   | 'interleaved_thinking'
 

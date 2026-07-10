@@ -183,6 +183,7 @@ import { endQueryProfile, queryCheckpoint } from "src/utils/queryProfiler.js";
 import {
   modelSupportsAdaptiveThinking,
   modelSupportsThinking,
+  resolveModelThinkingEnabled,
   shouldSendExplicitDisabledThinking,
   type ThinkingConfig,
 } from "src/utils/thinking.js";
@@ -1655,9 +1656,11 @@ async function* queryModel(
         : [];
     const extraBodyParams = getExtraBodyParams(bedrockBetas);
 
-    const hasThinking =
+    const hasThinking = resolveModelThinkingEnabled(
+      options.model,
       thinkingConfig.type !== 'disabled' &&
-      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
+        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
+    )
     const modelCanThink = modelSupportsThinking(options.model)
     const sendsExplicitDisabledThinking =
       !hasThinking && (modelCanThink || shouldSendExplicitDisabledThinking())
