@@ -5,7 +5,6 @@ import { modelsApi } from '../api/models'
 import { h5AccessApi } from '../api/h5Access'
 import { tracesApi } from '../api/traces'
 import {
-  isThemeMode,
   type AppMode,
   type AppModeConfig,
   type ChatSendBehavior,
@@ -230,7 +229,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         loadH5AccessSettings(previousH5Access),
         loadTraceCaptureSettings(),
       ])
-      const theme = isThemeMode(userSettings.theme) ? userSettings.theme : 'white'
+      const theme = useUIStore.getState().theme
       useUIStore.getState().setTheme(theme)
       set({
         permissionMode: mode,
@@ -327,15 +326,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   setTheme: async (theme) => {
-    const prev = get().theme
     set({ theme })
     useUIStore.getState().setTheme(theme)
-    try {
-      await settingsApi.updateUser({ theme })
-    } catch {
-      set({ theme: prev })
-      useUIStore.getState().setTheme(prev)
-    }
   },
 
   setChatSendBehavior: async (behavior) => {

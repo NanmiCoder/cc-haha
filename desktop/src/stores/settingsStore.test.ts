@@ -1112,11 +1112,13 @@ describe('settingsStore theme persistence', () => {
     expect(document.documentElement.style.colorScheme).toBe('light')
   })
 
-  it('hydrates the pure white theme from user settings', async () => {
+  it('keeps the desktop theme independent from the Claude user theme', async () => {
+    window.localStorage.setItem('cc-haha-theme', 'dark')
+    const updateUser = vi.fn()
     vi.doMock('../api/settings', () => ({
       settingsApi: {
-        getUser: vi.fn().mockResolvedValue({ theme: 'white' }),
-        updateUser: vi.fn(),
+        getUser: vi.fn().mockResolvedValue({ theme: 'light', unknownField: 'keep-me' }),
+        updateUser,
         getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
         setPermissionMode: vi.fn(),
         getCliLauncherStatus: vi.fn(),
@@ -1153,10 +1155,15 @@ describe('settingsStore theme persistence', () => {
 
     await useSettingsStore.getState().fetchAll()
 
-    expect(useSettingsStore.getState().theme).toBe('white')
-    expect(useUIStore.getState().theme).toBe('white')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('white')
-    expect(document.documentElement.style.colorScheme).toBe('light')
+    expect(useSettingsStore.getState().theme).toBe('dark')
+    expect(useUIStore.getState().theme).toBe('dark')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(document.documentElement.style.colorScheme).toBe('dark')
+
+    await useSettingsStore.getState().setTheme('light')
+
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('light')
+    expect(updateUser).not.toHaveBeenCalled()
   })
 })
 
