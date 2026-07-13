@@ -223,7 +223,7 @@ function formatToolSummary(tool: string, inp: Record<string, unknown>): string |
 }
 
 function shortPath(fp: string): string {
-  const parts = fp.split('/')
+  const parts = fp.replaceAll('\\', '/').split('/')
   return parts.length > 3 ? '…/' + parts.slice(-3).join('/') : fp
 }
 
