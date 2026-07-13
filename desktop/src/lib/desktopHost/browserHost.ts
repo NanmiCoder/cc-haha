@@ -43,6 +43,9 @@ export const browserHost: DesktopHost = {
     async getServerUrl() {
       unsupported('Resolving the bundled server URL')
     },
+    async getLocalAccessToken() {
+      unsupported('Resolving the bundled server access token')
+    },
   },
   app: {
     async getVersion() {

@@ -484,6 +484,7 @@ describe('updateStore', () => {
           updates: true,
         },
         runtime: {
+          ...browserHost.runtime,
           getServerUrl,
         },
         updates: {

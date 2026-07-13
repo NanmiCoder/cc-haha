@@ -23,6 +23,7 @@ describe('desktop host contract', () => {
 
   it('rejects desktop-only browser calls with actionable errors', async () => {
     await expect(browserHost.runtime.getServerUrl()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.runtime.getLocalAccessToken()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.dialogs.open({ directory: true })).rejects.toThrow('desktop app runtime')
     await expect(browserHost.shell.openPath('/tmp/report.md')).rejects.toThrow('desktop app runtime')
     await expect(browserHost.terminal.spawn({ cwd: '/tmp', cols: 80, rows: 24 })).rejects.toThrow(

@@ -125,6 +125,21 @@ describe('ElectronServerRuntime', () => {
       .not.toBe(path.join(homedir(), '.claude'))
   })
 
+  it('shares one unguessable local access token with server, adapters, and renderer', async () => {
+    const runtime = createRuntime()
+
+    await runtime.startServer()
+
+    const token = runtime.getLocalAccessToken()
+    expect(token.length).toBeGreaterThanOrEqual(32)
+    expect(sidecarMocks.serverPlans[0]!.env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBe(token)
+    for (const adapter of sidecarMocks.spawnSidecar.mock.calls
+      .map(([plan]) => plan)
+      .filter(plan => plan.args[0] === 'adapters')) {
+      expect(adapter.env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBe(token)
+    }
+  })
+
   it('persists a server startup failure through the sanitized host-log boundary', async () => {
     sidecarMocks.spawnError = new Error('spawn failed')
     const runtime = createRuntime({

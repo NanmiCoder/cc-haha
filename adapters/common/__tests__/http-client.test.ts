@@ -41,6 +41,18 @@ describe('AdapterHttpClient', () => {
     expect(body.workDir).toBe('/path/to/project')
   })
 
+  it('authenticates requests with the desktop local access token', async () => {
+    client = new AdapterHttpClient('ws://127.0.0.1:3456', {
+      localAccessToken: 'adapter-secret',
+    })
+    globalThis.fetch = mock(() => Promise.resolve(Response.json({ projects: [] }))) as any
+
+    await client.listRecentProjects()
+
+    const init = (globalThis.fetch as any).mock.calls[0][1] as RequestInit
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer adapter-secret')
+  })
+
   it('listRecentProjects calls GET /api/sessions/recent-projects', async () => {
     const mockProjects = [
       { projectName: 'my-app', realPath: '/home/user/my-app', sessionCount: 3 },

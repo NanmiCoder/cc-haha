@@ -1,6 +1,9 @@
 export type H5RequestKind = 'local-trusted' | 'internal-sdk' | 'h5-browser'
 export type H5RequestContext = {
   clientAddress: string | null
+  localAccessTokenConfigured?: boolean
+  localAccessAuthorized?: boolean
+  internalSdkAuthorized?: boolean
 }
 
 const LOCAL_DESKTOP_ORIGINS = new Set(['file://'])
@@ -71,6 +74,10 @@ function isLocalTrustedRequest(
   context: H5RequestContext,
   origin: string | null,
 ): boolean {
+  if (context.localAccessTokenConfigured) {
+    return context.localAccessAuthorized === true
+  }
+
   const clientAddress = context.clientAddress
   if (!clientAddress) return false
   if (hasProxyTraceHeaders(request.headers)) return false
@@ -96,7 +103,7 @@ export function classifyH5Request(
     return localTrusted ? 'local-trusted' : 'h5-browser'
   }
 
-  if (url.pathname.startsWith('/sdk/') && localTrusted) {
+  if (url.pathname.startsWith('/sdk/') && (localTrusted || context.internalSdkAuthorized)) {
     return 'internal-sdk'
   }
 

@@ -59,6 +59,15 @@ import { getDisconnectGraceMs } from './disconnectGraceConfig.js'
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
 
+function buildSdkWebSocketUrl(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+): string {
+  const url = new URL(`ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}`)
+  url.searchParams.set('token', crypto.randomUUID())
+  return url.toString()
+}
+
 /**
  * Cache slash commands from CLI init messages, keyed by sessionId.
  */
@@ -931,9 +940,7 @@ async function restartSessionWithPermissionMode(
       ...await getRuntimeSettings(sessionId),
       permissionMode: mode,
     }
-    const sdkUrl =
-      `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
-      `?token=${encodeURIComponent(crypto.randomUUID())}`
+    const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
 
     await commitConfirmedPermissionMode(sessionId, mode, workDir)
@@ -1020,9 +1027,7 @@ async function restartSessionWithRuntimeConfig(
     conversationService.stopSession(sessionId)
 
     const runtimeSettings = await getRuntimeSettings(sessionId)
-    const sdkUrl =
-      `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
-      `?token=${encodeURIComponent(crypto.randomUUID())}`
+    const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
 
     sendMessage(ws, { type: 'status', state: 'idle' })
@@ -1576,9 +1581,7 @@ async function ensureCliSessionStarted(
     const startupSettings = reason === 'prewarm_session'
       ? { ...runtimeSettings, resumeInterruptedTurn: false }
       : runtimeSettings
-    const sdkUrl =
-      `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
-      `?token=${encodeURIComponent(crypto.randomUUID())}`
+    const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await sendRepositoryStartupStatus(ws, sessionId, reason)
     console.log(`[WS] Starting CLI for ${sessionId} due to ${reason}`)
     await conversationService.startSession(sessionId, workDir, sdkUrl, startupSettings)

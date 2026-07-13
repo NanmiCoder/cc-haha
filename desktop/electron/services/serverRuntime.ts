@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import {
   appendHostDiagnostic,
   createAdapterPlan,
@@ -97,6 +98,7 @@ export class ElectronServerRuntime {
   private readonly baseEnv: NodeJS.ProcessEnv
   private readonly deps: ServerRuntimeDeps
   private readonly resolveSystemProxy?: (url: string) => Promise<string>
+  private readonly localAccessToken = randomBytes(32).toString('base64url')
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private server: ActiveServer | null = null
   private adapters: SidecarChild[] = []
@@ -134,6 +136,14 @@ export class ElectronServerRuntime {
     if (this.startPromise) return await this.startServer()
     if (this.startupError && !this.restartAfterExit) throw new Error(this.startupError)
     return await this.startServer()
+  }
+
+  getLocalAccessToken(): string {
+    return this.localAccessToken
+  }
+
+  getActiveServerUrl(): string | null {
+    return this.server?.url ?? null
   }
 
   restartAdaptersSidecars(): Promise<void> {
@@ -183,7 +193,7 @@ export class ElectronServerRuntime {
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
     let startState: ServerStartState | null = null
-    const env = await this.resolveSidecarBaseEnv()
+    const env = this.withLocalAccessToken(await this.resolveSidecarBaseEnv())
     const plan = createServerPlan({
       desktopRoot: this.desktopRoot,
       appRoot: this.appRoot,
@@ -245,7 +255,7 @@ export class ElectronServerRuntime {
     startState?: ServerStartState,
     activeServer?: ActiveServer,
   ): Promise<void> {
-    const env = await this.resolveSidecarBaseEnv()
+    const env = this.withLocalAccessToken(await this.resolveSidecarBaseEnv())
     const isCurrentGeneration = () => {
       if (startState?.failure) return false
       if (activeServer && this.server !== activeServer) return false
@@ -290,6 +300,13 @@ export class ElectronServerRuntime {
     this.removeOwnedAdapters(this.startingServer?.adapterChildren, children)
     for (const child of children) {
       killSidecar(child, sync)
+    }
+  }
+
+  private withLocalAccessToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    return {
+      ...env,
+      CC_HAHA_LOCAL_ACCESS_TOKEN: this.localAccessToken,
     }
   }
 

@@ -73,10 +73,14 @@ export type SkillSummary = {
 export class AdapterHttpClient {
   readonly httpBaseUrl: string
   private readonly allowedProjectRoots: string[]
+  private readonly localAccessToken: string | null
   /** Default timeout for HTTP requests (30 seconds) */
   private static readonly DEFAULT_TIMEOUT_MS = 30_000
 
-  constructor(wsUrl: string, options?: { allowedProjectRoots?: string[] }) {
+  constructor(
+    wsUrl: string,
+    options?: { allowedProjectRoots?: string[], localAccessToken?: string },
+  ) {
     this.httpBaseUrl = wsUrl
       .replace(/^ws:/, 'http:')
       .replace(/^wss:/, 'https:')
@@ -84,6 +88,17 @@ export class AdapterHttpClient {
     this.allowedProjectRoots = (options?.allowedProjectRoots ?? [])
       .map(resolveExistingProjectPath)
       .filter((value): value is string => Boolean(value))
+    this.localAccessToken = options?.localAccessToken?.trim() ||
+      process.env.CC_HAHA_LOCAL_ACCESS_TOKEN?.trim() ||
+      null
+  }
+
+  private request(pathname: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers)
+    if (this.localAccessToken) {
+      headers.set('Authorization', `Bearer ${this.localAccessToken}`)
+    }
+    return fetch(`${this.httpBaseUrl}${pathname}`, { ...init, headers })
   }
 
   /** Create an AbortController with timeout */
@@ -99,7 +114,7 @@ export class AdapterHttpClient {
   async createSession(workDir: string): Promise<string> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/sessions`, {
+      const res = await this.request('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workDir }),
@@ -119,7 +134,7 @@ export class AdapterHttpClient {
   async sessionExists(sessionId: string): Promise<boolean> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, {
+      const res = await this.request(`/api/sessions/${encodeURIComponent(sessionId)}`, {
         signal: controller.signal,
       })
       if (res.status === 404) return false
@@ -136,7 +151,7 @@ export class AdapterHttpClient {
   async listRecentProjects(): Promise<RecentProject[]> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/sessions/recent-projects`, {
+      const res = await this.request('/api/sessions/recent-projects', {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -202,7 +217,7 @@ export class AdapterHttpClient {
   async getGitInfo(sessionId: string): Promise<GitInfo> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/sessions/${encodeURIComponent(sessionId)}/git-info`, {
+      const res = await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/git-info`, {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -218,7 +233,7 @@ export class AdapterHttpClient {
   async getTasksForSession(sessionId: string): Promise<SessionTask[]> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/tasks/lists/${encodeURIComponent(sessionId)}`, {
+      const res = await this.request(`/api/tasks/lists/${encodeURIComponent(sessionId)}`, {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -246,7 +261,7 @@ export class AdapterHttpClient {
 
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/sessions${suffix}`, {
+      const res = await this.request(`/api/sessions${suffix}`, {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -262,7 +277,7 @@ export class AdapterHttpClient {
   async listProviders(): Promise<{ providers: ProviderSummary[]; activeId: string | null }> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/providers`, {
+      const res = await this.request('/api/providers', {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -286,7 +301,7 @@ export class AdapterHttpClient {
   async listModels(): Promise<{ models: ModelSummary[]; provider: { id: string; name: string } | null }> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/models`, {
+      const res = await this.request('/api/models', {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -302,7 +317,7 @@ export class AdapterHttpClient {
   async getCurrentModel(): Promise<{ model: ModelSummary }> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/models/current`, {
+      const res = await this.request('/api/models/current', {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -323,7 +338,7 @@ export class AdapterHttpClient {
     const params = new URLSearchParams({ cwd })
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}/api/skills?${params.toString()}`, {
+      const res = await this.request(`/api/skills?${params.toString()}`, {
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -339,7 +354,7 @@ export class AdapterHttpClient {
   private async postJson(pathname: string): Promise<void> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}${pathname}`, {
+      const res = await this.request(pathname, {
         method: 'POST',
         signal: controller.signal,
       })
@@ -355,7 +370,7 @@ export class AdapterHttpClient {
   private async putJson(pathname: string, body: Record<string, unknown>): Promise<void> {
     const { controller, timer } = this.createTimeoutController()
     try {
-      const res = await fetch(`${this.httpBaseUrl}${pathname}`, {
+      const res = await this.request(pathname, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

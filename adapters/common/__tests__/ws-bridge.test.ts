@@ -115,6 +115,22 @@ describe('WsBridge: handler serialization', () => {
     return connections[0]!
   }
 
+  it('authenticates websocket connections with the desktop local access token', async () => {
+    let requestUrl = ''
+    server.once('connection', (_ws, request) => {
+      requestUrl = request.url || ''
+    })
+    const bridge = new WsBridge(serverUrl, 'test', 'adapter secret/with spaces')
+
+    bridge.connectSession('chat-auth', 'sess-auth')
+    expect(await bridge.waitForOpen('chat-auth')).toBe(true)
+    await waitForServerConnection()
+
+    expect(new URL(requestUrl, serverUrl).searchParams.get('token'))
+      .toBe('adapter secret/with spaces')
+    bridge.destroy()
+  })
+
   it('processes handler calls in strict FIFO order per chatId', async () => {
     const bridge = new WsBridge(serverUrl, 'test')
     const events: string[] = []

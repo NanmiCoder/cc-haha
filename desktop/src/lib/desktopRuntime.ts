@@ -163,9 +163,12 @@ export async function initializeDesktopServerUrl() {
   }
 
   try {
-    const serverUrl = await host.runtime.getServerUrl()
+    const [serverUrl, localAccessToken] = await Promise.all([
+      host.runtime.getServerUrl(),
+      host.runtime.getLocalAccessToken(),
+    ])
     setBaseUrl(serverUrl)
-    setAuthToken(null)
+    setAuthToken(localAccessToken)
     await waitForHealth(serverUrl)
     markDesktopServerReady()
     return serverUrl

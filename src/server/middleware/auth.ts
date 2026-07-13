@@ -6,6 +6,7 @@
  */
 
 import { H5AccessService } from '../services/h5AccessService.js'
+import { isLocalAccessAuthorized } from '../localAccessAuth.js'
 
 type AuthResult = { valid: boolean; error?: string }
 
@@ -48,6 +49,10 @@ export async function validateRequestAuth(
   req: Request,
   tokenOverride?: string | null,
 ): Promise<AuthResult> {
+  if (isLocalAccessAuthorized(req, tokenOverride)) {
+    return { valid: true }
+  }
+
   const anthropicAuth = validateAuth(req)
   if (anthropicAuth.valid) {
     return anthropicAuth

@@ -20,8 +20,10 @@ import { createUpdateSmokeUpdaterFromEnv } from './services/updateSmoke'
 import { ElectronTerminalService, type TerminalSpawnInput } from './services/terminal'
 import { ElectronPreviewService, type PreviewBounds } from './services/preview'
 import {
+  configureLocalServerRequestAuth,
   configurePreviewSessionPermissions,
-  PREVIEW_SESSION_PARTITION,
+  createPreviewSessionPartition,
+  type PreviewLocalAccess,
 } from './services/previewSession'
 import {
   applyStartupPortableMode,
@@ -150,6 +152,14 @@ function getServerRuntime() {
   return serverRuntime
 }
 
+function resolveLocalServerAccess(): PreviewLocalAccess | null {
+  const runtime = getServerRuntime()
+  const serverUrl = runtime.getActiveServerUrl()
+  return serverUrl
+    ? { serverUrl, token: runtime.getLocalAccessToken() }
+    : null
+}
+
 function getUpdaterService() {
   const smokeUpdater = createUpdateSmokeUpdaterFromEnv(process.env)
   updaterService ??= new ElectronUpdaterService(smokeUpdater ?? autoUpdater, {
@@ -189,13 +199,17 @@ function getPreviewService() {
       const view = new WebContentsView({
         webPreferences: {
           preload: previewPreloadPath(),
-          partition: PREVIEW_SESSION_PARTITION,
+          partition: createPreviewSessionPartition(),
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
         },
       })
       configurePreviewSessionPermissions(view.webContents.session)
+      configureLocalServerRequestAuth(
+        view.webContents.session.webRequest,
+        resolveLocalServerAccess,
+      )
       installPreviewNavigationGuards(view.webContents, { openExternal: openExternalUrl })
       return view
     },
@@ -262,6 +276,10 @@ function registerIpcHandlers() {
   })
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
   registerHandler(ELECTRON_IPC_CHANNELS.runtimeGetServerUrl, () => getServerRuntime().getServerUrl())
+  registerHandler(
+    ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken,
+    () => getServerRuntime().getLocalAccessToken(),
+  )
   registerHandler(ELECTRON_IPC_CHANNELS.commandInvoke, (_event, payload) => handleCommandInvoke(payload))
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardReadText, () => clipboard.readText())
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardWriteText, (_event, payload) => clipboard.writeText(String(payload)))
@@ -363,6 +381,10 @@ async function createMainWindow() {
       sandbox: true,
     },
   })
+  configureLocalServerRequestAuth(
+    mainWindow.webContents.session.webRequest,
+    resolveLocalServerAccess,
+  )
 
   installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
   installPreviewCleanupOnRendererNavigation(mainWindow.webContents, () => {

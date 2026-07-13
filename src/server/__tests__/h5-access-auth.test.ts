@@ -21,6 +21,7 @@ let originalAnthropicApiKey: string | undefined
 let originalH5DistDir: string | undefined
 let originalClaudeAppRoot: string | undefined
 let originalServerAuthRequired: string | undefined
+let originalLocalAccessToken: string | undefined
 let originalServerPort = 3456
 const PHONE_ORIGIN = 'https://phone.example'
 
@@ -192,11 +193,13 @@ beforeEach(async () => {
   originalH5DistDir = process.env.CLAUDE_H5_DIST_DIR
   originalClaudeAppRoot = process.env.CLAUDE_APP_ROOT
   originalServerAuthRequired = process.env.SERVER_AUTH_REQUIRED
+  originalLocalAccessToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
   originalServerPort = ProviderService.getServerPort()
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   const h5DistDir = path.join(tmpDir, 'dist')
   process.env.CLAUDE_H5_DIST_DIR = h5DistDir
   delete process.env.ANTHROPIC_API_KEY
+  delete process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
   await fs.mkdir(path.join(h5DistDir, 'assets'), { recursive: true })
   await fs.writeFile(
     path.join(h5DistDir, 'index.html'),
@@ -224,6 +227,8 @@ afterEach(async () => {
   else process.env.CLAUDE_APP_ROOT = originalClaudeAppRoot
   if (originalServerAuthRequired === undefined) delete process.env.SERVER_AUTH_REQUIRED
   else process.env.SERVER_AUTH_REQUIRED = originalServerAuthRequired
+  if (originalLocalAccessToken === undefined) delete process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
+  else process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = originalLocalAccessToken
 
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
@@ -290,6 +295,20 @@ describe('remote H5 auth and CORS integration', () => {
         status: 'ok',
       })
     }
+  })
+
+  test('rejects a tokenless loopback proxy hop when desktop local auth is configured', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
+    await restartRemoteServer()
+
+    const proxyShapedResponse = await fetch(`${baseUrl}/api/status`)
+    expect(proxyShapedResponse.status).toBe(403)
+
+    const desktopResponse = await fetch(`${baseUrl}/api/status`, {
+      headers: { Authorization: 'Bearer desktop-local-secret' },
+    })
+    expect(desktopResponse.status).toBe(200)
+    await expect(desktopResponse.json()).resolves.toMatchObject({ status: 'ok' })
   })
 
   test('does not keep retired Tauri origins trusted after Electron replacement', async () => {

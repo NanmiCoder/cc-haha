@@ -142,6 +142,7 @@ export type DesktopHost = {
   capabilities: DesktopHostCapabilities
   runtime: {
     getServerUrl(): Promise<string>
+    getLocalAccessToken(): Promise<string | null>
   }
   app: {
     getVersion(): Promise<string>

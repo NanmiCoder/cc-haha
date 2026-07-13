@@ -57,6 +57,18 @@ describe('h5AccessPolicy', () => {
     expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: remoteContext })).toBe(false)
   })
 
+  test('accepts an SDK route only after its session token is authorized', () => {
+    const request = req('http://127.0.0.1:3456/sdk/session-1?token=sdk-secret')
+    const configuredContext = {
+      clientAddress: '127.0.0.1',
+      localAccessTokenConfigured: true,
+      localAccessAuthorized: false,
+      internalSdkAuthorized: true,
+    }
+
+    expect(classifyH5Request(request, new URL(request.url), configuredContext)).toBe('internal-sdk')
+  })
+
   test('keeps adapter API routes tokenless for local integrations', () => {
     const request = req('http://127.0.0.1:3456/api/adapters')
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
@@ -179,6 +191,30 @@ describe('h5AccessPolicy', () => {
         })).toBe(true)
       }
     }
+  })
+
+  test('requires the configured local credential even when a proxy perfectly mimics loopback', () => {
+    const request = req('http://127.0.0.1:3456/api/h5-access')
+    const url = new URL(request.url)
+    const unauthorizedContext = {
+      clientAddress: '127.0.0.1',
+      localAccessTokenConfigured: true,
+      localAccessAuthorized: false,
+    }
+    const authorizedContext = {
+      ...unauthorizedContext,
+      localAccessAuthorized: true,
+    }
+
+    expect(classifyH5Request(request, url, unauthorizedContext)).toBe('h5-browser')
+    expect(shouldBlockDisabledH5Access({
+      request,
+      url,
+      h5Enabled: false,
+      explicitAuthRequired: false,
+      context: unauthorizedContext,
+    })).toBe(true)
+    expect(classifyH5Request(request, url, authorizedContext)).toBe('local-trusted')
   })
 
   test('does not grant internal SDK trust to a request carrying proxy traces', () => {
