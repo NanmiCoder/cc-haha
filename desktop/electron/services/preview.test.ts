@@ -20,8 +20,28 @@ class FakeWebContents implements PreviewWebContentsLike {
   scripts: string[] = []
   zoomFactors: number[] = []
   sent: Array<{ channel: string, payload: unknown }> = []
+  documentSize = { width: 1280, height: 3200 }
+  debuggerAttached = false
+  debugger = {
+    isAttached: vi.fn(() => this.debuggerAttached),
+    attach: vi.fn(() => {
+      this.debuggerAttached = true
+    }),
+    detach: vi.fn(() => {
+      this.debuggerAttached = false
+    }),
+    sendCommand: vi.fn(async (method: string) => {
+      if (method === 'Page.getLayoutMetrics') {
+        return { cssContentSize: { x: 0, y: 0, ...this.documentSize } }
+      }
+      if (method === 'Page.captureScreenshot') return { data: 'FULL' }
+      throw new Error(`unexpected debugger command: ${method}`)
+    }),
+  }
   close = vi.fn()
-  capturePage = vi.fn(async () => ({ toDataURL: () => 'data:image/png;base64,NATIVE' }))
+  capturePage = vi.fn(async (_rect?: { x: number, y: number, width: number, height: number }) => ({
+    toDataURL: () => 'data:image/png;base64,NATIVE',
+  }))
   private loadHandler: (() => void) | null = null
 
   async loadURL(url: string) {
@@ -246,14 +266,267 @@ describe('Electron preview service', () => {
 
     await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
 
-    expect(view.webContents.capturePage).toHaveBeenCalledTimes(1)
-    expect(view.webContents.scripts.at(-1)).toBe('window.__previewInjected = true')
+    expect(view.webContents.capturePage).not.toHaveBeenCalled()
+    expect(view.webContents.scripts).not.toContain(expect.stringContaining('html2canvas'))
     expect(renderer.sent).toEqual([
       {
         channel: ELECTRON_EVENT_CHANNELS.previewEvent,
-        payload: { v: 1, type: 'screenshot', dataUrl: 'data:image/png;base64,NATIVE', kind: 'full' },
+        payload: { v: 1, type: 'screenshot', dataUrl: 'data:image/png;base64,FULL', kind: 'full' },
       },
     ])
+  })
+
+  it('captures the full document through CDP with bounded document dimensions', async () => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.documentSize = { width: 1280, height: 3200 }
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
+
+    expect(view.webContents.debugger.attach).toHaveBeenCalledWith('1.3')
+    expect(view.webContents.debugger.sendCommand.mock.calls).toEqual([
+      ['Page.getLayoutMetrics'],
+      ['Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width: 1280, height: 3200, scale: 1 },
+      }],
+    ])
+    expect(view.webContents.debugger.detach).toHaveBeenCalledTimes(1)
+    expect(view.webContents.capturePage).not.toHaveBeenCalled()
+  })
+
+  it('keeps viewport capture limited to the visible page', async () => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.documentSize = { width: 1280, height: 3200 }
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'viewport' }, renderer)
+
+    expect(view.webContents.capturePage).toHaveBeenCalledWith()
+    expect(view.webContents.debugger.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('detaches the debugger when a full capture fails', async () => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.debugger.sendCommand.mockRejectedValueOnce(new Error('layout failed'))
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
+
+    expect(view.webContents.debugger.detach).toHaveBeenCalledTimes(1)
+    expect(renderer.sent.at(-1)).toMatchObject({
+      channel: ELECTRON_EVENT_CHANNELS.previewEvent,
+      payload: { v: 1, type: 'error', message: 'Error: layout failed' },
+    })
+  })
+
+  it('preserves a completed capture if debugger state lookup fails during cleanup', async () => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.debugger.isAttached
+      .mockReturnValueOnce(false)
+      .mockImplementationOnce(() => {
+        throw new Error('view closed')
+      })
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
+
+    expect(renderer.sent.at(-1)).toMatchObject({
+      payload: { type: 'screenshot', dataUrl: 'data:image/png;base64,FULL', kind: 'full' },
+    })
+  })
+
+  it('does not detach a debugger session it did not attach', async () => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.debuggerAttached = true
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
+
+    expect(view.webContents.debugger.attach).not.toHaveBeenCalled()
+    expect(view.webContents.debugger.detach).not.toHaveBeenCalled()
+  })
+
+  it('shares one debugger capture across concurrent full-page requests', async () => {
+    const view = new FakeView()
+    const firstRenderer = new FakeWebContents()
+    const secondRenderer = new FakeWebContents()
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await Promise.all([
+      service.message({ v: 1, type: 'capture', kind: 'full' }, firstRenderer),
+      service.message({ v: 1, type: 'capture', kind: 'full' }, secondRenderer),
+    ])
+
+    expect(view.webContents.debugger.attach).toHaveBeenCalledTimes(1)
+    expect(view.webContents.debugger.detach).toHaveBeenCalledTimes(1)
+    expect(view.webContents.debugger.sendCommand).toHaveBeenCalledTimes(2)
+    expect(firstRenderer.sent.at(-1)).toEqual(secondRenderer.sent.at(-1))
+  })
+
+  it('starts a new full-page capture after the preview is closed and reopened', async () => {
+    const firstView = new FakeView()
+    const secondView = new FakeView()
+    const firstRenderer = new FakeWebContents()
+    const secondRenderer = new FakeWebContents()
+    const coalescedRenderer = new FakeWebContents()
+    let resolveFirstCapture!: (value: { data: string }) => void
+    let resolveSecondCapture!: (value: { data: string }) => void
+    const firstCapture = new Promise<{ data: string }>((resolve) => {
+      resolveFirstCapture = resolve
+    })
+    const secondCapture = new Promise<{ data: string }>((resolve) => {
+      resolveSecondCapture = resolve
+    })
+
+    firstView.webContents.debugger.sendCommand.mockImplementation(async (method: string) => {
+      if (method === 'Page.getLayoutMetrics') {
+        return { cssContentSize: { x: 0, y: 0, width: 800, height: 1200 } }
+      }
+      if (method === 'Page.captureScreenshot') return await firstCapture
+      throw new Error(`unexpected debugger command: ${method}`)
+    })
+    secondView.webContents.debugger.sendCommand.mockImplementation(async (method: string) => {
+      if (method === 'Page.getLayoutMetrics') {
+        return { cssContentSize: { x: 0, y: 0, width: 900, height: 1400 } }
+      }
+      if (method === 'Page.captureScreenshot') return await secondCapture
+      throw new Error(`unexpected debugger command: ${method}`)
+    })
+
+    const views = [firstView, secondView]
+    const parent = { contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }
+    const service = new ElectronPreviewService({
+      createView: () => views.shift()!,
+      previewScriptPath: previewScript(),
+    })
+    await service.open(parent, 'https://first.example.com', { x: 0, y: 0, width: 800, height: 600 })
+
+    const firstRequest = service.message({ v: 1, type: 'capture', kind: 'full' }, firstRenderer)
+    let secondRequest: Promise<void> | null = null
+    let coalescedRequest: Promise<void> | null = null
+    try {
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      expect(firstView.webContents.debugger.sendCommand).toHaveBeenCalledWith('Page.captureScreenshot', expect.anything())
+
+      service.close()
+      await service.open(parent, 'https://second.example.com', { x: 0, y: 0, width: 900, height: 700 })
+      secondRequest = service.message({ v: 1, type: 'capture', kind: 'full' }, secondRenderer)
+
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      expect(secondView.webContents.debugger.sendCommand).toHaveBeenCalledWith('Page.captureScreenshot', expect.anything())
+
+      resolveFirstCapture({ data: 'FIRST' })
+      await firstRequest
+
+      coalescedRequest = service.message({ v: 1, type: 'capture', kind: 'full' }, coalescedRenderer)
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      expect(secondView.webContents.debugger.sendCommand).toHaveBeenCalledTimes(2)
+
+      resolveSecondCapture({ data: 'SECOND' })
+      await Promise.all([secondRequest, coalescedRequest])
+
+      expect(secondRenderer.sent.at(-1)).toMatchObject({
+        payload: { type: 'screenshot', dataUrl: 'data:image/png;base64,SECOND', kind: 'full' },
+      })
+      expect(coalescedRenderer.sent.at(-1)).toEqual(secondRenderer.sent.at(-1))
+    } finally {
+      resolveFirstCapture({ data: 'FIRST' })
+      resolveSecondCapture({ data: 'SECOND' })
+      await Promise.allSettled([
+        firstRequest,
+        ...(secondRequest ? [secondRequest] : []),
+        ...(coalescedRequest ? [coalescedRequest] : []),
+      ])
+    }
+  })
+
+  it.each([
+    ['edge', { width: 16_385, height: 100 }],
+    ['pixel count', { width: 8_001, height: 4_000 }],
+  ])('rejects full captures that exceed the %s safety limit', async (_limit, documentSize) => {
+    const view = new FakeView()
+    const renderer = new FakeWebContents()
+    view.webContents.documentSize = documentSize
+    const service = new ElectronPreviewService({
+      createView: () => view,
+      previewScriptPath: previewScript(),
+    })
+    await service.open({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } }, 'https://example.com', {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+    })
+
+    await service.message({ v: 1, type: 'capture', kind: 'full' }, renderer)
+
+    expect(view.webContents.debugger.sendCommand).toHaveBeenCalledTimes(1)
+    expect(view.webContents.debugger.detach).toHaveBeenCalledTimes(1)
+    expect(renderer.sent.at(-1)).toMatchObject({
+      payload: { type: 'error', message: expect.stringContaining('exceeds safety limit') },
+    })
   })
 
   it('applies preview zoom to the native WebContentsView before screenshot capture', async () => {
@@ -275,10 +548,10 @@ describe('Electron preview service', () => {
 
     expect(view.webContents.zoomFactors.at(-1)).toBe(0.8)
     expect(view.bounds).toHaveLength(1)
-    expect(view.webContents.capturePage).toHaveBeenCalledTimes(1)
+    expect(view.webContents.capturePage).not.toHaveBeenCalled()
     expect(renderer.sent.at(-1)).toEqual({
       channel: ELECTRON_EVENT_CHANNELS.previewEvent,
-      payload: { v: 1, type: 'screenshot', dataUrl: 'data:image/png;base64,NATIVE', kind: 'full' },
+      payload: { v: 1, type: 'screenshot', dataUrl: 'data:image/png;base64,FULL', kind: 'full' },
     })
   })
 

@@ -45,6 +45,7 @@ import { registerChangedFileAccessRoot, registerFilesystemAccessRoot } from '../
 import { findGitRoot } from '../../utils/git.js'
 import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCaptureService.js'
 import { getSubagentRunByTool } from '../services/subagentRunService.js'
+import { isValidPermissionMode } from '../services/settingsService.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
 
@@ -392,6 +393,9 @@ async function createSession(req: Request): Promise<Response> {
 
   if (body.permissionMode !== undefined && typeof body.permissionMode !== 'string') {
     throw ApiError.badRequest('permissionMode must be a string')
+  }
+  if (body.permissionMode !== undefined && !isValidPermissionMode(body.permissionMode)) {
+    throw ApiError.badRequest(`Invalid permission mode: "${body.permissionMode}"`)
   }
 
   if (body.repository !== undefined) {

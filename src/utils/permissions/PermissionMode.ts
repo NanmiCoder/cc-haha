@@ -84,7 +84,7 @@ const PERMISSION_MODE_CONFIG: Partial<
           shortTitle: 'Auto',
           symbol: '⏵⏵',
           color: 'warning' as ModeColorKey,
-          external: 'default' as ExternalPermissionMode,
+          external: 'auto' as ExternalPermissionMode,
         },
       }
     : {}),
@@ -92,16 +92,13 @@ const PERMISSION_MODE_CONFIG: Partial<
 
 /**
  * Type guard to check if a PermissionMode is an ExternalPermissionMode.
- * auto is ant-only and excluded from external modes.
+ * Runtime availability follows EXTERNAL_PERMISSION_MODES, including Auto when
+ * the transcript-classifier feature is compiled in.
  */
 export function isExternalPermissionMode(
   mode: PermissionMode,
 ): mode is ExternalPermissionMode {
-  // External users can't have auto, so always true for them
-  if (process.env.USER_TYPE !== 'ant') {
-    return true
-  }
-  return mode !== 'auto' && mode !== 'bubble'
+  return (EXTERNAL_PERMISSION_MODES as readonly PermissionMode[]).includes(mode)
 }
 
 function getModeConfig(mode: PermissionMode): PermissionModeConfig {

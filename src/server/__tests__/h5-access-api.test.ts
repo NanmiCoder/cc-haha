@@ -210,4 +210,12 @@ describe('/api/h5-access', () => {
 
     expect(response.status).toBe(400)
   })
+
+  test('PUT rejects a browser-blocked fixedPort', async () => {
+    const response = await api('PUT', '/api/h5-access', {
+      body: { fixedPort: 5061 },
+    })
+
+    expect(response.status).toBe(400)
+  })
 })

@@ -103,9 +103,15 @@ vi.mock('../components/shared/DirectoryPicker', () => ({
 }))
 
 vi.mock('../components/controls/PermissionModeSelector', () => ({
-  PermissionModeSelector: ({ compact }: { compact?: boolean }) => (
-    <button type="button" data-testid="permission-mode-selector" data-compact={compact ? 'true' : 'false'}>
-      Bypass
+  PermissionModeSelector: ({ compact, value, onChange }: { compact?: boolean; value?: string; onChange?: (mode: string) => void }) => (
+    <button
+      type="button"
+      data-testid="permission-mode-selector"
+      data-compact={compact ? 'true' : 'false'}
+      aria-label={`Permission mode: ${value ?? 'default'}`}
+      onClick={() => onChange?.('auto')}
+    >
+      {value ?? 'default'}
     </button>
   ),
 }))
@@ -531,6 +537,20 @@ describe('EmptySession', () => {
     ])
   })
 
+  it('creates a new session with the draft Auto permission mode', async () => {
+    render(<EmptySession />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Permission mode: default' }))
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'run automatically', selectionStart: 17 },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'auto' })
+    })
+  })
+
   it('materializes the active provider runtime before the first draft message', async () => {
     useProviderStore.setState({
       providers: [{
@@ -550,7 +570,7 @@ describe('EmptySession', () => {
         toolSearchEnabled: true,
       }],
       activeId: 'provider-minimax',
-      providerOrder: ['provider-minimax', 'claude-official', 'openai-official'],
+      providerOrder: ['provider-minimax', 'claude-official', 'openai-official', 'grok-official'],
       hasLoadedProviders: true,
     })
 

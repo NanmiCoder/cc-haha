@@ -21,6 +21,7 @@ import {
   getSettingSourceDisplayNameLowercase,
   SETTING_SOURCES,
 } from '../settings/constants.js'
+import { getAutoModeConfig } from '../settings/settings.js'
 import { plural } from '../stringUtils.js'
 import { permissionModeTitle } from './PermissionMode.js'
 import type {
@@ -70,7 +71,6 @@ import {
   getTotalInputTokens,
   getTotalOutputTokens,
 } from '../../bootstrap/state.js'
-import { getFeatureValue_CACHED_WITH_REFRESH } from '../../services/analytics/growthbook.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -103,8 +103,6 @@ import {
   classifyYoloAction,
   formatActionForClassifier,
 } from './yoloClassifier.js'
-
-const CLASSIFIER_FAIL_CLOSED_REFRESH_MS = 30 * 60 * 1000 // 30 minutes
 
 const PERMISSION_RULE_SOURCES = [
   ...SETTING_SOURCES,
@@ -487,7 +485,33 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   assistantMessage,
   toolUseID,
 ): Promise<PermissionDecision> => {
-  const result = await hasPermissionsToUseToolInner(tool, input, context)
+  let result = await hasPermissionsToUseToolInner(tool, input, context)
+  const currentPermissionContext =
+    context.getAppState().toolPermissionContext
+  let autoModeActive = false
+  if (feature('TRANSCRIPT_CLASSIFIER')) {
+    autoModeActive =
+      currentPermissionContext.mode === 'auto' ||
+      (currentPermissionContext.mode === 'plan' &&
+        (autoModeStateModule?.isAutoModeActive() ?? false))
+  }
+  const forceShellClassifier =
+    autoModeActive &&
+    getAutoModeConfig()?.classifyAllShell === true &&
+    (tool.name === BASH_TOOL_NAME || tool.name === POWERSHELL_TOOL_NAME)
+  let classifierInput = input
+
+  // Entry-time rule stripping is defense in depth. This runtime conversion is
+  // the final guard for policy, flag, session, and dynamic shell allows added
+  // after Auto mode starts.
+  if (forceShellClassifier && result.behavior === 'allow') {
+    classifierInput = getUpdatedInputOrFallback(result, input)
+    result = {
+      behavior: 'ask',
+      message: createPermissionRequestMessage(tool.name),
+      decisionReason: result.decisionReason,
+    }
+  }
 
 
   // Reset consecutive denials on any allowed tool use in auto mode.
@@ -581,7 +605,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // prefix rules for ant users and auto mode entry.
       if (
         tool.name === POWERSHELL_TOOL_NAME &&
-        !feature('POWERSHELL_AUTO_MODE')
+        !feature('POWERSHELL_AUTO_MODE') &&
+        !forceShellClassifier
       ) {
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           return {
@@ -610,10 +635,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       if (
         result.behavior === 'ask' &&
         tool.name !== AGENT_TOOL_NAME &&
-        tool.name !== REPL_TOOL_NAME
+        tool.name !== REPL_TOOL_NAME &&
+        !forceShellClassifier
       ) {
         try {
-          const parsedInput = tool.inputSchema.parse(input)
+          const parsedInput = tool.inputSchema.parse(classifierInput)
           const acceptEditsResult = await tool.checkPermissions(parsedInput, {
             ...context,
             getAppState: () => {
@@ -687,7 +713,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         })
         return {
           behavior: 'allow',
-          updatedInput: input,
+          updatedInput: classifierInput,
           decisionReason: {
             type: 'mode',
             mode: 'auto',
@@ -696,7 +722,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       // Run the auto mode classifier
-      const action = formatActionForClassifier(tool.name, input)
+      const action = formatActionForClassifier(tool.name, classifierInput)
       setClassifierChecking(toolUseID)
       let classifierResult
       try {
@@ -851,15 +877,9 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           }
         }
         // When classifier is unavailable (API error), behavior depends on
-        // the tengu_iron_gate_closed gate.
+        // whether an interactive approval path exists.
         if (classifierResult.unavailable) {
-          if (
-            getFeatureValue_CACHED_WITH_REFRESH(
-              'tengu_iron_gate_closed',
-              true,
-              CLASSIFIER_FAIL_CLOSED_REFRESH_MS,
-            )
-          ) {
+          if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
             logForDebugging(
               'Auto mode classifier unavailable, denying with retry guidance (fail closed)',
               { level: 'warn' },
@@ -877,7 +897,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
               ),
             }
           }
-          // Fail open: fall back to normal permission handling
+          // Interactive sessions retain the exact original ask decision so
+          // the existing permission prompt remains authoritative.
           logForDebugging(
             'Auto mode classifier unavailable, falling back to normal permission handling (fail open)',
             { level: 'warn' },
@@ -927,7 +948,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
 
       return {
         behavior: 'allow',
-        updatedInput: input,
+        updatedInput: classifierInput,
         decisionReason: {
           type: 'classifier',
           classifier: 'auto-mode',
@@ -1468,19 +1489,16 @@ export function syncPermissionRulesFromDisk(
   // would leave the old rule in the context because convertRulesToUpdates
   // only generates replaceRules for source:behavior pairs that have rules —
   // an empty group produces no update, so stale rules persist.
-  const diskSources: PermissionUpdateDestination[] = [
-    'userSettings',
-    'projectSettings',
-    'localSettings',
-  ]
-  for (const diskSource of diskSources) {
-    for (const behavior of ['allow', 'deny', 'ask'] as PermissionBehavior[]) {
-      context = applyPermissionUpdate(context, {
-        type: 'replaceRules',
-        rules: [],
-        behavior,
-        destination: diskSource,
-      })
+  // Clear every synchronized settings source in memory, including immutable
+  // flag and policy sources. This does not write settings; the fresh snapshot
+  // below repopulates the currently enabled sources. Session/CLI rules remain
+  // untouched unless managed-only mode explicitly clears them above.
+  for (const source of SETTING_SOURCES) {
+    context = {
+      ...context,
+      alwaysAllowRules: { ...context.alwaysAllowRules, [source]: [] },
+      alwaysDenyRules: { ...context.alwaysDenyRules, [source]: [] },
+      alwaysAskRules: { ...context.alwaysAskRules, [source]: [] },
     }
   }
 

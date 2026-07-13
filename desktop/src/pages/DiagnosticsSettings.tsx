@@ -15,6 +15,7 @@ export function DiagnosticsSettings() {
   const [events, setEvents] = useState<DiagnosticEvent[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
+  const [isCopyingIssueReport, setIsCopyingIssueReport] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
   const [lastExportPath, setLastExportPath] = useState<string | null>(null)
@@ -91,6 +92,27 @@ export function DiagnosticsSettings() {
     addToast({ type: 'error', message: t('settings.diagnostics.copyFailed') })
   }
 
+  const handleCopyIssueReport = async () => {
+    setIsCopyingIssueReport(true)
+    try {
+      const { report } = await diagnosticsApi.getIssueReport()
+      const copied = await copyTextToClipboard(report)
+      addToast({
+        type: copied ? 'success' : 'error',
+        message: copied
+          ? t('settings.diagnostics.issueReportCopied')
+          : t('settings.diagnostics.issueReportCopyFailed'),
+      })
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('settings.diagnostics.issueReportCopyFailed'),
+      })
+    } finally {
+      setIsCopyingIssueReport(false)
+    }
+  }
+
   const handleClear = async () => {
     setIsClearing(true)
     try {
@@ -112,23 +134,39 @@ export function DiagnosticsSettings() {
 
   return (
     <div className="max-w-4xl">
-      <div className="flex items-start justify-between gap-4 mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5">
         <div>
           <h2 className="text-base font-semibold text-[var(--color-text-primary)]">{t('settings.diagnostics.title')}</h2>
           <p className="text-sm text-[var(--color-text-tertiary)] mt-0.5">{t('settings.diagnostics.description')}</p>
         </div>
         <Button variant="secondary" size="sm" onClick={load} loading={isLoading}>
-          <span className="material-symbols-outlined text-[16px]">refresh</span>
+          <span className="material-symbols-outlined text-[16px]" aria-hidden="true">refresh</span>
           {t('settings.diagnostics.refresh')}
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <Metric label={t('settings.diagnostics.totalSize')} value={status ? formatBytes(status.totalBytes) : '-'} />
-        <Metric label={t('settings.diagnostics.events')} value={status ? String(status.eventCount) : '-'} />
+        <Metric label={t('settings.diagnostics.completeEvents')} value={status ? t('settings.diagnostics.completeEventsValue', { count: status.eventCount }) : '-'} />
+        <Metric label={t('settings.diagnostics.visibleEvents')} value={t('settings.diagnostics.visibleEventsValue', { count: events.length })} />
         <Metric label={t('settings.diagnostics.recentErrors')} value={status ? String(status.recentErrorCount) : '-'} />
         <Metric label={t('settings.diagnostics.retention')} value={status ? t('settings.diagnostics.retentionValue', { days: String(status.retentionDays), size: formatBytes(status.maxBytes) }) : '-'} />
       </div>
+
+      {status && status.corruptLineCount > 0 ? (
+        <div role="alert" className="mb-5 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-warning)]">
+          {t('settings.diagnostics.corruptLinesWarning', {
+            count: status.corruptLineCount,
+            physical: status.physicalLineCount,
+          })}
+        </div>
+      ) : null}
+
+      {status?.storageLimitExceeded ? (
+        <div role="alert" className="mb-5 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-warning)]">
+          {t('settings.diagnostics.storageLimitExceededWarning')}
+        </div>
+      ) : null}
 
       <div className="mb-5">
         <DoctorPanel />
@@ -141,25 +179,29 @@ export function DiagnosticsSettings() {
             <div className="text-xs text-[var(--color-text-tertiary)] font-mono break-all mt-0.5">{status?.logDir ?? '-'}</div>
           </div>
           <Button variant="secondary" size="sm" onClick={handleOpenDir}>
-            <span className="material-symbols-outlined text-[16px]">folder_open</span>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">folder_open</span>
             {t('settings.diagnostics.openDirectory')}
           </Button>
         </div>
         <div className="px-4 py-3 flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={handleExport} loading={isExporting}>
-            <span className="material-symbols-outlined text-[16px]">archive</span>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">archive</span>
             {t('settings.diagnostics.exportBundle')}
           </Button>
           <Button variant="secondary" size="sm" onClick={handleCopySummary}>
-            <span className="material-symbols-outlined text-[16px]">content_copy</span>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">content_copy</span>
             {t('settings.diagnostics.copySummary')}
           </Button>
+          <Button variant="secondary" size="sm" onClick={handleCopyIssueReport} loading={isCopyingIssueReport}>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">assignment</span>
+            {t('settings.diagnostics.copyIssueReport')}
+          </Button>
           <Button variant="danger" size="sm" onClick={() => setClearConfirmOpen(true)} loading={isClearing}>
-            <span className="material-symbols-outlined text-[16px]">delete</span>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">delete</span>
             {t('settings.diagnostics.clearLogs')}
           </Button>
           {lastExportPath && (
-            <span className="text-xs text-[var(--color-text-tertiary)] font-mono break-all">
+            <span className="w-full text-xs text-[var(--color-text-tertiary)] font-mono break-all">
               {lastExportPath}
             </span>
           )}
@@ -183,6 +225,11 @@ export function DiagnosticsSettings() {
                 key={event.id}
                 event={event}
                 detailsLabel={t('settings.diagnostics.eventDetails')}
+                eventIdLabel={t('settings.diagnostics.eventId')}
+                copyEventIdLabel={t('settings.diagnostics.copyEventId')}
+                eventIdCopiedLabel={t('settings.diagnostics.eventIdCopied')}
+                eventIdCopyFailedLabel={t('settings.diagnostics.eventIdCopyFailed')}
+                addToast={addToast}
               />
             ))}
           </div>
@@ -218,9 +265,19 @@ function Metric({ label, value }: { label: string; value: string }) {
 function EventRow({
   event,
   detailsLabel,
+  eventIdLabel,
+  copyEventIdLabel,
+  eventIdCopiedLabel,
+  eventIdCopyFailedLabel,
+  addToast,
 }: {
   event: DiagnosticEvent
   detailsLabel: string
+  eventIdLabel: string
+  copyEventIdLabel: string
+  eventIdCopiedLabel: string
+  eventIdCopyFailedLabel: string
+  addToast: ReturnType<typeof useUIStore.getState>['addToast']
 }) {
   const severityClass =
     event.severity === 'error'
@@ -231,7 +288,7 @@ function EventRow({
   const detailsText = formatDetails(event.details)
 
   return (
-    <div className="px-4 py-3 grid grid-cols-[120px_92px_1fr] gap-3 items-start">
+    <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-[120px_92px_1fr] gap-3 items-start">
       <div className="text-xs text-[var(--color-text-tertiary)] font-mono">
         {new Date(event.timestamp).toLocaleString()}
       </div>
@@ -244,6 +301,19 @@ function EventRow({
           )}
         </div>
         <div className="text-xs text-[var(--color-text-secondary)] mt-1 break-words">{event.summary}</div>
+        <button
+          type="button"
+          className="mt-1 inline-flex max-w-full items-center gap-1 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+          aria-label={`${copyEventIdLabel}: ${event.id}`}
+          onClick={async () => {
+            const copied = await copyTextToClipboard(event.id)
+            addToast({ type: copied ? 'success' : 'error', message: copied ? eventIdCopiedLabel : eventIdCopyFailedLabel })
+          }}
+        >
+          <span>{eventIdLabel}:</span>
+          <span className="font-mono truncate">{event.id}</span>
+          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">content_copy</span>
+        </button>
         {detailsText && (
           <details className="mt-2">
             <summary className="cursor-pointer text-xs text-[var(--color-text-tertiary)] select-none">

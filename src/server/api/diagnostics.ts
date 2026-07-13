@@ -3,6 +3,7 @@
  *
  * GET    /api/diagnostics/status       — log directory, retention and counters
  * GET    /api/diagnostics/events       — recent sanitized diagnostic events
+ * GET    /api/diagnostics/issue-report — share-safe GitHub issue report Markdown
  * POST   /api/diagnostics/events       — append a sanitized client diagnostic event
  * POST   /api/diagnostics/export       — write a sanitized tar.gz bundle
  * POST   /api/diagnostics/open-log-dir — open the diagnostics directory
@@ -35,6 +36,10 @@ export async function handleDiagnosticsApi(
       return Response.json({ events })
     }
 
+    if (action === 'issue-report' && req.method === 'GET') {
+      return Response.json({ report: await diagnosticsService.buildIssueReport() })
+    }
+
     if (action === 'events' && req.method === 'POST') {
       const body = await parseJsonBody(req)
       const type = typeof body.type === 'string' && body.type.trim()
@@ -46,14 +51,15 @@ export async function handleDiagnosticsApi(
         ? body.summary
         : type
       const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
-      await diagnosticsService.recordEvent({
+      const result = await diagnosticsService.recordEvent({
         type,
         severity,
         summary,
         sessionId,
         details: body.details,
       })
-      return Response.json({ ok: true })
+      if (!result.ok) throw ApiError.internal(result.error)
+      return Response.json({ ok: true, eventId: result.event.id })
     }
 
     if (action === 'export' && req.method === 'POST') {

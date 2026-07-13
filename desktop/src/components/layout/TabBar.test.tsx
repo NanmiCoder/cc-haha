@@ -295,11 +295,12 @@ describe('TabBar', () => {
     expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
   })
 
-  it('shows the activity button for completed TodoWrite history without a badge', async () => {
+  it('shows the activity button for completed TodoWrite history and hides it while the workspace is open', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
     const { useSessionStore } = await import('../../stores/sessionStore')
+    const { useWorkspacePanelStore } = await import('../../stores/workspacePanelStore')
     const sessionId = 'session-1'
     const chatSession = makeChatSession('idle')
     chatSession.messages = [completedTodoWriteMessage()]
@@ -324,6 +325,12 @@ describe('TabBar', () => {
 
     expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
     expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
+
+    act(() => {
+      useWorkspacePanelStore.getState().openPanel(sessionId)
+    })
+
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
   })
 
   it('shows the activity button without a numeric badge for running or failed activity', async () => {

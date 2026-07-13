@@ -153,7 +153,6 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     appMode: {
       get: () => invoke(ELECTRON_IPC_CHANNELS.appModeGet),
       set: config => invoke(ELECTRON_IPC_CHANNELS.appModeSet, config),
-      detectPortableDir: () => invoke(ELECTRON_IPC_CHANNELS.appModeDetectPortableDir),
       prepareRestart: () => invoke(ELECTRON_IPC_CHANNELS.appModePrepareRestart),
       restart: () => invoke(ELECTRON_IPC_CHANNELS.appModeRestart),
     },

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import os from 'node:os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { isBrowserSafePort } from './browserSafePort.js'
 import { ManagedSettingsService } from './managedSettingsService.js'
 import { ProviderService } from './providerService.js'
 
@@ -529,7 +530,7 @@ function normalizeFixedPort(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     return null
   }
-  if (value < MIN_FIXED_PORT || value > MAX_FIXED_PORT) {
+  if (value < MIN_FIXED_PORT || value > MAX_FIXED_PORT || !isBrowserSafePort(value)) {
     return null
   }
   return value
@@ -715,7 +716,7 @@ export class H5AccessService {
         nextFixedPort = normalizeFixedPort(input.fixedPort)
         if (nextFixedPort === null) {
           throw ApiError.badRequest(
-            `fixedPort must be an integer between ${MIN_FIXED_PORT} and ${MAX_FIXED_PORT}`,
+            `fixedPort must be a browser-safe integer between ${MIN_FIXED_PORT} and ${MAX_FIXED_PORT}`,
           )
         }
       }

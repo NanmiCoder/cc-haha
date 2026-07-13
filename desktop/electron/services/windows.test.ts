@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
@@ -21,11 +21,21 @@ import {
   writeWindowState,
 } from './windows'
 
-const fakeApp = (userData: string) => ({
-  getPath: vi.fn(() => userData),
+const fakeApp = (home: string, userData = path.join(home, 'user-data')) => ({
+  getPath: vi.fn((name: string) => name === 'home' ? home : userData),
 })
 
 describe('Electron window service', () => {
+  it('stores system-mode window state under ~/.claude', () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'electron-window-state-system-'))
+    try {
+      const app = fakeApp(tmp)
+      expect(windowStatePath(app as never, {})).toBe(path.join(tmp, '.claude', 'window-state.json'))
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
   it('persists window state in CLAUDE_CONFIG_DIR when portable config is active', () => {
     const tmp = mkdtempSync(path.join(tmpdir(), 'electron-window-state-'))
     try {
@@ -92,6 +102,26 @@ describe('Electron window service', () => {
         {},
         'linux',
       )).toBeNull()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('reads the old Electron userData window state as a forward-migration fallback', () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'electron-window-state-legacy-'))
+    try {
+      const userData = path.join(tmp, 'user-data')
+      const app = fakeApp(tmp, userData)
+      const state = { x: 50, y: 60, width: 1280, height: 820, maximized: true }
+      mkdirSync(userData, { recursive: true })
+      writeFileSync(path.join(userData, 'window-state.json'), JSON.stringify(state))
+
+      expect(readWindowState(
+        app as never,
+        [{ bounds: { x: 0, y: 0, width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 860 } }],
+        {},
+        'win32',
+      )).toEqual(state)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }

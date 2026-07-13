@@ -99,6 +99,7 @@ async function compileExecutable({
 }) {
   const result = await Bun.build({
     entrypoints: [entrypoint],
+    features: ['TRANSCRIPT_CLASSIFIER'],
     // minify whitespace + identifiers + dead-code 大概能省 5-15% 的二进制大小，
     // 代价是 stack trace 里的函数名变成短名 —— 终端用户场景可接受。
     minify: { whitespace: true, identifiers: true, syntax: true },

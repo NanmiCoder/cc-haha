@@ -56,7 +56,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [
@@ -85,6 +86,7 @@
     "clean:electron-output": "bun run ./scripts/clean-electron-output.ts",
     "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
+    "test:windows-storage-recovery": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./build/recover-legacy-install-data.ps1 -SelfTest",
     "build:linux-x64": "bash ./scripts/build-linux.sh",
     "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
     "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",

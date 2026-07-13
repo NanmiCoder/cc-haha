@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildRootCoverageCommand,
   collectServerTestFiles,
   evaluateChangedLineCoverage,
   evaluateThresholds,
@@ -15,6 +16,22 @@ import {
 } from './coverage'
 
 describe('coverage gate helpers', () => {
+  test('collects root coverage with the transcript classifier build feature enabled', () => {
+    expect(buildRootCoverageCommand('/tmp/coverage', ['src/example.test.ts'])).toEqual([
+      'bun',
+      '--no-env-file',
+      '--feature=TRANSCRIPT_CLASSIFIER',
+      'test',
+      '--timeout=20000',
+      '--coverage',
+      '--coverage-reporter=lcov',
+      '--coverage-reporter=text',
+      '--coverage-dir',
+      '/tmp/coverage/root-server',
+      './src/example.test.ts',
+    ])
+  })
+
   test('parses lcov totals into percentages', () => {
     const summary = parseLcov([
       'TN:',

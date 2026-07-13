@@ -6,12 +6,13 @@ import { act } from 'react'
 // ──────────────────────────────────────────────────────────────────────────────
 // Hoisted mocks (vi.hoisted runs before module evaluation)
 // ──────────────────────────────────────────────────────────────────────────────
-const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock } = vi.hoisted(() => {
+const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, panelState } = vi.hoisted(() => {
   const openPreviewSpy = vi.fn().mockResolvedValue(undefined)
   const browserOpenSpy = vi.fn()
   const openTargetSpy = vi.fn().mockResolvedValue(undefined)
   const ensureTargetsMock = vi.fn().mockResolvedValue(undefined)
-  return { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock }
+  const panelState = { isOpen: false }
+  return { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, panelState }
 })
 
 // Mock openTargetStore
@@ -49,10 +50,10 @@ vi.mock('../../stores/browserPanelStore', () => ({
 // Mock workspacePanelStore
 vi.mock('../../stores/workspacePanelStore', () => ({
   useWorkspacePanelStore: Object.assign(
-    (selector: (s: { openPreview: () => Promise<void> }) => unknown) =>
-      selector({ openPreview: openPreviewSpy }),
+    (selector: (s: { openPreview: () => Promise<void>; isPanelOpen: () => boolean }) => unknown) =>
+      selector({ openPreview: openPreviewSpy, isPanelOpen: () => panelState.isOpen }),
     {
-      getState: vi.fn(() => ({ openPreview: openPreviewSpy })),
+      getState: vi.fn(() => ({ openPreview: openPreviewSpy, isPanelOpen: () => panelState.isOpen })),
     },
   ),
 }))
@@ -109,7 +110,7 @@ function makeCheckpoint(filesChanged: string[]): SessionTurnCheckpoint {
   }
 }
 
-function renderCard(filesChanged: string[]) {
+function renderCard(filesChanged: string[], isLatest = true) {
   const checkpoint = makeCheckpoint(filesChanged)
   return render(
     <CurrentTurnChangeCard
@@ -118,7 +119,7 @@ function renderCard(filesChanged: string[]) {
       workDir="/w/proj"
       error={null}
       isUndoing={false}
-      isLatest={true}
+      isLatest={isLatest}
       onUndo={vi.fn()}
     />,
   )
@@ -136,6 +137,7 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
     vi.clearAllMocks()
     ensureTargetsMock.mockResolvedValue(undefined)
     openPreviewSpy.mockResolvedValue(undefined)
+    panelState.isOpen = false
   })
 
   it('renders the filename (not just full path) for each file', () => {
@@ -192,14 +194,14 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     // displayPath is the workDir-relative path (matches the workspace file tree)
-    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'src/main.ts', 'diff')
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'src/main.ts', 'diff', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
   })
 
   it('passes the workDir-relative displayPath (not the absolute path) to openPreview', () => {
     renderCard(['/w/proj/README.md'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
-    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'diff')
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'diff', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
   })
 
   it('clicking an outside-workspace html changed file opens the in-app browser via local-file', () => {
@@ -216,7 +218,7 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
     renderCard(['/other/place/notes.txt'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
-    expect(openPreviewSpy).toHaveBeenCalledWith('s1', '/other/place/notes.txt', 'file')
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', '/other/place/notes.txt', 'file', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
     expect(browserOpenSpy).not.toHaveBeenCalled()
   })
 
@@ -264,11 +266,18 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(2)
   })
 
-  it('hides the workspace chevron on rows that already show an open-with button', () => {
+  it('keeps open-with secondary while every row retains its workspace chevron', () => {
     renderCard(['/w/proj/README.md', '/w/proj/index.html', '/w/proj/src/main.ts'])
 
     expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(2)
-    expect(screen.getAllByText('chevron_right')).toHaveLength(1)
+    const rows = screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
+    expect(rows.every((row) => row.querySelector('.lucide-chevron-right'))).toBe(true)
+  })
+
+  it('shows the same destination chevron on every changed-file row', () => {
+    const { container } = renderCard(['/w/proj/README.md', '/w/proj/src/main.ts'])
+
+    expect(container.querySelectorAll('.lucide-chevron-right')).toHaveLength(2)
   })
 
   it('clicking README.md open-with opens menu with workspace preview item', async () => {
@@ -360,6 +369,36 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
 
     // The diff open (3rd arg 'diff') must not have fired from clicking the pill.
     expect(openPreviewSpy).not.toHaveBeenCalledWith('s1', 'README.md', 'diff')
+  })
+})
+
+describe('CurrentTurnChangeCard – conversation continuity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    panelState.isOpen = false
+    openPreviewSpy.mockImplementation(async () => {
+      panelState.isOpen = true
+    })
+  })
+
+  it('truthfully labels a historical row as opening the current workspace diff', () => {
+    renderCard(['/w/proj/src/main.ts'], false)
+
+    expect(screen.getByText('chat.turnChangesCurrentWorkspaceDiff')).toBeInTheDocument()
+  })
+
+  it('records a stable opener id and semantic turn key before opening the diff', () => {
+    renderCard(['/w/proj/src/main.ts'])
+    const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
+
+    fireEvent.click(row)
+
+    expect(row.id).toContain('msg-1')
+    expect(row).toHaveAttribute('data-source-turn-key', 'msg-1')
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'src/main.ts', 'diff', {
+      sourceTurnKey: 'msg-1',
+      sourceElementId: row.id,
+    })
   })
 })
 

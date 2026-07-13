@@ -1,4 +1,5 @@
 import { useUIStore, type Toast as ToastType } from '../../stores/uiStore'
+import { useTranslation } from '../../i18n'
 
 const typeStyles: Record<ToastType['type'], string> = {
   success: 'border-l-4 border-l-[var(--color-success)]',
@@ -8,10 +9,15 @@ const typeStyles: Record<ToastType['type'], string> = {
 }
 
 function ToastItem({ toast }: { toast: ToastType }) {
+  const t = useTranslation()
   const removeToast = useUIStore((s) => s.removeToast)
+  const isUrgent = toast.type === 'warning' || toast.type === 'error'
 
   return (
     <div
+      role={isUrgent ? 'alert' : 'status'}
+      aria-live={isUrgent ? 'assertive' : 'polite'}
+      aria-atomic="true"
       className={`
         bg-[var(--color-surface)] rounded-[var(--radius-md)] shadow-[var(--shadow-dropdown)]
         px-4 py-3 text-sm text-[var(--color-text-primary)]
@@ -23,6 +29,7 @@ function ToastItem({ toast }: { toast: ToastType }) {
         <span>{toast.message}</span>
         <button
           onClick={() => removeToast(toast.id)}
+          aria-label={t('common.dismissNotification')}
           className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] text-lg leading-none"
         >
           ×

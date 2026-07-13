@@ -57,6 +57,18 @@ https://cc.example.com/?serverUrl=https%3A%2F%2Fcc-api.example.com
 4. WebSocket 代理需要支持协议升级。
 5. 只把域名分享给可信成员，并单独发送 Token。
 
+反向代理连接本机服务时，后端看到的来源地址通常也是 `127.0.0.1`。为避免把远程请求误认成本地直连，请保留公开 `Host`，或至少传递一个标准代理头：`Forwarded`、`X-Forwarded-For`、`X-Forwarded-Host`、`X-Forwarded-Proto`、`X-Real-IP`、`Via`。
+
+Nginx 可以这样配置：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Caddy 的 `reverse_proxy` 默认会保留原始 Host，并补充 `X-Forwarded-*` 头。如果你自定义了 `header_up`，请确保仍保留公开 Host 或上述任一代理头。不要同时把 Host 改成上游的 `127.0.0.1` 并删除全部代理头；缺少这些信息时，服务无法安全区分远程反代请求和本地直连请求。
+
 ## 手机体验范围
 
 H5 的第一版优先保证聊天主流程：

@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { MessageSquare, X } from 'lucide-react'
+import { useTranslation } from '../../i18n'
 import { ImageGalleryModal } from './ImageGalleryModal'
 
 export type AttachmentPreview = {
@@ -11,6 +13,8 @@ export type AttachmentPreview = {
   isDirectory?: boolean
   lineStart?: number
   lineEnd?: number
+  diffSide?: 'old' | 'new'
+  hunkId?: string
   note?: string
   quote?: string
 }
@@ -22,6 +26,7 @@ type Props = {
 }
 
 export function AttachmentGallery({ attachments, variant = 'message', onRemove }: Props) {
+  const t = useTranslation()
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null)
 
   const images = useMemo(
@@ -120,9 +125,60 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                     type="button"
                     onClick={() => onRemove(attachment.id!)}
                     className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-error)] text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
-                    aria-label={`Remove ${attachment.name}`}
+                    aria-label={t('attachments.remove', { name: attachment.name })}
                   >
                     ×
+                  </button>
+                )}
+              </div>
+            )
+          }
+
+          if (attachment.diffSide) {
+            const lineRange = attachment.lineStart
+              ? `L${attachment.lineStart}${attachment.lineEnd && attachment.lineEnd !== attachment.lineStart ? `-L${attachment.lineEnd}` : ''}`
+              : ''
+            const location = [
+              attachment.path || attachment.name,
+              '·',
+              t(`workspace.diffReview.side.${attachment.diffSide}`),
+              lineRange,
+            ]
+              .filter(Boolean)
+              .join(' ')
+            const note = attachment.note?.trim()
+            const quotePreview = attachment.quote?.trim().replace(/\s+/g, ' ')
+
+            return (
+              <div
+                key={attachment.id || `${attachment.name}-${index}`}
+                data-testid="diff-comment-card"
+                className="group/diff-comment flex max-w-[min(420px,100%)] min-w-[240px] items-start gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+              >
+                <MessageSquare aria-hidden="true" size={15} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[11px] font-medium text-[var(--color-text-tertiary)]">
+                    {location}
+                  </span>
+                  {note && (
+                    <span className="mt-0.5 block text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">
+                      {note}
+                    </span>
+                  )}
+                  {quotePreview && (
+                    <span className="mt-0.5 block truncate font-[var(--font-mono)] text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+                      {quotePreview}
+                    </span>
+                  )}
+                </span>
+                {onRemove && attachment.id && (
+                  <button
+                    type="button"
+                    onClick={() => onRemove(attachment.id!)}
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                    aria-label={t('attachments.remove', { name: attachment.name })}
+                  >
+                    <X aria-hidden="true" size={14} />
                   </button>
                 )}
               </div>
@@ -164,7 +220,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   type="button"
                   onClick={() => onRemove(attachment.id!)}
                   className={`${hasQuotePreview ? 'mt-0.5' : 'ml-0.5'} flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]`}
-                  aria-label={`Remove ${attachment.name}`}
+                  aria-label={t('attachments.remove', { name: attachment.name })}
                 >
                   <span className="material-symbols-outlined text-[17px]">close</span>
                 </button>

@@ -468,7 +468,7 @@ describe('ActiveSession task polling', () => {
     expect(screen.queryByTestId('background-tasks-button')).not.toBeInTheDocument()
   })
 
-  it('renders the activity panel inside the chat column with session activity rows', () => {
+  it('renders the activity panel as a rail and hides it when the workspace opens', async () => {
     const sessionId = 'activity-panel-open-session'
 
     useCLITaskStore.setState({
@@ -577,6 +577,16 @@ describe('ActiveSession task polling', () => {
     expect(chatColumn).toContainElement(screen.getByTestId('chat-input'))
     expect(screen.queryByTestId('session-task-bar')).not.toBeInTheDocument()
     expect(screen.queryByTestId('background-tasks-button')).not.toBeInTheDocument()
+
+    act(() => {
+      useWorkspacePanelStore.getState().openPanel(sessionId)
+    })
+
+    expect(screen.getByTestId('workbench-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+    })
   })
 
   it('does not render the activity panel when the store is open without visible activity', async () => {

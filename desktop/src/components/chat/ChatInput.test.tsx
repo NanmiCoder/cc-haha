@@ -224,6 +224,35 @@ describe('ChatInput file mentions', () => {
     vi.unstubAllGlobals()
   })
 
+  it('passes diff metadata to the composer card and clears the reference after send', async () => {
+    act(() => {
+      useWorkspaceChatContextStore.getState().addReference(sessionId, {
+        kind: 'code-comment',
+        path: 'src/a.ts',
+        absolutePath: '/repo/src/a.ts',
+        name: 'a.ts',
+        lineStart: 11,
+        lineEnd: 12,
+        diffSide: 'new',
+        hunkId: 'hunk-1',
+        note: 'Use a shared helper',
+        quote: 'const result = buildResult()\nreturn result',
+      })
+    })
+
+    render(<ChatInput compact />)
+
+    expect(screen.getByTestId('diff-comment-card')).toHaveTextContent('src/a.ts · new L11-L12')
+    expect(screen.getByTestId('diff-comment-card')).toHaveTextContent('Use a shared helper')
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useWorkspaceChatContextStore.getState().referencesBySession[sessionId]).toEqual([])
+    })
+    expect(screen.queryByTestId('diff-comment-card')).not.toBeInTheDocument()
+  })
+
   it('keeps unsent composer drafts isolated when switching between session tabs', async () => {
     const historySessionId = 'history-session'
     useTabStore.setState({

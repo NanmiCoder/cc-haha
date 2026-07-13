@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { OpenWithMenu } from '../common/OpenWithMenu'
@@ -59,7 +59,12 @@ export function CurrentTurnChangeCard({
     ? files.slice(0, COLLAPSED_COUNT)
     : files
 
-  const openChangedFile = useCallback((fileEntry: ChangedFileEntry) => {
+  const openChangedFile = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
+    const renderItem = event.currentTarget.closest<HTMLElement>('[data-chat-render-item-key]')
+    const origin = {
+      sourceTurnKey: renderItem?.dataset.chatRenderItemKey ?? checkpoint.target.targetUserMessageId,
+      sourceElementId: event.currentTarget.id,
+    }
     // A changed file outside the workdir (absolute displayPath — e.g. another
     // drive) has no checkpoint baseline, so a diff is meaningless. Render html in
     // the in-app browser and everything else as a file preview (served by its
@@ -69,14 +74,14 @@ export function CurrentTurnChangeCard({
         useBrowserPanelStore.getState().open(sessionId, localFileUrl(getServerBaseUrl(), fileEntry.apiPath))
         return
       }
-      void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'file')
+      void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'file', origin)
       return
     }
     // Jump to the right-side workspace and open a diff tab. We pass the workDir-relative
     // path (same format the workspace file tree passes to openPreview), so the diff tab
     // is keyed/fetched identically to the tree-driven one.
-    void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'diff')
-  }, [sessionId, files])
+    void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'diff', origin)
+  }, [checkpoint.target.targetUserMessageId, sessionId, files])
 
   const handleOpenWith = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     event.stopPropagation()
@@ -113,7 +118,7 @@ export function CurrentTurnChangeCard({
     : t('chat.turnChangesHistoricalCardLabel')
   const subtitle = isLatest
     ? t('chat.turnChangesLatestSubtitle')
-    : t('chat.turnChangesHistoricalSubtitle')
+    : t('chat.turnChangesCurrentWorkspaceDiff')
   const undoLabel = isLatest
     ? t('chat.turnChangesLatestUndo')
     : t('chat.turnChangesHistoricalUndo')
@@ -165,7 +170,9 @@ export function CurrentTurnChangeCard({
             <div key={fileEntry.apiPath} className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => openChangedFile(fileEntry)}
+                id={`turn-change-opener-${checkpoint.target.targetUserMessageId}-${encodeURIComponent(fileEntry.apiPath)}`}
+                data-source-turn-key={checkpoint.target.targetUserMessageId}
+                onClick={(event) => openChangedFile(event, fileEntry)}
                 aria-label={t('chat.turnChangesOpenInWorkspaceAria', { path: fileEntry.displayPath })}
                 title={fileEntry.displayPath}
                 className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-md)] px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]/35"
@@ -175,9 +182,7 @@ export function CurrentTurnChangeCard({
                   <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{fileName}</span>
                   <span className="block truncate text-xs text-[var(--color-text-tertiary)]">{`${t(typeInfo.categoryKey as Parameters<typeof t>[0])} · ${typeInfo.ext}`}</span>
                 </span>
-                {!previewable && (
-                  <span className="material-symbols-outlined shrink-0 text-[18px] text-[var(--color-text-tertiary)]">chevron_right</span>
-                )}
+                <ChevronRight size={17} strokeWidth={1.9} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
               </button>
               {previewable && (
                 <button

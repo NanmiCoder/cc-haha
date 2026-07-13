@@ -16,6 +16,7 @@ import { isEnvTruthy } from '../envUtils.js'
 import type { SettingSource } from '../settings/constants.js'
 import { SETTING_SOURCES } from '../settings/constants.js'
 import {
+  getAutoModeConfig,
   getSettings_DEPRECATED,
   getSettingsFilePathForSource,
   getUseAutoModeDuringPlan,
@@ -57,10 +58,8 @@ import {
   getFsImplementation,
   safeResolvePath,
 } from '../../utils/fsOperations.js'
-import { modelSupportsAutoMode } from '../betas.js'
 import { logForDebugging } from '../debug.js'
 import { gracefulShutdown } from '../gracefulShutdown.js'
-import { getMainLoopModel } from '../model/model.js'
 import {
   CROSS_PLATFORM_CODE_EXEC,
   DANGEROUS_BASH_PATTERNS,
@@ -297,12 +296,20 @@ export function findDangerousClassifierPermissions(
   cliAllowedTools: string[],
 ): DangerousPermissionInfo[] {
   const dangerous: DangerousPermissionInfo[] = []
+  const classifyAllShell = getAutoModeConfig()?.classifyAllShell === true
+  const bypassesClassifier = (
+    toolName: string,
+    ruleContent: string | undefined,
+  ) =>
+    (classifyAllShell &&
+      (toolName === BASH_TOOL_NAME || toolName === POWERSHELL_TOOL_NAME)) ||
+    isDangerousClassifierPermission(toolName, ruleContent)
 
   // Check rules loaded from settings
   for (const rule of rules) {
     if (
       rule.ruleBehavior === 'allow' &&
-      isDangerousClassifierPermission(
+      bypassesClassifier(
         rule.ruleValue.toolName,
         rule.ruleValue.ruleContent,
       )
@@ -327,7 +334,7 @@ export function findDangerousClassifierPermissions(
       const toolName = match[1]!.trim()
       const ruleContent = match[2]?.trim()
 
-      if (isDangerousClassifierPermission(toolName, ruleContent)) {
+      if (bypassesClassifier(toolName, ruleContent)) {
         dangerous.push({
           ruleValue: { toolName, ruleContent },
           source: 'cliArg',
@@ -549,6 +556,91 @@ export function stripDangerousPermissionsForAutoMode(
   return {
     ...removeDangerousPermissions(context, dangerousPermissions),
     strippedDangerousRules: stripped,
+  }
+}
+
+const RELOADED_PERMISSION_SOURCES = new Set<PermissionRuleSource>([
+  'userSettings',
+  'projectSettings',
+  'localSettings',
+])
+
+/**
+ * Reconcile the Auto-mode stash after disk permission rules are reloaded.
+ * Disk-backed stash entries are replaced by the current disk snapshot so a
+ * deleted rule cannot be resurrected on exit. Session/CLI stash entries are
+ * retained, and all additions are de-duplicated for idempotent reloads.
+ */
+export function reconcileAutoModePermissionsAfterSettingsChange(
+  context: ToolPermissionContext,
+  diskRules: PermissionRule[],
+): ToolPermissionContext {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) return context
+  const autoActive =
+    context.mode === 'auto' ||
+    (context.mode === 'plan' &&
+      (autoModeStateModule?.isAutoModeActive() ?? false))
+  if (!autoActive) return context
+
+  const currentRules: PermissionRule[] = []
+  for (const [source, ruleStrings] of Object.entries(
+    context.alwaysAllowRules,
+  )) {
+    for (const ruleString of ruleStrings ?? []) {
+      currentRules.push({
+        source: source as PermissionRuleSource,
+        ruleBehavior: 'allow',
+        ruleValue: permissionRuleValueFromString(ruleString),
+      })
+    }
+  }
+
+  const currentDangerous = findDangerousClassifierPermissions(currentRules, [])
+  const diskDangerous = findDangerousClassifierPermissions(diskRules, [])
+  const stash = new Map<PermissionUpdateDestination, Set<string>>()
+  const addToStash = (
+    source: PermissionRuleSource,
+    ruleString: string,
+  ): void => {
+    if (!isPermissionUpdateDestination(source)) return
+    const rules = stash.get(source) ?? new Set<string>()
+    rules.add(ruleString)
+    stash.set(source, rules)
+  }
+
+  for (const [source, ruleStrings] of Object.entries(
+    context.strippedDangerousRules ?? {},
+  )) {
+    if (RELOADED_PERMISSION_SOURCES.has(source as PermissionRuleSource)) {
+      continue
+    }
+    for (const ruleString of ruleStrings ?? []) {
+      addToStash(source as PermissionRuleSource, ruleString)
+    }
+  }
+  for (const permission of currentDangerous) {
+    if (RELOADED_PERMISSION_SOURCES.has(permission.source)) continue
+    addToStash(
+      permission.source,
+      permissionRuleValueToString(permission.ruleValue),
+    )
+  }
+  for (const permission of diskDangerous) {
+    if (!RELOADED_PERMISSION_SOURCES.has(permission.source)) continue
+    addToStash(
+      permission.source,
+      permissionRuleValueToString(permission.ruleValue),
+    )
+  }
+
+  const strippedDangerousRules: ToolPermissionRulesBySource = {}
+  for (const [source, rules] of stash) {
+    strippedDangerousRules[source] = [...rules]
+  }
+
+  return {
+    ...removeDangerousPermissions(context, currentDangerous),
+    strippedDangerousRules,
   }
 }
 
@@ -1100,32 +1192,31 @@ export async function verifyAutoModeGateAccess(
     enabledState === 'disabled' || disabledBySettings,
   )
 
-  // Carousel availability: not circuit-broken, not disabled-by-settings,
-  // model supports it, disableFastMode breaker not firing, and (enabled or opted-in)
-  const mainModel = getMainLoopModel()
+  // Carousel availability: not circuit-broken, not disabled by settings,
+  // disableFastMode breaker not firing, and either enabled or opted in.
   // Temp circuit breaker: tengu_auto_mode_config.disableFastMode blocks auto
   // mode when fast mode is on. Checks runtime AppState.fastMode (if provided)
   // and, for ants, model name '-fast' substring (ant-internal fast models
   // like capybara-v2-fast[1m] encode speed in the model ID itself).
   // Remove once auto+fast mode interaction is validated.
-  const disableFastModeBreakerFires =
-    !!autoModeConfig?.disableFastMode &&
-    (!!fastMode ||
-      (process.env.USER_TYPE === 'ant' &&
-        mainModel.toLowerCase().includes('-fast')))
-  const modelSupported =
-    modelSupportsAutoMode(mainModel) && !disableFastModeBreakerFires
+  const disableFastModeBreakerFires = !!autoModeConfig?.disableFastMode && !!fastMode
   let carouselAvailable = false
-  if (enabledState !== 'disabled' && !disabledBySettings && modelSupported) {
+  if (
+    enabledState !== 'disabled' &&
+    !disabledBySettings &&
+    !disableFastModeBreakerFires
+  ) {
     carouselAvailable =
       enabledState === 'enabled' || hasAutoModeOptInAnySource()
   }
   // canEnterAuto gates explicit entry (--permission-mode auto, defaultMode: auto)
-  // — explicit entry IS an opt-in, so we only block on circuit breaker + settings + model
+  // — explicit entry IS an opt-in, so only circuit breakers and settings block it.
   const canEnterAuto =
-    enabledState !== 'disabled' && !disabledBySettings && modelSupported
+    enabledState !== 'disabled' &&
+    !disabledBySettings &&
+    !disableFastModeBreakerFires
   logForDebugging(
-    `[auto-mode] verifyAutoModeGateAccess: enabledState=${enabledState} disabledBySettings=${disabledBySettings} model=${mainModel} modelSupported=${modelSupported} disableFastModeBreakerFires=${disableFastModeBreakerFires} carouselAvailable=${carouselAvailable} canEnterAuto=${canEnterAuto}`,
+    `[auto-mode] verifyAutoModeGateAccess: enabledState=${enabledState} disabledBySettings=${disabledBySettings} disableFastModeBreakerFires=${disableFastModeBreakerFires} carouselAvailable=${carouselAvailable} canEnterAuto=${canEnterAuto}`,
   )
 
   // Capture CLI-flag intent now (doesn't depend on context).
@@ -1173,7 +1264,7 @@ export async function verifyAutoModeGateAccess(
   } else {
     reason = 'model'
     logForDebugging(
-      `auto mode disabled: model ${getMainLoopModel()} does not support auto mode`,
+      'auto mode disabled by the temporary fast-mode circuit breaker',
       { level: 'warn' },
     )
   }
@@ -1283,7 +1374,6 @@ function isAutoModeDisabledBySettings(): boolean {
 export function isAutoModeGateEnabled(): boolean {
   if (autoModeStateModule?.isAutoModeCircuitBroken() ?? false) return false
   if (isAutoModeDisabledBySettings()) return false
-  if (!modelSupportsAutoMode(getMainLoopModel())) return false
   return true
 }
 
@@ -1296,7 +1386,6 @@ export function getAutoModeUnavailableReason(): AutoModeUnavailableReason | null
   if (autoModeStateModule?.isAutoModeCircuitBroken() ?? false) {
     return 'circuit-breaker'
   }
-  if (!modelSupportsAutoMode(getMainLoopModel())) return 'model'
   return null
 }
 
@@ -1310,7 +1399,7 @@ export function getAutoModeUnavailableReason(): AutoModeUnavailableReason | null
  */
 export type AutoModeEnabledState = 'enabled' | 'disabled' | 'opt-in'
 
-const AUTO_MODE_ENABLED_DEFAULT: AutoModeEnabledState = 'disabled'
+const AUTO_MODE_ENABLED_DEFAULT: AutoModeEnabledState = 'opt-in'
 
 function parseAutoModeEnabledState(value: unknown): AutoModeEnabledState {
   if (value === 'enabled' || value === 'disabled' || value === 'opt-in') {

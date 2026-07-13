@@ -141,7 +141,7 @@ export function TabBar() {
       hasVisibleActivity: hasVisibleSessionActivity(model),
     }
   }))
-  const showActivityButton = activeTabId && activityState.hasVisibleActivity
+  const showActivityButton = activeTabId && activityState.hasVisibleActivity && !isWorkbenchOpen
 
   const moveTab = useTabStore((s) => s.moveTab)
   const scrollRef = useRef<HTMLDivElement>(null)

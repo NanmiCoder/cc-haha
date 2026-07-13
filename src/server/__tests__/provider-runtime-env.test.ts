@@ -9,6 +9,8 @@ import {
 } from '../services/providerRuntimeEnv.js'
 
 let tmpDir: string
+let originalConfigDir: string | undefined
+let originalHome: string | undefined
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -18,10 +20,50 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 describe('providerRuntimeEnv', () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-runtime-env-'))
+    originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    originalHome = process.env.HOME
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.HOME = tmpDir
   })
 
   afterEach(async () => {
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
     await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  test('normalizes and preserves Grok Official as the active runtime provider', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'grok-official',
+      providers: [],
+      providerOrder: ['claude-official', 'openai-official'],
+    })
+
+    const env = mergeActiveProviderManagedEnv(
+      {
+        CC_HAHA_OPENAI_OAUTH_PROVIDER: '1',
+        OPENAI_CODEX_OAUTH_FILE: path.join(tmpDir, 'stale-openai-oauth.json'),
+        ANTHROPIC_MODEL: 'stale-openai-model',
+        DISABLE_AUTOUPDATER: '1',
+      },
+      tmpDir,
+    )
+
+    expect(env).toMatchObject({
+      CC_HAHA_GROK_OAUTH_PROVIDER: '1',
+      GROK_OAUTH_FILE: path.join(tmpDir, 'cc-haha', 'grok-oauth.json'),
+      ANTHROPIC_MODEL: 'grok-4.5',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.5',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.5',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5',
+      DISABLE_AUTOUPDATER: '1',
+    })
+    expect(env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
+    expect(env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
   })
 
   test('derives native Anthropic provider env from the active provider index', async () => {

@@ -8,7 +8,7 @@ export type DoctorReportItem = {
   path: string
   protected: boolean
   exists: boolean
-  status: 'ok' | 'missing' | 'invalid_json' | 'invalid_jsonl' | 'unreadable'
+  status: 'ok' | 'not_configured' | 'missing' | 'invalid_json' | 'invalid_jsonl' | 'invalid_schema' | 'unreadable'
   bytes: number
   entryCount?: number
   lineCount?: number
@@ -27,49 +27,15 @@ export type DoctorReport = {
   summary: {
     total: number
     protectedCount: number
+    neutralCount: number
     missingCount: number
     invalidCount: number
   }
 }
 
-export type DoctorRepairResult = {
-  dryRun: true
-  mutated: false
-  operations: Array<{
-    id: string
-    path: string
-    action: 'would_repair'
-  }>
-  skips: Array<{
-    id: string
-    path: string
-    reason: 'protected'
-  }>
-  summary: {
-    operationCount: number
-    skipCount: number
-  }
-}
-
-export type DoctorReportRepairResponse = {
-  ok: boolean
-  report: DoctorReport
-  repair: DoctorRepairResult
-}
-
 export const doctorApi = {
-  report: () => api.get<{ report: DoctorReport }>('/api/doctor/report', { timeout: 3_000 }),
-  repair: () => api.post<{ result: DoctorRepairResult }>('/api/doctor/repair', {}, { timeout: 3_000 }),
-  reportAndRepair: async (): Promise<DoctorReportRepairResponse> => {
-    const [{ report }, { result }] = await Promise.all([
-      doctorApi.report(),
-      doctorApi.repair(),
-    ])
-
-    return {
-      ok: true,
-      report,
-      repair: result,
-    }
+  report: (cwd?: string) => {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+    return api.get<{ report: DoctorReport }>(`/api/doctor/report${query}`, { timeout: 3_000 })
   },
 }

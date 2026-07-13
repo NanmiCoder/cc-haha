@@ -4,6 +4,7 @@ import * as path from 'path'
 import { randomBytes } from 'node:crypto'
 import { normalizeLegacyDeepSeekManagedEnv } from '../../utils/providerManagedEnvCompat.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
+import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import { BUILT_IN_PROVIDER_IDS } from '../types/provider.js'
 
 export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 2
@@ -175,7 +176,8 @@ function migrateProvidersIndex(value: unknown): JsonObject {
         : null
   const activeId = rawActiveId && (
     providers.some((provider) => provider.id === rawActiveId) ||
-    isOpenAIOfficialProviderId(rawActiveId)
+    isOpenAIOfficialProviderId(rawActiveId) ||
+    isGrokOfficialProviderId(rawActiveId)
   )
     ? rawActiveId
     : null

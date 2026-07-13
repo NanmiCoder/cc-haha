@@ -11,6 +11,8 @@ export type WorkspaceChatReference = {
   isDirectory?: boolean
   lineStart?: number
   lineEnd?: number
+  diffSide?: 'old' | 'new'
+  hunkId?: string
   note?: string
   quote?: string
   sourceRole?: 'user' | 'assistant'
@@ -33,7 +35,10 @@ function makeReferenceId(reference: Omit<WorkspaceChatReference, 'id'>) {
     ? `${reference.lineStart}-${reference.lineEnd ?? reference.lineStart}`
     : reference.messageId ?? 'file'
   const notePart = (reference.note?.trim() || reference.quote?.trim() || '').slice(0, 48)
-  return `${reference.kind}:${reference.path}:${linePart}:${notePart}`
+  const diffPart = reference.kind === 'code-comment'
+    ? `${reference.diffSide ?? ''}:${reference.hunkId ?? ''}:`
+    : ''
+  return `${reference.kind}:${reference.path}:${diffPart}${linePart}:${notePart}`
 }
 
 function getReferenceDedupKey(reference: WorkspaceChatReference) {
@@ -45,6 +50,8 @@ function getReferenceDedupKey(reference: WorkspaceChatReference) {
     reference.sourceRole ?? '',
     reference.lineStart ?? '',
     reference.lineEnd ?? '',
+    reference.kind === 'code-comment' ? reference.diffSide ?? '' : '',
+    reference.kind === 'code-comment' ? reference.hunkId ?? '' : '',
     reference.note?.trim() ?? '',
     reference.quote?.trim() ?? '',
   ].join(':')
@@ -58,7 +65,8 @@ export function formatWorkspaceReferenceLocation(reference: WorkspaceChatReferen
   const lineEnd = reference.lineEnd && reference.lineEnd !== reference.lineStart
     ? `-L${reference.lineEnd}`
     : ''
-  return `${reference.path}:L${reference.lineStart}${lineEnd}`
+  const side = reference.diffSide ? `:${reference.diffSide}` : ''
+  return `${reference.path}${side}:L${reference.lineStart}${lineEnd}`
 }
 
 function getFenceForQuote(quote: string) {

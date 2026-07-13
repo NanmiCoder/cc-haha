@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { ModelSelector } from './ModelSelector'
 import { useChatStore } from '../../stores/chatStore'
 import { useHahaOAuthStore } from '../../stores/hahaOAuthStore'
 import { useHahaOpenAIOAuthStore } from '../../stores/hahaOpenAIOAuthStore'
+import { useHahaGrokOAuthStore } from '../../stores/hahaGrokOAuthStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -32,11 +33,13 @@ afterEach(() => {
   useChatStore.setState(useChatStore.getInitialState(), true)
   useHahaOAuthStore.setState(useHahaOAuthStore.getInitialState(), true)
   useHahaOpenAIOAuthStore.setState(useHahaOpenAIOAuthStore.getInitialState(), true)
+  useHahaGrokOAuthStore.setState(useHahaGrokOAuthStore.getInitialState(), true)
 })
 
 beforeEach(() => {
   useHahaOAuthStore.setState({ fetchStatus: async () => {} })
   useHahaOpenAIOAuthStore.setState({ fetchStatus: async () => {} })
+  useHahaGrokOAuthStore.setState({ fetchStatus: async () => {} })
 })
 
 describe('ModelSelector', () => {
@@ -295,8 +298,8 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-1" />)
 
-    await clickByRole(/provider-main/i)
-    await clickByRole(/^High$/)
+    await clickByRole('Effort: Max')
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'ArrowLeft' })
 
     expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual({
       providerId: 'provider-a',
@@ -420,6 +423,17 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector runtimeKey="session-openai-effort" />)
 
+    expect(screen.getByRole('button', { name: 'GPT-5.6-Sol, ChatGPT Official' })).toHaveAttribute(
+      'title',
+      'ChatGPT Official · GPT-5.6-Sol',
+    )
+    expect(screen.queryByTestId('model-provider-badge')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Effort: Max' })).toBeInTheDocument()
+    await clickByRole('Effort: Max')
+    expect(screen.getByRole('slider', { name: 'Effort' })).toHaveAttribute('aria-valuemax', '4')
+    expect(screen.getAllByTestId('reasoning-effort-stop')).toHaveLength(5)
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'Escape' })
+
     await clickByRole(/GPT-5\.6-Sol/i)
     await clickByRole(/GPT-5\.5/)
 
@@ -429,9 +443,11 @@ describe('ModelSelector', () => {
       effortLevel: 'medium',
     })
 
-    await clickByRole(/GPT-5\.5/i)
-    expect(screen.queryByRole('button', { name: /^Max$/ })).not.toBeInTheDocument()
-    await clickByRole(/^X-High$/)
+    expect(screen.getByRole('button', { name: 'Effort: Medium' })).toBeInTheDocument()
+    await clickByRole('Effort: Medium')
+    expect(screen.getByRole('slider', { name: 'Effort' })).toHaveAttribute('aria-valuemax', '3')
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'End' })
+    expect(screen.getByRole('slider', { name: 'Effort' })).toHaveAttribute('aria-valuetext', 'X-High')
 
     expect(useSessionRuntimeStore.getState().selections['session-openai-effort']).toEqual({
       providerId: OPENAI_OFFICIAL_PROVIDER_ID,
@@ -440,9 +456,93 @@ describe('ModelSelector', () => {
     })
   })
 
+  it('selects Grok Official models for a logged-in runtime', async () => {
+    const grokModels: ModelInfo[] = [{
+      id: 'grok-4.5',
+      name: 'Grok 4.5',
+      description: 'Grok frontier text model',
+      context: '',
+      supportedReasoningEfforts: [],
+    }]
+    useHahaGrokOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, email: 'grok@example.com' },
+      fetchStatus: async () => {},
+    })
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: grokModels,
+      currentModel: grokModels[0],
+      activeProviderName: 'Grok Official',
+    })
+    useProviderStore.setState({
+      providers: [],
+      activeId: 'grok-official',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+
+    render(<ModelSelector runtimeKey="session-grok" />)
+    await clickByRole(/Grok 4\.5/i)
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /Grok 4\.5/i })[1]!)
+      await Promise.resolve()
+    })
+
+    expect(useSessionRuntimeStore.getState().selections['session-grok']).toMatchObject({
+      providerId: 'grok-official',
+      modelId: 'grok-4.5',
+    })
+    expect(screen.queryByRole('button', { name: /Effort:/i })).not.toBeInTheDocument()
+  })
+
+  it('replaces a stale Grok runtime model with the current official default', async () => {
+    const grokModels: ModelInfo[] = [{
+      id: 'grok-4.5',
+      name: 'Grok 4.5',
+      description: 'Grok frontier text model',
+      context: '500000',
+      defaultReasoningEffort: 'high',
+      supportedReasoningEfforts: ['low', 'medium', 'high'],
+    }]
+    useHahaGrokOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, email: 'grok@example.com' },
+      fetchStatus: async () => {},
+    })
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: grokModels,
+      currentModel: grokModels[0],
+      activeProviderName: 'Grok Official',
+      effortLevel: 'max',
+    })
+    useProviderStore.setState({
+      providers: [],
+      activeId: 'grok-official',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSessionRuntimeStore.getState().setSelection('session-stale-grok', {
+      providerId: 'grok-official',
+      modelId: 'grok-build',
+      effortLevel: 'max',
+    })
+    render(<ModelSelector runtimeKey="session-stale-grok" />)
+
+    expect(screen.queryByText('grok-build')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Grok 4.5, Grok Official' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(useSessionRuntimeStore.getState().selections['session-stale-grok']).toEqual({
+        providerId: 'grok-official',
+        modelId: 'grok-4.5',
+        effortLevel: 'high',
+      })
+    })
+  })
+
   it('hides official provider sections when OAuth is not logged in', async () => {
     useHahaOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
     useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+    useHahaGrokOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
     useSettingsStore.setState({
       locale: 'en',
       availableModels: MODELS,

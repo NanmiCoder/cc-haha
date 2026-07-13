@@ -8,6 +8,14 @@
 // Client → Server
 // ============================================================================
 
+export type PermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'plan'
+  | 'bypassPermissions'
+  | 'dontAsk'
+  | 'auto'
+
 export type ClientMessage =
   | { type: 'prewarm_session' }
   | { type: 'sync_state' }
@@ -26,7 +34,7 @@ export type ClientMessage =
       requestId: string
       response: ComputerUsePermissionResponse
     }
-  | { type: 'set_permission_mode'; mode: string }
+  | { type: 'set_permission_mode'; mode: PermissionMode }
   | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string }
   | { type: 'stop_generation' }
   | { type: 'stop_background_task'; taskId: string }
@@ -84,7 +92,7 @@ export type ServerMessage =
   // CLI 是权限模式的唯一真相来源。当 CLI 内部 mode 变化（如 ExitPlanMode 后
   // 恢复到进入 plan 前的模式、Shift+Tab 切换）时，把新模式回传给前端，让桌面端
   // 选择器与 CLI 保持同步，而不是停留在本地影子值上。
-  | { type: 'permission_mode_changed'; mode: string }
+  | { type: 'permission_mode_changed'; mode: PermissionMode }
   | {
       type: 'api_retry'
       attempt: number

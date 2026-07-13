@@ -68,6 +68,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const { sessions: raw } = await sessionsApi.list(buildSessionListParams(project))
       if (requestId !== fetchSessionsRequestId) return
+      useSessionRuntimeStore.getState().syncFromSessions(raw)
       let syncedSessions: SessionListItem[] = []
       set((state) => {
         const sessions = mergeSessionList(raw, state.sessions)

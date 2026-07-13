@@ -19,6 +19,7 @@ describe('h5AccessPolicy', () => {
     expect(isLoopbackHost('127.0.0.1')).toBe(true)
     expect(isLoopbackHost('127.0.1.1')).toBe(true)
     expect(isLoopbackHost('[::1]')).toBe(true)
+    expect(isLoopbackHost('::ffff:127.0.0.1')).toBe(true)
     expect(isLoopbackHost('127.example.com')).toBe(false)
     expect(isLoopbackHost('127.bad.0.1')).toBe(false)
     expect(isLoopbackHost('192.168.0.20')).toBe(false)
@@ -120,6 +121,86 @@ describe('h5AccessPolicy', () => {
       const request = req('http://127.0.0.1:3456/ws/session-1', init)
       expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
       expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+    }
+  })
+
+  test('does not trust a public request host just because a reverse proxy connects from loopback', () => {
+    for (const pathname of [
+      '/api/status',
+      '/local-file/Users/alice/report.html',
+      '/preview-fs/session-1/index.html',
+      '/proxy/openai/v1/chat/completions',
+      '/ws/session-1',
+    ]) {
+      const request = req(`https://haha.example.com:8443${pathname}`)
+      const url = new URL(request.url)
+
+      expect(classifyH5Request(request, url, localContext)).toBe('h5-browser')
+      expect(shouldRequireH5Token({ request, url, h5Enabled: true, context: localContext })).toBe(true)
+      expect(shouldBlockDisabledH5Access({
+        request,
+        url,
+        h5Enabled: false,
+        explicitAuthRequired: false,
+        context: localContext,
+      })).toBe(true)
+    }
+  })
+
+  test('does not trust loopback requests carrying reverse proxy trace headers', () => {
+    for (const [header, value] of [
+      ['Forwarded', 'for=203.0.113.9;proto=https;host=haha.example.com'],
+      ['X-Forwarded-For', '203.0.113.9'],
+      ['X-Forwarded-Host', 'haha.example.com'],
+      ['X-Forwarded-Proto', 'https'],
+      ['X-Real-IP', '203.0.113.9'],
+      ['Via', '1.1 proxy.example.com'],
+    ]) {
+      for (const pathname of [
+        '/api/status',
+        '/local-file/Users/alice/report.html',
+        '/preview-fs/session-1/index.html',
+        '/proxy/openai/v1/chat/completions',
+        '/ws/session-1',
+      ]) {
+        const request = req(`http://127.0.0.1:3456${pathname}`, {
+          headers: { [header]: value },
+        })
+        const url = new URL(request.url)
+
+        expect(classifyH5Request(request, url, localContext)).toBe('h5-browser')
+        expect(shouldRequireH5Token({ request, url, h5Enabled: true, context: localContext })).toBe(true)
+        expect(shouldBlockDisabledH5Access({
+          request,
+          url,
+          h5Enabled: false,
+          explicitAuthRequired: false,
+          context: localContext,
+        })).toBe(true)
+      }
+    }
+  })
+
+  test('does not grant internal SDK trust to a request carrying proxy traces', () => {
+    const request = req('http://127.0.0.1:3456/sdk/session-1', {
+      headers: { 'X-Forwarded-For': '203.0.113.9' },
+    })
+
+    expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('h5-browser')
+  })
+
+  test('keeps no-Origin requests tokenless when both connection and target hosts are loopback', () => {
+    for (const { requestUrl, clientAddress } of [
+      { requestUrl: 'http://localhost:3456/api/status', clientAddress: '127.0.0.1' },
+      { requestUrl: 'https://127.0.1.1:8443/api/status', clientAddress: '::ffff:127.0.0.1' },
+      { requestUrl: 'http://[::1]:3456/api/status', clientAddress: '::1' },
+    ]) {
+      const request = req(requestUrl)
+      const url = new URL(request.url)
+      const context = { clientAddress }
+
+      expect(classifyH5Request(request, url, context)).toBe('local-trusted')
+      expect(shouldRequireH5Token({ request, url, h5Enabled: true, context })).toBe(false)
     }
   })
 

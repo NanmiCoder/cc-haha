@@ -60,7 +60,7 @@ export type TerminalPtyFactory = {
 }
 
 export type TerminalAppLike = {
-  getPath(name: 'userData'): string
+  getPath(name: 'home' | 'userData'): string
 }
 
 export type TerminalWebContentsLike = {
@@ -104,18 +104,26 @@ export function terminalConfigPath(app: TerminalAppLike | undefined, env: NodeJS
     return path.join(portableDir, TERMINAL_CONFIG_FILE)
   }
   if (!app) return null
-  return path.join(app.getPath('userData'), TERMINAL_CONFIG_FILE)
+  return path.join(app.getPath('home'), '.claude', TERMINAL_CONFIG_FILE)
 }
 
-export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string | null {
+export function claudeConfigDir(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   const portableDir = env.CLAUDE_CONFIG_DIR?.trim()
   if (portableDir) return portableDir
-  const home = env.HOME || env.USERPROFILE || os.homedir()
+  const home = platform === 'win32'
+    ? env.USERPROFILE || os.homedir()
+    : env.HOME || os.homedir()
   return home ? path.join(home, '.claude') : null
 }
 
-export function desktopTerminalSettingsPath(env: NodeJS.ProcessEnv = process.env): string | null {
-  const dir = claudeConfigDir(env)
+export function desktopTerminalSettingsPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const dir = claudeConfigDir(env, platform)
   return dir ? path.join(dir, 'settings.json') : null
 }
 
@@ -228,8 +236,11 @@ export function terminalEnvironment(
   return ensureUtf8Locale(merged, platform)
 }
 
-export function readDesktopTerminalConfig(env: NodeJS.ProcessEnv = process.env): DesktopTerminalConfig | null {
-  const settingsPath = desktopTerminalSettingsPath(env)
+export function readDesktopTerminalConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): DesktopTerminalConfig | null {
+  const settingsPath = desktopTerminalSettingsPath(env, platform)
   if (!settingsPath) return null
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as DesktopTerminalSettingsFile
@@ -242,11 +253,18 @@ export function readDesktopTerminalConfig(env: NodeJS.ProcessEnv = process.env):
 function loadTerminalConfig(app: TerminalAppLike | undefined, env: NodeJS.ProcessEnv): TerminalConfig {
   const configPath = terminalConfigPath(app, env)
   if (!configPath) return {}
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8')) as TerminalConfig
-  } catch {
-    return {}
+  const candidates = [configPath]
+  if (app && !env.CLAUDE_CONFIG_DIR) {
+    candidates.push(path.join(app.getPath('userData'), TERMINAL_CONFIG_FILE))
   }
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(fs.readFileSync(candidate, 'utf8')) as TerminalConfig
+    } catch {
+      // Try the old Electron userData location before using defaults.
+    }
+  }
+  return {}
 }
 
 function saveTerminalConfig(app: TerminalAppLike | undefined, env: NodeJS.ProcessEnv, config: TerminalConfig) {
@@ -520,7 +538,7 @@ export class ElectronTerminalService {
       terminalConfig.bash_path ?? null,
       this.fileExists,
     )
-    return resolveDesktopTerminalShell(this.platform, readDesktopTerminalConfig(this.env)) ?? systemDefault
+    return resolveDesktopTerminalShell(this.platform, readDesktopTerminalConfig(this.env, this.platform)) ?? systemDefault
   }
 
   async spawn(input: TerminalSpawnInput, webContents: TerminalWebContentsLike): Promise<TerminalSpawnResult> {

@@ -1,4 +1,4 @@
-import { dirname } from 'path'
+import { basename, dirname } from 'path'
 import { getFsImplementation } from './fsOperations.js'
 import { jsonStringify } from './slowOperations.js'
 
@@ -10,6 +10,10 @@ type DiagnosticLogEntry = {
   event: string
   data: Record<string, unknown>
 }
+
+const MAX_SEGMENT_BYTES = 1024 * 1024
+const MAX_COMPLETED_SEGMENTS = 4
+let segmentSequence = 0
 
 /**
  * Logs diagnostic information to a logfile. This information is sent
@@ -29,8 +33,8 @@ export function logForDiagnosticsNoPII(
   event: string,
   data?: Record<string, unknown>,
 ): void {
-  const logFile = getDiagnosticLogFile()
-  if (!logFile) {
+  const baseLogFile = getDiagnosticLogFile()
+  if (!baseLogFile) {
     return
   }
 
@@ -43,16 +47,39 @@ export function logForDiagnosticsNoPII(
 
   const fs = getFsImplementation()
   const line = jsonStringify(entry) + '\n'
+  const logFile = `${baseLogFile}.${process.pid}.current.jsonl`
   try {
+    rotateOwnedSegmentIfNeeded(fs, baseLogFile, logFile, Buffer.byteLength(line))
     fs.appendFileSync(logFile, line)
   } catch {
     // If append fails, try creating the directory first
     try {
       fs.mkdirSync(dirname(logFile))
+      rotateOwnedSegmentIfNeeded(fs, baseLogFile, logFile, Buffer.byteLength(line))
       fs.appendFileSync(logFile, line)
     } catch {
       // Silently fail if logging is not possible
     }
+  }
+}
+
+function rotateOwnedSegmentIfNeeded(
+  fs: ReturnType<typeof getFsImplementation>,
+  baseLogFile: string,
+  activeLogFile: string,
+  incomingBytes: number,
+): void {
+  if (!fs.existsSync(activeLogFile)) return
+  if (fs.statSync(activeLogFile).size + incomingBytes <= MAX_SEGMENT_BYTES) return
+  segmentSequence += 1
+  const completedPath = `${baseLogFile}.${process.pid}.${Date.now()}-${segmentSequence}.jsonl`
+  fs.renameSync(activeLogFile, completedPath)
+  const prefix = `${basename(baseLogFile)}.${process.pid}.`
+  const completed = fs.readdirStringSync(dirname(baseLogFile))
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.jsonl') && !name.endsWith('.current.jsonl'))
+    .sort()
+  for (const staleName of completed.slice(0, -MAX_COMPLETED_SEGMENTS)) {
+    fs.unlinkSync(`${dirname(baseLogFile)}/${staleName}`)
   }
 }
 

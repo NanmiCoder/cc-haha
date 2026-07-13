@@ -5,6 +5,10 @@ import {
 } from '../constants/openaiOfficialProvider'
 import type { SavedProvider } from '../types/provider'
 import type { RuntimeSelection } from '../types/runtime'
+import {
+  GROK_OFFICIAL_DEFAULT_MODEL_ID,
+  GROK_OFFICIAL_PROVIDER_ID,
+} from '../constants/grokOfficialProvider'
 
 export function resolveActiveProviderRuntimeSelection(
   activeId: string | null,
@@ -27,7 +31,9 @@ export function resolveActiveProviderRuntimeSelection(
     modelId: providerMainModelId || currentModelId || (
       inferredProviderId === OPENAI_OFFICIAL_PROVIDER_ID
         ? OPENAI_OFFICIAL_DEFAULT_MODEL_ID
-        : OFFICIAL_DEFAULT_MODEL_ID
+        : inferredProviderId === GROK_OFFICIAL_PROVIDER_ID
+          ? GROK_OFFICIAL_DEFAULT_MODEL_ID
+          : OFFICIAL_DEFAULT_MODEL_ID
     ),
   }
 }

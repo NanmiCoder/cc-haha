@@ -1,20 +1,37 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import type { Readable } from 'node:stream'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { isBrowserSafePort } from '../../src/lib/browserSafePort'
 
 export const SERVER_BIND_HOST = '0.0.0.0'
 export const SERVER_CONTROL_HOST = '127.0.0.1'
 export const SERVER_STARTUP_TIMEOUT_MS = 30_000
 export const SERVER_STARTUP_LOG_LIMIT = 80
+export const HOST_DIAGNOSTICS_LINE_LIMIT = 80
+export const HOST_DIAGNOSTICS_BYTE_LIMIT = 256 * 1024
+export const ELECTRON_DIAGNOSTICS_FILE_ENV = 'CC_HAHA_ELECTRON_DIAGNOSTICS_FILE'
+const HOST_DIAGNOSTICS_LINE_BYTE_LIMIT = 4096
 // Shared with the Tauri shell (src-tauri/src/lib.rs) so both desktop builds
 // reuse the same sticky port across restarts (issue #767).
 export const SERVER_STATE_FILE = 'desktop-server-state.json'
 // Mirrors the server-side fixedPort range (h5AccessService MIN/MAX_FIXED_PORT).
 const MIN_FIXED_PORT = 1024
 const MAX_FIXED_PORT = 65535
+const MAX_PORT_RESERVATION_ATTEMPTS = 128
 
 export type SidecarChild = ChildProcessByStdio<null, Readable, Readable>
 
@@ -58,7 +75,11 @@ export function httpToWebSocketUrl(serverHttpUrl: string): string {
   return serverHttpUrl
 }
 
-export async function reserveLocalPort(bindHost = SERVER_BIND_HOST): Promise<number> {
+export type ReserveLocalPortDeps = {
+  reserveCandidate?: (bindHost: string) => Promise<number>
+}
+
+async function reserveLocalPortCandidate(bindHost: string): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer()
     server.once('error', error => reject(error))
@@ -73,6 +94,19 @@ export async function reserveLocalPort(bindHost = SERVER_BIND_HOST): Promise<num
       })
     })
   })
+}
+
+export async function reserveLocalPort(
+  bindHost = SERVER_BIND_HOST,
+  deps: ReserveLocalPortDeps = {},
+): Promise<number> {
+  const reserveCandidate = deps.reserveCandidate ?? reserveLocalPortCandidate
+  for (let attempt = 0; attempt < MAX_PORT_RESERVATION_ATTEMPTS; attempt++) {
+    const port = await reserveCandidate(bindHost)
+    if (isBrowserSafePort(port)) return port
+    console.error(`[desktop] OS assigned browser-blocked server port ${port}; retrying`)
+  }
+  throw new Error('Could not reserve a browser-safe local port')
 }
 
 function canBindPort(bindHost: string, port: number): Promise<boolean> {
@@ -95,15 +129,32 @@ export async function reserveServerPort(
   preferred: number[],
 ): Promise<number> {
   for (const port of preferred) {
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) continue
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      console.error(`[desktop] preferred server port ${port} is invalid; skipping`)
+      continue
+    }
+    if (!isBrowserSafePort(port)) {
+      console.error(`[desktop] preferred server port ${port} is blocked by browser fetch; skipping`)
+      continue
+    }
     if (await canBindPort(bindHost, port)) return port
     console.error(`[desktop] preferred server port ${port} unavailable`)
   }
   return await reserveLocalPort(bindHost)
 }
 
-export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+export function claudeConfigDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): string {
+  return env.CLAUDE_CONFIG_DIR || path.join(homeDir, '.claude')
+}
+
+export function electronHostDiagnosticsFile(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): string {
+  return path.join(claudeConfigDir(env, homeDir), 'cc-haha', 'diagnostics', 'electron-host.log')
 }
 
 /** Parse h5Access.fixedPort out of cc-haha/settings.json contents. */
@@ -119,7 +170,7 @@ export function parseH5FixedPort(contents: string): number | null {
   if (!h5Access || typeof h5Access !== 'object') return null
   const port = (h5Access as Record<string, unknown>).fixedPort
   if (typeof port !== 'number' || !Number.isInteger(port)) return null
-  return port >= MIN_FIXED_PORT && port <= MAX_FIXED_PORT ? port : null
+  return port >= MIN_FIXED_PORT && port <= MAX_FIXED_PORT && isBrowserSafePort(port) ? port : null
 }
 
 export function readH5FixedPort(env: NodeJS.ProcessEnv = process.env): number | null {
@@ -138,7 +189,7 @@ export function readLastServerPort(env: NodeJS.ProcessEnv = process.env): number
     if (!state || typeof state !== 'object') return null
     const port = (state as Record<string, unknown>).lastPort
     if (typeof port !== 'number' || !Number.isInteger(port)) return null
-    return port > 0 && port <= 65535 ? port : null
+    return isBrowserSafePort(port) ? port : null
   } catch {
     return null
   }
@@ -212,10 +263,99 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function pushStartupLog(logs: string[], line: string) {
-  const trimmed = line.trimEnd()
+  const trimmed = sanitizeHostDiagnostic(line, os.homedir())
   if (!trimmed) return
   if (logs.length >= SERVER_STARTUP_LOG_LIMIT) logs.shift()
   logs.push(trimmed)
+}
+
+export function appendHostDiagnostic(
+  filePath: string | undefined,
+  line: string,
+  { homeDir = os.homedir() }: { homeDir?: string } = {},
+): void {
+  if (!filePath) return
+  const tempPath = `${filePath}.${process.pid}.tmp`
+  try {
+    const sanitized = sanitizeHostDiagnostic(line, homeDir)
+    if (!sanitized) return
+    const existing = readHostDiagnosticsTail(filePath)
+    const lines = existing.trimEnd()
+      ? existing.trimEnd().split('\n').map(entry => sanitizeHostDiagnostic(entry, homeDir)).filter(Boolean)
+      : []
+    lines.push(sanitized)
+    const boundedLines: string[] = []
+    let retainedBytes = 0
+    for (const entry of lines.slice(-HOST_DIAGNOSTICS_LINE_LIMIT).reverse()) {
+      const entryBytes = Buffer.byteLength(entry, 'utf-8') + 1
+      if (retainedBytes + entryBytes > HOST_DIAGNOSTICS_BYTE_LIMIT) break
+      boundedLines.unshift(entry)
+      retainedBytes += entryBytes
+    }
+    mkdirSync(path.dirname(filePath), { recursive: true })
+    writeFileSync(tempPath, `${boundedLines.join('\n')}\n`, {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
+    renameSync(tempPath, filePath)
+  } catch {
+    try {
+      rmSync(tempPath, { force: true })
+    } catch {
+      // Best-effort cleanup must not mask the original diagnostics failure.
+    }
+    console.error('[desktop] failed to persist Electron host diagnostics')
+  }
+}
+
+function readHostDiagnosticsTail(filePath: string): string {
+  let descriptor: number | undefined
+  try {
+    descriptor = openSync(filePath, 'r')
+    const size = fstatSync(descriptor).size
+    const length = Math.min(size, HOST_DIAGNOSTICS_BYTE_LIMIT)
+    const buffer = Buffer.alloc(length)
+    const bytesRead = readSync(descriptor, buffer, 0, length, size - length)
+    const tail = buffer.subarray(0, bytesRead).toString('utf-8')
+    if (size <= length) return tail
+    const firstNewline = tail.indexOf('\n')
+    return firstNewline >= 0 ? tail.slice(firstNewline + 1) : ''
+  } catch {
+    return ''
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor)
+  }
+}
+
+export function sanitizeHostDiagnostic(line: string, homeDir = os.homedir()): string {
+  let sanitized = line
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/https?:\/\/[^\s<>"')\]}]+/gi, candidate => sanitizeUrlUserinfo(candidate))
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(
+      /\b((?:(?:[a-z0-9]+_)*(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|secret))\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      '$1[REDACTED]',
+    )
+    .replace(/\b(?:sk-(?:ant-api03-|proj-)?|ghp_)[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .trimEnd()
+  if (homeDir) sanitized = sanitized.replaceAll(homeDir, '[HOME]')
+  return truncateUtf8(sanitized, HOST_DIAGNOSTICS_LINE_BYTE_LIMIT)
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, 'utf-8')
+  if (buffer.byteLength <= maxBytes) return value
+  return buffer.subarray(0, maxBytes).toString('utf-8').replace(/\uFFFD$/, '')
+}
+
+function sanitizeUrlUserinfo(candidate: string): string {
+  try {
+    const url = new URL(candidate)
+    if (!url.username && !url.password) return candidate
+    return `${url.protocol}//[REDACTED]@${url.host}${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return '[REDACTED_URL]'
+  }
 }
 
 export function formatStartupError(message: string, logs: string[]): string {

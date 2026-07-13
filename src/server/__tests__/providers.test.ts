@@ -16,11 +16,14 @@ import type { CreateProviderInput } from '../types/provider.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
+let originalHome: string | undefined
 
 async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  originalHome = process.env.HOME
   process.env.CLAUDE_CONFIG_DIR = tmpDir
+  process.env.HOME = tmpDir
   clearTraceCaptureStateForTests()
 }
 
@@ -30,6 +33,11 @@ async function teardown() {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
     delete process.env.CLAUDE_CONFIG_DIR
+  }
+  if (originalHome !== undefined) {
+    process.env.HOME = originalHome
+  } else {
+    delete process.env.HOME
   }
   await fs.rm(tmpDir, { recursive: true, force: true })
 }
@@ -98,7 +106,7 @@ describe('ProviderService', () => {
       expect(result).toEqual({
         providers: [],
         activeId: null,
-        providerOrder: ['claude-official', 'openai-official'],
+        providerOrder: ['claude-official', 'openai-official', 'grok-official'],
       })
     })
 
@@ -113,7 +121,7 @@ describe('ProviderService', () => {
       expect(result).toEqual({
         providers: [],
         activeId: null,
-        providerOrder: ['claude-official', 'openai-official'],
+        providerOrder: ['claude-official', 'openai-official', 'grok-official'],
       })
       expect(files.some((name) => name.startsWith('providers.json.invalid-'))).toBe(true)
     })
@@ -513,6 +521,104 @@ describe('ProviderService', () => {
       })
     })
 
+    describe('Grok Official provider metadata', () => {
+      test('normalizes the built-in Grok provider and appends it to legacy provider order', async () => {
+        await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(
+          path.join(tmpDir, 'cc-haha', 'providers.json'),
+          JSON.stringify({
+            activeId: 'grok-official',
+            providers: [],
+            providerOrder: ['claude-official', 'openai-official'],
+          }),
+          'utf-8',
+        )
+
+        const svc = new ProviderService()
+        const result = await svc.listProviders()
+
+        expect(result.activeId).toBe('grok-official')
+        expect(result.providers).toEqual([])
+        expect(result.providerOrder).toEqual([
+          'claude-official',
+          'openai-official',
+          'grok-official',
+        ])
+      })
+
+      test('returns and activates built-in Grok metadata while clearing OpenAI OAuth runtime env', async () => {
+        const svc = new ProviderService()
+        const provider = await svc.getProvider('grok-official')
+
+        expect(provider).toMatchObject({
+          id: 'grok-official',
+          presetId: 'grok-official',
+          name: 'Grok Official',
+          apiKey: '',
+          apiFormat: 'openai_chat',
+          runtimeKind: 'grok_oauth',
+          models: {
+            main: 'grok-4.5',
+            haiku: 'grok-4.5',
+            sonnet: 'grok-4.5',
+            opus: 'grok-4.5',
+          },
+        })
+
+        await svc.activateProvider('openai-official')
+        await svc.activateProvider('grok-official')
+
+        const config = await readProvidersConfig()
+        const env = (await readSettings()).env as Record<string, string>
+        expect(config.activeId).toBe('grok-official')
+        expect(env.CC_HAHA_GROK_OAUTH_PROVIDER).toBe('1')
+        expect(env.GROK_OAUTH_FILE).toBe(
+          path.join(tmpDir, 'cc-haha', 'grok-oauth.json'),
+        )
+        expect(env.ANTHROPIC_MODEL).toBe('grok-4.5')
+        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('grok-4.5')
+        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('grok-4.5')
+        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('grok-4.5')
+        expect(env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
+        expect(env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
+      })
+
+      test('auth status reports Grok Official from the isolated Grok token file', async () => {
+        await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(
+          path.join(tmpDir, 'cc-haha', 'grok-oauth.json'),
+          JSON.stringify({
+            accessToken: 'grok-access',
+            refreshToken: 'grok-refresh',
+            expiresAt: Date.now() + 60 * 60_000,
+            email: 'grok@example.com',
+            clientId: 'grok-client',
+          }),
+          'utf-8',
+        )
+
+        const svc = new ProviderService()
+        await svc.activateProvider('grok-official')
+
+        await expect(svc.checkAuthStatus()).resolves.toMatchObject({
+          hasAuth: true,
+          source: 'grok-oauth',
+          activeProvider: 'Grok Official',
+        })
+      })
+
+      test('auth status reports Grok Official as unauthenticated without an isolated token file', async () => {
+        const svc = new ProviderService()
+        await svc.activateProvider('grok-official')
+
+        await expect(svc.checkAuthStatus()).resolves.toMatchObject({
+          hasAuth: false,
+          source: 'none',
+          activeProvider: 'Grok Official',
+        })
+      })
+    })
+
     test('should throw 404 for non-existent id', async () => {
       const svc = new ProviderService()
 
@@ -716,16 +822,40 @@ describe('ProviderService', () => {
       const a = await svc.addProvider(sampleInput({ name: 'A' }))
       const b = await svc.addProvider(sampleInput({ name: 'B' }))
 
-      const result = await svc.reorderProviders(['openai-official', b.id, 'claude-official', a.id])
+      const result = await svc.reorderProviders([
+        'openai-official',
+        b.id,
+        'claude-official',
+        a.id,
+        'grok-official',
+      ])
 
-      expect(result.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+      expect(result.providerOrder).toEqual([
+        'openai-official',
+        b.id,
+        'claude-official',
+        a.id,
+        'grok-official',
+      ])
       expect(result.providers.map((p) => p.id)).toEqual([b.id, a.id])
 
       const listed = await svc.listProviders()
-      expect(listed.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+      expect(listed.providerOrder).toEqual([
+        'openai-official',
+        b.id,
+        'claude-official',
+        a.id,
+        'grok-official',
+      ])
 
       const config = await readProvidersConfig()
-      expect(config.providerOrder).toEqual(['openai-official', b.id, 'claude-official', a.id])
+      expect(config.providerOrder).toEqual([
+        'openai-official',
+        b.id,
+        'claude-official',
+        a.id,
+        'grok-official',
+      ])
     })
 
     test('should not change activeId when reordering', async () => {
@@ -1130,6 +1260,14 @@ describe('ProviderService', () => {
       expect(active).toBeNull()
     })
 
+    test('should return null for explicit Grok Official proxy lookup', async () => {
+      const svc = new ProviderService()
+
+      const active = await svc.getProviderForProxy('grok-official')
+
+      expect(active).toBeNull()
+    })
+
     test('should return the active provider proxy config', async () => {
       const svc = new ProviderService()
       const provider = await svc.addProvider(sampleInput())
@@ -1145,6 +1283,15 @@ describe('ProviderService', () => {
     test('should return null when ChatGPT Official is the active provider', async () => {
       const svc = new ProviderService()
       await svc.activateProvider('openai-official')
+
+      const active = await svc.getProviderForProxy()
+
+      expect(active).toBeNull()
+    })
+
+    test('should return null when Grok Official is the active provider', async () => {
+      const svc = new ProviderService()
+      await svc.activateProvider('grok-official')
 
       const active = await svc.getProviderForProxy()
 
@@ -1861,7 +2008,13 @@ describe('Providers API', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: { name: string }[]; providerOrder: string[] }
     expect(body.providers.map((p) => p.name)).toEqual(['B', 'A'])
-    expect(body.providerOrder).toEqual([b.id, a.id, 'claude-official', 'openai-official'])
+    expect(body.providerOrder).toEqual([
+      b.id,
+      a.id,
+      'claude-official',
+      'openai-official',
+      'grok-official',
+    ])
   })
 
   test('PUT /api/providers/reorder should return 400 for a non-permutation', async () => {

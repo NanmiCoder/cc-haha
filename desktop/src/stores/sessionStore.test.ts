@@ -25,6 +25,7 @@ vi.mock('../lib/recentProjectsCache', () => ({
 }))
 
 import { useSessionStore } from './sessionStore'
+import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
 
@@ -73,12 +74,14 @@ describe('sessionStore', () => {
     })
     useSettingsStore.setState({ permissionMode: 'default' })
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useSessionRuntimeStore.setState({ selections: {} })
   })
 
   afterEach(() => {
     useSessionStore.setState(initialState)
     useSettingsStore.setState({ permissionMode: 'default' })
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useSessionRuntimeStore.setState({ selections: {} })
   })
 
   it('returns a new session id before the background refresh completes', async () => {
@@ -163,6 +166,31 @@ describe('sessionStore', () => {
     await useSessionStore.getState().fetchSessions()
 
     expect(useTabStore.getState().tabs[0]?.title).toBe('使用bash写一个shell，随便写点什么东西')
+  })
+
+  it('syncs transcript runtime metadata before a session is opened from the sidebar', async () => {
+    useSessionRuntimeStore.getState().setSelection('session-runtime-1', {
+      providerId: null,
+      modelId: 'gpt-5.4',
+      effortLevel: 'max',
+    })
+    listMock.mockResolvedValue({
+      sessions: [{
+        ...makeSession('session-runtime-1', '2026-07-13T05:57:05.818Z'),
+        runtimeProviderId: 'provider-latest',
+        runtimeModelId: 'anthropic/claude-opus-4.7',
+        effortLevel: 'max',
+      }],
+      total: 1,
+    })
+
+    await useSessionStore.getState().fetchSessions()
+
+    expect(useSessionRuntimeStore.getState().selections['session-runtime-1']).toEqual({
+      providerId: 'provider-latest',
+      modelId: 'anthropic/claude-opus-4.7',
+      effortLevel: 'max',
+    })
   })
 
   it('updates a session message count without changing other metadata', () => {

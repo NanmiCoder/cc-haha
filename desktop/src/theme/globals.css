@@ -546,6 +546,19 @@
   --color-code-inserted: #1A7F37;
   --color-code-deleted: #CF222E;
 
+  --color-diff-syntax-foreground: #0D0D0D;
+  --color-diff-syntax-comment: #666666;
+  --color-diff-syntax-string: #008809;
+  --color-diff-syntax-number: #0071EA;
+  --color-diff-syntax-regexp: #0071EA;
+  --color-diff-syntax-keyword: #D53538;
+  --color-diff-syntax-variable: #BD5800;
+  --color-diff-syntax-parameter: #666666;
+  --color-diff-syntax-property: #BD5800;
+  --color-diff-syntax-function: #751ED9;
+  --color-diff-syntax-type: #751ED9;
+  --color-diff-syntax-punctuation: #666666;
+
   --color-diff-added-bg: #E8F5E2;
   --color-diff-added-word: #B8E4A8;
   --color-diff-added-gutter: #D4EDCA;
@@ -581,6 +594,7 @@
   --color-text-primary-a78: rgba(27, 28, 26, 0.78);
   --color-surface-hover-a34: rgba(233, 232, 228, 0.34);
   --color-surface-hover-a54: rgba(233, 232, 228, 0.54);
+  --color-chat-navigation-target: rgba(143, 72, 47, 0.10);
   --color-outline-a72: rgba(135, 115, 109, 0.72);
   --color-outline-a78: rgba(135, 115, 109, 0.78);
   --color-outline-a92: rgba(135, 115, 109, 0.92);
@@ -742,6 +756,19 @@
   --color-code-inserted: #067647;
   --color-code-deleted: #B42318;
 
+  --color-diff-syntax-foreground: #0D0D0D;
+  --color-diff-syntax-comment: #666666;
+  --color-diff-syntax-string: #008809;
+  --color-diff-syntax-number: #0071EA;
+  --color-diff-syntax-regexp: #0071EA;
+  --color-diff-syntax-keyword: #D53538;
+  --color-diff-syntax-variable: #BD5800;
+  --color-diff-syntax-parameter: #666666;
+  --color-diff-syntax-property: #BD5800;
+  --color-diff-syntax-function: #751ED9;
+  --color-diff-syntax-type: #751ED9;
+  --color-diff-syntax-punctuation: #666666;
+
   --color-diff-added-bg: #ECFDF3;
   --color-diff-added-word: #ABEFC6;
   --color-diff-added-gutter: #D1FADF;
@@ -775,6 +802,7 @@
   --color-text-primary-a78: rgba(17, 24, 39, 0.78);
   --color-surface-hover-a34: rgba(241, 244, 247, 0.34);
   --color-surface-hover-a54: rgba(241, 244, 247, 0.54);
+  --color-chat-navigation-target: rgba(143, 72, 47, 0.10);
   --color-outline-a72: rgba(139, 152, 167, 0.72);
   --color-outline-a78: rgba(139, 152, 167, 0.78);
   --color-outline-a92: rgba(139, 152, 167, 0.92);
@@ -930,6 +958,19 @@
   --color-code-inserted: #8EEA9A;
   --color-code-deleted: #FFB59F;
 
+  --color-diff-syntax-foreground: #FCFCFC;
+  --color-diff-syntax-comment: #999999;
+  --color-diff-syntax-string: #85DF7B;
+  --color-diff-syntax-number: #6DCBF4;
+  --color-diff-syntax-regexp: #3D8DFF;
+  --color-diff-syntax-keyword: #F67576;
+  --color-diff-syntax-variable: #FA994C;
+  --color-diff-syntax-parameter: #999999;
+  --color-diff-syntax-property: #FA994C;
+  --color-diff-syntax-function: #B06DFF;
+  --color-diff-syntax-type: #B06DFF;
+  --color-diff-syntax-punctuation: #999999;
+
   --color-diff-added-bg: rgba(126, 219, 139, 0.12);
   --color-diff-added-word: rgba(126, 219, 139, 0.22);
   --color-diff-added-gutter: rgba(126, 219, 139, 0.18);
@@ -963,6 +1004,7 @@
   --color-text-primary-a78: rgba(229, 226, 225, 0.78);
   --color-surface-hover-a34: rgba(53, 53, 52, 0.34);
   --color-surface-hover-a54: rgba(53, 53, 52, 0.54);
+  --color-chat-navigation-target: rgba(255, 181, 159, 0.10);
   --color-outline-a72: rgba(141, 127, 122, 0.72);
   --color-outline-a78: rgba(141, 127, 122, 0.78);
   --color-outline-a92: rgba(141, 127, 122, 0.92);
@@ -1480,6 +1522,24 @@ button, input, textarea, select, a, [role="button"] {
 .chat-render-item--cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
+}
+
+@keyframes chat-navigation-target-pulse {
+  0% { background: transparent; }
+  22% { background: var(--color-chat-navigation-target); }
+  100% { background: transparent; }
+}
+
+.chat-render-item--navigation-target {
+  border-radius: var(--radius-lg);
+  animation: chat-navigation-target-pulse 1.4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-render-item--navigation-target {
+    animation: none;
+    background: var(--color-chat-navigation-target);
+  }
 }
 
 /* Same WebKit paint-skipping trick for trace tree rows (see .chat-render-item--cv

@@ -476,4 +476,70 @@ describe('release desktop workflow', () => {
     expect(desktopPackage.build.nsis?.oneClick).toBe(false)
     expect(desktopPackage.build.nsis?.allowToChangeInstallationDirectory).toBe(true)
   })
+
+  test('Windows NSIS installer fails closed while recovering legacy install-directory data', () => {
+    const desktopPackage = JSON.parse(readFileSync('desktop/package.json', 'utf8')) as {
+      scripts?: Record<string, string>
+      build: {
+        nsis?: {
+          include?: string
+        }
+      }
+    }
+
+    expect(desktopPackage.build.nsis?.include).toBe('build/installer.nsh')
+    expect(desktopPackage.scripts?.['test:windows-storage-recovery']).toContain('-SelfTest')
+
+    const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8')
+    const recoveryHelper = readFileSync('desktop/build/recover-legacy-install-data.ps1', 'utf8')
+    expect(installerHook).toContain('!macro customInit')
+    expect(installerHook).toContain('!macro customCheckAppRunning')
+    expect(installerHook).toContain('!macro customPageAfterChangeDir')
+    expect(installerHook).toContain('UAC_AsUser_Call Function CcHahaRecoverLegacy')
+    expect(installerHook).toContain('${UAC_IsInnerInstance}')
+    expect(installerHook).toContain('recover-legacy-install-data.ps1')
+    expect(installerHook).toContain('ReadRegStr $4 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation')
+    expect(installerHook).toContain('ReadRegStr $5 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation')
+    expect(installerHook).toContain('Function CcHahaUninstallerParent')
+    expect(installerHook).toContain('Function CcHahaFinalInstallDir')
+    expect(installerHook).toContain('HKCU "${UNINSTALL_REGISTRY_KEY}" UninstallString')
+    expect(installerHook).toContain('HKLM "${UNINSTALL_REGISTRY_KEY}" UninstallString')
+    expect(installerHook).toContain('UNINSTALL_REGISTRY_KEY_2')
+    expect(installerHook).toContain('ReadEnvStr $2 APPDATA')
+    expect(installerHook).toContain('ReadEnvStr $3 USERPROFILE')
+    expect(installerHook).toContain('ReadEnvStr $6 CLAUDE_CONFIG_DIR')
+    expect(installerHook).toContain('ReadEnvStr $7 CC_HAHA_APP_PORTABLE_DIR')
+    expect(installerHook).toContain('SetErrorLevel 20')
+    expect(installerHook).toContain('Quit')
+    expect(recoveryHelper).toContain('function Get-LegacyActiveSource')
+    expect(recoveryHelper).toContain('function Get-PotentialInstallDirs')
+    expect(recoveryHelper).toContain('function Assert-NoUndiscoveredLegacySources')
+    expect(recoveryHelper).toContain('function Assert-NoRunningApplication')
+    expect(recoveryHelper).toContain('function Get-TreeManifest')
+    expect(recoveryHelper).toContain('function Assert-TreeManifestsEqual')
+    expect(recoveryHelper).toContain('function Write-AppModeAtomically')
+    expect(recoveryHelper).toContain('[IO.File]::Replace')
+    expect(recoveryHelper).toContain('GetFinalPathNameByHandle')
+    expect(recoveryHelper).toContain('robocopy.exe')
+    expect(recoveryHelper).not.toMatch(/\/XC|\/XN|\/XO/)
+    expect(recoveryHelper).toContain('Multiple distinct legacy data sources')
+    expect(recoveryHelper).toContain('Active CLAUDE_CONFIG_DIR is managed outside Claude Code Haha')
+    expect(recoveryHelper).toContain('Test-LexicalPathAtOrBelow')
+    expect(recoveryHelper).toContain('untrusted-elevated')
+    expect(recoveryHelper).toContain('External CLAUDE_CONFIG_DIR is active while install-contained legacy data still exists')
+    expect(recoveryHelper).toMatch(/Assert-NoRunningApplication[\s\S]*Get-UnsafeLegacySource/)
+    expect(recoveryHelper).toMatch(/Assert-TreeManifestsEqual[\s\S]*Assert-NoRunningApplication[\s\S]*Write-AppModeAtomically/)
+    expect(recoveryHelper).toContain('reparse point')
+    expect(recoveryHelper).toContain('Run-SelfTest')
+  })
+
+  test('Windows build and release jobs execute the real legacy recovery self-test', () => {
+    const devWorkflow = readFileSync('.github/workflows/build-desktop-dev.yml', 'utf8')
+    const releaseWorkflow = readFileSync('.github/workflows/release-desktop.yml', 'utf8')
+
+    for (const workflow of [devWorkflow, releaseWorkflow]) {
+      expect(workflow).toContain("if: matrix.smoke_platform == 'windows'")
+      expect(workflow).toContain('bun run test:windows-storage-recovery')
+    }
+  })
 })

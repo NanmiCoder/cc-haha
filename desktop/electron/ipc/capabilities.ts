@@ -112,7 +112,6 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.previewMessage]: () => true,
   [ELECTRON_IPC_CHANNELS.appModeGet]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeSet]: optionalRecord,
-  [ELECTRON_IPC_CHANNELS.appModeDetectPortableDir]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,

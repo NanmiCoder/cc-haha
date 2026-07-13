@@ -39,4 +39,14 @@ describe('useTranslation', () => {
     expect(translate('jp', 'session.timeMinutes', { n: 5 })).toBe('5 分前')
     expect(translate('kr', 'session.timeMinutes', { n: 5 })).toBe('5분 전')
   })
+
+  it('describes exactly the standard ~/.claude mode and an external custom mode', () => {
+    expect(translate('en', 'settings.general.storageSystemDescription')).toContain('~/.claude')
+    expect(translate('zh', 'settings.general.storageSystemDescription')).toContain('~/.claude')
+    expect(translate('zh-TW', 'settings.general.storageSystemDescription')).toContain('~/.claude')
+    expect(translate('jp', 'settings.general.storageSystemDescription')).toContain('~/.claude')
+    expect(translate('kr', 'settings.general.storageSystemDescription')).toContain('~/.claude')
+    expect(translate('en', 'settings.general.storagePortableTitle')).toContain('custom')
+    expect(translate('zh', 'settings.general.storagePortableTitle')).toContain('自定义')
+  })
 })

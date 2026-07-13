@@ -11,13 +11,26 @@ export type PreviewBounds = {
   height: number
 }
 
+type PreviewCaptureRect = PreviewBounds
+
+type PreviewDebuggerLike = {
+  isAttached(): boolean
+  attach(protocolVersion?: string): void
+  detach(): void
+  sendCommand(method: string, commandParams?: Record<string, unknown>): Promise<unknown>
+}
+
+const FULL_CAPTURE_MAX_EDGE = 16_384
+const FULL_CAPTURE_MAX_PIXELS = 32_000_000
+
 export type PreviewWebContentsLike = {
   loadURL(url: string): Promise<unknown>
   executeJavaScript(script: string): Promise<unknown>
   on(event: 'did-finish-load', handler: () => void): unknown
   close?(): void
   isDestroyed?(): boolean
-  capturePage?(): Promise<{ toDataURL(): string }>
+  capturePage?(rect?: PreviewCaptureRect): Promise<{ toDataURL(): string }>
+  debugger?: PreviewDebuggerLike
   setZoomFactor?(factor: number): void
   send(channel: string, payload: unknown): void
 }
@@ -121,6 +134,10 @@ export class ElectronPreviewService {
   private parent: PreviewParentWindowLike | null = null
   private requestedBounds: PreviewBounds | null = null
   private zoomFactor = 1
+  private fullCapture: {
+    webContents: PreviewWebContentsLike
+    promise: Promise<string>
+  } | null = null
 
   constructor(options: ElectronPreviewServiceOptions) {
     this.createView = options.createView
@@ -217,11 +234,79 @@ export class ElectronPreviewService {
     await view.webContents.executeJavaScript(script)
   }
 
-  private async captureNativeDataUrl(): Promise<string> {
+  private async captureNativeDataUrl(kind: PreviewHostCaptureMessage['kind'] = 'viewport'): Promise<string> {
     const webContents = this.requireView().webContents
+    if (kind === 'full') return this.captureFullPageDataUrl(webContents)
     if (!webContents.capturePage) throw new Error('native preview capture unavailable')
     const image = await webContents.capturePage()
     return image.toDataURL()
+  }
+
+  private async captureFullPageDataUrl(webContents: PreviewWebContentsLike): Promise<string> {
+    if (this.fullCapture?.webContents === webContents) {
+      return await this.fullCapture.promise
+    }
+
+    const promise = this.captureFullPageDataUrlOnce(webContents)
+    const capture = { webContents, promise }
+    this.fullCapture = capture
+    try {
+      return await promise
+    } finally {
+      if (this.fullCapture === capture) this.fullCapture = null
+    }
+  }
+
+  private async captureFullPageDataUrlOnce(webContents: PreviewWebContentsLike): Promise<string> {
+    const debuggerApi = webContents.debugger
+    if (!debuggerApi) throw new Error('full preview capture unavailable')
+
+    let attachedHere = false
+    try {
+      if (!debuggerApi.isAttached()) {
+        debuggerApi.attach('1.3')
+        attachedHere = true
+      }
+
+      const metrics = await debuggerApi.sendCommand('Page.getLayoutMetrics')
+      if (!isPlainRecord(metrics)) throw new Error('invalid full preview layout metrics')
+      const contentSize = isPlainRecord(metrics.cssContentSize)
+        ? metrics.cssContentSize
+        : metrics.contentSize
+      if (!isPlainRecord(contentSize)) throw new Error('invalid full preview layout metrics')
+
+      const width = Math.ceil(Number(contentSize.width))
+      const height = Math.ceil(Number(contentSize.height))
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error('invalid full preview dimensions')
+      }
+      if (
+        width > FULL_CAPTURE_MAX_EDGE ||
+        height > FULL_CAPTURE_MAX_EDGE ||
+        width * height > FULL_CAPTURE_MAX_PIXELS
+      ) {
+        throw new Error(`full preview capture exceeds safety limit: ${width}x${height}`)
+      }
+
+      const screenshot = await debuggerApi.sendCommand('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width, height, scale: 1 },
+      })
+      if (!isPlainRecord(screenshot) || typeof screenshot.data !== 'string' || !screenshot.data) {
+        throw new Error('invalid full preview screenshot data')
+      }
+      return `data:image/png;base64,${screenshot.data}`
+    } finally {
+      if (attachedHere) {
+        try {
+          if (debuggerApi.isAttached()) debuggerApi.detach()
+        } catch {
+          // The page may close while a full-page capture is in flight.
+        }
+      }
+    }
   }
 
   private applyZoomFactor(view: PreviewViewLike | null): void {
@@ -239,7 +324,7 @@ export class ElectronPreviewService {
       renderer.send(ELECTRON_EVENT_CHANNELS.previewEvent, {
         v: 1,
         type: 'screenshot',
-        dataUrl: await this.captureNativeDataUrl(),
+        dataUrl: await this.captureNativeDataUrl(kind),
         kind,
       })
     } catch (error) {
@@ -262,7 +347,7 @@ export class ElectronPreviewService {
           screenshot: {
             ...screenshot,
             kind: screenshot.kind ?? 'region',
-            dataUrl: await this.captureNativeDataUrl(),
+            dataUrl: await this.captureNativeDataUrl('viewport'),
           },
         },
       }

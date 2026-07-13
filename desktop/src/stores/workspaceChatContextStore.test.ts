@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  formatWorkspaceReferenceLocation,
   formatWorkspaceReferencePrompt,
   useWorkspaceChatContextStore,
 } from './workspaceChatContextStore'
@@ -51,6 +52,54 @@ describe('workspaceChatContextStore', () => {
     expect(prompt).toContain('```tsx\nconst value = 1\n```')
     expect(prompt).not.toContain('Use the Read tool')
     expect(prompt).not.toContain('Path: /repo/src/App.tsx')
+  })
+
+  it('formats diff comments with their source side while preserving ordinary locations', () => {
+    const diffReference = {
+      id: 'diff-ref-1',
+      kind: 'code-comment' as const,
+      path: 'src/a.ts',
+      name: 'a.ts',
+      lineStart: 11,
+      lineEnd: 12,
+      diffSide: 'new' as const,
+      hunkId: 'hunk-1',
+      note: 'Use a shared helper',
+      quote: 'const result = buildResult()\nreturn result',
+    }
+    const ordinaryReference = {
+      ...diffReference,
+      id: 'ordinary-ref-1',
+      diffSide: undefined,
+      hunkId: undefined,
+    }
+
+    expect(formatWorkspaceReferenceLocation(diffReference)).toBe('src/a.ts:new:L11-L12')
+    expect(formatWorkspaceReferencePrompt([diffReference])).toContain('src/a.ts:new:L11-L12')
+    expect(formatWorkspaceReferencePrompt([diffReference])).toContain('Comment: Use a shared helper')
+    expect(formatWorkspaceReferenceLocation(ordinaryReference)).toBe('src/a.ts:L11-L12')
+  })
+
+  it('deduplicates diff comments only when side and hunk also match', () => {
+    const store = useWorkspaceChatContextStore.getState()
+    const baseReference = {
+      kind: 'code-comment' as const,
+      path: 'src/a.ts',
+      name: 'a.ts',
+      lineStart: 11,
+      lineEnd: 12,
+      note: 'Use a shared helper',
+      quote: 'return result',
+    }
+
+    store.addReference('session-diff', { ...baseReference, diffSide: 'new', hunkId: 'hunk-1' })
+    store.addReference('session-diff', { ...baseReference, diffSide: 'new', hunkId: 'hunk-1' })
+    store.addReference('session-diff', { ...baseReference, diffSide: 'old', hunkId: 'hunk-1' })
+    store.addReference('session-diff', { ...baseReference, diffSide: 'new', hunkId: 'hunk-2' })
+
+    const references = useWorkspaceChatContextStore.getState().referencesBySession['session-diff'] ?? []
+    expect(references).toHaveLength(3)
+    expect(new Set(references.map((reference) => reference.id))).toHaveLength(3)
   })
 
   it('formats selected code without requiring a comment', () => {

@@ -2,10 +2,43 @@
 
 import '@testing-library/jest-dom'
 import { fireEvent, render } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { AttachmentGallery } from './AttachmentGallery'
 
 describe('AttachmentGallery', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  it('renders diff comments as note-first composer cards with side-aware locations', () => {
+    const view = render(
+      <AttachmentGallery
+        variant="composer"
+        attachments={[{
+          id: 'diff-comment-1',
+          type: 'file',
+          name: 'a.ts',
+          path: 'src/a.ts',
+          lineStart: 11,
+          lineEnd: 12,
+          diffSide: 'new',
+          hunkId: 'hunk-1',
+          note: 'Use a shared helper',
+          quote: 'const result = buildResult()\nreturn result',
+        }]}
+      />,
+    )
+
+    const card = view.getByTestId('diff-comment-card')
+    expect(card.textContent).toContain('src/a.ts · new L11-L12')
+    expect(card.textContent).toContain('Use a shared helper')
+    expect(card.textContent).toContain('const result = buildResult() return result')
+    expect(card.textContent?.indexOf('Use a shared helper')).toBeLessThan(
+      card.textContent?.indexOf('const result = buildResult()') ?? -1,
+    )
+  })
+
   it('renders a compact quote preview for selected workspace text', () => {
     render(
       <AttachmentGallery
@@ -89,5 +122,27 @@ describe('AttachmentGallery', () => {
     expect(tooltip).toHaveTextContent('修改内容')
     expect(tooltip).toHaveTextContent('这个标题更轻一点')
     expect(tooltip.className).toContain('group-hover/selection:visible')
+  })
+
+  it('localizes diff sides and remove actions in Chinese', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    const view = render(
+      <AttachmentGallery
+        variant="composer"
+        onRemove={vi.fn()}
+        attachments={[{
+          id: 'diff-comment-zh',
+          type: 'file',
+          name: 'a.ts',
+          path: 'src/a.ts',
+          lineStart: 11,
+          diffSide: 'new',
+          note: '使用共享辅助函数',
+        }]}
+      />,
+    )
+
+    expect(view.getByTestId('diff-comment-card')).toHaveTextContent('src/a.ts · 新 L11')
+    expect(view.getByRole('button', { name: '移除 a.ts' })).toBeInTheDocument()
   })
 })

@@ -340,6 +340,15 @@ describe('SettingsService', () => {
     expect(mode).toBe('plan')
   })
 
+  it('should persist auto as the user default permission mode', async () => {
+    const svc = new SettingsService()
+
+    await svc.setPermissionMode('auto')
+
+    expect(await svc.getPermissionMode()).toBe('auto')
+    expect(await svc.getUserSettings()).toMatchObject({ defaultMode: 'auto' })
+  })
+
   it('should reject invalid permission mode', async () => {
     const svc = new SettingsService()
     await expect(svc.setPermissionMode('invalid')).rejects.toThrow('Invalid permission mode')
@@ -585,6 +594,18 @@ describe('Settings API', () => {
     expect(body.mode).toBe('bypassPermissions')
   })
 
+  it('PUT /api/permissions/mode should accept auto', async () => {
+    const { req, url, segments } = makeRequest('PUT', '/api/permissions/mode', {
+      mode: 'auto',
+    })
+
+    const res = await handleSettingsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, mode: 'auto' })
+    expect(await new SettingsService().getPermissionMode()).toBe('auto')
+  })
+
   it('PUT /api/permissions/mode should reject invalid mode', async () => {
     const { req, url, segments } = makeRequest('PUT', '/api/permissions/mode', {
       mode: 'yolo',
@@ -825,6 +846,35 @@ describe('Models API', () => {
       id: 'gpt-5.5',
       name: 'GPT-5.5',
     })
+  })
+
+  it('GET /api/models should return the Grok fallback catalog when Grok Official is active', async () => {
+    const providerSvc = new ProviderService()
+    await providerSvc.activateProvider('grok-official')
+
+    const { req, url, segments } = makeRequest('GET', '/api/models')
+    const res = await handleModelsApi(req, url, segments)
+    const body = await res.json() as {
+      models: Array<{ id: string; context: string }>
+      provider: { id: string; name: string }
+    }
+    expect(body.provider).toEqual({ id: 'grok-official', name: 'Grok Official' })
+    expect(body.models.map((model) => model.id)).toEqual([
+      'grok-4.5',
+      'grok-composer-2.5-fast',
+    ])
+    expect(body.models.find((model) => model.id === 'grok-4.5')?.context).toBe('500000')
+  })
+
+  it('persists and reads a Grok model from managed settings', async () => {
+    const providerSvc = new ProviderService()
+    await providerSvc.activateProvider('grok-official')
+    const put = makeRequest('PUT', '/api/models/current', { modelId: 'grok-4.5' })
+    expect((await handleModelsApi(put.req, put.url, put.segments)).status).toBe(200)
+
+    const get = makeRequest('GET', '/api/models/current')
+    const body = await (await handleModelsApi(get.req, get.url, get.segments)).json()
+    expect(body.model).toMatchObject({ id: 'grok-4.5', name: 'Grok 4.5' })
   })
 
   it('GET /api/effort should return default effort level', async () => {

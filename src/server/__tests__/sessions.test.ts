@@ -1660,6 +1660,55 @@ describe('SessionService', () => {
     expect(launchInfo?.permissionMode).toBe('plan')
   })
 
+  it('should round-trip auto through creation, list, metadata update, restore, and clear', async () => {
+    const workDir = path.join(tmpDir, 'auto-permission-workdir')
+    await fs.mkdir(workDir, { recursive: true })
+
+    const { sessionId } = await service.createSession(workDir, undefined, 'auto')
+
+    expect((await service.getSessionLaunchInfo(sessionId))?.permissionMode).toBe('auto')
+    expect(
+      (await service.listSessions()).sessions.find((session) => session.id === sessionId)
+        ?.permissionMode,
+    ).toBe('auto')
+
+    await service.appendSessionMetadata(sessionId, {
+      workDir,
+      permissionMode: 'default',
+    })
+    await service.appendSessionMetadata(sessionId, {
+      workDir,
+      permissionMode: 'auto',
+    })
+    expect((await service.getSessionLaunchInfo(sessionId))?.permissionMode).toBe('auto')
+
+    await service.clearSessionTranscript(sessionId, workDir, 'auto')
+    expect((await service.getSessionLaunchInfo(sessionId))?.permissionMode).toBe('auto')
+  })
+
+  it('should expose the latest runtime selection in the session list', async () => {
+    const workDir = '/tmp/runtime-list-metadata'
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      makeSnapshotEntry(),
+      {
+        ...makeSessionMetaEntry(workDir),
+        runtimeProviderId: 'provider-latest',
+        runtimeModelId: 'anthropic/claude-opus-4.7',
+        effortLevel: 'max',
+      },
+      makeUserEntry('Use the latest runtime metadata'),
+    ])
+
+    const listed = (await service.listSessions()).sessions.find((session) => session.id === sessionId)
+
+    expect(listed).toMatchObject({
+      runtimeProviderId: 'provider-latest',
+      runtimeModelId: 'anthropic/claude-opus-4.7',
+      effortLevel: 'max',
+    })
+  })
+
   it('should not append duplicate runtime metadata when it already matches', async () => {
     const workDir = '/tmp/runtime-idempotent'
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
@@ -2430,6 +2479,16 @@ describe('Sessions API', () => {
     expect(body.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     )
+  })
+
+  it('POST /api/sessions should reject an unknown permission mode', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ permissionMode: 'unknown' }),
+    })
+
+    expect(res.status).toBe(400)
   })
 
   it('GET /api/sessions/:id/inspection should report persisted permission mode for inactive sessions', async () => {

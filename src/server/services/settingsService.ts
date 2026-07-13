@@ -18,15 +18,20 @@ import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.j
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { addFileGlobRuleToGitignore } from '../../utils/git/gitignore.js'
 
-const VALID_PERMISSION_MODES = [
+export const VALID_PERMISSION_MODES = [
   'default',
   'acceptEdits',
   'plan',
   'bypassPermissions',
   'dontAsk',
+  'auto',
 ] as const
 
 export type PermissionMode = (typeof VALID_PERMISSION_MODES)[number]
+
+export function isValidPermissionMode(mode: unknown): mode is PermissionMode {
+  return typeof mode === 'string' && VALID_PERMISSION_MODES.includes(mode as PermissionMode)
+}
 
 export class SettingsService {
   private static writeLocks = new Map<string, Promise<void>>()
@@ -213,14 +218,14 @@ export class SettingsService {
   async getPermissionMode(): Promise<string> {
     const settings = await this.getUserSettings()
     const mode = settings.defaultMode
-    return typeof mode === 'string' && VALID_PERMISSION_MODES.includes(mode as PermissionMode)
+    return isValidPermissionMode(mode)
       ? mode
       : 'default'
   }
 
   /** 设置权限模式 */
   async setPermissionMode(mode: string): Promise<void> {
-    if (!VALID_PERMISSION_MODES.includes(mode as PermissionMode)) {
+    if (!isValidPermissionMode(mode)) {
       throw ApiError.badRequest(
         `Invalid permission mode: "${mode}". Valid modes: ${VALID_PERMISSION_MODES.join(', ')}`,
       )

@@ -31,7 +31,6 @@ function noopUnlisten(): void {
 const defaultAppMode: AppModeConfig = {
   mode: 'default',
   portableDir: null,
-  defaultPortableDir: null,
 }
 
 const defaultPermissionState: NotificationPermissionState = 'default'
@@ -239,9 +238,6 @@ export const browserHost: DesktopHost = {
     },
     async set() {
       unsupported('Desktop app mode')
-    },
-    async detectPortableDir() {
-      return null
     },
     async prepareRestart() {
       unsupported('Desktop app restart')

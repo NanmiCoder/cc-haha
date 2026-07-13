@@ -95,6 +95,11 @@ jobs:
         working-directory: adapters
         run: bun install
 
+      - name: Verify Windows legacy data recovery
+        if: matrix.smoke_platform == 'windows'
+        working-directory: desktop
+        run: bun run test:windows-storage-recovery
+
       - name: Build sidecars
         working-directory: desktop
         env:

@@ -1565,6 +1565,46 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('restores persisted workspace diff comments without exposing the model prompt', () => {
+    const modelPrompt = [
+      '@"/repo/homepage/src/App.vue" Referenced workspace context:',
+      '@"homepage/src/App.vue:new:L94-L105":',
+      'Comment: 这块儿我们不能再修改一下',
+      '```vue',
+      '<section id="hero" class="pt-32 pb-20 px-6">',
+      '  <h1>{{ name }}</h1>',
+      '</section>',
+      '```',
+    ].join('\n')
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'workspace-comment-user-1',
+        type: 'user',
+        timestamp: '2026-07-14T00:00:00.000Z',
+        content: [{ type: 'text', text: modelPrompt }],
+      } as MessageEntry,
+    ])
+
+    expect(mapped).toMatchObject([
+      {
+        id: 'workspace-comment-user-1',
+        type: 'user_text',
+        content: '',
+        modelContent: modelPrompt,
+        attachments: [{
+          type: 'file',
+          name: 'App.vue',
+          path: 'homepage/src/App.vue',
+          lineStart: 94,
+          lineEnd: 105,
+          diffSide: 'new',
+          note: '这块儿我们不能再修改一下',
+          quote: '<section id="hero" class="pt-32 pb-20 px-6">\n  <h1>{{ name }}</h1>\n</section>',
+        }],
+      },
+    ])
+  })
+
   it('keeps workspace reference chips visible while sending CLI attachment paths', () => {
     useChatStore.setState({
       sessions: {
@@ -1610,6 +1650,8 @@ describe('chatStore history mapping', () => {
           path: 'src/App.tsx',
           lineStart: 4,
           lineEnd: 4,
+          diffSide: 'new',
+          hunkId: 'hunk-1',
           note: 'tighten this',
           quote: 'const value = 1',
         }],
@@ -1627,6 +1669,8 @@ describe('chatStore history mapping', () => {
           path: 'src/App.tsx',
           lineStart: 4,
           lineEnd: 4,
+          diffSide: 'new',
+          hunkId: 'hunk-1',
           note: 'tighten this',
           quote: 'const value = 1',
         }],
@@ -2866,17 +2910,17 @@ describe('chatStore history mapping', () => {
     expect(sendMock).not.toHaveBeenCalled()
   })
 
-  it('ignores permission-mode broadcasts for modes the selector cannot render', () => {
+  it('mirrors CLI-originated Auto mode without echoing it back to the server', () => {
+    sendMock.mockReset()
     updateSessionPermissionModeMock.mockReset()
 
-    // 'auto' 不在桌面端 PermissionMode 内（仅在 CLI 启用对应特性时存在），
-    // 直接忽略，避免选择器拿到无法渲染的值。
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'permission_mode_changed',
       mode: 'auto' as never,
     })
 
-    expect(updateSessionPermissionModeMock).not.toHaveBeenCalled()
+    expect(updateSessionPermissionModeMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'auto')
+    expect(sendMock).not.toHaveBeenCalled()
   })
 
   it('stores terminal task notifications for agent tool cards', () => {
@@ -3982,6 +4026,67 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('replaces orphan thinking with authoritative history when a reconnected turn completes', async () => {
+    vi.mocked(sessionsApi.getMessages).mockClear()
+    vi.mocked(sessionsApi.getMessages).mockResolvedValue({
+      messages: [
+        {
+          id: 'persisted-user',
+          type: 'user',
+          timestamp: '2026-07-11T00:00:00.000Z',
+          content: 'Finish the foreground task',
+        },
+        {
+          id: 'persisted-assistant',
+          type: 'assistant',
+          timestamp: '2026-07-11T00:00:01.000Z',
+          content: [{ type: 'text', text: 'Foreground task finished.' }],
+        },
+      ],
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          messages: [],
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toHaveLength(2)
+    })
+
+    // The task_notification that should suppress this output arrived while
+    // the renderer was disconnected, so only the late follow-up is observed.
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'thinking',
+      text: 'orphan background follow-up thinking',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'thinking',
+        content: 'orphan background follow-up thinking',
+      }),
+    )
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 5, output_tokens: 8 },
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).not.toContainEqual(
+        expect.objectContaining({ type: 'thinking' }),
+      )
+    })
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the tab running for background agents when reconnect reconciliation finds the foreground idle', () => {
     useChatStore.setState({
       sessions: {
@@ -5032,6 +5137,44 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
       { type: 'user_text', content: prompt },
       { type: 'thinking', content: 'I need to plan the implementation.' },
+    ])
+  })
+
+  it('restores workspace diff comment styling from a replayed model prompt', () => {
+    const modelPrompt = [
+      '@"/repo/src/App.vue" Referenced workspace context:',
+      '@"src/App.vue:new:L94-L105":',
+      'Comment: 调整这里',
+      '```vue',
+      '<section id="hero">',
+      '```',
+    ].join('\n')
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay',
+      content: modelPrompt,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      {
+        type: 'user_text',
+        content: '',
+        modelContent: modelPrompt,
+        attachments: [{
+          type: 'file',
+          path: 'src/App.vue',
+          diffSide: 'new',
+          lineStart: 94,
+          lineEnd: 105,
+          note: '调整这里',
+          quote: '<section id="hero">',
+        }],
+      },
     ])
   })
 

@@ -346,6 +346,22 @@ export function parseBunTestFileCount(output: string) {
   return match ? Number(match[1]) : null
 }
 
+export function buildRootCoverageCommand(outputDir: string, serverFiles: string[]) {
+  return [
+    'bun',
+    '--no-env-file',
+    '--feature=TRANSCRIPT_CLASSIFIER',
+    'test',
+    '--timeout=20000',
+    '--coverage',
+    '--coverage-reporter=lcov',
+    '--coverage-reporter=text',
+    '--coverage-dir',
+    join(outputDir, 'root-server'),
+    ...serverFiles.map(rootBunTestFilter),
+  ]
+}
+
 function summarizeLcovRecords(records: LcovRecord[]): CoverageSummary {
   let linesTotal = 0
   let linesCovered = 0
@@ -806,7 +822,7 @@ export async function runCoverageGate(options: {
   const coverageByFile = new Map<string, FileLineCoverage>()
 
   mkdirSync(join(outputDir, 'root-server'), { recursive: true })
-  const rootCommand = ['bun', '--no-env-file', 'test', '--timeout=20000', '--coverage', '--coverage-reporter=lcov', '--coverage-reporter=text', '--coverage-dir', join(outputDir, 'root-server'), ...serverFiles.map(rootBunTestFilter)]
+  const rootCommand = buildRootCoverageCommand(outputDir, serverFiles)
   const rootLogPath = join(outputDir, 'root-server', 'coverage.log')
   const rootResult = await runCommand(rootCommand, rootDir, rootLogPath)
   const rootLcovPath = join(outputDir, 'root-server', 'lcov.info')

@@ -30,6 +30,7 @@ const streamDelayMs = Number(process.env.MOCK_SDK_STREAM_DELAY_MS || '0')
 const exitAfterOpenMs = Number(process.env.MOCK_SDK_EXIT_AFTER_OPEN_MS || '0')
 const exitAfterFirstUserMs = Number(process.env.MOCK_SDK_EXIT_AFTER_FIRST_USER_MS || '0')
 const mcpStatusDelayMs = Number(process.env.MOCK_SDK_MCP_STATUS_DELAY_MS || '0')
+const permissionModeBehavior = process.env.MOCK_SDK_PERMISSION_MODE_BEHAVIOR || 'confirm'
 let initSent = false
 let firstUserExitScheduled = false
 
@@ -199,6 +200,73 @@ ws.addEventListener('message', (event) => {
           usage: { input_tokens: 0, output_tokens: 0 },
           session_id: sessionId,
         })
+      }
+
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'set_permission_mode') {
+        if (permissionModeBehavior === 'unavailable') {
+          emit(ws, {
+            type: 'control_response',
+            response: {
+              subtype: 'error',
+              request_id: parsed.request_id,
+              error:
+                'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions',
+            },
+            session_id: sessionId,
+          })
+          continue
+        }
+        if (permissionModeBehavior === 'status-before-reject') {
+          emit(ws, {
+            type: 'system',
+            subtype: 'status',
+            status: null,
+            permissionMode: parsed.request.mode,
+            session_id: sessionId,
+          })
+          emit(ws, {
+            type: 'control_response',
+            response: {
+              subtype: 'error',
+              request_id: parsed.request_id,
+              error: 'mock permission mode rejection',
+            },
+            session_id: sessionId,
+          })
+          continue
+        }
+        if (permissionModeBehavior === 'reject') {
+          emit(ws, {
+            type: 'control_response',
+            response: {
+              subtype: 'error',
+              request_id: parsed.request_id,
+              error: 'mock permission mode rejection',
+            },
+            session_id: sessionId,
+          })
+          continue
+        }
+
+        emit(ws, {
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: parsed.request_id,
+            response: { mode: parsed.request.mode },
+          },
+          session_id: sessionId,
+        })
+        if (permissionModeBehavior === 'confirm') {
+          emit(ws, {
+            type: 'system',
+            subtype: 'status',
+            status: null,
+            permissionMode: parsed.request.mode,
+            session_id: sessionId,
+          })
+        }
+        continue
       }
 
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'get_session_usage') {

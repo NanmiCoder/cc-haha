@@ -72,6 +72,71 @@ function makeRequest(
 }
 
 describe('DoctorService', () => {
+  test('treats absent optional user features on a fresh install as not configured', async () => {
+    const freshHomeDir = path.join(tmpDir, 'fresh-home')
+    const freshConfigDir = path.join(freshHomeDir, '.claude')
+    const service = new DoctorService({ configDir: freshConfigDir, homeDir: freshHomeDir })
+
+    const report = await service.getReport()
+
+    expect(report.items.length).toBeGreaterThan(0)
+    expect(report.items.every((item) => item.status === 'not_configured')).toBe(true)
+    expect(report.summary).toEqual(expect.objectContaining({
+      total: report.items.length,
+      neutralCount: report.items.length,
+      missingCount: 0,
+      invalidCount: 0,
+    }))
+  })
+
+  test('treats absent optional project settings, skills, and MCP as not configured', async () => {
+    const freshProjectRoot = path.join(tmpDir, 'fresh-project')
+    const service = new DoctorService({ configDir, homeDir, projectRoot: freshProjectRoot })
+
+    const report = await service.getReport()
+    const projectItems = report.items.filter((item) => item.scope === 'project')
+
+    expect(projectItems.map((item) => item.id)).toEqual([
+      'project-settings',
+      'project-skills',
+      'project-mcp',
+    ])
+    expect(projectItems.every((item) => item.status === 'not_configured')).toBe(true)
+    expect(report.summary.neutralCount).toBeGreaterThanOrEqual(3)
+  })
+
+  test('still reports a configured optional feature when its file is malformed', async () => {
+    await fs.writeFile(path.join(configDir, 'adapters.json'), '{broken', 'utf-8')
+    const service = new DoctorService({ configDir, homeDir })
+
+    const report = await service.getReport()
+    const adapters = report.items.find((item) => item.id === 'adapters')
+
+    expect(adapters?.status).toBe('invalid_json')
+    expect(report.summary.invalidCount).toBeGreaterThanOrEqual(1)
+    expect(report.summary.neutralCount).toBeGreaterThan(0)
+  })
+
+  test('reports schema-invalid managed providers without exposing parsed contents', async () => {
+    const schemaConfigDir = path.join(homeDir, '.schema-test-claude')
+    await fs.mkdir(path.join(schemaConfigDir, 'cc-haha'), { recursive: true })
+    await fs.writeFile(
+      path.join(schemaConfigDir, 'cc-haha', 'providers.json'),
+      JSON.stringify({ activeId: null, providers: [{ id: 'provider-1' }] }),
+      'utf-8',
+    )
+    const service = new DoctorService({ configDir: schemaConfigDir, homeDir })
+
+    const report = await service.getReport()
+    const providers = report.items.find((item) => item.id === 'cc-haha-providers')
+
+    expect(providers?.status).toBe('invalid_schema')
+    expect(providers?.error).toContain('providers.0.presetId')
+    expect(providers?.error).not.toContain('provider-1')
+    expect(providers?.error).not.toContain(tmpDir)
+    expect(report.summary.invalidCount).toBe(1)
+  })
+
   test('report redacts filesystem paths and lists protected skipped items', async () => {
     const service = new DoctorService({ configDir, homeDir, projectRoot })
 

@@ -3,10 +3,11 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Dirent } from 'node:fs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { ProvidersIndexSchema } from '../types/provider.js'
 import { diagnosticsService } from './diagnosticsService.js'
 
 export type DoctorItemKind = 'json' | 'jsonl' | 'directory'
-export type DoctorItemStatus = 'ok' | 'missing' | 'invalid_json' | 'invalid_jsonl' | 'unreadable'
+export type DoctorItemStatus = 'ok' | 'not_configured' | 'missing' | 'invalid_json' | 'invalid_jsonl' | 'invalid_schema' | 'unreadable'
 export type DoctorSkipReason = 'protected'
 
 export type DoctorReportItem = {
@@ -38,6 +39,7 @@ export type DoctorReport = {
   summary: {
     total: number
     protectedCount: number
+    neutralCount: number
     missingCount: number
     invalidCount: number
   }
@@ -79,6 +81,7 @@ type DoctorTarget = {
   scope: 'user' | 'project'
   filePath: string
   protected: true
+  required: boolean
 }
 
 export class DoctorService {
@@ -112,10 +115,12 @@ export class DoctorService {
       summary: {
         total: items.length,
         protectedCount: protectedSkips.length,
+        neutralCount: items.filter((item) => item.status === 'not_configured').length,
         missingCount: items.filter((item) => item.status === 'missing').length,
         invalidCount: items.filter((item) =>
           item.status === 'invalid_json' ||
           item.status === 'invalid_jsonl' ||
+          item.status === 'invalid_schema' ||
           item.status === 'unreadable'
         ).length,
       },
@@ -196,6 +201,12 @@ export class DoctorService {
         'user',
         path.join(this.configDir, 'cc-haha', 'openai-oauth.json'),
       ),
+      this.jsonTarget(
+        'grok-oauth',
+        'Grok OAuth tokens',
+        'user',
+        path.join(this.configDir, 'cc-haha', 'grok-oauth.json'),
+      ),
     ]
 
     if (this.projectRoot) {
@@ -273,6 +284,21 @@ export class DoctorService {
 
     try {
       const parsed = JSON.parse(raw)
+      if (target.id === 'cc-haha-providers') {
+        const result = ProvidersIndexSchema.safeParse(parsed)
+        if (!result.success) {
+          const error = result.error.issues
+            .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+            .join('; ')
+          return {
+            ...this.baseItem(target),
+            exists: true,
+            status: 'invalid_schema',
+            bytes,
+            error: this.sanitizeText(error),
+          }
+        }
+      }
       return {
         ...this.baseItem(target),
         exists: true,
@@ -345,7 +371,7 @@ export class DoctorService {
     return {
       ...this.baseItem(target),
       exists: false,
-      status: 'missing',
+      status: target.required ? 'missing' : 'not_configured',
       bytes: 0,
     }
   }
@@ -453,7 +479,7 @@ export class DoctorService {
     scope: 'user' | 'project',
     filePath: string,
   ): DoctorTarget {
-    return { id, label, kind: 'json', scope, filePath, protected: true }
+    return { id, label, kind: 'json', scope, filePath, protected: true, required: false }
   }
 
   private jsonlTarget(
@@ -462,7 +488,7 @@ export class DoctorService {
     scope: 'user' | 'project',
     filePath: string,
   ): DoctorTarget {
-    return { id, label, kind: 'jsonl', scope, filePath, protected: true }
+    return { id, label, kind: 'jsonl', scope, filePath, protected: true, required: false }
   }
 
   private directoryTarget(
@@ -471,7 +497,7 @@ export class DoctorService {
     scope: 'user' | 'project',
     filePath: string,
   ): DoctorTarget {
-    return { id, label, kind: 'directory', scope, filePath, protected: true }
+    return { id, label, kind: 'directory', scope, filePath, protected: true, required: false }
   }
 
   private withAlias(alias: string, filePath: string, root: string): string {

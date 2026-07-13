@@ -9,10 +9,16 @@ import { z } from 'zod'
 
 export const CLAUDE_OFFICIAL_PROVIDER_ID = 'claude-official'
 export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
+export const GROK_OFFICIAL_PROVIDER_ID = 'grok-official'
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
+  GROK_OFFICIAL_PROVIDER_ID,
 ] as const
+
+export function isBuiltInProviderId(id: string | null | undefined): boolean {
+  return !!id && (BUILT_IN_PROVIDER_IDS as readonly string[]).includes(id)
+}
 
 export const ApiFormatSchema = z.enum([
   'anthropic',         // Native Anthropic Messages API (passthrough, no proxy)
@@ -33,6 +39,7 @@ export type ProviderAuthStrategy = z.infer<typeof ProviderAuthStrategySchema>
 export const ProviderRuntimeKindSchema = z.enum([
   'anthropic_compatible',
   'openai_oauth',
+  'grok_oauth',
 ])
 export type ProviderRuntimeKind = z.infer<typeof ProviderRuntimeKindSchema>
 

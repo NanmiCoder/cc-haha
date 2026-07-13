@@ -71,6 +71,18 @@ describe('WorkbenchPanel', () => {
     expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'false')
   })
 
+  it('exposes a single compact workbench navigation landmark', () => {
+    render(<WorkbenchPanel sessionId={SESSION_ID} variant="tab" />)
+
+    const navigation = screen.getByTestId('workbench-navigation')
+    expect(navigation).toHaveAttribute('aria-label', 'Workbench navigation')
+    expect(navigation).toContainElement(screen.getByRole('button', { name: 'Back to conversation' }))
+    expect(navigation).toContainElement(screen.getByRole('tablist', { name: 'Workbench mode' }))
+    expect(navigation).toContainElement(screen.getByRole('button', { name: 'Close' }))
+    expect(navigation.className).toContain('h-12')
+    expect(screen.getByRole('tablist', { name: 'Workbench mode' }).className).not.toContain('border')
+  })
+
   it('switching to the browser tab calls setMode("browser")', () => {
     render(<WorkbenchPanel sessionId={SESSION_ID} />)
     expect(useWorkspacePanelStore.getState().getMode(SESSION_ID)).toBe('workspace')
@@ -119,8 +131,34 @@ describe('WorkbenchPanel', () => {
         type: 'workbench',
         status: 'idle',
         workbenchSessionId: SESSION_ID,
+        sourceSessionId: SESSION_ID,
       },
     ])
+  })
+
+  it('carries the conversation opener origin into the expanded workbench tab', () => {
+    useWorkspacePanelStore.setState({
+      originBySession: {
+        [SESSION_ID]: {
+          sourceTurnKey: 'assistant-turn-3',
+          sourceElementId: 'turn-change-opener-3',
+        },
+      },
+    })
+    render(<WorkbenchPanel sessionId={SESSION_ID} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }))
+
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      sourceSessionId: SESSION_ID,
+      sourceTurnKey: 'assistant-turn-3',
+      sourceElementId: 'turn-change-opener-3',
+    })
+    expect(useWorkspacePanelStore.getState().isPanelOpen(SESSION_ID)).toBe(false)
+    expect(useWorkspacePanelStore.getState().getOrigin(SESSION_ID)).toEqual({
+      sourceTurnKey: 'assistant-turn-3',
+      sourceElementId: 'turn-change-opener-3',
+    })
   })
 
   it('renders the tab variant without a nested expand action', () => {
@@ -134,5 +172,16 @@ describe('WorkbenchPanel', () => {
 
     expect(handleClose).toHaveBeenCalledTimes(1)
     expect(useWorkspacePanelStore.getState().isPanelOpen(SESSION_ID)).toBe(true)
+  })
+
+  it('returns the tab variant to its source conversation', () => {
+    useTabStore.getState().openTab(SESSION_ID, 'Conversation')
+    const workbenchTabId = useTabStore.getState().openWorkbenchTab(SESSION_ID, 'Workbench')
+    render(<WorkbenchPanel sessionId={SESSION_ID} variant="tab" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversation' }))
+
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_ID)
+    expect(useTabStore.getState().tabs.some((tab) => tab.sessionId === workbenchTabId)).toBe(false)
   })
 })

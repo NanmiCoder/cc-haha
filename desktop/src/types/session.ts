@@ -1,5 +1,7 @@
 // Source: src/server/services/sessionService.ts
 
+import type { ReasoningEffortLevel } from './settings'
+
 export type SessionListItem = {
   id: string
   title: string
@@ -11,6 +13,9 @@ export type SessionListItem = {
   workDir: string | null
   workDirExists: boolean
   permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: ReasoningEffortLevel
 }
 
 export type MessageUsage = {

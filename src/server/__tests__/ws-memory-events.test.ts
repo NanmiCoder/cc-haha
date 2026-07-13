@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   createCurrentTurnLocalCommandForwarder,
-  shouldRestartForPermissionMode,
+  shouldFallbackToPermissionRestart,
   translateCliMessage,
 } from '../ws/handler.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
@@ -264,6 +264,15 @@ describe('WebSocket compact events', () => {
       { type: 'permission_mode_changed', mode: 'bypassPermissions' },
     ])
 
+    expect(translateCliMessage({
+      type: 'system',
+      subtype: 'status',
+      status: null,
+      permissionMode: 'auto',
+    }, 'session-1')).toEqual([
+      { type: 'permission_mode_changed', mode: 'auto' },
+    ])
+
     // 普通 thinking（无 permissionMode）仍走原路径，不受影响。
     expect(translateCliMessage({
       type: 'system',
@@ -309,29 +318,29 @@ describe('WebSocket compact events', () => {
   })
 })
 
-describe('WebSocket permission mode restart policy', () => {
-  it('restarts the CLI only when entering bypassPermissions', () => {
-    // 进入 bypass 需要带 --dangerously-skip-permissions 重启子进程。
-    expect(shouldRestartForPermissionMode('default', 'bypassPermissions')).toBe(true)
-    expect(shouldRestartForPermissionMode('plan', 'bypassPermissions')).toBe(true)
-    expect(shouldRestartForPermissionMode('acceptEdits', 'bypassPermissions')).toBe(true)
+describe('WebSocket permission mode compatibility fallback', () => {
+  it('restarts only when an old CLI session lacks the bypass launch capability', () => {
+    expect(shouldFallbackToPermissionRestart(
+      'bypassPermissions',
+      new Error(
+        'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions',
+      ),
+    )).toBe(true)
   })
 
-  it('does NOT restart when leaving bypassPermissions for a stricter mode', () => {
-    // 从 bypass 切出不重启——否则会冲掉进程内 prePlanMode，导致 ExitPlanMode 后
-    // 恢复成 default 而非进入 plan 前的 bypassPermissions。这正是桌面端退出 plan
-    // 权限回不到 bypass 的根因。
-    expect(shouldRestartForPermissionMode('bypassPermissions', 'plan')).toBe(false)
-    expect(shouldRestartForPermissionMode('bypassPermissions', 'default')).toBe(false)
-    expect(shouldRestartForPermissionMode('bypassPermissions', 'acceptEdits')).toBe(false)
+  it('does not restart when bypass is disabled by user settings', () => {
+    expect(shouldFallbackToPermissionRestart(
+      'bypassPermissions',
+      new Error(
+        'Cannot set permission mode to bypassPermissions because it is disabled by settings or configuration',
+      ),
+    )).toBe(false)
   })
 
-  it('does not restart for non-bypass transitions or no-op changes', () => {
-    expect(shouldRestartForPermissionMode('default', 'plan')).toBe(false)
-    expect(shouldRestartForPermissionMode('plan', 'acceptEdits')).toBe(false)
-    // 同模式（含 bypass→bypass）是 no-op，不重启。
-    expect(shouldRestartForPermissionMode('bypassPermissions', 'bypassPermissions')).toBe(false)
-    expect(shouldRestartForPermissionMode('plan', 'plan')).toBe(false)
+  it('does not restart other permission failures', () => {
+    expect(shouldFallbackToPermissionRestart('auto', new Error('classifier unavailable'))).toBe(false)
+    expect(shouldFallbackToPermissionRestart('default', new Error('mock rejection'))).toBe(false)
+    expect(shouldFallbackToPermissionRestart('bypassPermissions', new Error('mock rejection'))).toBe(false)
   })
 })
 

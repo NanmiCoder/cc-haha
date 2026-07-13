@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -31,6 +32,10 @@ import { checkRuleBasedPermissions } from '../../utils/permissions/permissions.j
 import { formatError } from '../../utils/toolErrors.js'
 import { isMcpTool } from '../mcp/utils.js'
 import type { McpServerType, MessageUpdateLazy } from './toolExecution.js'
+
+const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
+  ? (require('../../utils/permissions/autoModeState.js') as typeof import('../../utils/permissions/autoModeState.js'))
+  : null
 
 export type PostToolUseHooksResult<Output> =
   | MessageUpdateLazy<AttachmentMessage | ProgressMessage<HookProgress>>
@@ -347,6 +352,12 @@ export async function resolveHookPermissionDecision(
 
   if (hookPermissionResult?.behavior === 'allow') {
     const hookInput = hookPermissionResult.updatedInput ?? input
+    const permissionMode =
+      toolUseContext.getAppState().toolPermissionContext.mode
+    const autoModeActive =
+      permissionMode === 'auto' ||
+      (permissionMode === 'plan' &&
+        (autoModeStateModule?.isAutoModeActive() ?? false))
 
     // Hook provided updatedInput for an interactive tool — the hook IS the
     // user interaction (e.g. headless wrapper that collected AskUserQuestion
@@ -354,7 +365,11 @@ export async function resolveHookPermissionDecision(
     const interactionSatisfied =
       requiresInteraction && hookPermissionResult.updatedInput !== undefined
 
-    if ((requiresInteraction && !interactionSatisfied) || requireCanUseTool) {
+    if (
+      autoModeActive ||
+      (requiresInteraction && !interactionSatisfied) ||
+      requireCanUseTool
+    ) {
       logForDebugging(
         `Hook approved tool use for ${tool.name}, but canUseTool is required`,
       )

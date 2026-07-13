@@ -12,6 +12,8 @@ export type ComposerAttachment = {
   isDirectory?: boolean
   lineStart?: number
   lineEnd?: number
+  diffSide?: 'old' | 'new'
+  hunkId?: string
   note?: string
   quote?: string
 }

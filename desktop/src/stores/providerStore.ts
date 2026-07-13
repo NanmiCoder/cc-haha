@@ -11,6 +11,10 @@ import {
   OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
 } from '../constants/openaiOfficialProvider'
+import {
+  GROK_OFFICIAL_DEFAULT_MODEL_ID,
+  GROK_OFFICIAL_PROVIDER_ID,
+} from '../constants/grokOfficialProvider'
 import type {
   SavedProvider,
   CreateProviderInput,
@@ -265,6 +269,11 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     const settings = useSettingsStore.getState()
     if (id === OPENAI_OFFICIAL_PROVIDER_ID) {
       await settings.setModel(OPENAI_OFFICIAL_DEFAULT_MODEL_ID)
+      await settings.fetchAll()
+      return
+    }
+    if (id === GROK_OFFICIAL_PROVIDER_ID) {
+      await settings.setModel(GROK_OFFICIAL_DEFAULT_MODEL_ID)
       await settings.fetchAll()
       return
     }

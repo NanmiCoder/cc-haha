@@ -161,7 +161,27 @@ describe('H5AccessService', () => {
     expect(await legacyService.validateToken(result.token)).toBe(true)
   })
 
-  test('updateSettings manages fixedPort within the allowed range', async () => {
+  test('ignores a browser-blocked fixed port from older settings', async () => {
+    await fs.mkdir(path.dirname(getManagedSettingsPath()), { recursive: true })
+    await fs.writeFile(
+      getManagedSettingsPath(),
+      JSON.stringify({
+        h5Access: {
+          fixedPort: 5061,
+          allowedOrigins: ['https://example.com'],
+          disconnectGraceSeconds: 600,
+        },
+      }),
+      'utf-8',
+    )
+
+    const settings = await new H5AccessService().getSettings()
+    expect(settings.fixedPort).toBeNull()
+    expect(settings.allowedOrigins).toEqual(['https://example.com'])
+    expect(settings.disconnectGraceSeconds).toBe(600)
+  })
+
+  test('updateSettings manages browser-safe fixedPort values', async () => {
     const service = new H5AccessService()
 
     const updated = await service.updateSettings({ fixedPort: 28670 })
@@ -184,6 +204,14 @@ describe('H5AccessService', () => {
     await expect(service.updateSettings({ fixedPort: 3456.5 })).rejects.toMatchObject({
       statusCode: 400,
     })
+    for (const fixedPort of [
+      1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000,
+      6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+    ]) {
+      await expect(service.updateSettings({ fixedPort })).rejects.toMatchObject({
+        statusCode: 400,
+      })
+    }
   })
 
   test('updateSettings manages the disconnect grace period within range', async () => {

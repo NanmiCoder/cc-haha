@@ -1,4 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { GROK_OAUTH_DUMMY_KEY } from '../grokAuth/fetch.js'
 
 mock.module('src/utils/http.js', () => ({
   getAuthHeaders: mock(() => ({})),
@@ -83,6 +87,39 @@ describe('shouldUseOpenAICodexTransport', () => {
 })
 
 describe('getAnthropicClient', () => {
+  test('selects the isolated Grok transport with a dummy SDK key', async () => {
+    const { getAnthropicClient } = await import('./client.js')
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'grok-client-test-'))
+    const tokenFile = path.join(tempDir, 'grok-oauth.json')
+    await fs.writeFile(tokenFile, JSON.stringify({
+      accessToken: 'grok-access',
+      refreshToken: 'grok-refresh',
+      expiresAt: Date.now() + 3600_000,
+    }))
+    const previous = {
+      marker: process.env.CC_HAHA_GROK_OAUTH_PROVIDER,
+      tokenFile: process.env.GROK_OAUTH_FILE,
+      configDir: process.env.CLAUDE_CONFIG_DIR,
+    }
+    process.env.CC_HAHA_GROK_OAUTH_PROVIDER = '1'
+    process.env.GROK_OAUTH_FILE = tokenFile
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    try {
+      const client = await getAnthropicClient({ maxRetries: 0, model: 'grok-4.5' })
+      expect(client.apiKey).toBe(GROK_OAUTH_DUMMY_KEY)
+      expect(client.authToken).toBeNull()
+      expect(client._options.fetch).toBeFunction()
+    } finally {
+      if (previous.marker === undefined) delete process.env.CC_HAHA_GROK_OAUTH_PROVIDER
+      else process.env.CC_HAHA_GROK_OAUTH_PROVIDER = previous.marker
+      if (previous.tokenFile === undefined) delete process.env.GROK_OAUTH_FILE
+      else process.env.GROK_OAUTH_FILE = previous.tokenFile
+      if (previous.configDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous.configDir
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('passes bearer-token provider auth without an SDK api key', async () => {
     const { getAnthropicClient } = await import('./client.js')
     const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN

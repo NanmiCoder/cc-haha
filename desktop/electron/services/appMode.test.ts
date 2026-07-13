@@ -1,15 +1,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   applyStartupPortableMode,
-  defaultPortableDir,
-  detectPortableDir,
   determineStartupPortableDir,
-  dirHasPortableData,
   getAppMode,
   setAppMode,
+  systemClaudeConfigDir,
   type AppModeAppLike,
 } from './appMode'
 
@@ -22,121 +20,255 @@ function tempDir() {
 }
 
 function app(root = tempDir()): AppModeAppLike & { root: string } {
-  const exe = path.join(root, 'Claude Code Haha.app', 'Contents', 'MacOS', 'Claude Code Haha')
+  const exe = path.join(root, 'install', 'Claude Code Haha')
+  const home = path.join(root, 'home')
   const userData = path.join(root, 'user-data')
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, '')
   return {
     root,
     getPath(name) {
-      return name === 'exe' ? exe : userData
+      if (name === 'exe') return exe
+      if (name === 'home') return home
+      return userData
     },
   }
 }
 
+function writeMode(fakeApp: AppModeAppLike, value: unknown) {
+  const userData = fakeApp.getPath('userData')
+  fs.mkdirSync(userData, { recursive: true })
+  fs.writeFileSync(path.join(userData, 'app-mode.json'), JSON.stringify(value))
+}
+
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
 describe('Electron app mode service', () => {
-  it('detects portable data using the same sentinel files and directories as Tauri', () => {
-    const root = tempDir()
-    expect(dirHasPortableData(root)).toBe(false)
-    fs.writeFileSync(path.join(root, 'settings.json'), '{}')
-    expect(dirHasPortableData(root)).toBe(true)
-    fs.rmSync(path.join(root, 'settings.json'))
-    fs.mkdirSync(path.join(root, 'projects'))
-    expect(dirHasPortableData(root)).toBe(true)
-  })
-
-  it('resolves startup portable mode from default portable data or app-mode config', () => {
+  it('always uses ~/.claude in system mode and ignores app-adjacent legacy data at runtime', () => {
     const fakeApp = app()
-    const defaultDir = defaultPortableDir(fakeApp)
-    fs.mkdirSync(defaultDir, { recursive: true })
-    fs.writeFileSync(path.join(defaultDir, 'settings.json'), '{}')
+    const legacyDir = path.join(path.dirname(fakeApp.getPath('exe')), 'CLAUDE_CONFIG_DIR')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'settings.json'), '{"legacy":true}')
 
-    expect(determineStartupPortableDir(fakeApp, {})).toBe(defaultDir)
-    expect(determineStartupPortableDir(fakeApp, { CLAUDE_CONFIG_DIR: '/external' })).toBeNull()
-
-    fs.writeFileSync(path.join(defaultDir, 'app-mode.json'), JSON.stringify({ mode: 'default' }))
+    expect(systemClaudeConfigDir(fakeApp)).toBe(path.join(fakeApp.root, 'home', '.claude'))
     expect(determineStartupPortableDir(fakeApp, {})).toBeNull()
-  })
-
-  it('sets portable environment variables before sidecars start', () => {
-    const fakeApp = app()
-    const env: NodeJS.ProcessEnv = {}
-    const defaultDir = defaultPortableDir(fakeApp)
-    fs.mkdirSync(defaultDir, { recursive: true })
-    fs.writeFileSync(path.join(defaultDir, 'settings.json'), '{}')
-
-    expect(applyStartupPortableMode(fakeApp, env)).toBe(defaultDir)
-    expect(env.CLAUDE_CONFIG_DIR).toBe(defaultDir)
-    expect(env.CC_HAHA_APP_PORTABLE_DIR).toBe('1')
-    expect(env.WEBVIEW2_USER_DATA_FOLDER).toBe(path.join(defaultDir, 'EBWebView'))
-  })
-
-  it('returns the active app mode shape expected by settingsStore', () => {
-    const fakeApp = app()
-
+    expect(applyStartupPortableMode(fakeApp, {})).toBeNull()
     expect(getAppMode(fakeApp, {})).toEqual({
       mode: 'default',
-      portableDir: defaultPortableDir(fakeApp),
-      defaultPortableDir: defaultPortableDir(fakeApp),
-      activeConfigDir: fakeApp.getPath('userData'),
+      portableDir: null,
+      activeConfigDir: path.join(fakeApp.root, 'home', '.claude'),
       configDirSource: 'system',
-    })
-    expect(getAppMode(fakeApp, { CLAUDE_CONFIG_DIR: '/portable', CC_HAHA_APP_PORTABLE_DIR: '1' })).toMatchObject({
-      mode: 'portable',
-      portableDir: '/portable',
-      activeConfigDir: '/portable',
-      configDirSource: 'portable',
-    })
-    expect(getAppMode(fakeApp, { CLAUDE_CONFIG_DIR: '/external' })).toMatchObject({
-      configDirSource: 'environment',
     })
   })
 
-  it('writes app-mode.json to active, target portable, and system config dirs', () => {
+  it('activates only an explicit absolute custom directory persisted in userData', () => {
     const fakeApp = app()
-    const active = tempDir()
-    const selected = path.join(tempDir(), 'portable')
+    const customDir = path.join(fakeApp.root, 'custom-data')
+    writeMode(fakeApp, { mode: 'portable', portable_dir: customDir })
+    const env: NodeJS.ProcessEnv = {}
 
-    setAppMode(fakeApp, { mode: 'portable', portableDir: selected }, { CLAUDE_CONFIG_DIR: active })
+    expect(determineStartupPortableDir(fakeApp, env)).toBe(customDir)
+    expect(applyStartupPortableMode(fakeApp, env)).toBe(customDir)
+    expect(env).toMatchObject({
+      CLAUDE_CONFIG_DIR: customDir,
+      CC_HAHA_APP_PORTABLE_DIR: '1',
+      WEBVIEW2_USER_DATA_FOLDER: path.join(customDir, 'EBWebView'),
+    })
+    expect(getAppMode(fakeApp, env)).toEqual({
+      mode: 'portable',
+      portableDir: customDir,
+      activeConfigDir: customDir,
+      configDirSource: 'portable',
+    })
+  })
 
-    const expected = { mode: 'portable', portable_dir: selected }
-    expect(JSON.parse(fs.readFileSync(path.join(active, 'app-mode.json'), 'utf8'))).toEqual(expected)
-    expect(JSON.parse(fs.readFileSync(path.join(selected, 'app-mode.json'), 'utf8'))).toEqual(expected)
-    expect(JSON.parse(fs.readFileSync(path.join(fakeApp.getPath('userData'), 'app-mode.json'), 'utf8'))).toEqual(expected)
+  it('treats an externally supplied CLAUDE_CONFIG_DIR as a read-only override', () => {
+    const fakeApp = app()
+    const externalDir = path.join(fakeApp.root, 'external-data')
+    const env: NodeJS.ProcessEnv = { CLAUDE_CONFIG_DIR: externalDir }
 
-    setAppMode(fakeApp, { mode: 'default', portableDir: null }, { CLAUDE_CONFIG_DIR: active })
-    expect(JSON.parse(fs.readFileSync(path.join(active, 'app-mode.json'), 'utf8'))).toEqual({
+    expect(determineStartupPortableDir(fakeApp, env)).toBeNull()
+    expect(applyStartupPortableMode(fakeApp, env)).toBeNull()
+    expect(env).toEqual({ CLAUDE_CONFIG_DIR: externalDir })
+    expect(getAppMode(fakeApp, env)).toEqual({
+      mode: 'portable',
+      portableDir: externalDir,
+      activeConfigDir: externalDir,
+      configDirSource: 'environment',
+    })
+    expect(() => setAppMode(fakeApp, { mode: 'default', portableDir: null }, env))
+      .toThrow('CLAUDE_CONFIG_DIR is controlled by the launch environment')
+  })
+
+  it('rejects relative or install-contained external custom directories', () => {
+    const fakeApp = app()
+    const installData = path.join(path.dirname(fakeApp.getPath('exe')), 'external-data')
+
+    expect(() => applyStartupPortableMode(fakeApp, {
+      CLAUDE_CONFIG_DIR: 'relative-data',
+    })).toThrow('absolute path')
+    expect(() => getAppMode(fakeApp, {
+      CLAUDE_CONFIG_DIR: 'relative-data',
+    })).toThrow('absolute path')
+    expect(() => applyStartupPortableMode(fakeApp, {
+      CLAUDE_CONFIG_DIR: installData,
+    })).toThrow('outside the application install directory')
+  })
+
+  it('drops inherited app-managed env so switching back to ~/.claude survives relaunch', () => {
+    const fakeApp = app()
+    writeMode(fakeApp, { mode: 'default', portable_dir: null })
+    const oldCustomDir = path.join(fakeApp.root, 'old-custom')
+    const env: NodeJS.ProcessEnv = {
+      CLAUDE_CONFIG_DIR: oldCustomDir,
+      CC_HAHA_APP_PORTABLE_DIR: '1',
+      WEBVIEW2_USER_DATA_FOLDER: path.join(oldCustomDir, 'EBWebView'),
+    }
+
+    expect(applyStartupPortableMode(fakeApp, env)).toBeNull()
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
+    expect(env.CC_HAHA_APP_PORTABLE_DIR).toBeUndefined()
+    expect(env.WEBVIEW2_USER_DATA_FOLDER).toBeUndefined()
+    expect(getAppMode(fakeApp, env)).toMatchObject({
+      mode: 'default',
+      activeConfigDir: systemClaudeConfigDir(fakeApp),
+    })
+  })
+
+  it('replaces an inherited app-managed env with the newly persisted custom directory', () => {
+    const fakeApp = app()
+    const newCustomDir = path.join(fakeApp.root, 'new-custom')
+    writeMode(fakeApp, { mode: 'portable', portable_dir: newCustomDir })
+    const env: NodeJS.ProcessEnv = {
+      CLAUDE_CONFIG_DIR: path.join(fakeApp.root, 'old-custom'),
+      CC_HAHA_APP_PORTABLE_DIR: '1',
+      WEBVIEW2_USER_DATA_FOLDER: path.join(fakeApp.root, 'old-custom', 'EBWebView'),
+    }
+
+    expect(applyStartupPortableMode(fakeApp, env)).toBe(newCustomDir)
+    expect(env.CLAUDE_CONFIG_DIR).toBe(newCustomDir)
+    expect(env.WEBVIEW2_USER_DATA_FOLDER).toBe(path.join(newCustomDir, 'EBWebView'))
+  })
+
+  it.each([
+    { mode: 'portable', portable_dir: null },
+    { mode: 'portable', portable_dir: '' },
+    { mode: 'portable', portable_dir: 'relative-data' },
+    { mode: 'unknown', portable_dir: '/tmp/custom' },
+  ])('falls back to system mode for invalid custom metadata: %o', value => {
+    const fakeApp = app()
+    writeMode(fakeApp, value)
+
+    expect(determineStartupPortableDir(fakeApp, {})).toBeNull()
+    expect(getAppMode(fakeApp, {})).toMatchObject({
+      mode: 'default',
+      portableDir: null,
+      activeConfigDir: systemClaudeConfigDir(fakeApp),
+      configDirSource: 'system',
+    })
+  })
+
+  it('persists one atomic system-owned mode record for a custom directory', () => {
+    const fakeApp = app()
+    const customDir = path.join(fakeApp.root, 'custom-data')
+    const previousActive = path.join(fakeApp.root, 'previous-custom')
+
+    setAppMode(fakeApp, { mode: 'portable', portableDir: customDir }, {
+      CLAUDE_CONFIG_DIR: previousActive,
+      CC_HAHA_APP_PORTABLE_DIR: '1',
+    })
+
+    expect(JSON.parse(fs.readFileSync(path.join(fakeApp.getPath('userData'), 'app-mode.json'), 'utf8'))).toEqual({
+      mode: 'portable',
+      portable_dir: customDir,
+    })
+    expect(fs.existsSync(path.join(customDir, 'app-mode.json'))).toBe(false)
+    expect(fs.existsSync(path.join(previousActive, 'app-mode.json'))).toBe(false)
+    expect(fs.readdirSync(fakeApp.getPath('userData'))).toEqual(['app-mode.json'])
+  })
+
+  it('switches back to system mode without touching the custom directory', () => {
+    const fakeApp = app()
+    const customDir = path.join(fakeApp.root, 'custom-data')
+    fs.mkdirSync(customDir, { recursive: true })
+    fs.writeFileSync(path.join(customDir, 'settings.json'), '{"keep":true}')
+    writeMode(fakeApp, { mode: 'portable', portable_dir: customDir })
+
+    setAppMode(fakeApp, { mode: 'default', portableDir: null }, {
+      CLAUDE_CONFIG_DIR: customDir,
+      CC_HAHA_APP_PORTABLE_DIR: '1',
+    })
+
+    expect(JSON.parse(fs.readFileSync(path.join(fakeApp.getPath('userData'), 'app-mode.json'), 'utf8'))).toEqual({
       mode: 'default',
       portable_dir: null,
     })
+    expect(fs.readFileSync(path.join(customDir, 'settings.json'), 'utf8')).toBe('{"keep":true}')
   })
 
-  it('does not point existing config at a portable dir that cannot persist app-mode.json', () => {
+  it.each([
+    { label: 'missing', value: null },
+    { label: 'empty', value: '   ' },
+    { label: 'relative', value: 'relative-data' },
+  ])('rejects a $label custom directory', ({ value }) => {
     const fakeApp = app()
-    const active = tempDir()
-    const selected = path.join(tempDir(), 'portable')
-    fs.mkdirSync(path.join(selected, 'app-mode.json'), { recursive: true })
 
-    expect(() => setAppMode(fakeApp, { mode: 'portable', portableDir: selected }, { CLAUDE_CONFIG_DIR: active }))
-      .toThrow()
-    expect(fs.existsSync(path.join(active, 'app-mode.json'))).toBe(false)
+    expect(() => setAppMode(fakeApp, { mode: 'portable', portableDir: value }, {})).toThrow()
     expect(fs.existsSync(path.join(fakeApp.getPath('userData'), 'app-mode.json'))).toBe(false)
   })
 
-  it('reports whether the default portable dir already has data', () => {
+  it('rejects custom directories inside the application install tree, including symlink aliases', () => {
     const fakeApp = app()
-    expect(detectPortableDir(fakeApp)).toEqual({
-      defaultPortableDir: defaultPortableDir(fakeApp),
-      hasData: false,
+    const installDir = path.dirname(fakeApp.getPath('exe'))
+    const aliasedInstallDir = path.join(fakeApp.root, 'install-alias')
+    fs.symlinkSync(installDir, aliasedInstallDir, 'dir')
+
+    expect(() => setAppMode(fakeApp, {
+      mode: 'portable',
+      portableDir: path.join(installDir, 'data'),
+    }, {})).toThrow('outside the application install directory')
+    expect(() => setAppMode(fakeApp, {
+      mode: 'portable',
+      portableDir: path.join(aliasedInstallDir, 'data'),
+    }, {})).toThrow('outside the application install directory')
+  })
+
+  it('does not partially mutate process.env when custom startup preparation fails', () => {
+    const fakeApp = app()
+    const customDir = path.join(fakeApp.root, 'custom-data')
+    writeMode(fakeApp, { mode: 'portable', portable_dir: customDir })
+    const env: NodeJS.ProcessEnv = {}
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw new Error('mkdir failed')
     })
-    fs.mkdirSync(defaultPortableDir(fakeApp), { recursive: true })
-    fs.writeFileSync(path.join(defaultPortableDir(fakeApp), '.mcp.json'), '{}')
-    expect(detectPortableDir(fakeApp).hasData).toBe(true)
+
+    expect(() => applyStartupPortableMode(fakeApp, env)).toThrow('mkdir failed')
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
+    expect(env.CC_HAHA_APP_PORTABLE_DIR).toBeUndefined()
+    expect(env.WEBVIEW2_USER_DATA_FOLDER).toBeUndefined()
+  })
+
+  it('keeps the previous mode record if the atomic replacement fails', () => {
+    const fakeApp = app()
+    const modeFile = path.join(fakeApp.getPath('userData'), 'app-mode.json')
+    writeMode(fakeApp, { mode: 'default', portable_dir: null })
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('rename failed')
+    })
+
+    expect(() => setAppMode(fakeApp, {
+      mode: 'portable',
+      portableDir: path.join(fakeApp.root, 'custom-data'),
+    }, {})).toThrow('rename failed')
+    expect(JSON.parse(fs.readFileSync(modeFile, 'utf8'))).toEqual({
+      mode: 'default',
+      portable_dir: null,
+    })
+    expect(fs.readdirSync(fakeApp.getPath('userData'))).toEqual(['app-mode.json'])
   })
 })

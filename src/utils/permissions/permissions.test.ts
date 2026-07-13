@@ -5,6 +5,7 @@ import type { PermissionDecision } from './PermissionResult.js'
 import {
   checkRuleBasedPermissions,
   hasPermissionsToUseTool,
+  syncPermissionRulesFromDisk,
 } from './permissions.js'
 
 const inputSchema = {
@@ -282,5 +283,35 @@ describe('hasPermissionsToUseTool bypassPermissions mode', () => {
       behavior: 'deny',
       message: 'Denied by rule',
     })
+  })
+})
+
+describe('syncPermissionRulesFromDisk', () => {
+  it('revokes stale policy and flag rules on an empty settings snapshot', () => {
+    const context = permissionContext({
+      alwaysAllowRules: {
+        policySettings: ['FakeTool'],
+        flagSettings: ['FakeTool'],
+        session: ['SessionTool'],
+      },
+      alwaysDenyRules: {
+        policySettings: ['DeniedTool'],
+        flagSettings: ['DeniedTool'],
+      },
+      alwaysAskRules: {
+        policySettings: ['AskedTool'],
+        flagSettings: ['AskedTool'],
+      },
+    })
+
+    const synced = syncPermissionRulesFromDisk(context, [])
+
+    expect(synced.alwaysAllowRules.policySettings).toEqual([])
+    expect(synced.alwaysAllowRules.flagSettings).toEqual([])
+    expect(synced.alwaysDenyRules.policySettings).toEqual([])
+    expect(synced.alwaysDenyRules.flagSettings).toEqual([])
+    expect(synced.alwaysAskRules.policySettings).toEqual([])
+    expect(synced.alwaysAskRules.flagSettings).toEqual([])
+    expect(synced.alwaysAllowRules.session).toEqual(['SessionTool'])
   })
 })

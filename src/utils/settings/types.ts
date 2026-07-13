@@ -1003,11 +1003,21 @@ export const SettingsSchema = lazySchema(() =>
                 allow: z
                   .array(z.string())
                   .optional()
-                  .describe('Rules for the auto mode classifier allow section'),
+                  .describe(
+                    'Rules for the auto mode classifier allow section. Include "$defaults" to inherit built-in rules at that position.',
+                  ),
                 soft_deny: z
                   .array(z.string())
                   .optional()
-                  .describe('Rules for the auto mode classifier deny section'),
+                  .describe(
+                    'Rules for the auto mode classifier soft-deny section. Include "$defaults" to inherit built-in rules at that position.',
+                  ),
+                hard_deny: z
+                  .array(z.string())
+                  .optional()
+                  .describe(
+                    'Rules for the auto mode classifier hard-deny section. Include "$defaults" to inherit built-in rules at that position.',
+                  ),
                 ...(process.env.USER_TYPE === 'ant'
                   ? {
                       // Back-compat alias for ant users; external users use soft_deny
@@ -1018,7 +1028,13 @@ export const SettingsSchema = lazySchema(() =>
                   .array(z.string())
                   .optional()
                   .describe(
-                    'Entries for the auto mode classifier environment section',
+                    'Entries for the auto mode classifier environment section. Include "$defaults" to inherit built-in entries at that position.',
+                  ),
+                classifyAllShell: z
+                  .boolean()
+                  .optional()
+                  .describe(
+                    'Route all Bash and PowerShell commands through the auto mode classifier.',
                   ),
               })
               .optional()

@@ -28,22 +28,27 @@ export function autoModeDefaultsHandler(): void {
 /**
  * Dump the effective auto mode config: user settings where provided, external
  * defaults otherwise. Per-section REPLACE semantics — matches how
- * buildYoloSystemPrompt resolves the external template (a non-empty user
- * section replaces that section's defaults entirely; an empty/absent section
- * falls through to defaults).
+ * buildYoloSystemPrompt resolves the external template. A configured section,
+ * including an empty array, replaces its defaults. `$defaults` expands in
+ * place; only an absent section inherits the complete default list.
  */
 export function autoModeConfigHandler(): void {
   const config = getAutoModeConfig()
   const defaults = getDefaultExternalAutoModeRules()
   writeRules({
-    allow: config?.allow?.length ? config.allow : defaults.allow,
-    soft_deny: config?.soft_deny?.length
-      ? config.soft_deny
-      : defaults.soft_deny,
-    environment: config?.environment?.length
-      ? config.environment
-      : defaults.environment,
+    allow: resolveRules(config?.allow, defaults.allow),
+    soft_deny: resolveRules(config?.soft_deny, defaults.soft_deny),
+    hard_deny: resolveRules(config?.hard_deny, defaults.hard_deny),
+    environment: resolveRules(config?.environment, defaults.environment),
   })
+}
+
+function resolveRules(
+  configured: string[] | undefined,
+  defaults: string[],
+): string[] {
+  if (configured === undefined) return defaults
+  return configured.flatMap(rule => (rule === '$defaults' ? defaults : [rule]))
 }
 
 const CRITIQUE_SYSTEM_PROMPT =
@@ -51,10 +56,11 @@ const CRITIQUE_SYSTEM_PROMPT =
   '\n' +
   'Claude Code has an "auto mode" that uses an AI classifier to decide whether ' +
   'tool calls should be auto-approved or require user confirmation. Users can ' +
-  'write custom rules in three categories:\n' +
+  'write custom rules in four categories:\n' +
   '\n' +
   '- **allow**: Actions the classifier should auto-approve\n' +
   '- **soft_deny**: Actions the classifier should block (require user confirmation)\n' +
+  '- **hard_deny**: Actions the classifier must block unconditionally\n' +
   "- **environment**: Context about the user's setup that helps the classifier make decisions\n" +
   '\n' +
   "Your job is to critique the user's custom rules for clarity, completeness, " +
@@ -75,14 +81,15 @@ export async function autoModeCritiqueHandler(options: {
 }): Promise<void> {
   const config = getAutoModeConfig()
   const hasCustomRules =
-    (config?.allow?.length ?? 0) > 0 ||
-    (config?.soft_deny?.length ?? 0) > 0 ||
-    (config?.environment?.length ?? 0) > 0
+    config?.allow !== undefined ||
+    config?.soft_deny !== undefined ||
+    config?.hard_deny !== undefined ||
+    config?.environment !== undefined
 
   if (!hasCustomRules) {
     process.stdout.write(
       'No custom auto mode rules found.\n\n' +
-        'Add rules to your settings file under autoMode.{allow, soft_deny, environment}.\n' +
+        'Add rules to your settings file under autoMode.{allow, soft_deny, hard_deny, environment}.\n' +
         'Run `claude auto-mode defaults` to see the default rules for reference.\n',
     )
     return
@@ -96,15 +103,20 @@ export async function autoModeCritiqueHandler(options: {
   const classifierPrompt = buildDefaultExternalSystemPrompt()
 
   const userRulesSummary =
-    formatRulesForCritique('allow', config?.allow ?? [], defaults.allow) +
+    formatRulesForCritique('allow', config?.allow, defaults.allow) +
     formatRulesForCritique(
       'soft_deny',
-      config?.soft_deny ?? [],
+      config?.soft_deny,
       defaults.soft_deny,
     ) +
     formatRulesForCritique(
+      'hard_deny',
+      config?.hard_deny,
+      defaults.hard_deny,
+    ) +
+    formatRulesForCritique(
       'environment',
-      config?.environment ?? [],
+      config?.environment,
       defaults.environment,
     )
 
@@ -150,17 +162,21 @@ export async function autoModeCritiqueHandler(options: {
 
 function formatRulesForCritique(
   section: string,
-  userRules: string[],
+  userRules: string[] | undefined,
   defaultRules: string[],
 ): string {
-  if (userRules.length === 0) return ''
-  const customLines = userRules.map(r => '- ' + r).join('\n')
+  if (userRules === undefined) return ''
+  const effectiveRules = resolveRules(userRules, defaultRules)
+  const customLines =
+    effectiveRules.length === 0
+      ? '(explicitly empty)'
+      : effectiveRules.map(r => '- ' + r).join('\n')
   const defaultLines = defaultRules.map(r => '- ' + r).join('\n')
   return (
     '## ' +
     section +
     ' (custom rules replacing defaults)\n' +
-    'Custom:\n' +
+    'Effective:\n' +
     customLines +
     '\n\n' +
     'Defaults being replaced:\n' +

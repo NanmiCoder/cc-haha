@@ -68,7 +68,7 @@ describe('persistent storage upgrade migrations', () => {
     }
     expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
     expect(migrated.activeId).toBe('provider-1')
-    expect(migrated.providerOrder).toEqual(['provider-1', 'claude-official', 'openai-official'])
+    expect(migrated.providerOrder).toEqual(['provider-1', 'claude-official', 'openai-official', 'grok-official'])
     expect(migrated.activeProviderId).toBeUndefined()
     expect(migrated.rootFutureField).toEqual({ keep: true })
     expect(migrated.providers?.[0]?.extraFutureField).toBe('keep-me')
@@ -136,7 +136,7 @@ describe('persistent storage upgrade migrations', () => {
       }>
     }
     expect(migrated.activeId).toBe('legacy-provider')
-    expect(migrated.providerOrder).toEqual(['legacy-provider', 'claude-official', 'openai-official'])
+    expect(migrated.providerOrder).toEqual(['legacy-provider', 'claude-official', 'openai-official', 'grok-official'])
     expect(migrated.providers?.[0]).toMatchObject({
       id: 'legacy-provider',
       presetId: 'custom',
@@ -204,7 +204,7 @@ describe('persistent storage upgrade migrations', () => {
       providers?: unknown[]
     }
     expect(current.activeId).toBeNull()
-    expect(current.providerOrder).toEqual(['claude-official', 'openai-official'])
+    expect(current.providerOrder).toEqual(['claude-official', 'openai-official', 'grok-official'])
     expect(current.providers).toEqual([])
   })
 

@@ -896,14 +896,12 @@ export function hasSkipDangerousModePermissionPrompt(): boolean {
 export function hasAutoModeOptIn(): boolean {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const user = getSettingsForSource('userSettings')?.skipAutoPermissionPrompt
-    const local =
-      getSettingsForSource('localSettings')?.skipAutoPermissionPrompt
     const flag = getSettingsForSource('flagSettings')?.skipAutoPermissionPrompt
     const policy =
       getSettingsForSource('policySettings')?.skipAutoPermissionPrompt
-    const result = !!(user || local || flag || policy)
+    const result = !!(user || flag || policy)
     logForDebugging(
-      `[auto-mode] hasAutoModeOptIn=${result} skipAutoPermissionPrompt: user=${user} local=${local} flag=${flag} policy=${policy}`,
+      `[auto-mode] hasAutoModeOptIn=${result} skipAutoPermissionPrompt: user=${user} flag=${flag} policy=${policy}`,
     )
     return result
   }
@@ -934,19 +932,33 @@ export function getUseAutoModeDuringPlan(): boolean {
  * otherwise inject classifier allow/deny rules (RCE risk).
  */
 export function getAutoModeConfig():
-  | { allow?: string[]; soft_deny?: string[]; environment?: string[] }
+  | {
+      allow?: string[]
+      soft_deny?: string[]
+      hard_deny?: string[]
+      environment?: string[]
+      classifyAllShell?: boolean
+    }
   | undefined {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const schema = z.object({
       allow: z.array(z.string()).optional(),
       soft_deny: z.array(z.string()).optional(),
+      hard_deny: z.array(z.string()).optional(),
       deny: z.array(z.string()).optional(),
       environment: z.array(z.string()).optional(),
+      classifyAllShell: z.boolean().optional(),
     })
 
     const allow: string[] = []
     const soft_deny: string[] = []
+    const hard_deny: string[] = []
     const environment: string[] = []
+    let allowConfigured = false
+    let softDenyConfigured = false
+    let hardDenyConfigured = false
+    let environmentConfigured = false
+    let classifyAllShell: boolean | undefined
 
     for (const source of [
       'userSettings',
@@ -960,21 +972,47 @@ export function getAutoModeConfig():
         (settings as Record<string, unknown>).autoMode,
       )
       if (result.success) {
-        if (result.data.allow) allow.push(...result.data.allow)
-        if (result.data.soft_deny) soft_deny.push(...result.data.soft_deny)
-        if (process.env.USER_TYPE === 'ant') {
-          if (result.data.deny) soft_deny.push(...result.data.deny)
+        if (result.data.allow !== undefined) {
+          allowConfigured = true
+          allow.push(...result.data.allow)
         }
-        if (result.data.environment)
+        if (result.data.soft_deny !== undefined) {
+          softDenyConfigured = true
+          soft_deny.push(...result.data.soft_deny)
+        }
+        if (result.data.hard_deny !== undefined) {
+          hardDenyConfigured = true
+          hard_deny.push(...result.data.hard_deny)
+        }
+        if (process.env.USER_TYPE === 'ant') {
+          if (result.data.deny !== undefined) {
+            softDenyConfigured = true
+            soft_deny.push(...result.data.deny)
+          }
+        }
+        if (result.data.environment !== undefined) {
+          environmentConfigured = true
           environment.push(...result.data.environment)
+        }
+        if (result.data.classifyAllShell !== undefined) {
+          classifyAllShell = result.data.classifyAllShell
+        }
       }
     }
 
-    if (allow.length > 0 || soft_deny.length > 0 || environment.length > 0) {
+    if (
+      allowConfigured ||
+      softDenyConfigured ||
+      hardDenyConfigured ||
+      environmentConfigured ||
+      classifyAllShell !== undefined
+    ) {
       return {
-        ...(allow.length > 0 && { allow }),
-        ...(soft_deny.length > 0 && { soft_deny }),
-        ...(environment.length > 0 && { environment }),
+        ...(allowConfigured && { allow }),
+        ...(softDenyConfigured && { soft_deny }),
+        ...(hardDenyConfigured && { hard_deny }),
+        ...(environmentConfigured && { environment }),
+        ...(classifyAllShell !== undefined && { classifyAllShell }),
       }
     }
   }

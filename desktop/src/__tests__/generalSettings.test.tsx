@@ -88,6 +88,10 @@ vi.mock('../components/settings/ChatGPTOfficialLogin', () => ({
   ChatGPTOfficialLogin: () => <div data-testid="chatgpt-official-login" />,
 }))
 
+vi.mock('../components/settings/GrokOfficialLogin', () => ({
+  GrokOfficialLogin: () => <div data-testid="grok-official-login" />,
+}))
+
 vi.mock('../pages/AdapterSettings', () => ({
   AdapterSettings: () => <div>Adapter Settings Mock</div>,
 }))
@@ -209,6 +213,7 @@ describe('Settings > General tab', () => {
       locale: 'en',
       theme: 'light',
       permissionMode: 'default',
+      autoModeOptInAccepted: false,
       thinkingEnabled: true,
       autoDreamEnabled: false,
       skipWebFetchPreflight: true,
@@ -262,6 +267,9 @@ describe('Settings > General tab', () => {
       setPermissionMode: vi.fn().mockImplementation(async (permissionMode: PermissionMode) => {
         useSettingsStore.setState({ permissionMode })
       }),
+      acceptAutoModeOptIn: vi.fn().mockImplementation(async () => {
+        useSettingsStore.setState({ autoModeOptInAccepted: true } as never)
+      }),
       setSkipWebFetchPreflight: vi.fn().mockImplementation(async (enabled: boolean) => {
         useSettingsStore.setState({ skipWebFetchPreflight: enabled })
       }),
@@ -290,8 +298,7 @@ describe('Settings > General tab', () => {
       appMode: {
         mode: 'default',
         portableDir: null,
-        defaultPortableDir: '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR',
-        activeConfigDir: null,
+        activeConfigDir: '/Users/test/.claude',
         configDirSource: 'system',
       },
       appModeRequiresRestart: false,
@@ -300,9 +307,8 @@ describe('Settings > General tab', () => {
         useSettingsStore.setState({
           appMode: {
             mode,
-            portableDir: mode === 'portable' ? portableDir ?? '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR' : null,
-            defaultPortableDir: '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR',
-            activeConfigDir: mode === 'portable' ? portableDir ?? '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR' : null,
+            portableDir: mode === 'portable' ? portableDir ?? null : null,
+            activeConfigDir: mode === 'portable' ? portableDir ?? null : '/Users/test/.claude',
             configDirSource: mode === 'portable' ? 'portable' : 'system',
           },
           appModeRequiresRestart: true,
@@ -510,17 +516,17 @@ describe('Settings > General tab', () => {
     const storageHeading = screen.getByRole('heading', { name: 'Data Storage Location' })
 
     expect((webSearchHeading.compareDocumentPosition(storageHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-    expect(screen.getByText(/Switching directories does not migrate existing data/)).toBeInTheDocument()
+    expect(screen.getByText(/Windows, upgrades recover verified legacy app-adjacent data/)).toBeInTheDocument()
   })
 
-  it('lets desktop users choose a portable data directory and relaunch immediately', async () => {
+  it('lets desktop users choose a custom data directory and relaunch immediately', async () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
     fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Portable data directory')).toHaveValue('/Users/test/cc-haha-data')
+      expect(screen.getByLabelText('Custom data directory')).toHaveValue('/Users/test/cc-haha-data')
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Use This Folder and Restart' }))
@@ -534,12 +540,11 @@ describe('Settings > General tab', () => {
     })
   })
 
-  it('switches back to the system directory without deleting portable data', async () => {
+  it('switches back to ~/.claude without deleting custom data', async () => {
     useSettingsStore.setState({
       appMode: {
         mode: 'portable',
         portableDir: '/Users/test/cc-haha-data',
-        defaultPortableDir: '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR',
         activeConfigDir: '/Users/test/cc-haha-data',
         configDirSource: 'portable',
       },
@@ -550,7 +555,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('General'))
     fireEvent.click(screen.getByRole('button', { name: /Use system directory/ }))
 
-    expect(screen.getByText(/Data in the portable directory is not deleted/)).toBeInTheDocument()
+    expect(screen.getByText(/Data in the custom directory is not deleted/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save and Restart' }))
 
     await waitFor(() => {
@@ -560,19 +565,20 @@ describe('Settings > General tab', () => {
     })
   })
 
-  it('validates portable directory input and lets users reset to the app-side folder', async () => {
+  it('requires an explicit custom directory and exposes no third default-custom choice', async () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    const input = screen.getByLabelText('Portable data directory')
+    const input = screen.getByLabelText('Custom data directory')
 
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use This Folder and Restart' }))
-    expect(screen.getByText('Choose or enter a portable data directory first.')).toBeInTheDocument()
+    expect(screen.getByText('Choose or enter a custom data directory first.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /default.*data folder/i })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use the default portable folder beside the app' }))
-    expect(input).toHaveValue('/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR')
-    expect(screen.queryByText('Choose or enter a portable data directory first.')).not.toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '/Users/test/custom-data' } })
+    expect(input).toHaveValue('/Users/test/custom-data')
+    expect(screen.queryByText('Choose or enter a custom data directory first.')).not.toBeInTheDocument()
   })
 
   it('shows folder picker failures as an inline storage error', async () => {
@@ -591,7 +597,6 @@ describe('Settings > General tab', () => {
       appMode: {
         mode: 'portable',
         portableDir: '/env/claude-data',
-        defaultPortableDir: '/Applications/Claude Code Haha/CLAUDE_CONFIG_DIR',
         activeConfigDir: '/env/claude-data',
         configDirSource: 'environment',
       },
@@ -605,7 +610,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Use system directory/ }))
     expect(screen.getByText(/Remove it from the launch environment before switching back/)).toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Portable data directory'), { target: { value: '/other/data' } })
+    fireEvent.change(screen.getByLabelText('Custom data directory'), { target: { value: '/other/data' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use This Folder and Restart' }))
     expect(screen.queryByText('Switch data storage location?')).not.toBeInTheDocument()
     expect(screen.getByText(/Remove it from the launch environment before switching back/)).toBeInTheDocument()
@@ -615,6 +620,7 @@ describe('Settings > General tab', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
+    fireEvent.change(screen.getByLabelText('Custom data directory'), { target: { value: '/Users/test/custom-data' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use This Folder and Restart' }))
     expect(screen.getByText('Switch data storage location?')).toBeInTheDocument()
 
@@ -632,6 +638,7 @@ describe('Settings > General tab', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
+    fireEvent.change(screen.getByLabelText('Custom data directory'), { target: { value: '/Users/test/custom-data' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use This Folder and Restart' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save and Restart' }))
 
@@ -772,6 +779,29 @@ describe('Settings > General tab', () => {
 
     expect(useSettingsStore.getState().setPermissionMode).toHaveBeenCalledWith('bypassPermissions')
     expect(useSettingsStore.getState().permissionMode).toBe('bypassPermissions')
+  })
+
+  it('confirms first use before saving Auto as the new-session default', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Auto mode/ }))
+
+    expect(useSettingsStore.getState().setPermissionMode).not.toHaveBeenCalledWith('auto')
+    const dialog = screen.getByRole('dialog', { name: 'Enable Auto mode?' })
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable Auto mode' }))
+    })
+
+    expect(useSettingsStore.getState().acceptAutoModeOptIn).toHaveBeenCalledOnce()
+    expect(useSettingsStore.getState().setPermissionMode).toHaveBeenCalledWith('auto')
+    expect(useSettingsStore.getState().permissionMode).toBe('auto')
   })
 
   it('keeps Auto-dream disabled by default and confirms before enabling it', async () => {
@@ -1125,7 +1155,31 @@ describe('Settings > General tab', () => {
       target: { value: '99' },
     })
 
-    expect(within(section).getByText('Port must be an integer between 1024 and 65535.')).toBeInTheDocument()
+    expect(within(section).getByText('Port must be a browser-safe integer between 1024 and 65535.')).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: 'Save H5 settings' })).toBeDisabled()
+    expect(useSettingsStore.getState().updateH5AccessSettings).not.toHaveBeenCalled()
+  })
+
+  it('rejects a browser-blocked fixed port before saving', () => {
+    useSettingsStore.setState({
+      h5Access: {
+        enabled: true,
+        token: 'h5_persisted_token',
+        tokenPreview: 'h5_pers...oken',
+        allowedOrigins: [],
+        publicBaseUrl: 'http://192.168.0.102:54064',
+        fixedPort: null,
+        disconnectGraceSeconds: null,
+      },
+    })
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('H5 Access'))
+    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.change(within(section).getByLabelText('Fixed port'), {
+      target: { value: '5061' },
+    })
+
     expect(within(section).getByRole('button', { name: 'Save H5 settings' })).toBeDisabled()
     expect(useSettingsStore.getState().updateH5AccessSettings).not.toHaveBeenCalled()
   })
@@ -1521,7 +1575,7 @@ describe('Settings > Providers tab', () => {
         notes: '',
       },
     ]
-    providerStoreState.providerOrder = ['provider-1', 'claude-official', 'openai-official']
+    providerStoreState.providerOrder = ['provider-1', 'claude-official', 'openai-official', 'grok-official']
     providerStoreState.activeId = null
     providerStoreState.hasLoadedProviders = true
   })
@@ -1570,6 +1624,18 @@ describe('Settings > Providers tab', () => {
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
   })
 
+  it('shows Grok Official as the active built-in provider', () => {
+    providerStoreState.providers = []
+    providerStoreState.activeId = 'grok-official'
+
+    render(<Settings />)
+
+    const provider = screen.getByTestId('grok-official-provider')
+    expect(within(provider).getByText('Grok Official')).toBeInTheDocument()
+    expect(within(provider).getByText('Default')).toBeInTheDocument()
+    expect(screen.getByTestId('grok-official-login')).toBeInTheDocument()
+  })
+
   it('renders saved and official providers in the stored sortable order', () => {
     providerStoreState.providerOrder = ['provider-1', 'openai-official', 'claude-official']
 
@@ -1581,6 +1647,7 @@ describe('Settings > Providers tab', () => {
       'provider-provider-1',
       'openai-official-provider',
       'claude-official-provider',
+      'grok-official-provider',
     ])
   })
 
@@ -1595,6 +1662,7 @@ describe('Settings > Providers tab', () => {
       'provider-provider-1',
       'claude-official-provider',
       'openai-official-provider',
+      'grok-official-provider',
     ])
   })
 

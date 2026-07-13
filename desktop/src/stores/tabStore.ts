@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { sessionsApi } from '../api/sessions'
 import { dropSession as dropVirtualHeightSession } from '../components/chat/virtualHeightCache'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
+import { useSessionRuntimeStore } from './sessionRuntimeStore'
 
 const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
 
@@ -27,7 +28,15 @@ export type Tab = {
   traceSessionId?: string
   workbenchSessionId?: string
   sourceSessionId?: string
+  sourceTurnKey?: string
+  sourceElementId?: string
   subagentToolUseId?: string
+}
+
+export type WorkbenchTabOrigin = {
+  sourceSessionId?: string
+  sourceTurnKey?: string
+  sourceElementId?: string
 }
 
 type TabPersistence = {
@@ -43,7 +52,8 @@ type TabStore = {
   openTracesTab: (title?: string) => string
   openTraceTab: (sessionId: string, title?: string) => string
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
-  openWorkbenchTab: (sessionId: string, title?: string) => string
+  openWorkbenchTab: (sessionId: string, title?: string, origin?: WorkbenchTabOrigin) => string
+  returnFromWorkbench: (tabId: string) => void
   openSubagentTab: (sourceSessionId: string, toolUseId: string, title?: string) => string
   closeTab: (sessionId: string) => void
   setActiveTab: (sessionId: string) => void
@@ -168,7 +178,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     return sessionId
   },
 
-  openWorkbenchTab: (sessionId, title = 'Workbench') => {
+  openWorkbenchTab: (sessionId, title = 'Workbench', origin) => {
     const tabId = `${WORKBENCH_TAB_PREFIX}${sessionId}`
     const { tabs } = get()
     const existing = tabs.find((tab) => tab.sessionId === tabId)
@@ -178,6 +188,9 @@ export const useTabStore = create<TabStore>((set, get) => ({
       type: 'workbench',
       status: 'idle',
       workbenchSessionId: sessionId,
+      sourceSessionId: origin?.sourceSessionId ?? sessionId,
+      ...(origin?.sourceTurnKey ? { sourceTurnKey: origin.sourceTurnKey } : {}),
+      ...(origin?.sourceElementId ? { sourceElementId: origin.sourceElementId } : {}),
     }
 
     if (existing) {
@@ -193,6 +206,16 @@ export const useTabStore = create<TabStore>((set, get) => ({
     }
     get().saveTabs()
     return tabId
+  },
+
+  returnFromWorkbench: (tabId) => {
+    const tab = get().tabs.find((current) => current.sessionId === tabId)
+    if (tab?.type !== 'workbench') return
+
+    if (tab.sourceSessionId && get().tabs.some((current) => current.sessionId === tab.sourceSessionId)) {
+      get().setActiveTab(tab.sourceSessionId)
+    }
+    get().closeTab(tabId)
   },
 
   openSubagentTab: (sourceSessionId, toolUseId, title = 'SubAgent') => {
@@ -288,6 +311,12 @@ export const useTabStore = create<TabStore>((set, get) => ({
   saveTabs: () => {
     const { tabs, activeTabId } = get()
     const persistableTabs = tabs.filter((tab) => tab.type !== 'terminal' && tab.type !== 'workbench' && tab.type !== 'subagent')
+    const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
+    const persistedActiveTabId = activeTabId && persistableTabs.some((tab) => tab.sessionId === activeTabId)
+      ? activeTabId
+      : activeTab?.type === 'workbench' && activeTab.sourceSessionId && persistableTabs.some((tab) => tab.sessionId === activeTab.sourceSessionId)
+        ? activeTab.sourceSessionId
+        : (persistableTabs[0]?.sessionId ?? null)
     const data: TabPersistence = {
       openTabs: persistableTabs.map((t) => ({
         sessionId: t.sessionId,
@@ -295,9 +324,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
         type: t.type,
         ...(t.traceSessionId ? { traceSessionId: t.traceSessionId } : {}),
       })),
-      activeTabId: activeTabId && persistableTabs.some((tab) => tab.sessionId === activeTabId)
-        ? activeTabId
-        : (persistableTabs[0]?.sessionId ?? null),
+      activeTabId: persistedActiveTabId,
     }
     try {
       localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(data))
@@ -325,6 +352,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
       ) {
         return
       }
+      useSessionRuntimeStore.getState().syncFromSessions(sessions)
       const existingIds = new Set(sessions.map((s) => s.id))
 
       const validTabs: Tab[] = data.openTabs

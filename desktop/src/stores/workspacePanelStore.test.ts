@@ -92,6 +92,29 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().width).toBe(WORKSPACE_PANEL_MAX_WIDTH)
   })
 
+  it('keeps a preview opener origin at session scope after the originating card unmounts', async () => {
+    mocks.getWorkspaceDiffMock.mockResolvedValue({ state: 'ok', diff: '' })
+
+    await useWorkspacePanelStore.getState().openPreview('session-origin', 'src/a.ts', 'diff', {
+      sourceTurnKey: 'assistant-message-4',
+      sourceElementId: 'turn-change-opener-message-4-a',
+    })
+
+    expect(useWorkspacePanelStore.getState().getOrigin('session-origin')).toEqual({
+      sourceTurnKey: 'assistant-message-4',
+      sourceElementId: 'turn-change-opener-message-4-a',
+    })
+
+    useWorkspacePanelStore.getState().closePanel('session-origin')
+    expect(useWorkspacePanelStore.getState().getOrigin('session-origin')).toEqual({
+      sourceTurnKey: 'assistant-message-4',
+      sourceElementId: 'turn-change-opener-message-4-a',
+    })
+
+    useWorkspacePanelStore.getState().clearOrigin('session-origin')
+    expect(useWorkspacePanelStore.getState().getOrigin('session-origin')).toBeNull()
+  })
+
   it('loads workspace status successfully', async () => {
     mocks.getWorkspaceStatusMock.mockResolvedValue({
       state: 'ok',
@@ -419,6 +442,102 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().activePreviewTabIdBySession['session-refresh']).toBe('diff:src/a.ts')
   })
 
+  it('keeps the last successful preview payload while a refresh is pending and after it fails', async () => {
+    const refresh = deferred<{ state: 'ok'; path: string; diff: string }>()
+    mocks.getWorkspaceDiffMock
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/a.ts',
+        diff: '@@ -1 +1 @@\n-old\n+cached',
+      })
+      .mockReturnValueOnce(refresh.promise)
+
+    await useWorkspacePanelStore.getState().openPreview('session-stale-refresh', 'src/a.ts', 'diff')
+    const refreshPromise = useWorkspacePanelStore.getState().openPreview('session-stale-refresh', 'src/a.ts', 'diff')
+    const previewKey = 'session-stale-refresh::diff:src/a.ts'
+
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-stale-refresh']).toEqual([
+      expect.objectContaining({ state: 'ok', diff: '@@ -1 +1 @@\n-old\n+cached' }),
+    ])
+    expect(useWorkspacePanelStore.getState().loading.previewByTabId[previewKey]).toBe(true)
+
+    refresh.reject(new Error('refresh failed'))
+    await refreshPromise
+
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-stale-refresh']).toEqual([
+      expect.objectContaining({ state: 'ok', diff: '@@ -1 +1 @@\n-old\n+cached' }),
+    ])
+    expect(useWorkspacePanelStore.getState().loading.previewByTabId[previewKey]).toBe(false)
+    expect(useWorkspacePanelStore.getState().errors.previewByTabId[previewKey]).toBe('refresh failed')
+  })
+
+  it('keeps the last successful file payload and records structured state for a non-ok refresh result', async () => {
+    mocks.getWorkspaceFileMock
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/a.ts',
+        content: 'cached file',
+        language: 'typescript',
+        size: 11,
+      })
+      .mockResolvedValueOnce({
+        state: 'error',
+        path: 'src/a.ts',
+      })
+
+    await useWorkspacePanelStore.getState().openPreview('session-file-refresh-error', 'src/a.ts', 'file')
+    await useWorkspacePanelStore.getState().openPreview('session-file-refresh-error', 'src/a.ts', 'file')
+
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-file-refresh-error']).toEqual([
+      expect.objectContaining({ state: 'ok', content: 'cached file', language: 'typescript' }),
+    ])
+    expect(useWorkspacePanelStore.getState().errors.previewByTabId['session-file-refresh-error::file:src/a.ts'])
+      .toBeNull()
+    expect(useWorkspacePanelStore.getState().errors.previewRefreshStateByTabId['session-file-refresh-error::file:src/a.ts'])
+      .toBe('error')
+  })
+
+  it('keeps the last successful diff payload and records structured state for a non-ok refresh result', async () => {
+    mocks.getWorkspaceDiffMock
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/a.ts',
+        diff: '@@ -1 +1 @@\n-old\n+cached',
+      })
+      .mockResolvedValueOnce({
+        state: 'missing',
+        path: 'src/a.ts',
+      })
+
+    await useWorkspacePanelStore.getState().openPreview('session-diff-refresh-missing', 'src/a.ts', 'diff')
+    await useWorkspacePanelStore.getState().openPreview('session-diff-refresh-missing', 'src/a.ts', 'diff')
+
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-diff-refresh-missing']).toEqual([
+      expect.objectContaining({ state: 'ok', diff: '@@ -1 +1 @@\n-old\n+cached' }),
+    ])
+    expect(useWorkspacePanelStore.getState().errors.previewByTabId['session-diff-refresh-missing::diff:src/a.ts'])
+      .toBeNull()
+    expect(useWorkspacePanelStore.getState().errors.previewRefreshStateByTabId['session-diff-refresh-missing::diff:src/a.ts'])
+      .toBe('missing')
+  })
+
+  it('keeps first-load non-ok state on the tab without marking it as a refresh failure', async () => {
+    mocks.getWorkspaceDiffMock.mockResolvedValueOnce({
+      state: 'missing',
+      path: 'src/missing.ts',
+    })
+
+    await useWorkspacePanelStore.getState().openPreview('session-initial-missing', 'src/missing.ts', 'diff')
+
+    expect(useWorkspacePanelStore.getState().previewTabsBySession['session-initial-missing']).toEqual([
+      expect.objectContaining({ state: 'missing' }),
+    ])
+    expect(useWorkspacePanelStore.getState().errors.previewByTabId['session-initial-missing::diff:src/missing.ts'])
+      .toBeNull()
+    expect(useWorkspacePanelStore.getState().errors.previewRefreshStateByTabId['session-initial-missing::diff:src/missing.ts'])
+      .toBeNull()
+  })
+
   it('closes exact tab id and preserves sibling preview for the same path', async () => {
     mocks.getWorkspaceFileMock.mockResolvedValue({
       state: 'ok',
@@ -515,6 +634,11 @@ describe('workspacePanelStore', () => {
           'session-preview-scope::file:c.ts': 'loading',
           'session-preview-scope::file:d.ts': 'loading',
         },
+        previewRefreshStateByTabId: {
+          ...state.errors.previewRefreshStateByTabId,
+          'session-preview-scope::file:c.ts': 'missing',
+          'session-preview-scope::file:d.ts': 'error',
+        },
       },
     }))
 
@@ -527,6 +651,8 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().activePreviewTabIdBySession['session-preview-scope']).toBe('file:b.ts')
     expect(useWorkspacePanelStore.getState().loading.previewByTabId['session-preview-scope::file:c.ts']).toBeUndefined()
     expect(useWorkspacePanelStore.getState().errors.previewByTabId['session-preview-scope::file:d.ts']).toBeUndefined()
+    expect(useWorkspacePanelStore.getState().errors.previewRefreshStateByTabId['session-preview-scope::file:c.ts']).toBeUndefined()
+    expect(useWorkspacePanelStore.getState().errors.previewRefreshStateByTabId['session-preview-scope::file:d.ts']).toBeUndefined()
 
     useWorkspacePanelStore.getState().closePreviewTabs('session-preview-scope', 'file:b.ts', 'others')
 
@@ -729,6 +855,10 @@ describe('workspacePanelStore', () => {
           'session-clear::file:src/a.ts': 'bad',
           'session-reset::file:src/b.ts': 'bad',
         },
+        previewRefreshStateByTabId: {
+          'session-clear::file:src/a.ts': 'missing',
+          'session-reset::file:src/b.ts': 'error',
+        },
       },
     }))
 
@@ -762,5 +892,7 @@ describe('workspacePanelStore', () => {
     expect(state.errors.treeBySessionPath['session-reset::src']).toBeUndefined()
     expect(state.errors.previewByTabId['session-clear::file:src/a.ts']).toBeUndefined()
     expect(state.errors.previewByTabId['session-reset::file:src/b.ts']).toBeUndefined()
+    expect(state.errors.previewRefreshStateByTabId['session-clear::file:src/a.ts']).toBeUndefined()
+    expect(state.errors.previewRefreshStateByTabId['session-reset::file:src/b.ts']).toBeUndefined()
   })
 })

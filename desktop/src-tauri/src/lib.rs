@@ -230,6 +230,7 @@ const WINDOW_STATE_FILE: &str = "window-state.json";
 const TERMINAL_CONFIG_FILE: &str = "terminal-config.json";
 const APP_MODE_FILE: &str = "app-mode.json";
 const SERVER_STATE_FILE: &str = "desktop-server-state.json";
+const MAX_PORT_RESERVATION_ATTEMPTS: usize = 128;
 const MIN_WINDOW_WIDTH: u32 = 960;
 const MIN_WINDOW_HEIGHT: u32 = 640;
 const MIN_VISIBLE_PIXELS: i64 = 64;
@@ -1449,7 +1450,9 @@ fn parse_h5_fixed_port(contents: &str) -> Option<u16> {
     let value: serde_json::Value = serde_json::from_str(contents).ok()?;
     let port = value.get("h5Access")?.get("fixedPort")?.as_u64()?;
     if (1024..=65535).contains(&port) {
-        u16::try_from(port).ok()
+        u16::try_from(port)
+            .ok()
+            .filter(|port| is_browser_safe_port(*port))
     } else {
         None
     }
@@ -1606,21 +1609,57 @@ fn default_shell(_custom_bash: Option<&str>) -> String {
     }
 }
 
+// Keep this list aligned with the WHATWG Fetch bad-port table and the
+// Electron/renderer predicate. https://fetch.spec.whatwg.org/#bad-port
+const FETCH_BLOCKED_PORTS: &[u16] = &[
+    0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
+    102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427,
+    465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990,
+    993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667,
+    6668, 6669, 6679, 6697, 10080,
+];
+
+fn is_browser_safe_port(port: u16) -> bool {
+    !FETCH_BLOCKED_PORTS.contains(&port)
+}
+
+fn reserve_browser_safe_port<F>(mut reserve_candidate: F) -> Result<u16, String>
+where
+    F: FnMut() -> Result<u16, String>,
+{
+    for _ in 0..MAX_PORT_RESERVATION_ATTEMPTS {
+        let port = reserve_candidate()?;
+        if is_browser_safe_port(port) {
+            return Ok(port);
+        }
+        eprintln!("[desktop] OS assigned browser-blocked server port {port}; retrying");
+    }
+    Err("could not reserve a browser-safe local port".to_string())
+}
+
 fn reserve_local_port(bind_host: &str) -> Result<u16, String> {
-    let listener = TcpListener::bind(format!("{bind_host}:0"))
-        .map_err(|err| format!("bind local port: {err}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|err| format!("read local port: {err}"))?
-        .port();
-    drop(listener);
-    Ok(port)
+    reserve_browser_safe_port(|| {
+        let listener = TcpListener::bind(format!("{bind_host}:0"))
+            .map_err(|err| format!("bind local port: {err}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|err| format!("read local port: {err}"))?
+            .port();
+        drop(listener);
+        Ok(port)
+    })
 }
 
 /// 按优先级尝试给定端口（h5Access.fixedPort > 上次使用的端口），
 /// 全部被占用时回退到 OS 随机分配。保证 app 总能启动。
 fn reserve_local_port_with_preference(bind_host: &str, preferred: &[u16]) -> Result<u16, String> {
     for &port in preferred {
+        if !is_browser_safe_port(port) {
+            eprintln!(
+                "[desktop] preferred server port {port} is blocked by browser fetch; skipping"
+            );
+            continue;
+        }
         match TcpListener::bind(format!("{bind_host}:{port}")) {
             Ok(listener) => {
                 drop(listener);
@@ -2086,8 +2125,9 @@ fn kill_windows_sidecars() {
 mod tests {
     use super::{
         decode_terminal_output, default_utf8_locale, dir_has_portable_data, ensure_utf8_locale,
-        has_meaningful_intersection, is_persistable_window_state, normalize_terminal_bash_path,
-        parse_env_block, parse_h5_fixed_port, reserve_local_port_with_preference,
+        has_meaningful_intersection, is_browser_safe_port, is_persistable_window_state,
+        normalize_terminal_bash_path, parse_env_block, parse_h5_fixed_port,
+        reserve_browser_safe_port, reserve_local_port_with_preference,
         resolve_agent_powershell_path_override, resolve_desktop_terminal_shell,
         resolve_terminal_cwd, run_notification_bridge, select_h5_dist_dir, DesktopTerminalConfig,
         StoredServerState, StoredWindowState, TerminalHostPlatform, SERVER_BIND_HOST,
@@ -2406,6 +2446,10 @@ mod tests {
             parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":28670}}"#),
             Some(28670)
         );
+        assert_eq!(
+            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":5061}}"#),
+            None
+        );
         // Out of range, wrong type, missing, or null all fall back to None.
         assert_eq!(parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":80}}"#), None);
         assert_eq!(
@@ -2447,6 +2491,59 @@ mod tests {
 
         // Empty preference list behaves like the plain random reservation.
         assert!(reserve_local_port_with_preference("127.0.0.1", &[]).is_ok());
+    }
+
+    #[test]
+    fn fetch_blocked_preferred_port_is_skipped() {
+        let reserved = reserve_local_port_with_preference("127.0.0.1", &[5061])
+            .expect("reserve browser-safe fallback");
+        assert_ne!(reserved, 5061);
+    }
+
+    #[test]
+    fn fetch_blocked_random_port_is_retried() {
+        let mut candidates = [5061, 5062].into_iter();
+        let reserved = reserve_browser_safe_port(|| {
+            candidates
+                .next()
+                .ok_or_else(|| "ran out of test ports".to_string())
+        })
+        .expect("reserve browser-safe candidate");
+        assert_eq!(reserved, 5062);
+    }
+
+    #[test]
+    fn fetch_blocked_random_port_retry_is_bounded() {
+        let mut attempts = 0;
+        let error = reserve_browser_safe_port(|| {
+            attempts += 1;
+            Ok(5061)
+        })
+        .expect_err("blocked candidates must eventually fail");
+        assert_eq!(error, "could not reserve a browser-safe local port");
+        assert_eq!(attempts, 128);
+    }
+
+    #[test]
+    fn random_port_reservation_errors_are_propagated() {
+        let error = reserve_browser_safe_port(|| Err("bind failed".to_string()))
+            .expect_err("reservation errors must propagate");
+        assert_eq!(error, "bind failed");
+    }
+
+    #[test]
+    fn browser_safe_port_matches_fetch_blocking_contract() {
+        for port in [
+            0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+            101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
+            179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563,
+            587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060,
+            5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+        ] {
+            assert!(!is_browser_safe_port(port), "port {port} should be blocked");
+        }
+        assert!(is_browser_safe_port(5062));
+        assert!(is_browser_safe_port(28670));
     }
 
     #[test]

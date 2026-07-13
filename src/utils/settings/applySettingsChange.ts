@@ -5,6 +5,7 @@ import {
   createDisabledBypassPermissionsContext,
   findOverlyBroadBashPermissions,
   isBypassPermissionsModeDisabled,
+  reconcileAutoModePermissionsAfterSettingsChange,
   removeDangerousPermissions,
   transitionPlanAutoMode,
 } from '../permissions/permissionSetup.js'
@@ -65,6 +66,10 @@ export function applySettingsChange(
       newContext = createDisabledBypassPermissionsContext(newContext)
     }
 
+    newContext = reconcileAutoModePermissionsAfterSettingsChange(
+      newContext,
+      updatedRules,
+    )
     newContext = transitionPlanAutoMode(newContext)
 
     // Sync effortLevel from settings to top-level AppState when it changes

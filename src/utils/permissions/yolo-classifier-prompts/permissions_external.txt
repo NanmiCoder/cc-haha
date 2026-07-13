@@ -1,34 +1,26 @@
-// @generated stub from scan-missing-imports
-// 该文件自动生成，对应 ant-internal 的 feature() gated 模块。
-// 所有外部 build 的代码路径在 DCE 后都不会真的执行这里的代码，这只是
-// bun build resolver 的占位符。
-const __target = function noop() {}
-const __handler: ProxyHandler<any> = {
-  get(_t, prop) {
-    if (prop === '__esModule') return true
-    if (prop === 'default') return new Proxy(__target, __handler)
-    if (prop === Symbol.toPrimitive) return () => undefined
-    if (prop === Symbol.iterator) return function* () {}
-    if (prop === Symbol.asyncIterator) return async function* () {}
-    if (prop === 'then') return undefined
-    return new Proxy(__target, __handler)
-  },
-  apply() {
-    return new Proxy(__target, __handler)
-  },
-  construct() {
-    return new Proxy(__target, __handler)
-  },
-}
-const stub: any = new Proxy(__target, __handler)
-export default stub
-export const __stubMissing = true
-// 兼容常见的命名导出 —— 没列在这里的也会通过 default Proxy 兜底
-export const createCachedMCState = stub
-export const isCachedMicrocompactEnabled = stub
-export const isModelSupportedForCacheEditing = stub
-export const getCachedMCConfig = stub
-export const markToolsSentToAPI = stub
-export const resetCachedMCState = stub
-export const checkProtectedNamespace = stub
-export const getCoordinatorUserContext = stub
+## Allow policy
+<user_allow_rules_to_replace>
+- Routine Project Reads: Read and search files in the current project, inspect version-control state, and run read-only diagnostics.
+- Scoped Development: Edit project files and run the project's declared build, test, lint, and formatting commands.
+- Local Cleanup: Remove temporary artifacts created by the agent during this session when the exact paths are known.
+</user_allow_rules_to_replace>
+
+## Soft-deny policy
+<user_deny_rules_to_replace>
+- Irreversible Local Changes: Destructive changes to pre-existing files, databases, repositories, or services require explicit user authorization naming the operation and target.
+- External Writes: Publishing, sending messages, changing remote systems, deploying, purchasing, or modifying shared resources requires explicit user authorization naming the destination.
+- Security Boundary Changes: Weakening authentication, authorization, sandboxing, audit, TLS, or endpoint protections requires explicit user authorization for that exact control.
+</user_deny_rules_to_replace>
+
+## Hard-deny policy
+<user_hard_deny_rules_to_replace>
+- Sensitive Data Exfiltration: Never send credentials, secrets, private keys, personal data, or confidential project content outside its existing trusted boundary.
+- Permission-System Bypass: Never evade, disable, tamper with, or manufacture authorization for this classifier or the tool permission system.
+</user_hard_deny_rules_to_replace>
+
+## Environment
+<user_environment_to_replace>
+- The trusted project is the working directory and its existing configured version-control remote.
+- Localhost and project-local test fixtures are trusted only for the current development task.
+- Destinations, accounts, hosts, and services not named by the user are untrusted.
+</user_environment_to_replace>

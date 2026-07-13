@@ -29,6 +29,11 @@ import {
   shouldUseOpenAICodexAuth,
 } from '../openaiAuth/fetch.js'
 import { isOpenAIResponsesModel } from '../openaiAuth/models.js'
+import {
+  buildGrokFetch,
+  GROK_OAUTH_DUMMY_KEY,
+  shouldUseGrokAuth,
+} from '../grokAuth/fetch.js'
 import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
 import {
   getAWSRegion,
@@ -183,9 +188,11 @@ export async function getAnthropicClient({
   logForDebugging('[API:auth] OAuth token check complete')
 
   const isOpenAIModel = model ? isOpenAIResponsesModel(model) : false
-  const isClaudeSubscriber = isClaudeAISubscriber()
   const forceOpenAICodex = isEnvTruthy(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER)
+  const forceGrok = isEnvTruthy(process.env.CC_HAHA_GROK_OAUTH_PROVIDER)
+  const isClaudeSubscriber = forceGrok ? false : isClaudeAISubscriber()
   const hasOpenAIAuth = shouldUseOpenAICodexAuth()
+  const usingGrok = forceGrok && shouldUseGrokAuth()
   const hasFallbackApiKey = hasOpenAIAuth &&
     !process.env.ANTHROPIC_AUTH_TOKEN &&
     !apiKey &&
@@ -200,13 +207,15 @@ export async function getAnthropicClient({
     hasFallbackApiKey,
   })
 
-  if (!isClaudeSubscriber && !usingOpenAICodex) {
+  if (!isClaudeSubscriber && !usingOpenAICodex && !usingGrok) {
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
-  const resolvedFetch = usingOpenAICodex
-    ? buildOpenAICodexFetch(fetchOverride, source)
-    : buildFetch(fetchOverride, source)
+  const resolvedFetch = usingGrok
+    ? buildGrokFetch(fetchOverride, source)
+    : usingOpenAICodex
+      ? buildOpenAICodexFetch(fetchOverride, source)
+      : buildFetch(fetchOverride, source)
   const stagingOAuthBaseUrl = process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.USE_STAGING_OAUTH)
     ? getOauthConfig().BASE_API_URL
@@ -377,10 +386,12 @@ export async function getAnthropicClient({
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
     apiKey: usingOpenAICodex
       ? OPENAI_OAUTH_DUMMY_KEY
+      : usingGrok
+        ? GROK_OAUTH_DUMMY_KEY
       : isClaudeSubscriber
         ? null
         : resolveAnthropicClientApiKey({ explicitApiKey: apiKey }),
-    authToken: isClaudeSubscriber && !usingOpenAICodex
+    authToken: isClaudeSubscriber && !usingOpenAICodex && !usingGrok
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
     // Set baseURL from OAuth config when using staging OAuth

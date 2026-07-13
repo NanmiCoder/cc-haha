@@ -283,7 +283,6 @@ import {
   resolveAppliedEffort,
 } from 'src/utils/effort.js'
 import { modelSupportsAdaptiveThinking } from 'src/utils/thinking.js'
-import { modelSupportsAutoMode } from 'src/utils/betas.js'
 import { ensureModelStringsInitialized } from 'src/utils/model/modelStrings.js'
 import {
   getSessionId,
@@ -1198,6 +1197,7 @@ function runHeadlessStreaming(
   }
 
   const modelOptions = getModelOptions()
+  const autoModeSupported = feature('TRANSCRIPT_CLASSIFIER') ? true : false
   const modelInfos = modelOptions.map(option => {
     const modelId = option.value === null ? 'default' : option.value
     const resolvedModel =
@@ -1207,7 +1207,7 @@ function runHeadlessStreaming(
     const hasEffort = modelSupportsEffort(resolvedModel)
     const hasAdaptiveThinking = modelSupportsAdaptiveThinking(resolvedModel)
     const hasFastMode = isFastModeSupportedByModel(option.value)
-    const hasAutoMode = modelSupportsAutoMode(resolvedModel)
+    const hasAutoMode = autoModeSupported
     return {
       value: modelId,
       displayName: option.label,
