@@ -546,6 +546,19 @@
   --color-code-inserted: #1A7F37;
   --color-code-deleted: #CF222E;
 
+  --color-diff-syntax-foreground: #0D0D0D;
+  --color-diff-syntax-comment: #666666;
+  --color-diff-syntax-string: #008809;
+  --color-diff-syntax-number: #0071EA;
+  --color-diff-syntax-regexp: #0071EA;
+  --color-diff-syntax-keyword: #D53538;
+  --color-diff-syntax-variable: #BD5800;
+  --color-diff-syntax-parameter: #666666;
+  --color-diff-syntax-property: #BD5800;
+  --color-diff-syntax-function: #751ED9;
+  --color-diff-syntax-type: #751ED9;
+  --color-diff-syntax-punctuation: #666666;
+
   --color-diff-added-bg: #E8F5E2;
   --color-diff-added-word: #B8E4A8;
   --color-diff-added-gutter: #D4EDCA;
@@ -743,6 +756,19 @@
   --color-code-inserted: #067647;
   --color-code-deleted: #B42318;
 
+  --color-diff-syntax-foreground: #0D0D0D;
+  --color-diff-syntax-comment: #666666;
+  --color-diff-syntax-string: #008809;
+  --color-diff-syntax-number: #0071EA;
+  --color-diff-syntax-regexp: #0071EA;
+  --color-diff-syntax-keyword: #D53538;
+  --color-diff-syntax-variable: #BD5800;
+  --color-diff-syntax-parameter: #666666;
+  --color-diff-syntax-property: #BD5800;
+  --color-diff-syntax-function: #751ED9;
+  --color-diff-syntax-type: #751ED9;
+  --color-diff-syntax-punctuation: #666666;
+
   --color-diff-added-bg: #ECFDF3;
   --color-diff-added-word: #ABEFC6;
   --color-diff-added-gutter: #D1FADF;
@@ -931,6 +957,19 @@
   --color-code-punctuation: #9B908C;
   --color-code-inserted: #8EEA9A;
   --color-code-deleted: #FFB59F;
+
+  --color-diff-syntax-foreground: #FCFCFC;
+  --color-diff-syntax-comment: #999999;
+  --color-diff-syntax-string: #85DF7B;
+  --color-diff-syntax-number: #6DCBF4;
+  --color-diff-syntax-regexp: #3D8DFF;
+  --color-diff-syntax-keyword: #F67576;
+  --color-diff-syntax-variable: #FA994C;
+  --color-diff-syntax-parameter: #999999;
+  --color-diff-syntax-property: #FA994C;
+  --color-diff-syntax-function: #B06DFF;
+  --color-diff-syntax-type: #B06DFF;
+  --color-diff-syntax-punctuation: #999999;
 
   --color-diff-added-bg: rgba(126, 219, 139, 0.12);
   --color-diff-added-word: rgba(126, 219, 139, 0.22);

@@ -18,6 +18,15 @@ import {
   type WorkspaceDiffRow,
   type WorkspaceDiffSelection,
 } from './workspaceDiffModel'
+import {
+  type WorkspaceDiffHighlightResult,
+  type WorkspaceDiffHighlightToken,
+  type WorkspaceDiffWordRange,
+} from './workspaceDiffHighlighter'
+import {
+  createWorkspaceDiffHighlightCacheKey,
+  requestWorkspaceDiffHighlight,
+} from './workspaceDiffHighlightRuntime'
 
 export const WORKSPACE_PREVIEW_LINE_LIMIT = 2000
 export const WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD = 5000
@@ -98,6 +107,70 @@ export const InlineHighlightedCode = memo(function InlineHighlightedCode({
   )
 })
 
+function tokenStyle(token: WorkspaceDiffHighlightToken): CSSProperties {
+  const fontStyle = token.fontStyle ?? 0
+  return {
+    color: token.color,
+    fontStyle: fontStyle & 1 ? 'italic' : undefined,
+    fontWeight: fontStyle & 2 ? 700 : undefined,
+    textDecoration: [
+      fontStyle & 4 ? 'underline' : '',
+      fontStyle & 8 ? 'line-through' : '',
+    ].filter(Boolean).join(' ') || undefined,
+  }
+}
+
+function overlapsRange(start: number, end: number, ranges: WorkspaceDiffWordRange[]) {
+  return ranges.some((range) => start < range.end && end > range.start)
+}
+
+const HighlightedDiffLine = memo(function HighlightedDiffLine({
+  row,
+  tokens,
+  wordRanges,
+}: {
+  row: WorkspaceDiffRow
+  tokens: WorkspaceDiffHighlightToken[]
+  wordRanges: WorkspaceDiffWordRange[]
+}) {
+  let offset = 0
+  return (
+    <>
+      {tokens.map((token, tokenIndex) => {
+        const tokenStart = offset
+        const tokenEnd = tokenStart + token.content.length
+        offset = tokenEnd
+        const boundaries = new Set([tokenStart, tokenEnd])
+        wordRanges.forEach((range) => {
+          if (range.start > tokenStart && range.start < tokenEnd) boundaries.add(range.start)
+          if (range.end > tokenStart && range.end < tokenEnd) boundaries.add(range.end)
+        })
+        const points = [...boundaries].sort((left, right) => left - right)
+        return points.slice(0, -1).map((start, partIndex) => {
+          const end = points[partIndex + 1]!
+          const changed = overlapsRange(start, end, wordRanges)
+          return (
+            <span
+              key={`${tokenIndex}-${partIndex}`}
+              data-diff-word-change={changed ? row.kind : undefined}
+              className={changed
+                ? row.kind === 'addition'
+                  ? 'bg-[var(--color-diff-added-word)]'
+                  : row.kind === 'deletion'
+                    ? 'bg-[var(--color-diff-removed-word)]'
+                    : undefined
+                : undefined}
+              style={tokenStyle(token)}
+            >
+              {token.content.slice(start - tokenStart, end - tokenStart)}
+            </span>
+          )
+        })
+      })}
+    </>
+  )
+})
+
 export interface WorkspaceDiffCommentSelection {
   side: 'old' | 'new'
   lineStart: number
@@ -123,6 +196,12 @@ interface ReviewState {
 }
 
 type ReviewStatus = 'selectionReset' | 'diffChanged' | 'collapsedSelection' | null
+
+const plainHighlightResult: WorkspaceDiffHighlightResult = {
+  engine: 'plain',
+  tokensByRowId: {},
+  wordRangesByRowId: {},
+}
 
 const emptyReviewState: ReviewState = {
   anchorId: null,
@@ -202,7 +281,21 @@ export function WorkspaceDiffSurface({
   )
   const visibleRows = useMemo(() => rows.filter((row) => visibleItemIds.has(row.id)), [rows, visibleItemIds])
   const selectableRows = useMemo(() => visibleRows.filter((row) => row.selectable), [visibleRows])
-  const usePlainLargePreview = showAllRows && rows.length > WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD
+  const usePlainLargePreview = rows.length > WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD
+  const highlightCacheKey = useMemo(
+    () => createWorkspaceDiffHighlightCacheKey(path, value),
+    [path, value],
+  )
+  const [highlightState, setHighlightState] = useState<{
+    cacheKey: string | null
+    result: WorkspaceDiffHighlightResult
+  }>({
+    cacheKey: null,
+    result: plainHighlightResult,
+  })
+  const highlightResult = !usePlainLargePreview && highlightState.cacheKey === highlightCacheKey
+    ? highlightState.result
+    : plainHighlightResult
   const [rovingId, setRovingId] = useState<string | null>(() => rows.find((row) => row.selectable)?.id ?? null)
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>())
   const editorRef = useRef<HTMLTextAreaElement>(null)
@@ -212,6 +305,22 @@ export function WorkspaceDiffSurface({
   const previousValue = useRef(value)
   const selectedIds = new Set(review.selection?.rowIds ?? [])
   const sideLabel = (side: 'old' | 'new') => t(`workspace.diffReview.side.${side}`)
+
+  useEffect(() => {
+    if (usePlainLargePreview) {
+      setHighlightState({ cacheKey: null, result: plainHighlightResult })
+      return
+    }
+
+    let cancelled = false
+    setHighlightState({ cacheKey: null, result: plainHighlightResult })
+    requestWorkspaceDiffHighlight({ cacheKey: highlightCacheKey, files, path }).then((result) => {
+      if (!cancelled) setHighlightState({ cacheKey: highlightCacheKey, result })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [files, highlightCacheKey, path, usePlainLargePreview])
 
   useEffect(() => {
     const pathChanged = previousPath.current !== path
@@ -491,6 +600,7 @@ export function WorkspaceDiffSurface({
         <div
           data-workspace-code=""
           data-testid="workspace-code"
+          data-highlight-engine={highlightResult.engine}
           role="grid"
           aria-label={`${path} diff`}
           className="m-0 min-w-full font-[var(--font-mono)] text-[13px] leading-5 text-[var(--color-code-fg)]"
@@ -502,7 +612,6 @@ export function WorkspaceDiffSurface({
             if (!headerVisible && fileRows.length === 0) return null
             const oldPath = file.oldPath ? `a/${file.oldPath}` : '/dev/null'
             const newPath = file.newPath ? `b/${file.newPath}` : '/dev/null'
-            const language = getLanguageFromPath(file.newPath ?? file.oldPath ?? path)
             const fileAdditions = file.rows.filter((row) => row.kind === 'addition').length
             const fileDeletions = file.rows.filter((row) => row.kind === 'deletion').length
             const displayPath = file.newPath ?? file.oldPath ?? path
@@ -611,8 +720,14 @@ export function WorkspaceDiffSurface({
                         >
                           <span className={`inline-block w-[2ch] select-none text-center ${prefixTone(row)}`}>{row.prefix || ' '}</span>
                           <span className={codeTone(row)}>
-                            {row.selectable && row.text && !usePlainLargePreview
-                              ? <InlineHighlightedCode value={row.text} language={language} />
+                            {row.selectable && row.text && highlightResult.tokensByRowId[row.id]
+                              ? (
+                                  <HighlightedDiffLine
+                                    row={row}
+                                    tokens={highlightResult.tokensByRowId[row.id]!}
+                                    wordRanges={highlightResult.wordRangesByRowId[row.id] ?? []}
+                                  />
+                                )
                               : row.text || ' '}
                           </span>
                         </span>

@@ -1,6 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import type { ComponentProps } from 'react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { WorkspaceDiffSurface } from './WorkspaceDiffSurface'
@@ -10,16 +9,12 @@ import {
   WorkspaceDiffSurface as ExportedWorkspaceDiffSurface,
 } from './WorkspaceCodeSurface'
 
-const highlightRenderSpy = vi.hoisted(() => vi.fn())
+const highlightRequestSpy = vi.hoisted(() => vi.fn())
 
-vi.mock('prism-react-renderer', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('prism-react-renderer')>()
+vi.mock('./workspaceDiffHighlightRuntime', () => {
   return {
-    ...actual,
-    Highlight: (props: ComponentProps<typeof actual.Highlight>) => {
-      highlightRenderSpy()
-      return <actual.Highlight {...props} />
-    },
+    createWorkspaceDiffHighlightCacheKey: (path: string, value: string) => `${path}:${value}`,
+    requestWorkspaceDiffHighlight: highlightRequestSpy,
   }
 })
 
@@ -43,10 +38,26 @@ function getCodeRow(text: string) {
   return row!
 }
 
+function createHighlightResult(files: Array<{ rows: Array<{ id: string; text: string; selectable: boolean }> }>) {
+  const tokensByRowId: Record<string, Array<{ content: string; color: string }>> = {}
+  files.flatMap((file) => file.rows)
+    .filter((row) => row.selectable)
+    .forEach((row) => {
+      tokensByRowId[row.id] = row.text.split(/(const)/).filter(Boolean).map((content) => ({
+        content,
+        color: content === 'const'
+          ? 'var(--color-diff-syntax-keyword)'
+          : 'var(--color-diff-syntax-foreground)',
+      }))
+    })
+  return { engine: 'shiki', tokensByRowId, wordRangesByRowId: {} }
+}
+
 describe('WorkspaceDiffSurface', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
-    highlightRenderSpy.mockClear()
+    highlightRequestSpy.mockReset()
+    highlightRequestSpy.mockImplementation(() => new Promise(() => {}))
   })
 
   it('keeps one scroll surface while hiding redundant single-file patch chrome', () => {
@@ -338,7 +349,7 @@ describe('WorkspaceDiffSurface', () => {
     expect(screen.getByRole('textbox', { name: 'Review comment' })).toHaveValue('Keep this collapsed draft')
   })
 
-  it('uses plain text instead of Prism after expanding a diff beyond the large preview threshold', () => {
+  it('uses plain text instead of Shiki after expanding a diff beyond the large preview threshold', () => {
     const additions = Array.from(
       { length: WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD + 1 },
       (_, index) => `+const value${index} = ${index}`,
@@ -354,7 +365,8 @@ describe('WorkspaceDiffSurface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show all loaded lines' }))
 
-    expect(document.querySelector('.token')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'plain')
+    expect(highlightRequestSpy).not.toHaveBeenCalled()
     expect(getCodeRow('const value5000 = 5000')).toHaveTextContent('const value5000 = 5000')
   })
 
@@ -377,12 +389,76 @@ describe('WorkspaceDiffSurface', () => {
     expect(headers[1]).toHaveTextContent('diff --git a/src/b.ts b/src/b.ts')
   })
 
-  it('renders TypeScript Prism tokens through the compatibility export without a circular runtime failure', () => {
+  it('renders TypeScript Shiki tokens through the compatibility export without a circular runtime failure', async () => {
+    highlightRequestSpy.mockImplementationOnce(async ({ files }) => createHighlightResult(files))
     render(<ExportedWorkspaceDiffSurface value={diff} path="src/a.ts" />)
 
-    const keyword = screen.getAllByText('const').find((element) => element.classList.contains('keyword'))
-    expect(keyword).toHaveClass('token', 'keyword')
+    await waitFor(() => expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'shiki'))
+    const keyword = screen.getAllByText('const').find((element) => (
+      element.getAttribute('style')?.includes('var(--color-diff-syntax-keyword)')
+    ))
+    expect(keyword).toBeDefined()
     expect(document.querySelectorAll('[data-row-text="const b = 3"]')).toHaveLength(1)
+  })
+
+  it('never renders tokens from the previous diff while the next highlight is pending', async () => {
+    highlightRequestSpy.mockImplementationOnce(async ({ files }) => {
+      const result = createHighlightResult(files)
+      const firstRow = files.flatMap((file: { rows: Array<{ id: string; selectable: boolean }> }) => file.rows)
+        .find((row: { selectable: boolean }) => row.selectable)!
+      result.tokensByRowId[firstRow.id] = [{
+        content: 'STALE_TOKEN',
+        color: 'var(--color-diff-syntax-keyword)',
+      }]
+      return result
+    })
+    const view = render(<WorkspaceDiffSurface value={diff} path="src/a.ts" />)
+    await screen.findByText('STALE_TOKEN')
+
+    let resolveNext: (() => void) | undefined
+    const nextDiff = diff.replace('const a = 1', 'let fresh = 2')
+    highlightRequestSpy.mockImplementationOnce(({ files }) => new Promise((resolve) => {
+      resolveNext = () => resolve(createHighlightResult(files))
+    }))
+    view.rerender(<WorkspaceDiffSurface value={nextDiff} path="src/a.ts" />)
+
+    expect(screen.queryByText('STALE_TOKEN')).not.toBeInTheDocument()
+    expect(getCodeRow('let fresh = 2')).toHaveTextContent('let fresh = 2')
+
+    await act(async () => resolveNext?.())
+    await waitFor(() => expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'shiki'))
+  })
+
+  it('layers word-level changes over Shiki tokens without changing the line layout', async () => {
+    const wordDiff = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1 +1 @@',
+      '-const label = oldName',
+      '+const label = newName',
+    ].join('\n')
+    highlightRequestSpy.mockImplementationOnce(async ({ files }) => {
+      const result = createHighlightResult(files)
+      const rows = files.flatMap((file: { rows: Array<{ id: string; text: string }> }) => file.rows)
+      const oldRow = rows.find((row: { text: string }) => row.text.includes('oldName'))!
+      const newRow = rows.find((row: { text: string }) => row.text.includes('newName'))!
+      return {
+        ...result,
+        wordRangesByRowId: {
+          [oldRow.id]: [{ start: 14, end: 21 }],
+          [newRow.id]: [{ start: 14, end: 21 }],
+        },
+      }
+    })
+
+    render(<WorkspaceDiffSurface value={wordDiff} path="src/a.ts" />)
+
+    await waitFor(() => expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'shiki'))
+    expect(document.querySelector('[data-diff-word-change="deletion"]')).toHaveTextContent('oldName')
+    expect(document.querySelector('[data-diff-word-change="addition"]')).toHaveTextContent('newName')
+    expect(document.querySelector('[data-diff-word-change="deletion"]')?.className).toContain('color-diff-removed-word')
+    expect(document.querySelector('[data-diff-word-change="addition"]')?.className).toContain('color-diff-added-word')
   })
 
   it('renders the complete review flow in Chinese', () => {
@@ -400,7 +476,7 @@ describe('WorkspaceDiffSurface', () => {
     expect(screen.getByRole('status')).toHaveTextContent('只能选择同一侧、同一变更块中的行')
   })
 
-  it('does not rerun Prism highlighting for each controlled draft change', () => {
+  it('does not request Shiki highlighting again for each controlled draft change', () => {
     const additions = Array.from(
       { length: WORKSPACE_PREVIEW_LINE_LIMIT - 4 },
       (_, index) => `+const value${index + 1} = ${index + 1}`,
@@ -414,14 +490,14 @@ describe('WorkspaceDiffSurface', () => {
     ].join('\n')
     render(<WorkspaceDiffSurface value={nearLimitDiff} path="src/near-limit.ts" />)
     fireEvent.click(screen.getByRole('button', { name: 'Comment on src/near-limit.ts new line 1' }))
-    const highlightCountBeforeTyping = highlightRenderSpy.mock.calls.length
+    const highlightCountBeforeTyping = highlightRequestSpy.mock.calls.length
     const editor = screen.getByRole('textbox', { name: 'Review comment' })
 
     fireEvent.change(editor, { target: { value: 'a' } })
     fireEvent.change(editor, { target: { value: 'ab' } })
     fireEvent.change(editor, { target: { value: 'abc' } })
 
-    expect(highlightRenderSpy).toHaveBeenCalledTimes(highlightCountBeforeTyping)
+    expect(highlightRequestSpy).toHaveBeenCalledTimes(highlightCountBeforeTyping)
     expect(editor).toHaveValue('abc')
   })
 
