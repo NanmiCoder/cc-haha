@@ -25,26 +25,50 @@ const NAVIGATION_MODE_STYLES: Record<ConversationNavigationMode, {
   position: string
   lane: string
   button: string
-  marker: string
+  restingWidth: number
+  expandedWidth: number
 }> = {
   full: {
     position: 'left-2',
-    lane: 'w-10',
-    button: 'w-10 pl-1.5',
-    marker: 'w-3 group-hover:w-5 group-focus-visible:w-5',
+    lane: 'w-16',
+    button: 'w-16 pl-1.5',
+    restingWidth: 12,
+    expandedWidth: 52,
   },
   compact: {
     position: 'left-1',
-    lane: 'w-7',
-    button: 'w-7 pl-1',
-    marker: 'w-2.5 group-hover:w-4 group-focus-visible:w-4',
+    lane: 'w-9',
+    button: 'w-9 pl-1',
+    restingWidth: 10,
+    expandedWidth: 32,
   },
   edge: {
     position: 'left-0',
-    lane: 'w-5',
-    button: 'w-5 pl-0.5',
-    marker: 'w-1.5 group-hover:w-3 group-focus-visible:w-3',
+    lane: 'w-6',
+    button: 'w-6 pl-0.5',
+    restingWidth: 6,
+    expandedWidth: 20,
   },
+}
+
+const NAVIGATION_ITEM_HEIGHT_PX = 16
+const NAVIGATION_ITEM_GAP_PX = 2
+const NAVIGATION_LANE_PADDING_PX = 8
+const NAVIGATION_WAVE_RADIUS_ITEMS = 4
+
+function getMarkerWidth(
+  restingWidth: number,
+  expandedWidth: number,
+  itemIndex: number,
+  interactionIndex: number | null,
+) {
+  if (interactionIndex === null) return restingWidth
+  const distance = Math.abs(itemIndex - interactionIndex)
+  if (distance >= NAVIGATION_WAVE_RADIUS_ITEMS) return restingWidth
+
+  const proximity = 1 - distance / NAVIGATION_WAVE_RADIUS_ITEMS
+  const easedProximity = Math.sin(proximity * Math.PI / 2) ** 2
+  return restingWidth + (expandedWidth - restingWidth) * easedProximity
 }
 
 function normalizePreview(content: string) {
@@ -92,9 +116,12 @@ export function ConversationNavigator({
   const t = useTranslation()
   const [previewItemId, setPreviewItemId] = useState<string | null>(null)
   const [previewPosition, setPreviewPosition] = useState({ left: 0, top: 0 })
+  const [pointerIndex, setPointerIndex] = useState<number | null>(null)
+  const [focusIndex, setFocusIndex] = useState<number | null>(null)
   const markerRefs = useRef(new Map<string, HTMLButtonElement>())
   const previewItem = items.find((item) => item.id === previewItemId) ?? null
   const modeStyles = NAVIGATION_MODE_STYLES[mode]
+  const interactionIndex = pointerIndex ?? focusIndex
 
   const openPreview = (itemId: string, marker: HTMLButtonElement) => {
     const rect = marker.getBoundingClientRect()
@@ -117,12 +144,30 @@ export function ConversationNavigator({
       aria-label={t('chat.conversationNavigator.label')}
       className={`absolute top-1/2 z-30 flex max-h-[64%] -translate-y-1/2 flex-col overflow-visible ${modeStyles.position}`}
     >
-      <div className={`conversation-navigation-scroll flex max-h-full flex-col items-start gap-0.5 overflow-y-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${modeStyles.lane}`}>
-        {items.map((item) => {
+      <div
+        className={`conversation-navigation-scroll flex max-h-full flex-col items-start gap-0.5 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${modeStyles.lane}`}
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          const firstItemCenter = NAVIGATION_LANE_PADDING_PX + NAVIGATION_ITEM_HEIGHT_PX / 2
+          const pointerOffset = event.clientY - rect.top + event.currentTarget.scrollTop
+          const nextPointerIndex = (pointerOffset - firstItemCenter) /
+            (NAVIGATION_ITEM_HEIGHT_PX + NAVIGATION_ITEM_GAP_PX)
+          setPointerIndex(Math.min(items.length - 1, Math.max(0, nextPointerIndex)))
+        }}
+        onMouseLeave={() => setPointerIndex(null)}
+      >
+        {items.map((item, itemIndex) => {
           const roleLabel = item.role === 'user'
             ? t('chat.userMessageReference')
             : t('chat.assistantMessageReference')
           const isActive = item.id === activeItemId
+          const isInteractionTarget = interactionIndex !== null && Math.round(interactionIndex) === itemIndex
+          const markerWidth = getMarkerWidth(
+            modeStyles.restingWidth,
+            modeStyles.expandedWidth,
+            itemIndex,
+            interactionIndex,
+          )
 
           return (
             <div key={item.id} className="relative flex shrink-0 items-center">
@@ -140,22 +185,30 @@ export function ConversationNavigator({
                 onMouseLeave={(event) => {
                   if (document.activeElement !== event.currentTarget) setPreviewItemId(null)
                 }}
-                onFocus={(event) => openPreview(item.id, event.currentTarget)}
-                onBlur={() => setPreviewItemId(null)}
+                onFocus={(event) => {
+                  setFocusIndex(itemIndex)
+                  openPreview(item.id, event.currentTarget)
+                }}
+                onBlur={() => {
+                  setFocusIndex(null)
+                  setPreviewItemId(null)
+                }}
                 onClick={() => onNavigate(item)}
                 className={`group flex h-4 items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35 ${modeStyles.button}`}
               >
                 <span
                   aria-hidden="true"
                   className={[
-                    'block h-0.5 rounded-full transition-[width,background-color,opacity] duration-200 ease-out motion-reduce:transition-none',
-                    modeStyles.marker,
-                    isActive
+                    'block h-0.5 rounded-full transition-[width,background-color,opacity] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                    isInteractionTarget
+                      ? 'bg-[var(--color-text-primary)] opacity-100'
+                      : isActive
                       ? 'bg-[var(--color-brand)] opacity-100'
                       : item.role === 'user'
                         ? 'bg-[var(--color-text-secondary)] opacity-75 group-hover:bg-[var(--color-text-primary)] group-hover:opacity-100 group-focus-visible:bg-[var(--color-text-primary)] group-focus-visible:opacity-100'
                         : 'bg-[var(--color-outline)] opacity-65 group-hover:bg-[var(--color-text-secondary)] group-hover:opacity-100 group-focus-visible:bg-[var(--color-text-secondary)] group-focus-visible:opacity-100',
                   ].join(' ')}
+                  style={{ width: markerWidth }}
                 />
               </button>
 

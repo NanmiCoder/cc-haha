@@ -1956,16 +1956,20 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
     !isTouchH5Document() &&
     conversationNavigationItems.length >= CONVERSATION_NAVIGATION_MIN_ITEMS
   const chatScrollPaddingClass = compact
-    ? showConversationNavigator && conversationNavigationMode === 'compact'
-      ? 'pb-5 pl-9 pr-3 py-3'
-      : showConversationNavigator && conversationNavigationMode === 'edge'
-        ? 'pb-5 pl-6 pr-3 py-3'
-        : 'px-3 py-3 pb-5'
-    : showConversationNavigator && conversationNavigationMode === 'compact'
-      ? 'pl-9 pr-4 py-4'
-      : showConversationNavigator && conversationNavigationMode === 'edge'
-        ? 'pl-6 pr-4 py-4'
-        : 'px-4 py-4'
+    ? showConversationNavigator && conversationNavigationMode === 'full'
+      ? 'pb-5 pl-20 pr-3 py-3'
+      : showConversationNavigator && conversationNavigationMode === 'compact'
+        ? 'pb-5 pl-12 pr-3 py-3'
+        : showConversationNavigator && conversationNavigationMode === 'edge'
+          ? 'pb-5 pl-7 pr-3 py-3'
+          : 'px-3 py-3 pb-5'
+    : showConversationNavigator && conversationNavigationMode === 'full'
+      ? 'pl-20 pr-4 py-4'
+      : showConversationNavigator && conversationNavigationMode === 'compact'
+        ? 'pl-12 pr-4 py-4'
+        : showConversationNavigator && conversationNavigationMode === 'edge'
+          ? 'pl-7 pr-4 py-4'
+          : 'px-4 py-4'
   const confirmTurnCard = useMemo(
     () => visibleTurnChangeCards.find((card) => card.target.messageId === turnUndoConfirmTargetId) ?? null,
     [turnUndoConfirmTargetId, visibleTurnChangeCards],

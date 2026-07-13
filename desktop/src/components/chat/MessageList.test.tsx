@@ -409,6 +409,7 @@ describe('MessageList nested tool calls', () => {
     const layoutObserver = observers.find(({ targets }) => targets.includes(messageList))
     expect(layoutObserver).toBeTruthy()
     expect(screen.getByTestId('conversation-navigator').getAttribute('data-mode')).toBe('full')
+    expect(scroller.className.split(/\s+/)).toContain('pl-20')
 
     const resizeTo = (width: number) => {
       act(() => {
@@ -421,19 +422,20 @@ describe('MessageList nested tool calls', () => {
 
     resizeTo(900)
     expect(screen.getByTestId('conversation-navigator').getAttribute('data-mode')).toBe('compact')
-    expect(scroller.className.split(/\s+/)).toContain('pl-9')
+    expect(scroller.className.split(/\s+/)).toContain('pl-12')
 
     resizeTo(640)
     expect(screen.getByTestId('conversation-navigator').getAttribute('data-mode')).toBe('compact')
 
     resizeTo(520)
     expect(screen.getByTestId('conversation-navigator').getAttribute('data-mode')).toBe('edge')
-    expect(scroller.className.split(/\s+/)).toContain('pl-6')
+    expect(scroller.className.split(/\s+/)).toContain('pl-7')
 
     resizeTo(1000)
     expect(screen.getByTestId('conversation-navigator').getAttribute('data-mode')).toBe('full')
-    expect(scroller.className.split(/\s+/)).not.toContain('pl-9')
-    expect(scroller.className.split(/\s+/)).not.toContain('pl-6')
+    expect(scroller.className.split(/\s+/)).toContain('pl-20')
+    expect(scroller.className.split(/\s+/)).not.toContain('pl-12')
+    expect(scroller.className.split(/\s+/)).not.toContain('pl-7')
   })
 
   it('updates the active conversation marker while the transcript scrolls', () => {
