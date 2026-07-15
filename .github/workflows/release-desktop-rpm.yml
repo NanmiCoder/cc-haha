@@ -120,7 +120,7 @@ jobs:
               ;;
             Linux-ARM64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-linux-arm64.rpm"
+                "Claude-Code-Haha-${APP_VERSION}-linux-aarch64.rpm"
                 "latest-linux-arm64.yml"
               )
               ;;
@@ -227,7 +227,7 @@ jobs:
         run: |
           expected=(
             "Claude-Code-Haha-${APP_VERSION}-linux-x86_64.rpm"
-            "Claude-Code-Haha-${APP_VERSION}-linux-arm64.rpm"
+            "Claude-Code-Haha-${APP_VERSION}-linux-aarch64.rpm"
           )
 
           missing=()
@@ -277,14 +277,14 @@ jobs:
 
             ### Installation
 
-            **Fedora/RHEL/CentOS:**
+            **Fedora/RHEL/CentOS (x86_64):**
             ```bash
             sudo dnf install ./Claude-Code-Haha-${{ steps.version.outputs.value }}-linux-x86_64.rpm
             ```
 
-            **For ARM64 systems:**
+            **For ARM64 systems (aarch64):**
             ```bash
-            sudo dnf install ./Claude-Code-Haha-${{ steps.version.outputs.value }}-linux-arm64.rpm
+            sudo dnf install ./Claude-Code-Haha-${{ steps.version.outputs.value }}-linux-aarch64.rpm
             ```
 
             ${{ steps.release_notes.outputs.body }}
