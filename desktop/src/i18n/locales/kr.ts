@@ -983,6 +983,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.general.outputStyleSourceLocal': '로컬 프로젝트 스타일',
   'settings.general.outputStyleSourcePolicy': '관리형 스타일',
   'settings.general.outputStyleSourcePlugin': '플러그인 스타일',
+  'settings.general.plantumlJarDescription': 'plantuml.jar 경로를 설정하면 Markdown의 PlantUML 코드 블록이 다이어그램으로 렌더링됩니다. 비워두면 코드 블록으로 표시됩니다.',
   'settings.general.effortTitle': '노력 수준',
   'settings.general.effortDescription': '모델이 사용하는 계산량을 제어합니다.',
   'settings.general.effort.low': '낮음',

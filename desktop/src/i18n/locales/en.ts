@@ -981,6 +981,7 @@ export const en = {
   'settings.general.outputStyleSourceLocal': 'Local project style',
   'settings.general.outputStyleSourcePolicy': 'Managed style',
   'settings.general.outputStyleSourcePlugin': 'Plugin style',
+  'settings.general.plantumlJarDescription': 'Set a plantuml.jar path to enable diagram rendering in Markdown. Leave empty to show code blocks instead.',
   'settings.general.effortTitle': 'Effort Level',
   'settings.general.effortDescription': 'Controls how much computation the model uses.',
   'settings.general.effort.low': 'Low',

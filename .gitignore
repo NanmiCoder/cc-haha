@@ -71,6 +71,7 @@ runtime/__pycache__
 
 # IDE
 .idea
+.vscode/
 
 # Codex logs
 .codex-logs/
@@ -80,3 +81,8 @@ CLAUDE.md
 .mavis/
 .opencode/
 graphify-out/
+
+# claude code 
+.specstory/
+tests/doc/
+result/

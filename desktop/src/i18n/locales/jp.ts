@@ -983,6 +983,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.general.outputStyleSourceLocal': 'ローカルプロジェクトスタイル',
   'settings.general.outputStyleSourcePolicy': '管理スタイル',
   'settings.general.outputStyleSourcePlugin': 'プラグインスタイル',
+  'settings.general.plantumlJarDescription': 'plantuml.jar のパスを設定すると、Markdown 内の PlantUML コードブロックが図として表示されます。空のままにするとコードブロックとして表示されます。',
   'settings.general.effortTitle': '労力レベル',
   'settings.general.effortDescription': 'モデルが使用する計算量を制御します。',
   'settings.general.effort.low': '低',
