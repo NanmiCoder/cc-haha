@@ -8,6 +8,7 @@ import {
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
+import { useUIStore } from './uiStore'
 import type { LocalIndexStatus, SessionListItem } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
@@ -85,6 +86,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           state.sessions,
         )
         syncedSessions = sessions
+        // 补打 side 标记：侧会话不出现在左列表
+        const sideIds = new Set(Object.values(useUIStore.getState().sideSessions))
+        if (sideIds.size > 0) {
+          sessions.forEach(s => { if (sideIds.has(s.id)) (s as any).side = true })
+        }
         return {
           sessions,
           indexStatus,

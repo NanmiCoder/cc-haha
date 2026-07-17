@@ -11,7 +11,9 @@ import {
   type TabType,
 } from '../stores/tabStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useChatStore } from '../stores/chatStore'
+import { useUIStore } from '../stores/uiStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useTeamStore } from '../stores/teamStore'
 import { useWorkspacePanelStore } from '../stores/workspacePanelStore'
@@ -24,6 +26,7 @@ import {
 import { useTranslation } from '../i18n'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
+import { SideSessionPanel } from '../components/side/SideSessionPanel'
 import { ComputerUsePermissionModal } from '../components/chat/ComputerUsePermissionModal'
 import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
 import { SessionActivityPanel } from '../components/activity/SessionActivityPanel'
@@ -41,7 +44,6 @@ import {
   hasRunningBackgroundTasks as hasAnyRunningBackgroundTasks,
 } from '../lib/backgroundTasks'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
-import { getSessionBrowsablePath, getSessionWorkspaceState } from '../lib/sessionWorkspace'
 
 const TASK_POLL_INTERVAL_MS = 1000
 const WORKSPACE_RESIZE_STEP = 32
@@ -71,7 +73,9 @@ function getTokenUsageTotal(usage: TokenUsage): number {
 }
 
 function getSessionTerminalCwd(session: SessionListItem | undefined) {
-  return getSessionBrowsablePath(session)
+  if (!session) return undefined
+  if (session.workDir && session.workDirExists !== false) return session.workDir
+  return session.projectPath || undefined
 }
 
 function ActiveGoalStrip({
@@ -325,7 +329,8 @@ export function ActiveSession() {
       ? state.isPanelOpen(activeTabId)
       : false,
   )
-  const showRightPanel = showWorkbench
+  const sideSessionId = useUIStore((s) => activeTabId ? s.sideSessions[activeTabId] : undefined)
+  const showRightPanel = showWorkbench || !!sideSessionId
   const rightPanelWidth = useWorkspacePanelStore((state) => state.width)
   const showTerminalPanel = useTerminalPanelStore((state) =>
     activeTabId && isSessionTabState(activeTabId, activeTabType) && !isMemberSession && !isMobileLayout
@@ -507,12 +512,112 @@ export function ActiveSession() {
 
   if (!activeTabId) return null
 
+  function renderSessionHeader() {
+    return (
+      <>
+      {!isMemberSession && !isMobileLayout && (
+      <div
+      className={
+      showWorkbench
+      ? 'flex w-full items-center border-b border-[var(--color-border)]/70 px-4 py-3'
+      : 'w-full border-b border-outline-variant/10 px-4 py-3'
+      }
+      >
+      <div className={showRightPanel ? 'min-w-0 flex-1' : 'mx-auto w-full max-w-[860px] min-w-0'}>
+      <div className="flex min-w-0 items-center gap-3">
+      <h1
+      className={
+      showRightPanel
+      ? 'min-w-0 flex-1 truncate text-[15px] font-bold font-headline leading-tight text-on-surface'
+      : 'min-w-0 flex-1 text-lg font-bold font-headline text-on-surface leading-tight'
+      }
+      >
+      {session?.title || t('session.untitled')}
+      </h1>
+      {!isMemberSession && (
+      <button
+      onClick={() => {
+      if (!activeTabId) return
+      const store = useUIStore.getState()
+      store.setSideSession(activeTabId, '')
+      const { createSession } = useSessionStore.getState()
+      const mainSession = useSessionStore.getState().sessions.find(s => s.id === activeTabId)
+      createSession(mainSession?.workDir ?? undefined)
+      .then((sessionId) => {
+      store.setSideSession(activeTabId, sessionId)
+      useSessionStore.setState({ activeSessionId: activeTabId })
+      useChatStore.getState().connectToSession(sessionId)
+      const sel = useSessionRuntimeStore.getState().selections[activeTabId]
+      if (sel) useSessionRuntimeStore.getState().setSelection(sessionId, sel)
+      })
+      .catch(() => store.clearSideSession(activeTabId))
+      }}
+      disabled={!!sideSessionId}
+      className="ml-auto cursor-pointer rounded p-1.5 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:cursor-default"
+      title="Open side chat"
+      ><span className="material-symbols-outlined text-[16px]">vertical_split</span></button>
+      )}
+      </div>
+      <div
+      className={
+      showRightPanel
+      ? 'mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px] font-medium text-outline'
+      : 'flex items-center gap-2 text-[10px] text-outline font-medium mt-1'
+      }
+      >
+      {isActive && (
+      <span className="flex shrink-0 items-center gap-1">
+      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse-dot" />
+      {t('session.active')}
+      </span>
+      )}
+      {totalTokens > 0 && (
+      <>
+      <span className="text-[var(--color-outline)]">·</span>
+      <span title={t('common.tokens', { count: totalTokens.toLocaleString() })}>
+      {t('common.tokens', { count: formatTokenCount(totalTokens) })}
+      </span>
+      </>
+      )}
+      {lastUpdated && (
+      <>
+      <span className="shrink-0 text-[var(--color-outline)]">·</span>
+      <span className="truncate">{t('session.lastUpdated', { time: lastUpdated })}</span>
+      </>
+      )}
+      {!showRightPanel && visibleMessageCount > 0 && (
+      <>
+      <span className="text-[var(--color-outline)]">·</span>
+      <span>{t('session.messages', { count: visibleMessageCount })}</span>
+      </>
+      )}
+      </div>
+      {session?.workDirExists === false && (
+      <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-lg border border-[var(--color-error)]/20 bg-[var(--color-error)]/8 px-3 py-1.5 text-[11px] text-[var(--color-error)]">
+      <span className="material-symbols-outlined text-[14px]">warning</span>
+      <span className="truncate">
+      {t('session.workspaceUnavailable', { dir: session.workDir || 'directory no longer exists' })}
+      </span>
+      </div>
+      )}
+      <ActiveGoalStrip
+      goal={activeGoal}
+      isRunning={isActive}
+      compact={showRightPanel}
+      />
+      </div>
+      </div>
+      )}
+      </>
+    )
+  }
+
   return (
     <div className="flex-1 flex relative overflow-hidden bg-background text-on-surface">
       <div data-testid="active-session-content-row" className="flex min-h-0 min-w-0 flex-1">
         <div
           data-testid="active-session-chat-column"
-          className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden ${showRightPanel ? CHAT_COLUMN_WITH_WORKSPACE_CLASS : isMobileLayout ? 'flex-1' : 'min-w-[360px] flex-1'}`}
+          className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden ${showWorkbench ? CHAT_COLUMN_WITH_WORKSPACE_CLASS : isMobileLayout ? 'flex-1' : 'min-w-[360px] flex-1'}`}
         >
           {isMemberSession && (
             <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-container)]">
@@ -560,13 +665,14 @@ export function ActiveSession() {
           )}
 
           {isEmpty ? (
-            <div
-              data-testid="empty-session-hero"
-              className={[
-                'flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-8 pt-8',
-                compactEmptyHero ? 'pb-6' : 'pb-32',
-              ].join(' ')}
-            >
+            <>
+              <div
+                data-testid="empty-session-hero"
+                className={[
+                  'flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-8 pt-8',
+                  compactEmptyHero ? 'pb-6' : 'pb-32',
+                ].join(' ')}
+              >
               <div className="flex max-w-md flex-col items-center text-center">
                 {isMemberSession ? (
                   <>
@@ -594,86 +700,14 @@ export function ActiveSession() {
                 )}
               </div>
             </div>
-          ) : (
+            <ChatInput
+              variant="hero"
+              compact={showWorkbench}
+            />
+          </>
+        ) : (
             <>
-              {!isMemberSession && !isMobileLayout && (
-                <div
-                  className={
-                    showRightPanel
-                      ? 'flex w-full items-center border-b border-[var(--color-border)]/70 px-4 py-3'
-                      : 'w-full border-b border-outline-variant/10 px-4 py-3'
-                  }
-                >
-                  <div className={showRightPanel ? 'min-w-0 flex-1' : 'mx-auto w-full max-w-[860px] min-w-0'}>
-                    <div className="flex min-w-0 items-center gap-3">
-                      <h1
-                        className={
-                          showRightPanel
-                            ? 'min-w-0 flex-1 truncate text-[15px] font-bold font-headline leading-tight text-on-surface'
-                            : 'min-w-0 flex-1 text-lg font-bold font-headline text-on-surface leading-tight'
-                        }
-                      >
-                        {session?.title || t('session.untitled')}
-                      </h1>
-                    </div>
-                    <div
-                      className={
-                        showRightPanel
-                          ? 'mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px] font-medium text-outline'
-                          : 'flex items-center gap-2 text-[10px] text-outline font-medium mt-1'
-                      }
-                    >
-                      {isActive && (
-                        <span className="flex shrink-0 items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse-dot" />
-                          {t('session.active')}
-                        </span>
-                      )}
-                      {totalTokens > 0 && (
-                        <>
-                          <span className="text-[var(--color-outline)]">·</span>
-                          <span title={t('common.tokens', { count: totalTokens.toLocaleString() })}>
-                            {t('common.tokens', { count: formatTokenCount(totalTokens) })}
-                          </span>
-                        </>
-                      )}
-                      {lastUpdated && (
-                        <>
-                          <span className="shrink-0 text-[var(--color-outline)]">·</span>
-                          <span className="truncate">{t('session.lastUpdated', { time: lastUpdated })}</span>
-                        </>
-                      )}
-                      {!showRightPanel && visibleMessageCount > 0 && (
-                        <>
-                          <span className="text-[var(--color-outline)]">·</span>
-                          <span>{t('session.messages', { count: visibleMessageCount })}</span>
-                        </>
-                      )}
-                    </div>
-                    {session && getSessionWorkspaceState(session) !== 'available' && (
-                      <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px] ${
-                        getSessionWorkspaceState(session) === 'worktree_removed'
-                          ? 'border-[var(--color-border)] bg-[var(--color-surface-secondary)] text-[var(--color-text-secondary)]'
-                          : 'border-[var(--color-error)]/20 bg-[var(--color-error)]/8 text-[var(--color-error)]'
-                      }`}>
-                        <span className="material-symbols-outlined text-[14px]">
-                          {getSessionWorkspaceState(session) === 'worktree_removed' ? 'history' : 'warning'}
-                        </span>
-                        <span className="truncate">
-                          {getSessionWorkspaceState(session) === 'worktree_removed'
-                            ? t('session.worktreeRemoved', { dir: session.projectRoot || '' })
-                            : t('session.workspaceUnavailable', { dir: session.workDir || 'directory no longer exists' })}
-                        </span>
-                      </div>
-                    )}
-                    <ActiveGoalStrip
-                      goal={activeGoal}
-                      isRunning={isActive}
-                      compact={showRightPanel}
-                    />
-                  </div>
-                </div>
-              )}
+              {!sideSessionId && renderSessionHeader()}
 
               {isHistoryLoading ? (
                 <div role="status" className="flex flex-1 items-center justify-center p-8 text-sm text-[var(--color-text-secondary)]">
@@ -685,7 +719,17 @@ export function ActiveSession() {
                   {historyError}
                 </div>
               ) : (
-                <MessageList compact={showRightPanel} mobileLayout={isMobileLayout} />
+                <div className="flex flex-1 min-h-0">
+                  <div className="flex flex-col flex-1 min-w-0 bg-[var(--color-background)]">
+                        {sideSessionId && renderSessionHeader()}
+                    <MessageList compact={showRightPanel} />
+                    <ChatInput
+                      variant={isEmpty && !isMemberSession && !showRightPanel ? 'hero' : 'default'}
+                      compact={showWorkbench}
+                    />
+                  </div>
+                  {sideSessionId && <SideSessionPanel />}
+                </div>
               )}
             </>
           )}
@@ -704,10 +748,6 @@ export function ActiveSession() {
             />
           ) : null}
 
-          <ChatInput
-            variant={isEmpty && !isMemberSession && !showRightPanel ? 'hero' : 'default'}
-            compact={showRightPanel}
-          />
 
           {terminalPanelRuntimeId && activeTabId ? (
             <div

@@ -27,7 +27,7 @@ function getStoredTheme(): ThemeMode {
     const stored = localStorage.getItem(THEME_STORAGE_KEY)
     if (isThemeMode(stored)) return stored
   } catch { /* localStorage unavailable */ }
-  return 'white'
+  return 'light'
 }
 
 function isSettingsTab(value: unknown): value is SettingsTab {
@@ -46,6 +46,50 @@ export function applyTheme(theme: ThemeMode) {
   if (typeof document === 'undefined') return
   document.documentElement.setAttribute('data-theme', theme)
   document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
+}
+
+const PRESET_STORAGE_KEY = 'cc-haha-theme-preset'
+
+function getStoredPreset(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    return localStorage.getItem(PRESET_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function setStoredPreset(preset: string) {
+  if (typeof window === 'undefined') return
+  try {
+    if (preset) localStorage.setItem(PRESET_STORAGE_KEY, preset)
+    else localStorage.removeItem(PRESET_STORAGE_KEY)
+  } catch { /* quota exceeded, ignore */ }
+}
+
+let _presetLink: HTMLLinkElement | null = null
+
+export function applyPreset(preset: string) {
+  if (typeof document === 'undefined') return
+  document.documentElement.setAttribute('data-theme-preset', preset)
+  setStoredPreset(preset)
+  // Remove old preset CSS link
+  if (_presetLink) {
+    _presetLink.remove()
+    _presetLink = null
+  }
+  // Inject new preset CSS
+  if (preset) {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = `./themes/${preset}.css`
+    document.head.appendChild(link)
+    _presetLink = link
+  }
+}
+
+export function initializePreset() {
+  applyPreset(getStoredPreset())
 }
 
 export function initializeTheme() {
@@ -87,12 +131,15 @@ type UIStore = {
   pendingMemoryPath: string | null
   activeModal: string | null
   toasts: Toast[]
+  sideSessions: Record<string, string>
 
   setTheme: (theme: ThemeMode) => void
   toggleTheme: () => void
   toggleSidebar: () => void
   setSidebarOpen: (open: boolean) => void
   setActiveView: (view: ActiveView) => void
+  setSideSession: (tabId: string, sessionId: string) => void
+  clearSideSession: (tabId: string) => void
   setActiveSettingsTab: (tab: SettingsTab) => void
   setPendingSettingsTab: (tab: SettingsTab | null) => void
   setPendingMemoryPath: (path: string | null) => void
@@ -113,6 +160,7 @@ export const useUIStore = create<UIStore>((set) => ({
   pendingMemoryPath: null,
   activeModal: null,
   toasts: [],
+  sideSessions: {} as Record<string, string>,
 
   setTheme: (theme) => {
     applyTheme(theme)
@@ -133,6 +181,13 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setActiveView: (view) => set({ activeView: view }),
+  setSideSession: (tabId, sessionId) => set((s) => ({
+    sideSessions: { ...s.sideSessions, [tabId]: sessionId }
+  })),
+  clearSideSession: (tabId) => set((s) => {
+    const { [tabId]: _, ...rest } = s.sideSessions
+    return { sideSessions: rest }
+  }),
   setActiveSettingsTab: (tab) => {
     try { localStorage.setItem(ACTIVE_SETTINGS_TAB_STORAGE_KEY, tab) } catch { /* noop */ }
     set({ activeSettingsTab: tab })
