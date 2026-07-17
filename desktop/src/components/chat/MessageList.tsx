@@ -1030,6 +1030,10 @@ const CONVERSATION_FIND_CONTENT_REFRESH_MS = 80
 
 const sessionScrollSnapshots = new Map<string, SessionScrollSnapshot>()
 
+export function resetSessionScrollSnapshotsForTests() {
+  sessionScrollSnapshots.clear()
+}
+
 function isNearScrollBottom(element: HTMLElement) {
   return (
     element.scrollHeight - element.scrollTop - element.clientHeight <=
@@ -1619,7 +1623,7 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
   const ignoreProgrammaticScrollUntilRef = useRef(0)
   const ignoreProgrammaticScrollTopRef = useRef<number | null>(null)
   const userScrollIntentUntilRef = useRef(0)
-  const lastSessionIdRef = useRef<string | null | undefined>(resolvedSessionId)
+  const lastSessionIdRef = useRef<string | null | undefined>(undefined)
   const lastTailMessageIdBySessionRef = useRef(new Map<string, string | null>())
   const t = useTranslation()
   const [turnChangeCards, setTurnChangeCards] = useState<TurnChangeCardModel[]>([])

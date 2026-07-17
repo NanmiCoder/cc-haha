@@ -7,6 +7,7 @@ import {
   getActiveConversationNavigationItemId,
   getConversationNavigationTargetScrollTop,
   isRenderItemFullyVisibleInChatScroller,
+  resetSessionScrollSnapshotsForTests,
   shouldVirtualizeRenderItems,
 } from './MessageList'
 import type { ConversationNavigationItem } from './ConversationNavigator'
@@ -228,6 +229,7 @@ describe('MessageList nested tool calls', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    resetSessionScrollSnapshotsForTests()
     useSettingsStore.setState({ locale: 'en' })
     useUIStore.setState({ pendingSettingsTab: null })
     useTabStore.setState({ activeTabId: ACTIVE_TAB, tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session' as const, status: 'idle' }] })
@@ -3991,6 +3993,55 @@ describe('MessageList nested tool calls', () => {
     })
 
     expect(scrollTop).toBe(180)
+    expect(screen.getByRole('button', { name: 'Latest' })).toBeTruthy()
+  })
+
+  it('restores a session scroll position after the message list remounts between conversations', async () => {
+    const sessionA = 'issue-1057-session-a'
+    const sessionB = 'issue-1057-session-b'
+    useChatStore.setState({
+      sessions: {
+        [sessionA]: makeSessionState({
+          messages: [
+            { id: 'a-user', type: 'user_text', content: 'A prompt', timestamp: 1 },
+            { id: 'a-assistant', type: 'assistant_text', content: 'A response', timestamp: 2 },
+          ],
+        }),
+        [sessionB]: makeSessionState({
+          messages: [
+            { id: 'b-user', type: 'user_text', content: 'B prompt', timestamp: 1 },
+            { id: 'b-assistant', type: 'assistant_text', content: 'B response', timestamp: 2 },
+          ],
+        }),
+      },
+    })
+
+    const firstSession = render(<MessageList sessionId={sessionA} />)
+    const firstScroller = firstSession.container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let firstScrollTop = 180
+    Object.defineProperty(firstScroller, 'scrollHeight', { configurable: true, value: 1200 })
+    Object.defineProperty(firstScroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(firstScroller, 'scrollTop', {
+      configurable: true,
+      get: () => firstScrollTop,
+      set: (value) => {
+        firstScrollTop = value
+      },
+    })
+
+    await waitForProgrammaticScrollReset()
+    fireEvent.scroll(firstScroller)
+    expect(screen.getByRole('button', { name: 'Latest' })).toBeTruthy()
+    firstSession.unmount()
+
+    const secondSession = render(<MessageList sessionId={sessionB} />)
+    expect(screen.getByText('B response')).toBeTruthy()
+    secondSession.unmount()
+
+    const restoredSession = render(<MessageList sessionId={sessionA} />)
+    const restoredScroller = restoredSession.container.querySelector('.overflow-y-auto') as HTMLDivElement
+
+    expect(restoredScroller.scrollTop).toBe(180)
     expect(screen.getByRole('button', { name: 'Latest' })).toBeTruthy()
   })
 
