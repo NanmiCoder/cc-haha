@@ -743,6 +743,7 @@ function isAgentBackgroundTask(task: Pick<BackgroundAgentTask, 'taskType' | 'sum
 }
 
 function shouldSuppressTaskNotificationResponse(session: PerSessionState): boolean {
+  if (session.chatState !== 'idle') return false
   const lastMessage = session.messages[session.messages.length - 1]
   const hasVisibleActiveOutput =
     session.streamingText.trim().length > 0 ||

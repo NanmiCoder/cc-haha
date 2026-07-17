@@ -4349,6 +4349,71 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'idle')
   })
 
+  it('does not suppress foreground skill output when a background task completes', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [{
+            id: 'skill-user-1',
+            type: 'user_text',
+            content: '/demo-skill',
+            timestamp: 1,
+          }],
+          chatState: 'thinking',
+          elapsedTimer: null,
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolUseId: 'skill-tool-1',
+      toolName: 'Skill',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolUseId: 'skill-tool-1',
+      toolName: 'Skill',
+      input: { skill: 'demo-skill' },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_result',
+      toolUseId: 'skill-tool-1',
+      content: 'Launching skill: demo-skill',
+      isError: false,
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: {
+        task_id: 'older-background-task',
+        tool_use_id: 'older-background-tool',
+        status: 'completed',
+        summary: 'Older background task completed',
+      },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.suppressNextTaskNotificationResponse).not.toBe(true)
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'text',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      text: 'Visible skill output',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 12, output_tokens: 34 },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'assistant_text', content: 'Visible skill output' }),
+    ]))
+  })
+
   it('does not flush a delayed completion before a new user turn while background tasks keep running', () => {
     useChatStore.setState({
       sessions: {
