@@ -1270,6 +1270,58 @@ describe('WorkspacePanel', () => {
     expect(view.getAllByText('b.ts').length).toBeGreaterThanOrEqual(1)
   })
 
+  it('keeps a close control available for the last preview tab', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-last-preview-tab': {
+          isOpen: true,
+          activeView: 'changed',
+          hasUserSelectedView: true,
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-last-preview-tab': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [{
+            path: 'src/app.ts',
+            status: 'modified',
+            additions: 1,
+            deletions: 1,
+          }],
+        },
+      },
+      previewTabsBySession: {
+        ...state.previewTabsBySession,
+        'session-last-preview-tab': [{
+          id: 'diff:src/app.ts',
+          path: 'src/app.ts',
+          kind: 'diff',
+          title: 'app.ts',
+          diff: '@@ -1 +1 @@\n-old\n+new',
+          state: 'ok',
+        }],
+      },
+      activePreviewTabIdBySession: {
+        ...state.activePreviewTabIdBySession,
+        'session-last-preview-tab': 'diff:src/app.ts',
+      },
+    }))
+
+    const view = await renderPanel('session-last-preview-tab')
+
+    expect(view.getByTestId('workspace-code').textContent).toContain('+new')
+    await clickElement(view.getByLabelText('Close tab app.ts Diff'))
+
+    expect(view.queryByTestId('workspace-preview-column')).toBeNull()
+  })
+
   it('keeps the file navigator hidden while previewing until explicitly opened', async () => {
     await setWorkspaceState((state) => ({
       ...state,
