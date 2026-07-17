@@ -643,6 +643,63 @@ describe('buildSessionActivityModel', () => {
     expect(model.badgeCount).toBe(2)
   })
 
+  it('seals interrupted earlier tasks without badge attention', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [
+        {
+          id: 'user-1',
+          type: 'user_text',
+          content: '执行第一轮任务',
+          timestamp: 1000,
+        },
+        {
+          id: 'todo-1',
+          type: 'tool_use',
+          toolName: 'TodoWrite',
+          toolUseId: 'todo-1',
+          input: {
+            todos: [
+              { content: '已完成项', status: 'completed' },
+              { content: '被中断项', status: 'in_progress' },
+            ],
+          },
+          timestamp: 1100,
+        },
+        {
+          id: 'user-2',
+          type: 'user_text',
+          content: '中断后继续新任务',
+          timestamp: 2000,
+        },
+        {
+          id: 'todo-2',
+          type: 'tool_use',
+          toolName: 'TodoWrite',
+          toolUseId: 'todo-2',
+          input: {
+            todos: [{ content: '新轮次任务', status: 'completed' }],
+          },
+          timestamp: 2100,
+        },
+      ],
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(model.sections.tasks.rows).toEqual([
+      expect.objectContaining({ label: '新轮次任务', status: 'completed' }),
+      expect.objectContaining({
+        label: 'Earlier tasks',
+        status: 'completed',
+        taskHistory: { completed: 1, total: 2, turnCount: 1 },
+      }),
+    ])
+    expect(model.badgeCount).toBe(0)
+  })
+
   it('does not show orphan non-agent notifications in the SubAgents section', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',

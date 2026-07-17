@@ -529,17 +529,12 @@ function buildHistoricalTasksRow(groups: TaskTurnRows[]): ActivityRow | null {
   if (rows.length === 0) return null
 
   const completed = rows.filter((row) => row.status === 'completed').length
-  const status: TaskStatus = rows.some((row) => row.status === 'in_progress')
-    ? 'in_progress'
-    : rows.some((row) => row.status === 'pending')
-      ? 'pending'
-      : 'completed'
 
   return {
     id: `task-history-${groups[0]?.turn.id ?? 'turn'}-${groups.length}-${rows.length}`,
     section: 'tasks',
     label: 'Earlier tasks',
-    status,
+    status: 'completed',
     taskHistory: {
       completed,
       total: rows.length,
