@@ -622,7 +622,15 @@ export class ConversationService {
                   }
                 : {}),
             }
-          : { behavior: 'deny', message: denyMessage || 'User denied via UI' },
+          : {
+              behavior: 'deny',
+              message: denyMessage || 'User denied via UI',
+              // Rejecting ExitPlanMode means "keep planning"; other desktop
+              // denials stop the current agent turn and wait for user input.
+              ...(pendingRequest?.toolName !== 'ExitPlanMode'
+                ? { interrupt: true }
+                : {}),
+            },
       },
     })
   }

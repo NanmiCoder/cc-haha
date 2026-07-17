@@ -272,7 +272,13 @@ describe('ConversationService', () => {
       pendingOutbound: [],
       stderrLines: [],
       sdkMessages: [],
-      pendingPermissionRequests: new Map(),
+      pendingPermissionRequests: new Map([
+        ['req-1', {
+          toolName: 'ExitPlanMode',
+          input: {},
+          permissionSuggestions: [],
+        }],
+      ]),
     })
 
     const result = svc.respondToPermission(
@@ -291,6 +297,48 @@ describe('ConversationService', () => {
         response: {
           behavior: 'deny',
           message: 'Add rollback steps before implementation.',
+        },
+      },
+    })
+    expect((sent[0] as any).response.response.interrupt).toBeUndefined()
+  })
+
+  it('should interrupt the active turn when desktop denies a tool permission', () => {
+    const svc = new ConversationService()
+    const sent: unknown[] = []
+
+    ;(svc as any).sessions.set('session-1', {
+      proc: null,
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      pendingPermissionRequests: new Map([
+        ['req-1', {
+          toolName: 'Bash',
+          input: { command: 'rm temp.txt' },
+          permissionSuggestions: [],
+        }],
+      ]),
+    })
+
+    const result = svc.respondToPermission('session-1', 'req-1', false)
+
+    expect(result).toBe(true)
+    expect(sent[0]).toMatchObject({
+      type: 'control_response',
+      response: {
+        response: {
+          behavior: 'deny',
+          message: 'User denied via UI',
+          interrupt: true,
         },
       },
     })
