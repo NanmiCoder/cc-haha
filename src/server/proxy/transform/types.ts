@@ -117,10 +117,14 @@ export type OpenAIChatStreamChunk = {
 
 // ─── OpenAI Responses API ───────────────────────────────────
 
+export type OpenAIResponsesInputContentPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string }
+
 export type OpenAIResponsesInputItem =
-  | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string | OpenAIChatContentPart[] }
+  | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string | OpenAIResponsesInputContentPart[] }
   | { type: 'function_call'; call_id: string; name: string; arguments: unknown }
-  | { type: 'function_call_output'; call_id: string; output: string }
+  | { type: 'function_call_output'; call_id: string; output: string | OpenAIResponsesInputContentPart[] }
 
 export type OpenAIResponsesRequest = {
   model: string
