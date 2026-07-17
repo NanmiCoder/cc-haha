@@ -2295,6 +2295,16 @@ describe('chatStore history mapping', () => {
   })
 
   it('replays saved runtime selection when reconnecting a session', () => {
+    sessionStoreSnapshot.sessions = [{
+      id: TEST_SESSION_ID,
+      title: 'New Session',
+      createdAt: '2026-06-20T10:00:00.000Z',
+      modifiedAt: '2026-06-20T10:00:00.000Z',
+      messageCount: 0,
+      projectPath: '/workspace/project',
+      workDir: '/workspace/project',
+      workDirExists: true,
+    }]
     useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, {
       providerId: 'provider-1',
       modelId: 'kimi-k2.6',
@@ -2323,10 +2333,10 @@ describe('chatStore history mapping', () => {
     ])
   })
 
-  it('prewarms regular desktop sessions when connecting', () => {
+  it('does not prewarm unknown desktop sessions when connecting', () => {
     useChatStore.getState().connectToSession(TEST_SESSION_ID)
 
-    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, {
+    expect(sendMock).not.toHaveBeenCalledWith(TEST_SESSION_ID, {
       type: 'prewarm_session',
     })
   })
