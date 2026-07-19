@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
+import { Profiler, type ProfilerOnRenderCallback } from 'react'
 
 const desktopUiPreferencesApiMock = vi.hoisted(() => ({
   getPreferences: vi.fn(),
@@ -1617,6 +1618,197 @@ describe('Sidebar', () => {
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
       value: originalVisibility,
+    })
+  })
+
+  describe('streaming optimization', () => {
+    it('does not re-render when only streamingText changes during token streaming', async () => {
+      const now = new Date().toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('session-1', 'Test Session', '/workspace/alpha', now)],
+      })
+      useChatStore.setState({
+        sessions: {
+          'session-1': makeChatSessionState({ chatState: 'idle', streamingText: '' }),
+        },
+      })
+
+      const renders: string[] = []
+      const onRender: ProfilerOnRenderCallback = (_, phase) => { renders.push(phase) }
+
+      render(
+        <Profiler id="stream-text" onRender={onRender}>
+          <Sidebar />
+        </Profiler>,
+      )
+
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await Promise.resolve() })
+      const initialCount = renders.length
+
+      // Simulate streaming token flush: only streamingText changes,
+      // creating a new top-level sessions reference (as updateSessionIn does)
+      act(() => {
+        const prev = useChatStore.getState().sessions
+        const session = prev['session-1']
+        useChatStore.setState({
+          sessions: { ...prev, 'session-1': { ...session, streamingText: 'Hello world' } },
+        })
+      })
+
+      expect(renders.length).toBe(initialCount)
+    })
+
+    it('does not re-render across multiple rapid streamingText updates', async () => {
+      const now = new Date().toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('session-1', 'Test Session', '/workspace/alpha', now)],
+      })
+      useChatStore.setState({
+        sessions: {
+          'session-1': makeChatSessionState({ chatState: 'idle', streamingText: '' }),
+        },
+      })
+
+      const renders: string[] = []
+      const onRender: ProfilerOnRenderCallback = (_, phase) => { renders.push(phase) }
+
+      render(
+        <Profiler id="stream-multi" onRender={onRender}>
+          <Sidebar />
+        </Profiler>,
+      )
+
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await Promise.resolve() })
+      const initialCount = renders.length
+
+      // Simulate 5 rapid token flushes (as the 50ms interval would produce)
+      for (let i = 0; i < 5; i++) {
+        act(() => {
+          const prev = useChatStore.getState().sessions
+          const session = prev['session-1']
+          useChatStore.setState({
+            sessions: {
+              ...prev,
+              'session-1': { ...session, streamingText: session.streamingText + ' token' + i },
+            },
+          })
+        })
+      }
+
+      expect(renders.length).toBe(initialCount)
+    })
+
+    it('does not re-render when only elapsedSeconds changes', async () => {
+      const now = new Date().toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('session-1', 'Test Session', '/workspace/alpha', now)],
+      })
+      useChatStore.setState({
+        sessions: {
+          'session-1': makeChatSessionState({ chatState: 'idle', elapsedSeconds: 0 }),
+        },
+      })
+
+      const renders: string[] = []
+      const onRender: ProfilerOnRenderCallback = (_, phase) => { renders.push(phase) }
+
+      render(
+        <Profiler id="elapsed-seconds" onRender={onRender}>
+          <Sidebar />
+        </Profiler>,
+      )
+
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await Promise.resolve() })
+      const initialCount = renders.length
+
+      act(() => {
+        const prev = useChatStore.getState().sessions
+        const session = prev['session-1']
+        useChatStore.setState({
+          sessions: { ...prev, 'session-1': { ...session, elapsedSeconds: 42 } },
+        })
+      })
+
+      expect(renders.length).toBe(initialCount)
+    })
+
+    it('re-renders and shows running indicator when chatState transitions to streaming', async () => {
+      const now = new Date().toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('session-1', 'Test Session', '/workspace/alpha', now)],
+      })
+      useChatStore.setState({
+        sessions: {
+          'session-1': makeChatSessionState({ chatState: 'idle' }),
+        },
+      })
+
+      const renders: string[] = []
+      const onRender: ProfilerOnRenderCallback = (_, phase) => { renders.push(phase) }
+
+      render(
+        <Profiler id="chatstate-on" onRender={onRender}>
+          <Sidebar />
+        </Profiler>,
+      )
+
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await Promise.resolve() })
+
+      expect(screen.queryByLabelText('Session running')).not.toBeInTheDocument()
+      const countBefore = renders.length
+
+      act(() => {
+        const prev = useChatStore.getState().sessions
+        const session = prev['session-1']
+        useChatStore.setState({
+          sessions: { ...prev, 'session-1': { ...session, chatState: 'streaming' } },
+        })
+      })
+
+      expect(renders.length).toBeGreaterThan(countBefore)
+      expect(screen.getByLabelText('Session running')).toBeInTheDocument()
+    })
+
+    it('re-renders and hides running indicator when chatState transitions back to idle', async () => {
+      const now = new Date().toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('session-1', 'Test Session', '/workspace/alpha', now)],
+      })
+      useChatStore.setState({
+        sessions: {
+          'session-1': makeChatSessionState({ chatState: 'streaming' }),
+        },
+      })
+
+      const renders: string[] = []
+      const onRender: ProfilerOnRenderCallback = (_, phase) => { renders.push(phase) }
+
+      render(
+        <Profiler id="chatstate-off" onRender={onRender}>
+          <Sidebar />
+        </Profiler>,
+      )
+
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await Promise.resolve() })
+
+      expect(screen.getByLabelText('Session running')).toBeInTheDocument()
+      const countBefore = renders.length
+
+      act(() => {
+        const prev = useChatStore.getState().sessions
+        const session = prev['session-1']
+        useChatStore.setState({
+          sessions: { ...prev, 'session-1': { ...session, chatState: 'idle' } },
+        })
+      })
+
+      expect(renders.length).toBeGreaterThan(countBefore)
+      expect(screen.queryByLabelText('Session running')).not.toBeInTheDocument()
     })
   })
 })
