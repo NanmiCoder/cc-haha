@@ -5420,6 +5420,125 @@ describe('chatStore history mapping', () => {
     expect(userMessages).toHaveLength(1)
   })
 
+  it('dedupes a path-backed image after the server inlines it into replay content', () => {
+    const prompt = '检查这张截图'
+    const imagePath = 'C:\\Users\\tester\\Desktop\\screen.png'
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [
+            {
+              id: 'live-user',
+              type: 'user_text',
+              content: prompt,
+              modelContent: `@"${imagePath}" ${prompt}`,
+              attachments: [{
+                type: 'file',
+                name: 'screen.png',
+                path: imagePath,
+              }],
+              timestamp: 1,
+            },
+          ],
+          chatState: 'thinking',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay',
+      content: `${prompt}\n[Image source: ${imagePath}]`,
+    })
+
+    const userMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+      .filter((message) => message.type === 'user_text')
+    expect(userMessages).toHaveLength(1)
+  })
+
+  it('dedupes a prompt when data-only files replay with server-materialized upload paths', () => {
+    const prompt = '检查这两个附件'
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [
+            {
+              id: 'live-user',
+              type: 'user_text',
+              content: prompt,
+              attachments: [
+                {
+                  type: 'file',
+                  name: 'PROJECT.md',
+                  data: 'data:text/markdown;base64,IyBQcm9qZWN0',
+                },
+                {
+                  type: 'file',
+                  name: 'server.pem',
+                  data: 'data:application/x-pem-file;base64,VEVTVA==',
+                },
+              ],
+              timestamp: 1,
+            },
+          ],
+          chatState: 'thinking',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay',
+      content: [
+        '@"C:\\Users\\tester\\.claude\\uploads\\sid\\5d3af295-b914-4d44-a686-d665dc46b189-PROJECT.md"',
+        '@"C:\\Users\\tester\\.claude\\uploads\\sid\\d81b63cd-978c-42ce-ad9a-3bcd049dc24e-server.pem"',
+        prompt,
+      ].join(' '),
+    })
+
+    const userMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+      .filter((message) => message.type === 'user_text')
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages?.[0]).toMatchObject({
+      content: prompt,
+      attachments: [
+        { name: 'PROJECT.md', data: 'data:text/markdown;base64,IyBQcm9qZWN0' },
+        { name: 'server.pem', data: 'data:application/x-pem-file;base64,VEVTVA==' },
+      ],
+    })
+  })
+
+  it('keeps a replay whose materialized upload filename does not match the current attachment', () => {
+    const prompt = '检查这个附件'
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [
+            {
+              id: 'live-user',
+              type: 'user_text',
+              content: prompt,
+              attachments: [{
+                type: 'file',
+                name: 'PROJECT.md',
+                data: 'data:text/markdown;base64,IyBQcm9qZWN0',
+              }],
+              timestamp: 1,
+            },
+          ],
+          chatState: 'thinking',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay',
+      content: `@"C:\\Users\\tester\\.claude\\uploads\\sid\\5d3af295-b914-4d44-a686-d665dc46b189-other.md" ${prompt}`,
+    })
+
+    const userMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+      .filter((message) => message.type === 'user_text')
+    expect(userMessages).toHaveLength(2)
+  })
+
   it('flushes pending text before appending an error message', () => {
     vi.useFakeTimers()
 

@@ -3684,11 +3684,13 @@ function pathsReferToSameFile(left: string | undefined, right: string | undefine
   )
 }
 
-function extractRestoredUserDisplay(text: string): {
+type RestoredUserDisplay = {
   content: string
   attachments?: UIAttachment[]
   modelContent?: string
-} {
+}
+
+function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
   const leading = extractLeadingFileReferences(text)
   const workspace = parseWorkspaceReferenceHistoryPrompt(leading.content)
   if (!workspace) return leading
@@ -3709,6 +3711,69 @@ function extractRestoredUserDisplay(text: string): {
   }
 }
 
+// ConversationService stores data-only files as `${randomUUID()}-${sanitizedName}`
+// and omits successfully inlined images from the replayed text content.
+const MATERIALIZED_UPLOAD_NAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-(.+)$/i
+
+function isLikelyInlineImageAttachment(attachment: UIAttachment): boolean {
+  if (attachment.type === 'image') return true
+  if (attachment.mimeType?.startsWith('image/')) return true
+  const candidate = attachment.path ?? attachment.name
+  return /\.(png|jpe?g|gif|webp)$/i.test(candidate)
+}
+
+function replayAttachmentMatchesCurrent(
+  replayAttachment: UIAttachment,
+  currentAttachment: UIAttachment,
+): boolean {
+  if (pathsReferToSameFile(replayAttachment.path, currentAttachment.path)) return true
+  if (currentAttachment.path || !replayAttachment.path) return false
+
+  const replayName = getReferenceName(replayAttachment.path)
+  const materializedName = replayName.match(MATERIALIZED_UPLOAD_NAME_RE)?.[1]
+  if (!materializedName) return false
+
+  const currentName = currentAttachment.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return Boolean(currentName) && materializedName === currentName
+}
+
+function replayAttachmentsMatchCurrent(
+  replayAttachments: UIAttachment[],
+  currentAttachments: UIAttachment[],
+): boolean {
+  if (currentAttachments.length === 0) return false
+
+  const unmatchedCurrent = new Set(currentAttachments.map((_, index) => index))
+  for (const replayAttachment of replayAttachments) {
+    const matchingIndex = currentAttachments.findIndex((currentAttachment, index) =>
+      unmatchedCurrent.has(index) && replayAttachmentMatchesCurrent(replayAttachment, currentAttachment),
+    )
+    if (matchingIndex < 0) return false
+    unmatchedCurrent.delete(matchingIndex)
+  }
+
+  return [...unmatchedCurrent].every((index) =>
+    isLikelyInlineImageAttachment(currentAttachments[index]!),
+  )
+}
+
+function replayMatchesCurrentUserMessage(
+  message: Extract<UIMessage, { type: 'user_text' }>,
+  replayDisplay: RestoredUserDisplay,
+  replayModelContent: string,
+): boolean {
+  const currentModelContent = (message.modelContent ?? message.content).trim()
+  if (currentModelContent === replayModelContent) return true
+
+  const currentDisplay = extractRestoredUserDisplay(currentModelContent)
+  if (currentDisplay.content.trim() !== replayDisplay.content.trim()) return false
+
+  return replayAttachmentsMatchCurrent(
+    replayDisplay.attachments ?? [],
+    message.attachments ?? [],
+  )
+}
+
 export function appendReplayedUserMessage(
   messages: UIMessage[],
   content: string,
@@ -3724,7 +3789,7 @@ export function appendReplayedUserMessage(
   if (!displayContent && !parsed.attachments?.length) return messages
 
   const modelContent = parsed.modelContent ?? sanitized
-  const currentTurnUserIndex = findCurrentTurnUserMessageIndex(messages, modelContent)
+  const currentTurnUserIndex = findCurrentTurnUserMessageIndex(messages, modelContent, parsed)
   if (currentTurnUserIndex >= 0) {
     const optimisticMessage = messages[currentTurnUserIndex]
     if (optimisticMessage?.type === 'user_text' && optimisticMessage.optimisticQueued) {
@@ -3796,13 +3861,14 @@ function mapQueuedDisplayAttachments(attachments?: AttachmentRef[]): UIAttachmen
 function findCurrentTurnUserMessageIndex(
   messages: UIMessage[],
   modelContent: string,
+  replayDisplay: RestoredUserDisplay,
 ): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message?.type !== 'user_text') {
       continue
     }
-    return (message.modelContent ?? message.content).trim() === modelContent ? index : -1
+    return replayMatchesCurrentUserMessage(message, replayDisplay, modelContent) ? index : -1
   }
   return -1
 }
