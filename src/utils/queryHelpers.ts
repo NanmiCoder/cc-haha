@@ -27,7 +27,12 @@ import {
   createFileStateCacheWithSizeLimit,
   type FileStateCache,
 } from './fileStateCache.js'
-import { isNotEmptyMessage, normalizeMessages } from './messages.js'
+import {
+  INTERRUPT_MESSAGE,
+  INTERRUPT_MESSAGE_FOR_TOOL_USE,
+  isNotEmptyMessage,
+  normalizeMessages,
+} from './messages.js'
 import { expandPath } from './path.js'
 import type {
   inputSchema as permissionToolInputSchema,
@@ -50,6 +55,7 @@ const ASK_READ_FILE_STATE_CACHE_SIZE = 10
  * Returns true if:
  * - Last message is assistant with text/thinking content
  * - Last message is user with only tool_result blocks
+ * - Last message is a synthetic user interruption
  * - Last message is the user prompt but the API completed with end_turn
  *   (model chose to emit no content blocks)
  */
@@ -75,6 +81,16 @@ export function isResultSuccessful(
       Array.isArray(content) &&
       content.length > 0 &&
       content.every(block => 'type' in block && block.type === 'tool_result')
+    ) {
+      return true
+    }
+
+    const onlyBlock = Array.isArray(content) ? content[0] : undefined
+    if (
+      content.length === 1 &&
+      onlyBlock?.type === 'text' &&
+      (onlyBlock.text === INTERRUPT_MESSAGE ||
+        onlyBlock.text === INTERRUPT_MESSAGE_FOR_TOOL_USE)
     ) {
       return true
     }
