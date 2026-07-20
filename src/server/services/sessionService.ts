@@ -2504,8 +2504,6 @@ export class SessionService {
       const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
       const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
       const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
-      const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens
-      if (promptTokens === 0 && outputTokens === 0) continue
 
       latest = {
         model,
@@ -2774,16 +2772,13 @@ export class SessionService {
       const webSearchRequests = typeof usage.server_tool_use?.web_search_requests === 'number'
         ? usage.server_tool_use.web_search_requests
         : 0
-      const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens
 
-      if (promptTokens !== 0 || outputTokens !== 0) {
-        latestContextUsage = {
-          model,
-          inputTokens,
-          outputTokens,
-          cacheReadInputTokens,
-          cacheCreationInputTokens,
-        }
+      latestContextUsage = {
+        model,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
       }
 
       if (

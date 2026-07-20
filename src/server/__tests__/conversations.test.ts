@@ -891,6 +891,76 @@ describe('ConversationService', () => {
     }
   })
 
+  it('should fall back to transcript estimates when provider usage is empty or zero', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-zero-usage-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-zero-usage-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+
+    try {
+      const svc = new SessionService()
+
+      for (const usage of [
+        {},
+        {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      ]) {
+        const { sessionId } = await svc.createSession(workDir)
+        const found = await svc.findSessionFile(sessionId)
+        expect(found).not.toBeNull()
+
+        await fs.appendFile(found!.filePath, JSON.stringify({
+          type: 'user',
+          uuid: crypto.randomUUID(),
+          timestamp: '2026-07-20T12:00:00.000Z',
+          cwd: workDir,
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'Estimate this transcript even when the provider does not report token counts.' }],
+          },
+        }) + '\n')
+        await fs.appendFile(found!.filePath, JSON.stringify({
+          type: 'assistant',
+          uuid: crypto.randomUUID(),
+          timestamp: '2026-07-20T12:00:01.000Z',
+          cwd: workDir,
+          message: {
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [{ type: 'text', text: 'The local transcript estimate should remain available.' }],
+            usage,
+          },
+        }) + '\n')
+
+        const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+        const inspectionSnapshot = await svc.getInspectionTranscriptSnapshot(sessionId)
+
+        expect(contextEstimate?.model).toBe('claude-sonnet-4-6')
+        expect(contextEstimate?.totalTokens).toBeGreaterThan(0)
+        expect(inspectionSnapshot?.contextEstimate).toEqual(contextEstimate)
+      }
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('should use active provider model context windows for transcript estimates', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
