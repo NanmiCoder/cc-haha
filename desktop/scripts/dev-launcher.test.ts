@@ -1,5 +1,6 @@
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createElectronDevEnv, DEFAULT_RENDERER_URL, mergeNoProxy } from './electron-dev'
+import { createElectronDevEnv, DEFAULT_RENDERER_URL, mergeNoProxy, resolveElectronExecutable } from './electron-dev'
 
 describe('desktop dev launcher environment', () => {
   it('uses localhost and bypasses proxies for local renderer startup', () => {
@@ -26,5 +27,9 @@ describe('desktop dev launcher environment', () => {
 
   it('deduplicates no_proxy entries', () => {
     expect(mergeNoProxy('localhost,127.0.0.1')).toBe('localhost,127.0.0.1,::1')
+  })
+
+  it('resolves Electron directly instead of shelling through bunx', () => {
+    expect(resolveElectronExecutable(path.resolve(import.meta.dirname, '..'), 'win32')).toMatch(/electron\.exe$/)
   })
 })
