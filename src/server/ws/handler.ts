@@ -144,10 +144,10 @@ export type SessionChatActivityState =
 
 /**
  * Pet/activity status deliberately reuses the authoritative WebSocket turn and
- * permission state above. Only terminal outcomes and the legacy REST queue
- * fallback need their own memory; waiting/running are derived live.
+ * permission state above. Only failures and the legacy REST queue fallback
+ * need their own memory; successful completion returns directly to idle.
  */
-const terminalSessionChatStates = new Map<string, 'failed' | 'review'>()
+const terminalSessionChatStates = new Map<string, 'failed'>()
 const legacyQueuedSessionChats = new Set<string>()
 const interruptedSessionChats = new Set<string>()
 
@@ -171,7 +171,14 @@ function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
     terminalSessionChatStates.delete(sessionId)
     return
   }
-  terminalSessionChatStates.set(sessionId, cliMsg.is_error ? 'failed' : 'review')
+  if (cliMsg.is_error) {
+    terminalSessionChatStates.set(sessionId, 'failed')
+    return
+  }
+
+  // A successful result is complete. Keeping the tab open does not imply that
+  // the user has an outstanding review action.
+  terminalSessionChatStates.delete(sessionId)
 }
 
 type CliBackgroundTaskLifecycle = {
@@ -337,6 +344,7 @@ export type WebSocketData = {
 // legitimately watch the same running session at the same time.
 const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 let activePetClient: ServerWebSocket<WebSocketData> | null = null
+
 const clientOutputCallbacks = new Map<
   ServerWebSocket<WebSocketData>,
   {

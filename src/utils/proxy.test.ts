@@ -25,12 +25,12 @@ describe('proxy environment handling', () => {
   afterEach(restoreEnv)
 
   test('bypasses proxy fetch options for loopback provider proxy targets', () => {
-    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
-    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
-    process.env.NO_PROXY = 'localhost,127.0.0.1,::1'
     delete process.env.http_proxy
     delete process.env.https_proxy
     delete process.env.no_proxy
+    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
+    process.env.NO_PROXY = 'localhost,127.0.0.1,::1'
 
     expect(shouldBypassProxy('http://127.0.0.1:3456/proxy/providers/p1/v1/messages')).toBe(true)
     expect(getProxyFetchOptions({
@@ -40,12 +40,12 @@ describe('proxy environment handling', () => {
   })
 
   test('bypasses bracketed IPv6 loopback targets for plain ::1 NO_PROXY entries', () => {
-    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
-    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
-    process.env.NO_PROXY = '::1'
     delete process.env.http_proxy
     delete process.env.https_proxy
     delete process.env.no_proxy
+    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
+    process.env.NO_PROXY = '::1'
 
     expect(shouldBypassProxy('http://[::1]:3456/api/status')).toBe(true)
     expect(getProxyFetchOptions({
@@ -66,12 +66,12 @@ describe('proxy environment handling', () => {
   })
 
   test('keeps proxy fetch options for external provider targets', () => {
-    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
-    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
-    process.env.NO_PROXY = 'localhost,127.0.0.1,::1'
     delete process.env.http_proxy
     delete process.env.https_proxy
     delete process.env.no_proxy
+    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
+    process.env.NO_PROXY = 'localhost,127.0.0.1,::1'
 
     expect(shouldBypassProxy('https://api.example.com/v1/messages')).toBe(false)
     expect(getProxyFetchOptions({

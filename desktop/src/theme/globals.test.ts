@@ -156,4 +156,12 @@ describe('desktop theme tokens', () => {
     expect(css).toContain('left: -9999em;')
     expect(css).toContain('overflow: hidden;')
   })
+
+  it('keeps the pet task card controls above the mascot hit target', () => {
+    const mascotCss = getCssBetween('.pet-mascot-button {', '.pet-mascot-wrap {')
+    const cardCss = getCssBetween('.pet-activity-card {', '.pet-activity-card[data-expanded=')
+
+    expect(mascotCss).toContain('z-index: 10;')
+    expect(cardCss).toContain('z-index: 15;')
+  })
 })

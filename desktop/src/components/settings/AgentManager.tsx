@@ -6,6 +6,8 @@ import {
   Boxes,
   Bolt,
   Braces,
+  Check,
+  ChevronDown,
   CircleAlert,
   Folder,
   Hammer,
@@ -14,6 +16,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Shield,
   Terminal,
   Trash2,
@@ -21,6 +24,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import type { TranslationKey } from '../../i18n'
 import type {
   AgentDefinition,
   AgentMutationInput,
@@ -34,6 +38,8 @@ import { useUIStore } from '../../stores/uiStore'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Button } from '../shared/Button'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
+import { DirectoryPicker } from '../shared/DirectoryPicker'
+import { Dropdown } from '../shared/Dropdown'
 import { Input } from '../shared/Input'
 import { Modal } from '../shared/Modal'
 
@@ -62,6 +68,37 @@ const BUILT_IN_MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/
 type ToolAccessMode = 'inherit' | 'none' | 'custom'
+type ToolCategory = 'readSearch' | 'modify' | 'execute' | 'workflow' | 'other'
+
+const TOOL_CATEGORY_ORDER: ToolCategory[] = ['readSearch', 'modify', 'execute', 'workflow', 'other']
+const TOOL_METADATA: Record<string, { category: ToolCategory; description: TranslationKey }> = {
+  Read: { category: 'readSearch', description: 'settings.agents.form.toolDescription.Read' },
+  Glob: { category: 'readSearch', description: 'settings.agents.form.toolDescription.Glob' },
+  Grep: { category: 'readSearch', description: 'settings.agents.form.toolDescription.Grep' },
+  WebFetch: { category: 'readSearch', description: 'settings.agents.form.toolDescription.WebFetch' },
+  WebSearch: { category: 'readSearch', description: 'settings.agents.form.toolDescription.WebSearch' },
+  Edit: { category: 'modify', description: 'settings.agents.form.toolDescription.Edit' },
+  Write: { category: 'modify', description: 'settings.agents.form.toolDescription.Write' },
+  NotebookEdit: { category: 'modify', description: 'settings.agents.form.toolDescription.NotebookEdit' },
+  Bash: { category: 'execute', description: 'settings.agents.form.toolDescription.Bash' },
+  PowerShell: { category: 'execute', description: 'settings.agents.form.toolDescription.PowerShell' },
+  TodoWrite: { category: 'workflow', description: 'settings.agents.form.toolDescription.TodoWrite' },
+  Skill: { category: 'workflow', description: 'settings.agents.form.toolDescription.Skill' },
+  ToolSearch: { category: 'workflow', description: 'settings.agents.form.toolDescription.ToolSearch' },
+  EnterWorktree: { category: 'workflow', description: 'settings.agents.form.toolDescription.EnterWorktree' },
+  ExitWorktree: { category: 'workflow', description: 'settings.agents.form.toolDescription.ExitWorktree' },
+  StructuredOutput: { category: 'workflow', description: 'settings.agents.form.toolDescription.StructuredOutput' },
+}
+
+function getAgentProjectPath(agent?: AgentDefinition): string | undefined {
+  if (agent?.source !== 'projectSettings' || !agent.baseDir) return undefined
+  const normalized = agent.baseDir.replace(/\\/g, '/').replace(/\/+$/, '')
+  const suffix = '/.claude/agents'
+  if (!normalized.toLowerCase().endsWith(suffix)) return undefined
+  const projectPath = normalized.slice(0, -suffix.length)
+  if (!projectPath) return '/'
+  return /^[A-Za-z]:$/.test(projectPath) ? `${projectPath}/` : projectPath
+}
 
 export function AgentManager() {
   const {
@@ -84,8 +121,13 @@ export function AgentManager() {
 
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = getSessionBrowsablePath(activeSession)
+  const [agentContextPath, setAgentContextPath] = useState<string | undefined>(currentWorkDir)
+  const contextSessionId = sessions.find(
+    (session) => getSessionBrowsablePath(session) === agentContextPath,
+  )?.id
 
   useEffect(() => {
+    setAgentContextPath(currentWorkDir)
     void fetchAgents(currentWorkDir)
   }, [fetchAgents, currentWorkDir])
 
@@ -117,9 +159,6 @@ export function AgentManager() {
               <p className="text-sm font-medium text-[var(--color-text-primary)]">
                 {t('settings.agents.refreshWarning')}
               </p>
-              <p className="mt-0.5 break-words text-xs text-[var(--color-text-secondary)]">
-                {mutationWarning}
-              </p>
             </div>
           </div>
           <Button
@@ -127,8 +166,8 @@ export function AgentManager() {
             size="sm"
             icon={<RefreshCw size={14} />}
             onClick={() => void retryMutationRefresh(
-              currentWorkDir,
-              activeSessionId || undefined,
+              agentContextPath,
+              contextSessionId,
             )}
           >
             {t('common.retry')}
@@ -164,12 +203,12 @@ export function AgentManager() {
             </div>
           ) : error ? (
             <div className="rounded-2xl border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-5 py-10 text-center">
-              <p className="mb-3 text-sm text-[var(--color-error)]">{error}</p>
+              <p className="mb-3 text-sm text-[var(--color-error)]">{t('settings.agents.loadError')}</p>
               <Button
                 variant="secondary"
                 size="sm"
                 icon={<RefreshCw size={14} />}
-                onClick={() => void fetchAgents(currentWorkDir)}
+                onClick={() => void fetchAgents(agentContextPath)}
               >
                 {t('common.retry')}
               </Button>
@@ -271,15 +310,16 @@ export function AgentManager() {
         <AgentFormModal
           mode={formState.mode}
           agent={formState.agent}
-          cwd={currentWorkDir}
-          sessionId={activeSessionId || undefined}
+          cwd={agentContextPath}
+          sessionId={contextSessionId}
+          onProjectContextChange={setAgentContextPath}
           onClose={() => setFormState(null)}
         />
       )}
       <AgentDeleteDialog
         agent={deleteTarget}
-        cwd={currentWorkDir}
-        sessionId={activeSessionId || undefined}
+        cwd={agentContextPath}
+        sessionId={contextSessionId}
         onClose={() => setDeleteTarget(null)}
       />
     </div>
@@ -397,21 +437,28 @@ function AgentFormModal({
   agent,
   cwd,
   sessionId,
+  onProjectContextChange,
   onClose,
 }: {
   mode: 'create' | 'edit'
   agent?: AgentDefinition
   cwd?: string
   sessionId?: string
+  onProjectContextChange: (path: string) => void
   onClose: () => void
 }) {
   const t = useTranslation()
   const createAgent = useAgentStore((state) => state.createAgent)
   const updateAgent = useAgentStore((state) => state.updateAgent)
   const isMutating = useAgentStore((state) => state.isMutating)
+  const availableTools = useAgentStore((state) => state.availableTools)
+  const sessions = useSessionStore((state) => state.sessions)
   const initialScope = agent?.source === 'projectSettings' ? 'project' : 'user'
   const initialModel = agent?.model || 'inherit'
   const [scope, setScope] = useState<AgentScope>(initialScope)
+  const [projectPath, setProjectPath] = useState(
+    initialScope === 'project' ? getAgentProjectPath(agent) || cwd || '' : cwd || '',
+  )
   const [name, setName] = useState(agent?.agentType || '')
   const [description, setDescription] = useState(agent?.description || '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt || '')
@@ -430,8 +477,18 @@ function AgentFormModal({
       ? 'none'
       : 'custom'
   const [toolAccess, setToolAccess] = useState<ToolAccessMode>(initialToolAccess)
-  const initialToolsText = agent?.tools?.join(', ') || ''
-  const [tools, setTools] = useState(initialToolsText)
+  const initialTools = agent?.tools ?? []
+  const [selectedBuiltInTools, setSelectedBuiltInTools] = useState(
+    initialTools.filter(tool => availableTools.includes(tool)),
+  )
+  const [customTools, setCustomTools] = useState(
+    initialTools.filter(tool => !availableTools.includes(tool)).join(', '),
+  )
+  const [toolsDirty, setToolsDirty] = useState(false)
+  const parsedTools = useMemo(
+    () => [...new Set([...selectedBuiltInTools, ...parseTools(customTools)])],
+    [customTools, selectedBuiltInTools],
+  )
   const [color, setColor] = useState(agent?.color || '')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -439,22 +496,22 @@ function AgentFormModal({
   const handleSubmit = async () => {
     const nextErrors: Record<string, string> = {}
     const trimmedName = name.trim()
-    const parsedTools = parseTools(tools)
     if (!NAME_PATTERN.test(trimmedName)) nextErrors.name = t('settings.agents.form.nameError')
     if (!description.trim()) nextErrors.description = t('settings.agents.form.descriptionRequired')
     if (mode === 'create' && !systemPrompt.trim()) nextErrors.systemPrompt = t('settings.agents.form.systemPromptRequired')
     if (modelChoice === 'custom' && !customModel.trim()) nextErrors.customModel = t('settings.agents.form.customModelRequired')
     if (toolAccess === 'custom' && parsedTools.length === 0) nextErrors.tools = t('settings.agents.form.toolsCustomRequired')
-    if (scope === 'project' && !cwd) nextErrors.scope = t('settings.agents.form.projectUnavailable')
+    if (scope === 'project' && !projectPath) nextErrors.scope = t('settings.agents.form.projectUnavailable')
     setFieldErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
     const toolSelectionIsUnchanged = mode === 'edit' &&
       toolAccess === initialToolAccess &&
-      (toolAccess !== 'custom' || tools === initialToolsText)
+      (toolAccess !== 'custom' || !toolsDirty)
+    const targetCwd = scope === 'project' ? projectPath : cwd
     const input: AgentMutationInput = {
       scope,
-      ...(cwd ? { cwd } : {}),
+      ...(targetCwd ? { cwd: targetCwd } : {}),
       ...(mode === 'edit' && agent?.target ? { target: agent.target } : {}),
       name: trimmedName,
       description: description.trim(),
@@ -481,14 +538,18 @@ function AgentFormModal({
 
     setSubmitError(null)
     try {
+      const targetSessionId = scope === 'project'
+        ? sessions.find((session) => getSessionBrowsablePath(session) === projectPath)?.id
+        : sessionId
       if (mode === 'edit' && agent) {
-        await updateAgent(agent.agentType, input, sessionId)
+        await updateAgent(agent.agentType, input, targetSessionId)
       } else {
-        await createAgent(input, sessionId)
+        await createAgent(input, targetSessionId)
       }
+      if (scope === 'project' && targetCwd) onProjectContextChange(targetCwd)
       onClose()
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : t('settings.agents.form.saveError'))
+    } catch {
+      setSubmitError(t('settings.agents.form.saveError'))
     }
   }
 
@@ -507,21 +568,50 @@ function AgentFormModal({
     >
       <div className="grid gap-4">
         <Field label={t('settings.agents.form.scope')} error={fieldErrors.scope} required>
-          <select
-            aria-label={t('settings.agents.form.scope')}
-            value={scope}
-            disabled={mode === 'edit'}
-            onChange={(event) => setScope(event.target.value as AgentScope)}
-            className={selectClassName}
-          >
-            <option value="user">{t('settings.agents.form.scopeUser')}</option>
-            <option value="project" disabled={!cwd}>{t('settings.agents.form.scopeProject')}</option>
-          </select>
-          {!cwd && <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.agents.form.projectUnavailable')}</p>}
-          {scope === 'project' && cwd && (
-            <p className="break-all text-xs text-[var(--color-text-tertiary)]">
-              {t('settings.agents.form.projectTarget', { path: cwd })}
-            </p>
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label={t('settings.agents.form.scope')}>
+            {([
+              { value: 'user' as const, label: t('settings.agents.form.scopeUser'), icon: <User size={16} /> },
+              { value: 'project' as const, label: t('settings.agents.form.scopeProject'), icon: <Folder size={16} /> },
+            ]).map((option) => {
+              const selected = scope === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={selected}
+                  disabled={mode === 'edit'}
+                  onClick={() => setScope(option.value)}
+                  className={`flex min-h-16 items-center gap-3 rounded-[var(--radius-lg)] border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selected
+                      ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+                  }`}
+                >
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                    selected ? 'bg-[var(--color-primary-fixed)] text-[var(--color-brand)]' : 'bg-[var(--color-surface-container-high)]'
+                  }`}>
+                    {option.icon}
+                  </span>
+                  <span className="text-sm font-semibold">{option.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {scope === 'project' && (
+            <div className="mt-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                    {projectPath
+                      ? t('settings.agents.form.projectTarget', { path: projectPath })
+                      : t('settings.agents.form.projectUnavailable')}
+                  </p>
+                </div>
+                {mode === 'create' && (
+                  <DirectoryPicker value={projectPath} onChange={setProjectPath} />
+                )}
+              </div>
+            </div>
           )}
         </Field>
 
@@ -560,18 +650,28 @@ function AgentFormModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t('settings.agents.form.model')}>
-            <select aria-label={t('settings.agents.form.model')} value={modelChoice} onChange={(event) => setModelChoice(event.target.value)} className={selectClassName}>
-              <option value="inherit">{t('settings.agents.form.inherit')}</option>
-              {BUILT_IN_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
-              <option value="custom">{t('settings.agents.form.customModel')}</option>
-            </select>
+            <AgentSelect
+              label={t('settings.agents.form.model')}
+              value={modelChoice}
+              onChange={setModelChoice}
+              items={[
+                { value: 'inherit', label: t('settings.agents.form.inherit') },
+                ...BUILT_IN_MODELS.map((model) => ({ value: model, label: model })),
+                { value: 'custom', label: t('settings.agents.form.customModel') },
+              ]}
+            />
           </Field>
           <Field label={t('settings.agents.form.effort')}>
-            <select aria-label={t('settings.agents.form.effort')} value={effort} onChange={(event) => setEffort(event.target.value)} className={selectClassName}>
-              <option value="inherit">{t('settings.agents.form.inherit')}</option>
-              {hasLegacyEffort && <option value={initialEffort}>{initialEffort}</option>}
-              {EFFORTS.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            <AgentSelect
+              label={t('settings.agents.form.effort')}
+              value={effort}
+              onChange={setEffort}
+              items={[
+                { value: 'inherit', label: t('settings.agents.form.inherit') },
+                ...(hasLegacyEffort ? [{ value: initialEffort, label: initialEffort }] : []),
+                ...EFFORTS.map((value) => ({ value, label: value })),
+              ]}
+            />
           </Field>
         </div>
 
@@ -586,16 +686,16 @@ function AgentFormModal({
         )}
 
         <Field label={t('settings.agents.form.tools')}>
-          <select
-            aria-label={t('settings.agents.form.tools')}
+          <AgentSelect<ToolAccessMode>
+            label={t('settings.agents.form.tools')}
             value={toolAccess}
-            onChange={(event) => setToolAccess(event.target.value as ToolAccessMode)}
-            className={selectClassName}
-          >
-            <option value="inherit">{t('settings.agents.form.toolsInherit')}</option>
-            <option value="none">{t('settings.agents.form.toolsNone')}</option>
-            <option value="custom">{t('settings.agents.form.toolsCustom')}</option>
-          </select>
+            onChange={setToolAccess}
+            items={[
+              { value: 'inherit', label: t('settings.agents.form.toolsInherit') },
+              { value: 'none', label: t('settings.agents.form.toolsNone') },
+              { value: 'custom', label: t('settings.agents.form.toolsCustom') },
+            ]}
+          />
         </Field>
         <p className="-mt-3 text-xs text-[var(--color-text-tertiary)]">
           {toolAccess === 'inherit'
@@ -605,21 +705,36 @@ function AgentFormModal({
               : t('settings.agents.form.toolsHint')}
         </p>
         {toolAccess === 'custom' && (
-          <Input
-            label={t('settings.agents.form.toolsCustomLabel')}
-            required
-            value={tools}
+          <ToolPicker
+            availableTools={availableTools}
+            selectedTools={selectedBuiltInTools}
+            customTools={customTools}
             error={fieldErrors.tools}
-            placeholder={t('settings.agents.form.toolsPlaceholder')}
-            onChange={(event) => setTools(event.target.value)}
+            onSelectedToolsChange={(nextTools) => {
+              setSelectedBuiltInTools(nextTools)
+              setToolsDirty(true)
+            }}
+            onCustomToolsChange={(value) => {
+              setCustomTools(value)
+              setToolsDirty(true)
+            }}
           />
         )}
 
         <Field label={t('settings.agents.form.color')}>
-          <select aria-label={t('settings.agents.form.color')} value={color} onChange={(event) => setColor(event.target.value)} className={selectClassName}>
-            <option value="">{t('settings.agents.form.noColor')}</option>
-            {Object.keys(AGENT_COLORS).map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
+          <AgentSelect
+            label={t('settings.agents.form.color')}
+            value={color}
+            onChange={setColor}
+            items={[
+              { value: '', label: t('settings.agents.form.noColor') },
+              ...Object.keys(AGENT_COLORS).map((value) => ({
+                value,
+                label: value,
+                icon: <span className="h-3 w-3 rounded-full" style={{ backgroundColor: AGENT_COLORS[value] }} />,
+              })),
+            ]}
+          />
         </Field>
 
         {submitError && (
@@ -629,6 +744,143 @@ function AgentFormModal({
         )}
       </div>
     </Modal>
+  )
+}
+
+function ToolPicker({
+  availableTools,
+  selectedTools,
+  customTools,
+  error,
+  onSelectedToolsChange,
+  onCustomToolsChange,
+}: {
+  availableTools: string[]
+  selectedTools: string[]
+  customTools: string
+  error?: string
+  onSelectedToolsChange: (tools: string[]) => void
+  onCustomToolsChange: (value: string) => void
+}) {
+  const t = useTranslation()
+  const [query, setQuery] = useState('')
+  const normalizedQuery = query.trim().toLowerCase()
+  const visibleTools = availableTools.filter((tool) => {
+    if (!normalizedQuery) return true
+    const metadata = TOOL_METADATA[tool]
+    const description = t(metadata?.description ?? 'settings.agents.form.toolDescription.generic')
+    const category = t(`settings.agents.form.toolCategory.${metadata?.category ?? 'other'}`)
+    return `${tool} ${description} ${category}`.toLowerCase().includes(normalizedQuery)
+  })
+  const groupedTools = TOOL_CATEGORY_ORDER.map((category) => ({
+    category,
+    tools: visibleTools.filter(tool => (TOOL_METADATA[tool]?.category ?? 'other') === category),
+  })).filter(group => group.tools.length > 0)
+
+  const toggleTool = (tool: string) => {
+    onSelectedToolsChange(
+      selectedTools.includes(tool)
+        ? selectedTools.filter(selectedTool => selectedTool !== tool)
+        : [...selectedTools, tool],
+    )
+  }
+
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+            {t('settings.agents.form.builtInTools')}
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+            {t('settings.agents.form.builtInToolsHint')}
+          </p>
+        </div>
+        <span className="rounded-full bg-[var(--color-primary-fixed)] px-2.5 py-1 text-xs font-medium text-[var(--color-brand)]">
+          {t('settings.agents.form.toolsSelectedCount', { count: selectedTools.length })}
+        </span>
+      </div>
+
+      {availableTools.length > 0 ? (
+        <>
+          <label className="relative mb-3 block">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
+            <input
+              type="search"
+              aria-label={t('settings.agents.form.toolsSearch')}
+              value={query}
+              placeholder={t('settings.agents.form.toolsSearchPlaceholder')}
+              onChange={(event) => setQuery(event.target.value)}
+              className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] pl-9 pr-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:ring-2 focus:ring-[var(--color-brand)]/15"
+            />
+          </label>
+          <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
+            {groupedTools.map(({ category, tools }) => (
+              <section key={category} aria-label={t(`settings.agents.form.toolCategory.${category}`)}>
+                <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
+                  {t(`settings.agents.form.toolCategory.${category}`)}
+                </h4>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {tools.map((tool) => {
+                    const selected = selectedTools.includes(tool)
+                    const description = t(TOOL_METADATA[tool]?.description ?? 'settings.agents.form.toolDescription.generic')
+                    return (
+                      <button
+                        key={tool}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={selected}
+                        aria-label={`${tool} — ${description}`}
+                        onClick={() => toggleTool(tool)}
+                        className={`flex min-h-14 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors ${
+                          selected
+                            ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)]'
+                            : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)]'
+                        }`}
+                      >
+                        <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                          selected
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
+                            : 'border-[var(--color-border-strong)] bg-[var(--color-surface)]'
+                        }`}>
+                          {selected && <Check size={12} strokeWidth={3} />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block font-mono text-xs font-semibold text-[var(--color-text-primary)]">{tool}</span>
+                          <span className="mt-0.5 block text-[11px] leading-4 text-[var(--color-text-tertiary)]">{description}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+            ))}
+            {groupedTools.length === 0 && (
+              <p className="py-5 text-center text-xs text-[var(--color-text-tertiary)]">
+                {t('settings.agents.form.toolsNoResults')}
+              </p>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">
+          {t('settings.agents.form.toolsUnavailable')}
+        </p>
+      )}
+
+      <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+        <Input
+          label={t('settings.agents.form.toolsCustomLabel')}
+          value={customTools}
+          error={error}
+          placeholder={t('settings.agents.form.toolsPlaceholder')}
+          onChange={(event) => onCustomToolsChange(event.target.value)}
+        />
+        <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+          {t('settings.agents.form.toolsCustomHint')}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -659,8 +911,8 @@ function AgentDeleteDialog({
     try {
       await deleteAgent(agent.agentType, scope, cwd, agent.target, sessionId)
       onClose()
-    } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : t('settings.agents.deleteError'))
+    } catch {
+      setDeleteError(t('settings.agents.deleteError'))
     }
   }
 
@@ -756,6 +1008,42 @@ function getAgentSourceAccentClass(source: AgentSource) {
   }
 }
 
+function AgentSelect<T extends string>({
+  label,
+  items,
+  value,
+  onChange,
+}: {
+  label: string
+  items: Array<{ value: T; label: string; icon?: ReactNode }>
+  value: T
+  onChange: (value: T) => void
+}) {
+  const selected = items.find((item) => item.value === value) ?? items[0]
+  return (
+    <Dropdown<T>
+      items={items}
+      value={value}
+      onChange={onChange}
+      width="100%"
+      maxHeight={280}
+      placement="top"
+      className="block w-full"
+      trigger={(
+        <button
+          type="button"
+          aria-label={label}
+          className="flex h-10 w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-left text-sm text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)] focus-visible:border-[var(--color-border-focus)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+        >
+          {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
+          <span className="min-w-0 flex-1 truncate">{selected?.label ?? value}</span>
+          <ChevronDown size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </button>
+      )}
+    />
+  )
+}
+
 function Field({ label, error, required, children }: { label: string; error?: string; required?: boolean; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
@@ -794,5 +1082,4 @@ function DetailStat({ label, value, icon }: { label: string; value: string; icon
   )
 }
 
-const selectClassName = 'h-10 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50'
 const textAreaClassName = 'min-h-32 resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'

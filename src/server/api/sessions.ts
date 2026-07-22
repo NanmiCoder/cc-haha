@@ -195,7 +195,7 @@ export async function handleSessionsApi(
           { status: 405 }
         )
       }
-      return await getSessionInspection(sessionId, url)
+      return await getSessionInspection(req, sessionId, url)
     }
 
     if (subResource === 'workspace') {
@@ -632,7 +632,7 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
   return Response.json({ commands: slashCommands })
 }
 
-async function getSessionInspection(sessionId: string, url: URL): Promise<Response> {
+async function getSessionInspection(req: Request, sessionId: string, url: URL): Promise<Response> {
   const includeContext = url.searchParams.get('includeContext') !== '0'
   const contextOnly = includeContext && url.searchParams.get('contextOnly') === '1'
   let transcriptSnapshot: Awaited<ReturnType<typeof sessionService.getInspectionTranscriptSnapshot>> | undefined
@@ -714,8 +714,10 @@ async function getSessionInspection(sessionId: string, url: URL): Promise<Respon
         sessionId,
         { subtype: 'get_context_usage', estimateOnly: true },
         20_000,
+        req.signal,
       )
     } catch (error) {
+      throwIfRequestAborted(req)
       errors.context = error instanceof Error ? error.message : String(error)
     }
     if (!response.context) {
@@ -727,16 +729,18 @@ async function getSessionInspection(sessionId: string, url: URL): Promise<Respon
   } else {
     const basicControlTimeoutMs = includeContext ? 10_000 : 4_000
     const [usageResult, contextResult, mcpResult] = await Promise.allSettled([
-      conversationService.requestControl(sessionId, { subtype: 'get_session_usage' }, basicControlTimeoutMs),
+      conversationService.requestControl(sessionId, { subtype: 'get_session_usage' }, basicControlTimeoutMs, req.signal),
       includeContext
         ? conversationService.requestControl(
             sessionId,
             { subtype: 'get_context_usage', estimateOnly: true },
             20_000,
+            req.signal,
           )
         : Promise.resolve(null),
-      conversationService.requestControl(sessionId, { subtype: 'mcp_status' }, basicControlTimeoutMs),
+      conversationService.requestControl(sessionId, { subtype: 'mcp_status' }, basicControlTimeoutMs, req.signal),
     ])
+    throwIfRequestAborted(req)
 
     if (usageResult.status === 'fulfilled') {
       const transcriptUsage = (await getTranscriptSnapshot())?.usage ?? null
@@ -776,6 +780,12 @@ async function getSessionInspection(sessionId: string, url: URL): Promise<Respon
 
   response.errors = errors
   return Response.json(response)
+}
+
+function throwIfRequestAborted(req: Request): void {
+  if (!req.signal.aborted) return
+  if (req.signal.reason instanceof Error) throw req.signal.reason
+  throw new DOMException('The operation was aborted', 'AbortError')
 }
 
 function usageTokenTotal(usage: unknown): number {

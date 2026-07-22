@@ -17,6 +17,7 @@ import { CronScheduler } from '../cronScheduler.js'
 let tmpDir: string | undefined
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 const originalLocalIndexMode = process.env.CC_HAHA_LOCAL_INDEX
+const exactFileTime = new Date(1_700_000_000_000)
 
 afterEach(async () => {
   await resetScheduledRunReadModelForTests()
@@ -365,12 +366,13 @@ describe('scheduled run read model', () => {
       prompt: 'prompt',
     }] })
     await fs.writeFile(sourcePath, serialize('run-a'))
+    await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     const original = await fs.stat(sourcePath)
 
     expect((await readScheduledRunPage(sourcePath, { summaryOnly: true }))?.runs[0]?.id).toBe('run-a')
 
     await fs.writeFile(sourcePath, serialize('run-b'))
-    await fs.utimes(sourcePath, original.atimeMs / 1000, original.mtimeMs / 1000)
+    await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     const restored = await fs.stat(sourcePath)
     expect(restored.size).toBe(original.size)
     expect(restored.mtimeMs).toBe(original.mtimeMs)
@@ -397,11 +399,12 @@ describe('scheduled run read model', () => {
       output: `${'a'.repeat(half)}${middle}${'a'.repeat(half)}`,
     }] })
     await fs.writeFile(sourcePath, serialize('a'))
+    await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     const original = await fs.stat(sourcePath)
     await readScheduledRunPage(sourcePath, { summaryOnly: true })
 
     await fs.writeFile(sourcePath, serialize('b'))
-    await fs.utimes(sourcePath, original.atimeMs / 1000, original.mtimeMs / 1000)
+    await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     const restored = await fs.stat(sourcePath)
     expect(restored.size).toBe(original.size)
     expect(restored.mtimeMs).toBe(original.mtimeMs)
@@ -426,13 +429,14 @@ describe('scheduled run read model', () => {
       output: `${'a'.repeat(half)}${middle}${'a'.repeat(half)}`,
     }] })
     await fs.writeFile(sourcePath, serialize('a'))
+    await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     const original = await fs.stat(sourcePath)
     await readScheduledRunPage(sourcePath, { summaryOnly: true })
 
     setScheduledRunFingerprintAfterInitialStatHookForTests(async () => {
       setScheduledRunFingerprintAfterInitialStatHookForTests(null)
       await fs.writeFile(sourcePath, serialize('b'))
-      await fs.utimes(sourcePath, original.atimeMs / 1000, original.mtimeMs / 1000)
+      await fs.utimes(sourcePath, exactFileTime, exactFileTime)
     })
 
     await readScheduledRunPage(sourcePath, { summaryOnly: true })

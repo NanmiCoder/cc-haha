@@ -27,10 +27,14 @@ async function getStatus(sessionId: string): Promise<string> {
   return body.activityState
 }
 
-function makeClientSocket(sessionId: string): ServerWebSocket<WebSocketData> {
+function makeClientSocket(
+  sessionId: string,
+  clientKind: WebSocketData['clientKind'] = 'full',
+): ServerWebSocket<WebSocketData> {
   return {
     data: {
       sessionId,
+      clientKind,
       connectedAt: Date.now(),
       channel: 'client',
       sdkToken: null,
@@ -108,18 +112,68 @@ describe('read-only session chat activity status', () => {
     expect(await getStatus(sessionId)).toBe('failed')
   })
 
-  it('marks a successful CLI result for review and clears it when a new turn starts', async () => {
+  it('returns idle after a successful CLI result even while the session tab remains open', async () => {
     const sessionId = `status-review-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(ws)
     __markActiveTurnForTests(sessionId)
     __settleActiveTurnForTests(sessionId, {
       type: 'result',
       subtype: 'success',
       usage: {},
     })
-    expect(await getStatus(sessionId)).toBe('review')
+    expect(await getStatus(sessionId)).toBe('idle')
 
     __registerPendingUserTurnForTests(sessionId)
     expect(await getStatus(sessionId)).toBe('running')
+  })
+
+  it('keeps a successful completed turn idle when the last full client closes', async () => {
+    const sessionId = `status-review-close-${crypto.randomUUID()}`
+    const pet = makeClientSocket(sessionId, 'pet')
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(pet)
+    handleWebSocket.open(ws)
+    __markActiveTurnForTests(sessionId)
+    __settleActiveTurnForTests(sessionId, {
+      type: 'result',
+      subtype: 'success',
+      usage: {},
+    })
+    expect(await getStatus(sessionId)).toBe('idle')
+
+    handleWebSocket.close(ws, 1000, 'tab closed')
+    expect(await getStatus(sessionId)).toBe('idle')
+  })
+
+  it('keeps a failed result visible when the last full client closes', async () => {
+    const sessionId = `status-failed-close-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(ws)
+    __markActiveTurnForTests(sessionId)
+    __settleActiveTurnForTests(sessionId, {
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: 'Provider request failed',
+      usage: {},
+    })
+    expect(await getStatus(sessionId)).toBe('failed')
+
+    handleWebSocket.close(ws, 1000, 'tab closed')
+    expect(await getStatus(sessionId)).toBe('failed')
+  })
+
+  it('does not create review state when a disconnected turn finishes', async () => {
+    const sessionId = `status-review-disconnected-${crypto.randomUUID()}`
+    __markActiveTurnForTests(sessionId)
+    __settleActiveTurnForTests(sessionId, {
+      type: 'result',
+      subtype: 'success',
+      usage: {},
+    })
+
+    expect(await getStatus(sessionId)).toBe('idle')
   })
 
   it('keeps an interrupted result idle instead of classifying it as failed', async () => {
@@ -148,13 +202,15 @@ describe('read-only session chat activity status', () => {
 
   it('clears terminal activity through the shared test reset hook', () => {
     const sessionId = `status-reset-${crypto.randomUUID()}`
+    handleWebSocket.open(makeClientSocket(sessionId))
     __markActiveTurnForTests(sessionId)
     __settleActiveTurnForTests(sessionId, {
       type: 'result',
-      subtype: 'success',
+      subtype: 'error_during_execution',
+      is_error: true,
       usage: {},
     })
-    expect(getSessionChatActivityState(sessionId)).toBe('review')
+    expect(getSessionChatActivityState(sessionId)).toBe('failed')
 
     __resetWebSocketHandlerStateForTests()
     expect(getSessionChatActivityState(sessionId)).toBe('idle')

@@ -9,7 +9,26 @@ import {
   parseProcessSnapshots,
 } from './electron-output-guard'
 
-const outputDir = '/workspace/desktop/build-artifacts/electron'
+const outputDir = path.resolve('build-artifacts', 'electron')
+const bundledMainCommand = path.join(
+  outputDir,
+  'mac-arm64',
+  'Claude Code Haha.app',
+  'Contents',
+  'MacOS',
+  'Claude Code Haha',
+)
+const bundledSidecarCommand = path.join(
+  outputDir,
+  'mac-arm64',
+  'Claude Code Haha.app',
+  'Contents',
+  'Resources',
+  'app.asar.unpacked',
+  'src-tauri',
+  'binaries',
+  'claude-sidecar server',
+)
 const scriptsDir = import.meta.dirname
 
 describe('Electron output guard', () => {
@@ -31,11 +50,11 @@ describe('Electron output guard', () => {
     const processes = findRunningElectronOutputProcesses(outputDir, [
       {
         pid: 20641,
-        command: '/workspace/desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app/Contents/MacOS/Claude Code Haha',
+        command: bundledMainCommand,
       },
       {
         pid: 20656,
-        command: '/workspace/desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app/Contents/Resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar server',
+        command: bundledSidecarCommand,
       },
       {
         pid: 99,
@@ -46,11 +65,11 @@ describe('Electron output guard', () => {
     expect(processes).toEqual([
       {
         pid: 20641,
-        command: '/workspace/desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app/Contents/MacOS/Claude Code Haha',
+        command: bundledMainCommand,
       },
       {
         pid: 20656,
-        command: '/workspace/desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app/Contents/Resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar server',
+        command: bundledSidecarCommand,
       },
     ])
   })
@@ -58,7 +77,7 @@ describe('Electron output guard', () => {
   it('fails before cleanup with an actionable message', () => {
     expect(() => assertElectronOutputIdle(outputDir, [{
       pid: 20641,
-      command: '/workspace/desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app/Contents/MacOS/Claude Code Haha',
+      command: bundledMainCommand,
     }])).toThrow(/Quit the packaged app before rebuilding.*PID 20641/s)
   })
 

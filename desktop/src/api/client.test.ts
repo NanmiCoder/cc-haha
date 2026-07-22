@@ -145,10 +145,9 @@ describe('api diagnostics reporting', () => {
         })
       }
 
-      return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
+      return Promise.resolve({
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response)
     })
 
     const request = expect(api.get('/api/slow')).rejects.toThrow('Request timed out after 120s')
@@ -161,6 +160,36 @@ describe('api diagnostics reporting', () => {
     const body = JSON.parse(String((diagnosticInit as RequestInit).body))
     expect(body.type).toBe('client_api_request_failed')
     expect(body.details.message).toBe('Request timed out after 120s')
+  })
+
+  it('keeps the timeout active until the response body is consumed', async () => {
+    let requestSignal: AbortSignal | undefined
+    let bodyReadStarted = false
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/api/slow-body')) {
+        requestSignal = init?.signal ?? undefined
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => new Promise((_resolve, reject) => {
+            bodyReadStarted = true
+            requestSignal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'))
+            })
+          }),
+        } as Response)
+      }
+
+      return Promise.resolve({
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response)
+    })
+
+    await expect(api.get('/api/slow-body', { timeout: 20 })).rejects.toThrow('Request timed out after 0s')
+
+    expect(bodyReadStarted).toBe(true)
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   it('can report raw client exceptions', async () => {
@@ -183,6 +212,36 @@ describe('api diagnostics reporting', () => {
     const [, init] = call!
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.type).toBe('client_window_error')
+  })
+
+  it('drains diagnostics response bodies before releasing the request', async () => {
+    let resolveBody!: () => void
+    const bodyConsumed = new Promise<void>(resolve => {
+      resolveBody = resolve
+    })
+    const arrayBuffer = vi.fn(async () => {
+      await bodyConsumed
+      return new ArrayBuffer(0)
+    })
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockResolvedValueOnce({ arrayBuffer } as unknown as Response)
+
+    let settled = false
+    const request = rawRecordDiagnosticEvent({
+      type: 'client_window_error',
+      severity: 'error',
+      summary: 'drain me',
+    }).then(() => {
+      settled = true
+    })
+
+    await Promise.resolve()
+    expect(arrayBuffer).toHaveBeenCalledTimes(1)
+    expect(settled).toBe(false)
+
+    resolveBody()
+    await request
+    expect(settled).toBe(true)
   })
 
   it('bounds raw diagnostics requests when the local server is unresponsive', async () => {

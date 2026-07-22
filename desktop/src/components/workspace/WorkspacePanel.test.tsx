@@ -37,6 +37,7 @@ type WorkspaceApiMocks = {
 }
 
 var mocks: WorkspaceApiMocks | undefined
+const workspacePreviewLineLimitForTests = vi.hoisted(() => 20)
 
 function getMocks() {
   if (!mocks) {
@@ -283,6 +284,11 @@ vi.mock('../../api/openTargets', () => ({
 }))
 
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn().mockResolvedValue(undefined) }))
+
+vi.mock('./WorkspaceCodeSurface', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./WorkspaceCodeSurface')>(),
+  WORKSPACE_PREVIEW_LINE_LIMIT: workspacePreviewLineLimitForTests,
+}))
 
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -1689,7 +1695,10 @@ describe('WorkspacePanel', () => {
   })
 
   it('can expand long file previews beyond the default rendered line cap', async () => {
-    const longFile = Array.from({ length: 2300 }, (_, index) => `const line${index + 1} = ${index + 1}`).join('\n')
+    const longFile = Array.from(
+      { length: workspacePreviewLineLimitForTests + 3 },
+      (_, index) => `const line${index + 1} = ${index + 1}`,
+    ).join('\n')
 
     await setWorkspaceState((state) => ({
       ...state,
@@ -1723,15 +1732,15 @@ describe('WorkspacePanel', () => {
     const highlightedCode = view.getByTestId('workspace-code').textContent ?? ''
 
     expect(highlightedCode).toContain('const line1 = 1')
-    expect(highlightedCode).toContain('const line2000 = 2000')
-    expect(highlightedCode).not.toContain('const line2001 = 2001')
+    expect(highlightedCode).toContain('const line20 = 20')
+    expect(highlightedCode).not.toContain('const line21 = 21')
     await clickElement(view.getByRole('button', { name: 'Show all loaded lines' }))
 
     await waitFor(() => {
-      expect(view.getByTestId('workspace-code').textContent).toContain('const line2300 = 2300')
+      expect(view.getByTestId('workspace-code').textContent).toContain('const line23 = 23')
     })
     expect(view.getByRole('button', { name: 'Collapse preview' })).toBeTruthy()
-  }, 20_000)
+  })
 
   it('renders image previews from workspace files', async () => {
     await setWorkspaceState((state) => ({

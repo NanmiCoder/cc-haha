@@ -14,6 +14,7 @@ const preferences = {
     enabled: false,
     selectedPetId: 'dada-code',
     size: 144,
+    showTaskPanel: false,
     collapsed: false,
     motionEnabled: true,
     lastSessionId: null,

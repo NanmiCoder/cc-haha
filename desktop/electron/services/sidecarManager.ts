@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import type { Readable } from 'node:stream'
+import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -277,27 +278,46 @@ export async function waitForServer(host: string, port: number, timeoutMs = SERV
 }
 
 async function assertServerHealth(healthUrl: string, timeoutMs: number): Promise<void> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(healthUrl, {
-      cache: 'no-store',
-      signal: controller.signal,
+  await new Promise<void>((resolve, reject) => {
+    const request = http.get(healthUrl, {
+      agent: false,
+      headers: {
+        Accept: 'application/json',
+        Connection: 'close',
+      },
+    }, response => {
+      const chunks: Buffer[] = []
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+      response.on('error', reject)
+      response.on('end', () => {
+        if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`healthcheck returned ${response.statusCode ?? 'no status'}`))
+          return
+        }
+
+        const contentType = response.headers['content-type'] ?? ''
+        if (!contentType.toLowerCase().includes('application/json')) {
+          reject(new Error(`healthcheck returned non-JSON response from ${healthUrl}`))
+          return
+        }
+
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+          if (!body || typeof body !== 'object' || !('status' in body) || body.status !== 'ok') {
+            reject(new Error(`healthcheck returned invalid response from ${healthUrl}`))
+            return
+          }
+          resolve()
+        } catch {
+          reject(new Error(`healthcheck returned invalid response from ${healthUrl}`))
+        }
+      })
     })
-    if (!response.ok) throw new Error(`healthcheck returned ${response.status}`)
-
-    const contentType = response.headers.get('content-type') ?? ''
-    if (!contentType.toLowerCase().includes('application/json')) {
-      throw new Error(`healthcheck returned non-JSON response from ${healthUrl}`)
-    }
-
-    const body = await response.json().catch(() => null)
-    if (!body || typeof body !== 'object' || !('status' in body) || body.status !== 'ok') {
-      throw new Error(`healthcheck returned invalid response from ${healthUrl}`)
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`healthcheck timed out after ${timeoutMs}ms`))
+    })
+    request.on('error', reject)
+  })
 }
 
 function sleep(ms: number): Promise<void> {

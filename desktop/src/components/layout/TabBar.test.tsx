@@ -99,6 +99,7 @@ vi.mock('../../i18n', () => ({
       'tabs.hideWorkspace': 'Hide Workspace',
       'tabs.showBrowser': 'Show Browser',
       'tabs.hideBrowser': 'Hide Browser',
+      'settings.title': 'Localized Settings',
       'openProject.openProject': 'Open project',
       'openProject.openIn': 'Open in {target}',
       'openProject.openFailed': 'Could not open project',
@@ -535,6 +536,23 @@ describe('TabBar', () => {
     })
 
     expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+  })
+
+  it('renders the settings tab title from the current locale instead of its persisted title', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { SETTINGS_TAB_ID, useTabStore } = await import('../../stores/tabStore')
+
+    useTabStore.setState({
+      tabs: [{ sessionId: SETTINGS_TAB_ID, title: '设置', type: 'settings', status: 'idle' }],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByText('Localized Settings')).toBeInTheDocument()
+    expect(screen.queryByText('设置')).not.toBeInTheDocument()
   })
 
   it('shows current-session CLI tasks without a numeric activity badge', async () => {

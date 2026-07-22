@@ -18,6 +18,7 @@ const desktopRoot = existsSync(path.resolve(process.cwd(), 'electron', 'main.ts'
   ? process.cwd()
   : path.resolve(process.cwd(), 'desktop')
 const mainSource = readFileSync(path.join(desktopRoot, 'electron', 'main.ts'), 'utf8')
+  .replace(/\r\n/g, '\n')
 
 function createFakeWindow(initialBounds = {
   x: 100,
@@ -430,14 +431,14 @@ describe('Electron pet window service', () => {
     expect(secondWindow.showInactive).toHaveBeenCalledTimes(1)
   })
 
-  it('uses native shapes off macOS and rejects IPC from another window', async () => {
+  it('keeps the shaped Windows pet topmost and rejects IPC from another window', async () => {
     const petWindow = createFakeWindow()
     const otherWindow = createFakeWindow()
     const controller = new PetWindowController({
       createWindow: vi.fn(() => petWindow) as never,
       getCurrentWorkArea: () => ({ x: 0, y: 0, width: 1440, height: 900 }),
       load: vi.fn().mockResolvedValue(undefined),
-      platform: 'linux',
+      platform: 'win32',
       preloadPath: '/app/electron-dist/preload.cjs',
     })
 
@@ -448,8 +449,10 @@ describe('Electron pet window service', () => {
     controller.setIgnoreMouseEvents(petWindow as never, true)
 
     expect(petWindow.setShape).toHaveBeenLastCalledWith([
-      { x: 100, y: 220, width: 144, height: 170 },
+      { x: 88, y: 208, width: 168, height: 192 },
     ])
+    expect(petWindow.setAlwaysOnTop).toHaveBeenCalledWith(true)
+    expect(petWindow.setAlwaysOnTop).toHaveBeenLastCalledWith(true)
     expect(petWindow.setIgnoreMouseEvents).toHaveBeenCalledTimes(1)
     expect(() => controller.setInteractiveRegions(otherWindow as never, [
       { x: 0, y: 0, width: 10, height: 10 },

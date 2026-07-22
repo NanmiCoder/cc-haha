@@ -138,6 +138,86 @@ describe('ConversationService', () => {
     await expect(request).resolves.toEqual({ ok: true })
   })
 
+  it('should remove a pending control callback when the HTTP request is aborted', async () => {
+    const svc = new ConversationService()
+    const sid = crypto.randomUUID()
+    const sent: unknown[] = []
+    const session: any = {
+      proc: { kill() {}, exited: Promise.resolve(0) },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      outputDrain: Promise.resolve(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    }
+    ;(svc as any).sessions.set(sid, session)
+    const controller = new AbortController()
+
+    const request = svc.requestControl(
+      sid,
+      { subtype: 'get_context_usage' },
+      10_000,
+      controller.signal,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(sent).toHaveLength(1)
+    expect(session.outputCallbacks).toHaveLength(1)
+
+    controller.abort(new Error('HTTP client disconnected'))
+
+    await expect(request).rejects.toThrow('HTTP client disconnected')
+    expect(session.outputCallbacks).toHaveLength(0)
+  })
+
+  it('should remove the abort listener when a control request times out', async () => {
+    const svc = new ConversationService()
+    const sid = crypto.randomUUID()
+    const controller = new AbortController()
+    const removeAbortListener = spyOn(controller.signal, 'removeEventListener')
+    const session: any = {
+      proc: { kill() {}, exited: Promise.resolve(0) },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      sdkToken: 'token',
+      sdkSocket: { send() {} },
+      pendingOutbound: [],
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      outputDrain: Promise.resolve(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    }
+    ;(svc as any).sessions.set(sid, session)
+
+    await expect(svc.requestControl(
+      sid,
+      { subtype: 'get_context_usage' },
+      20,
+      controller.signal,
+    )).rejects.toThrow('Timed out waiting for get_context_usage response')
+
+    expect(session.outputCallbacks).toHaveLength(0)
+    expect(removeAbortListener).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
   it('should ignore a stale SDK disconnect after a replacement socket attaches', () => {
     const svc = new ConversationService()
     const sessionId = crypto.randomUUID()
@@ -413,7 +493,7 @@ describe('ConversationService', () => {
     const svc = new ConversationService()
     const sent: Array<{ request_id: string }> = []
     const sessionId = 'session-permission-rejected'
-    ;(svc as any).sessions.set(sessionId, {
+    const session = {
       proc: null,
       outputCallbacks: [],
       workDir: process.cwd(),
@@ -428,7 +508,8 @@ describe('ConversationService', () => {
       stderrLines: [],
       sdkMessages: [],
       pendingPermissionRequests: new Map(),
-    })
+    }
+    ;(svc as any).sessions.set(sessionId, session)
 
     const change = svc.setPermissionMode(sessionId, 'auto')
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -443,6 +524,8 @@ describe('ConversationService', () => {
 
     await expect(change).rejects.toThrow('auto mode unavailable')
     expect(svc.getSessionPermissionMode(sessionId)).toBe('default')
+    expect(session.outputCallbacks).toHaveLength(0)
+    expect((svc as any).pendingPermissionModeChanges.size).toBe(0)
   })
 
   it('should time out without recording a mode when control succeeds without CLI confirmation', async () => {
@@ -1779,6 +1862,8 @@ describe('WebSocket Chat Integration', () => {
 
   afterAll(async () => {
     server?.stop(true)
+    const { stopServerRuntimeForShutdown } = await import('../index.js')
+    await stopServerRuntimeForShutdown()
     if (tmpDir) {
       await rmWithRetry(tmpDir)
     }

@@ -645,13 +645,21 @@ export class ConversationService {
     this.trackPendingPermissionModeChange(sessionId, mode, 1)
 
     let confirmationSettled = false
-    let confirmationTimeout: ReturnType<typeof setTimeout>
-    let handleOutput: (msg: any) => void
+    let confirmationTimeout: ReturnType<typeof setTimeout> | undefined
+    let handleOutput: ((msg: any) => void) | undefined
+    let rejectConfirmation: ((reason?: unknown) => void) | undefined
     const cleanupConfirmation = () => {
-      clearTimeout(confirmationTimeout)
-      this.removeOutputCallback(sessionId, handleOutput)
+      if (confirmationTimeout !== undefined) clearTimeout(confirmationTimeout)
+      if (handleOutput) this.removeOutputCallback(sessionId, handleOutput)
+    }
+    const cancelConfirmation = (reason: unknown) => {
+      if (confirmationSettled) return
+      confirmationSettled = true
+      cleanupConfirmation()
+      rejectConfirmation?.(reason)
     }
     const confirmation = new Promise<void>((resolve, reject) => {
+      rejectConfirmation = reject
       handleOutput = (msg: any) => {
         if (
           msg?.type !== 'system' ||
@@ -665,12 +673,6 @@ export class ConversationService {
         cleanupConfirmation()
         resolve()
       }
-
-      confirmationTimeout = setTimeout(() => {
-        confirmationSettled = true
-        cleanupConfirmation()
-        reject(new Error(`Timed out waiting for permission mode confirmation: ${mode}`))
-      }, timeoutMs)
       this.onOutput(sessionId, handleOutput)
     })
     // requestControl can reject before the confirmation promise is awaited.
@@ -678,15 +680,22 @@ export class ConversationService {
     void confirmation.catch(() => undefined)
 
     try {
+      const startedAt = Date.now()
       await this.requestControl(sessionId, {
         subtype: 'set_permission_mode',
         mode,
       }, timeoutMs)
+      if (!confirmationSettled) {
+        const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt))
+        confirmationTimeout = setTimeout(() => {
+          cancelConfirmation(new Error(`Timed out waiting for permission mode confirmation: ${mode}`))
+        }, remainingMs)
+      }
       await confirmation
 
       return this.sessions.has(sessionId)
     } catch (err) {
-      if (!confirmationSettled) cleanupConfirmation()
+      cancelConfirmation(err)
       throw err
     } finally {
       this.trackPendingPermissionModeChange(sessionId, mode, -1)
@@ -736,10 +745,12 @@ export class ConversationService {
   private async waitForControlChannelReady(
     sessionId: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<void> {
     const startedAt = Date.now()
 
     while (Date.now() - startedAt < timeoutMs) {
+      if (signal?.aborted) throw controlRequestAbortReason(signal)
       const session = this.sessions.get(sessionId)
       if (!session) {
         throw new Error('CLI session is not running')
@@ -747,7 +758,7 @@ export class ConversationService {
       if (this.isControlChannelReady(session)) {
         return
       }
-      await new Promise((resolve) => setTimeout(resolve, CONTROL_READY_POLL_MS))
+      await waitForControlPoll(CONTROL_READY_POLL_MS, signal)
     }
 
     throw new Error('Timed out waiting for CLI control channel to become ready')
@@ -757,25 +768,34 @@ export class ConversationService {
     sessionId: string,
     request: Record<string, unknown>,
     timeoutMs = 10_000,
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    if (signal?.aborted) {
+      return Promise.reject(controlRequestAbortReason(signal))
+    }
     if (!this.sessions.has(sessionId)) {
       return Promise.reject(new Error('CLI session is not running'))
     }
 
     const startedAt = Date.now()
-    await this.waitForControlChannelReady(sessionId, timeoutMs)
+    await this.waitForControlChannelReady(sessionId, timeoutMs, signal)
     const responseTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt))
     const requestId = crypto.randomUUID()
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.removeOutputCallback(sessionId, handleOutput)
-        reject(new Error(`Timed out waiting for ${String(request.subtype ?? 'control')} response`))
-      }, responseTimeoutMs)
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout>
 
       const finish = (fn: () => void) => {
+        if (settled) return
+        settled = true
         clearTimeout(timeout)
+        signal?.removeEventListener('abort', handleAbort)
         this.removeOutputCallback(sessionId, handleOutput)
         fn()
+      }
+
+      const handleAbort = () => {
+        finish(() => reject(controlRequestAbortReason(signal!)))
       }
 
       const handleOutput = (msg: any) => {
@@ -798,7 +818,17 @@ export class ConversationService {
         ))
       }
 
+      timeout = setTimeout(() => {
+        finish(() => reject(new Error(
+          `Timed out waiting for ${String(request.subtype ?? 'control')} response`,
+        )))
+      }, responseTimeoutMs)
       this.onOutput(sessionId, handleOutput)
+      signal?.addEventListener('abort', handleAbort, { once: true })
+      if (signal?.aborted) {
+        handleAbort()
+        return
+      }
       const sent = this.sendSdkMessage(sessionId, {
         type: 'control_request',
         request_id: requestId,
@@ -2171,6 +2201,29 @@ export class ConversationService {
     const url = new URL(sdkUrl)
     return url.searchParams.get('token') || ''
   }
+}
+
+function controlRequestAbortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason
+  return new DOMException('The operation was aborted', 'AbortError')
+}
+
+function waitForControlPoll(timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, timeoutMs))
+  if (signal.aborted) return Promise.reject(controlRequestAbortReason(signal))
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort)
+      resolve()
+    }, timeoutMs)
+    const handleAbort = () => {
+      clearTimeout(timeout)
+      reject(controlRequestAbortReason(signal))
+    }
+    signal.addEventListener('abort', handleAbort, { once: true })
+    if (signal.aborted) handleAbort()
+  })
 }
 
 function normalizeSessionPermissionUpdates(

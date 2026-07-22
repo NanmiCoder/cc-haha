@@ -228,7 +228,8 @@ describe('Settings > Agents tab', () => {
     render(<Settings />)
     switchToAgentsTab()
 
-    expect(screen.getByText('Network error')).toBeInTheDocument()
+    expect(screen.getByText('Failed to load agents')).toBeInTheDocument()
+    expect(screen.queryByText('Network error')).not.toBeInTheDocument()
     expect(screen.getByText('Retry')).toBeInTheDocument()
   })
 

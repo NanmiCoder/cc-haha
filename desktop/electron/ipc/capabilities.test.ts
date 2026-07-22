@@ -44,7 +44,15 @@ describe('Electron IPC capabilities', () => {
       slug: 'moon-cat',
       displayName: 'Moon Cat',
       description: 'A quiet companion.',
+      dialogTitle: '选择透明背景的宠物图片',
+      dialogFilterName: '宠物图片',
     })).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsCreateFromImage, {
+      slug: 'moon-cat',
+      displayName: 'Moon Cat',
+      description: 'A quiet companion.',
+      dialogTitle: 'Bad\nTitle',
+    })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsCreateFromAtlas, {
       slug: 'moon-cat',
       displayName: 'Moon Cat',

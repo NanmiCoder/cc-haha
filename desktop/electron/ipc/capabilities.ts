@@ -18,8 +18,20 @@ const sessionIdPayload: Validator = value =>
   && value.length <= 200
   && /^[A-Za-z0-9._:-]+$/.test(value)
 
+const isSafeUiLabel = (value: unknown) =>
+  typeof value === 'string'
+  && value.trim().length > 0
+  && value.length <= 120
+  && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
+
 const petCreateFromAtlas: Validator = value => {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['slug', 'displayName', 'description'])) return false
+  if (!isRecord(value) || !hasOnlyKeys(value, [
+    'slug',
+    'displayName',
+    'description',
+    'dialogTitle',
+    'dialogFilterName',
+  ])) return false
   if (
     typeof value.slug !== 'string'
     || value.slug.length === 0
@@ -32,6 +44,8 @@ const petCreateFromAtlas: Validator = value => {
     && typeof value.description === 'string'
     && value.description.trim().length > 0
     && value.description.length <= 500
+    && (value.dialogTitle === undefined || isSafeUiLabel(value.dialogTitle))
+    && (value.dialogFilterName === undefined || isSafeUiLabel(value.dialogFilterName))
 }
 
 const petContextMenu: Validator = value => {

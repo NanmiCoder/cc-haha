@@ -68,7 +68,7 @@ describe('MCP host preflight', () => {
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('finds npx from user shell PATH when the desktop process PATH is minimal', async () => {
+  it.skipIf(process.platform === 'win32')('finds npx from user shell PATH when the desktop process PATH is minimal', async () => {
     const shellPath = path.join(tmpDir, 'zsh')
     const nodeBin = path.join(tmpDir, 'node-bin')
     const npxPath = path.join(nodeBin, 'npx')

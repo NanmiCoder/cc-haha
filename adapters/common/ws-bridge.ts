@@ -242,9 +242,31 @@ export class WsBridge {
     ws.removeAllListeners()
     if (ws.readyState === WebSocket.CLOSED) return
 
-    // `ws.close()` aborts an in-flight handshake by emitting an asynchronous
-    // error before close. Keep a temporary sink after detaching the session
-    // listeners so teardown cannot surface an unhandled EventEmitter error.
+    if (ws.readyState === WebSocket.CONNECTING) {
+      // Bun's `ws` compatibility layer can remain stuck in CLOSING when a
+      // handshake is aborted. Let the handshake settle, consuming its natural
+      // error, and close normally if the connection opens first.
+      const cleanup = () => {
+        ws.removeListener('open', onOpen)
+        ws.removeListener('error', onError)
+        ws.removeListener('close', onClose)
+      }
+      const onOpen = () => {
+        ws.removeListener('open', onOpen)
+        ws.close(code, reason)
+      }
+      const onError = () => cleanup()
+      const onClose = () => cleanup()
+
+      ws.once('open', onOpen)
+      ws.once('error', onError)
+      ws.once('close', onClose)
+      return
+    }
+
+    // Keep a temporary error sink after detaching the session listeners so a
+    // close-time transport error cannot surface as an unhandled EventEmitter
+    // error.
     const swallowTeardownError = () => {}
     ws.on('error', swallowTeardownError)
     ws.once('close', () => {

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -139,6 +140,21 @@ describe('TerminalSettings', () => {
     expect(screen.getByText('/Users/test')).toBeInTheDocument()
     expect(terminalMocks.terminalInstance.open).toHaveBeenCalled()
     expect(terminalMocks.fitInstance.fit).toHaveBeenCalled()
+  })
+
+  it('keeps the terminal runtime current across the StrictMode effect replay', async () => {
+    terminalMocks.available = true
+
+    render(
+      <StrictMode>
+        <TerminalSettings runtimeId="strict-mode-terminal" />
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('Running')).toBeInTheDocument()
+
+    destroyTerminalRuntime('strict-mode-terminal')
   })
 
   it('does not start duplicate xterm surfaces for one runtime', async () => {

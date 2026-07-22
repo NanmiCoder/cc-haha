@@ -24,6 +24,7 @@ import {
 import { verifySourceFingerprint } from './sourceFingerprint.js'
 
 const tempDirs: string[] = []
+const exactFileTime = new Date(1_700_000_000_000)
 
 async function createTempDir(label: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), `cc-haha-${label}-`))
@@ -62,10 +63,12 @@ async function createCandidate(options: {
   projectPath: string
   sessionId: string
   content: string
+  fileTime?: Date
 }): Promise<SessionSourceCandidate> {
   const path = join(options.root, 'projects', options.projectPath, `${options.sessionId}.jsonl`)
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, options.content)
+  if (options.fileTime) await utimes(path, options.fileTime, options.fileTime)
   const snapshot = await stat(path)
   return {
     path,
@@ -669,6 +672,7 @@ describe('session projector', () => {
       projectPath: '-repo-a',
       sessionId: 'commit-ctime-race',
       content: beforeContent,
+      fileTime: exactFileTime,
     })
     const originalSnapshot = await stat(candidate.path)
     const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
@@ -684,8 +688,8 @@ describe('session projector', () => {
         writeFileSync(candidate.path, afterContent)
         utimesSync(
           candidate.path,
-          originalSnapshot.atimeMs / 1_000,
-          originalSnapshot.mtimeMs / 1_000,
+          exactFileTime,
+          exactFileTime,
         )
       },
     })
@@ -719,6 +723,7 @@ describe('session projector', () => {
       projectPath: '-repo-a',
       sessionId: 'activity-commit-ctime-race',
       content: beforeContent,
+      fileTime: exactFileTime,
     })
     const originalSnapshot = await stat(candidate.path)
     const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
@@ -734,8 +739,8 @@ describe('session projector', () => {
           writeFileSync(path, afterContent)
           utimesSync(
             path,
-            originalSnapshot.atimeMs / 1_000,
-            originalSnapshot.mtimeMs / 1_000,
+            exactFileTime,
+            exactFileTime,
           )
         }
         return statSync(path)

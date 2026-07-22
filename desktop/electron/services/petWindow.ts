@@ -25,6 +25,7 @@ export const PET_WINDOW_STATE_FILE = 'pet-window.json'
 
 const MAX_ABSOLUTE_SCREEN_COORDINATE = 1_000_000
 const PET_WINDOW_DRAG_INTERVAL_MS = 16
+const PET_WINDOW_SHAPE_PADDING = 12
 const failedPetWindowStateWritePaths = new Set<string>()
 
 type PetWindow = BrowserWindow
@@ -278,6 +279,11 @@ export class PetWindowController {
         window.setIgnoreMouseEvents(true, { forward: true })
       }
       window.showInactive()
+      if ((this.options.platform ?? process.platform) === 'darwin') {
+        window.setAlwaysOnTop(true, 'floating')
+      } else {
+        window.setAlwaysOnTop(true)
+      }
     }
   }
 
@@ -311,11 +317,15 @@ export class PetWindowController {
     if ((this.options.platform ?? process.platform) === 'darwin') return
 
     const shape = regions.flatMap((region) => {
-      const x = Math.max(0, Math.min(PET_WINDOW_WIDTH - 1, Math.round(region.x)))
-      const y = Math.max(0, Math.min(PET_WINDOW_HEIGHT - 1, Math.round(region.y)))
-      const width = Math.min(PET_WINDOW_WIDTH - x, Math.max(1, Math.round(region.width)))
-      const height = Math.min(PET_WINDOW_HEIGHT - y, Math.max(1, Math.round(region.height)))
-      return width > 0 && height > 0 ? [{ x, y, width, height }] : []
+      const requestedLeft = Math.round(region.x) - PET_WINDOW_SHAPE_PADDING
+      const requestedTop = Math.round(region.y) - PET_WINDOW_SHAPE_PADDING
+      const requestedRight = Math.round(region.x + region.width) + PET_WINDOW_SHAPE_PADDING
+      const requestedBottom = Math.round(region.y + region.height) + PET_WINDOW_SHAPE_PADDING
+      const x = Math.max(0, Math.min(PET_WINDOW_WIDTH - 1, requestedLeft))
+      const y = Math.max(0, Math.min(PET_WINDOW_HEIGHT - 1, requestedTop))
+      const right = Math.max(x + 1, Math.min(PET_WINDOW_WIDTH, requestedRight))
+      const bottom = Math.max(y + 1, Math.min(PET_WINDOW_HEIGHT, requestedBottom))
+      return [{ x, y, width: right - x, height: bottom - y }]
     })
     if (shape.length > 0) window.setShape(shape)
   }

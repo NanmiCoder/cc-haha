@@ -55,6 +55,7 @@ import {
   createCustomPetFromAtlas,
   createCustomPetFromImage,
   ensureCustomPetsRoot,
+  getPetPackageErrorCode,
   loadCustomPets,
 } from './services/pets'
 import {
@@ -370,30 +371,60 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.traceOpenWindow, (_event, payload) => openTraceWindow(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.petsList, () => listCustomPets())
   registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromImage, async (event, payload) => {
+    const input = payload as {
+      slug: string
+      displayName: string
+      description: string
+      dialogTitle?: string
+      dialogFilterName?: string
+    }
     const imagePath = await openDialog(currentWindow(event), {
-      title: 'Choose a transparent pet image',
-      filters: [{ name: 'Pet image', extensions: ['png', 'webp'] }],
+      title: input.dialogTitle || 'Choose a transparent pet image',
+      filters: [{ name: input.dialogFilterName || 'Pet image', extensions: ['png', 'webp'] }],
     })
     if (typeof imagePath !== 'string') return null
-    const input = payload as { slug: string, displayName: string, description: string }
-    const pet = await loadCustomPetCatalog.invalidateAfter(() =>
-      createCustomPetFromImage({ ...input, imagePath }, {
-        inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-      }))
-    return { id: pet.id }
+    try {
+      const pet = await loadCustomPetCatalog.invalidateAfter(() =>
+        createCustomPetFromImage({
+          slug: input.slug,
+          displayName: input.displayName,
+          description: input.description,
+          imagePath,
+        }, {
+          inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
+        }))
+      return { id: pet.id }
+    } catch (error) {
+      return { errorCode: getPetPackageErrorCode(error) }
+    }
   })
   registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromAtlas, async (event, payload) => {
+    const input = payload as {
+      slug: string
+      displayName: string
+      description: string
+      dialogTitle?: string
+      dialogFilterName?: string
+    }
     const atlasPath = await openDialog(currentWindow(event), {
-      title: 'Choose a v2 pet animation atlas',
-      filters: [{ name: 'Pet animation atlas', extensions: ['png', 'webp'] }],
+      title: input.dialogTitle || 'Choose a v2 pet animation atlas',
+      filters: [{ name: input.dialogFilterName || 'Pet animation atlas', extensions: ['png', 'webp'] }],
     })
     if (typeof atlasPath !== 'string') return null
-    const input = payload as { slug: string, displayName: string, description: string }
-    const pet = await loadCustomPetCatalog.invalidateAfter(() =>
-      createCustomPetFromAtlas({ ...input, atlasPath }, {
-        inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-      }))
-    return { id: pet.id }
+    try {
+      const pet = await loadCustomPetCatalog.invalidateAfter(() =>
+        createCustomPetFromAtlas({
+          slug: input.slug,
+          displayName: input.displayName,
+          description: input.description,
+          atlasPath,
+        }, {
+          inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
+        }))
+      return { id: pet.id }
+    } catch (error) {
+      return { errorCode: getPetPackageErrorCode(error) }
+    }
   })
   registerHandler(ELECTRON_IPC_CHANNELS.petsOpenFolder, async () => {
     const root = await ensureCustomPetsRoot()

@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { App, Tray } from 'electron'
 
+type ElectronTrayRuntime = Pick<typeof import('electron'), 'Menu' | 'Tray' | 'nativeImage'>
+
 export type TrayController = {
   tray: Tray
   dispose(): void
@@ -29,13 +31,15 @@ export async function installTray({
   desktopRoot,
   show,
   quit,
+  electronRuntime,
 }: {
   app: App
   desktopRoot: string
   show: () => void
   quit: () => void
+  electronRuntime?: ElectronTrayRuntime
 }): Promise<TrayController> {
-  const { Menu, Tray, nativeImage } = await import('electron')
+  const { Menu, Tray, nativeImage } = electronRuntime ?? await import('electron')
   const icon = nativeImage.createFromPath(resolveTrayIconPath(desktopRoot))
   const tray = new Tray(icon)
   tray.setToolTip(app.name || 'Claude Code Haha')

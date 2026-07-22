@@ -109,17 +109,21 @@ describe('Electron sidecar manager', () => {
   })
 
   it('can keep sidecar binaries and H5 assets unpacked while pointing app-root at app.asar', () => {
+    const resourcesRoot = path.resolve(path.sep, 'Applications', 'App.app', 'Contents', 'Resources')
+    const desktopRoot = path.join(resourcesRoot, 'app.asar.unpacked')
+    const appRoot = path.join(resourcesRoot, 'app.asar')
+    const h5DistDir = path.join(desktopRoot, 'dist')
     const plan = createServerPlan({
-      desktopRoot: '/Applications/App.app/Contents/Resources/app.asar.unpacked',
-      appRoot: '/Applications/App.app/Contents/Resources/app.asar',
-      h5DistDir: '/Applications/App.app/Contents/Resources/app.asar.unpacked/dist',
+      desktopRoot,
+      appRoot,
+      h5DistDir,
       port: 49321,
       env: {},
     })
 
-    expect(plan.command).toContain('/Applications/App.app/Contents/Resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-')
-    expect(plan.args).toContain('/Applications/App.app/Contents/Resources/app.asar')
-    expect(plan.env.CLAUDE_H5_DIST_DIR).toBe('/Applications/App.app/Contents/Resources/app.asar.unpacked/dist')
+    expect(plan.command).toContain(path.join(desktopRoot, 'src-tauri', 'binaries', 'claude-sidecar-'))
+    expect(plan.args).toContain(appRoot)
+    expect(plan.env.CLAUDE_H5_DIST_DIR).toBe(h5DistDir)
   })
 
   it('passes the packaged ripgrep path to the server and its CLI children', () => {
@@ -137,7 +141,9 @@ describe('Electron sidecar manager', () => {
       })
 
       expect(plan.env[RIPGREP_PATH_ENV]).toBe(bundledRipgrep)
-      expect(plan.env.PATH?.split(path.delimiter)).toContain(
+      const pathValue = Object.entries(plan.env)
+        .find(([key]) => key.toLowerCase() === 'path')?.[1]
+      expect(pathValue?.split(path.delimiter)).toContain(
         path.dirname(bundledRipgrep),
       )
 
@@ -551,6 +557,27 @@ describe('Electron sidecar manager', () => {
       await expect(waitForServer('127.0.0.1', port, 300)).rejects.toThrow(
         /desktop server did not report healthy at http:\/\/127\.0\.0\.1:\d+\/health/,
       )
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('isolates health probes from the shared HTTP connection pool', async () => {
+    const connections = new Set<number>()
+    const connectionHeaders: string[] = []
+    const server = http.createServer((request, response) => {
+      connections.add(request.socket.remotePort!)
+      connectionHeaders.push(request.headers.connection ?? '')
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'ok' }))
+    })
+    const port = await listen(server)
+
+    try {
+      await waitForServer('127.0.0.1', port, 1_000)
+      await waitForServer('127.0.0.1', port, 1_000)
+      expect(connections.size).toBe(2)
+      expect(connectionHeaders).toEqual(['close', 'close'])
     } finally {
       await close(server)
     }

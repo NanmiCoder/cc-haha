@@ -58,6 +58,7 @@ const defaultPetPreferences: DesktopPetPreferences = {
   enabled: false,
   selectedPetId: 'dada-code',
   size: 144,
+  showTaskPanel: false,
   collapsed: false,
   motionEnabled: true,
   lastSessionId: null,
@@ -67,7 +68,7 @@ function preferencesResponse(pet: DesktopPetPreferences) {
   return {
     exists: true,
     preferences: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       sidebar: {
         projectOrder: [],
         pinnedProjects: [],
@@ -156,6 +157,20 @@ describe('PetSettings', () => {
     expect(hidePetMock).not.toHaveBeenCalled()
   })
 
+  it('keeps the task panel disabled by default and persists enabling it', async () => {
+    render(<PetSettings />)
+
+    const panelToggle = await screen.findByRole('checkbox', { name: 'Show active task panel' })
+    expect(panelToggle).not.toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: 'Start collapsed' })).not.toBeInTheDocument()
+
+    fireEvent.click(panelToggle)
+
+    await waitFor(() => {
+      expect(updatePetPreferencesMock).toHaveBeenCalledWith({ showTaskPanel: true })
+    })
+  })
+
   it('rolls back optimistic preferences when persistence fails', async () => {
     updatePetPreferencesMock.mockRejectedValueOnce(new Error('disk full'))
     render(<PetSettings />)
@@ -232,12 +247,12 @@ describe('PetSettings', () => {
 
     fireEvent.change(screen.getByRole('slider', { name: 'Pet size' }), { target: { value: '176' } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Play animations' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Start collapsed' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show active task panel' }))
 
     await waitFor(() => {
       expect(updatePetPreferencesMock).toHaveBeenCalledWith({ size: 176 })
       expect(updatePetPreferencesMock).toHaveBeenCalledWith({ motionEnabled: false })
-      expect(updatePetPreferencesMock).toHaveBeenCalledWith({ collapsed: true })
+      expect(updatePetPreferencesMock).toHaveBeenCalledWith({ showTaskPanel: true })
     })
   })
 
@@ -319,6 +334,8 @@ describe('PetSettings', () => {
       slug: 'orbit-fox',
       displayName: 'Orbit Fox',
       description: 'A bright local companion.',
+      dialogTitle: 'Choose a transparent pet image',
+      dialogFilterName: 'Pet image',
     }))
     expect(createFromAtlasMock).not.toHaveBeenCalled()
     expect(updatePetPreferencesMock).toHaveBeenCalledWith({ selectedPetId: 'custom:orbit-fox' })
@@ -365,13 +382,15 @@ describe('PetSettings', () => {
       slug: 'orbit-fox',
       displayName: 'Orbit Fox',
       description: 'A bright local companion.',
+      dialogTitle: 'Choose a v2 pet animation atlas',
+      dialogFilterName: 'Pet animation atlas',
     }))
     expect(updatePetPreferencesMock).toHaveBeenCalledWith({ selectedPetId: 'custom:orbit-fox' })
     expect(await screen.findByText('Orbit Fox')).toBeInTheDocument()
   })
 
-  it('keeps the create dialog open and shows validation failures', async () => {
-    createFromAtlasMock.mockRejectedValueOnce(new Error('The spritesheet image must be 1536x2288.'))
+  it('keeps the create dialog open and localizes validation failures', async () => {
+    createFromAtlasMock.mockResolvedValueOnce({ errorCode: 'invalid-image-dimensions' })
     render(<PetSettings />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add pet' }))
@@ -381,7 +400,7 @@ describe('PetSettings', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'Needs repair.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Choose atlas and create' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('The spritesheet image must be 1536x2288.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('The animation atlas must be exactly 1536×2288 pixels.')
     expect(screen.getByRole('dialog', { name: 'Create a custom pet' })).toBeInTheDocument()
     expect(updatePetPreferencesMock).not.toHaveBeenCalledWith(expect.objectContaining({
       selectedPetId: 'custom:bad-atlas',
@@ -428,5 +447,26 @@ describe('PetSettings', () => {
 
     expect(await screen.findByRole('heading', { name: 'Built-in pets' })).toBeInTheDocument()
     expect(getPreferencesMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the active locale for native picker labels and image validation', async () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    createFromImageMock.mockResolvedValueOnce({ errorCode: 'invalid-image-dimensions' })
+    render(<PetSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '添加宠物' }))
+    fireEvent.click(screen.getByRole('button', { name: /用一张图片制作轻动画/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: '宠物 ID' }), { target: { value: 'bad-image' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '显示名称' }), { target: { value: 'Bad Image' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '宠物描述' }), { target: { value: 'Needs repair.' } })
+    fireEvent.click(screen.getByRole('button', { name: '选择图片并创建' }))
+
+    await waitFor(() => expect(createFromImageMock).toHaveBeenCalledWith(expect.objectContaining({
+      dialogTitle: '选择透明背景的宠物图片',
+      dialogFilterName: '宠物图片',
+    })))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '宠物图片每边必须为 32–4096 像素，且总像素数不能超过 16,777,216。',
+    )
   })
 })

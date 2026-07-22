@@ -156,6 +156,24 @@ describe('cliTaskStore', () => {
     ])
   })
 
+  it('coalesces overlapping task polls for the same session', async () => {
+    let resolvePoll: ((value: { tasks: CLITask[] }) => void) | null = null
+    vi.mocked(cliTasksApi.getTasksForList).mockImplementation(
+      () => new Promise((resolve) => {
+        resolvePoll = resolve
+      }),
+    )
+
+    const first = useCLITaskStore.getState().fetchSessionTasks('session-1')
+    const second = useCLITaskStore.getState().fetchSessionTasks('session-1')
+
+    expect(cliTasksApi.getTasksForList).toHaveBeenCalledTimes(1)
+    resolvePoll!({ tasks: [makeTask('session-1')] })
+    await Promise.all([first, second])
+
+    expect(useCLITaskStore.getState().tasks).toHaveLength(1)
+  })
+
   it('ignores an older task response that finishes after a newer refresh', async () => {
     let resolveOlder: ((value: { tasks: CLITask[] }) => void) | null = null
     let resolveNewer: ((value: { tasks: CLITask[] }) => void) | null = null

@@ -6,7 +6,7 @@ import {
 } from '../../api/desktopUiPreferences'
 import { Button } from '../../components/shared/Button'
 import { Modal } from '../../components/shared/Modal'
-import { useTranslation } from '../../i18n'
+import { useTranslation, type TranslationKey } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { BUILTIN_PETS } from './builtinPets'
 import { PetRenderer } from './PetRenderer'
@@ -16,6 +16,33 @@ const PET_SIZE_MIN = 96
 const PET_SIZE_MAX = 192
 const PET_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 type PetCreationMethod = 'image' | 'atlas'
+
+const PET_CREATE_ERROR_KEYS: Record<string, TranslationKey> = {
+  'invalid-id': 'settings.pets.createError.invalidId',
+  'duplicate-id': 'settings.pets.createError.duplicateId',
+  'unsupported-image-format': 'settings.pets.createError.unsupportedFormat',
+  'image-too-large': 'settings.pets.createError.imageTooLarge',
+  'total-image-bytes-exceeded': 'settings.pets.createError.imageTooLarge',
+  'decode-budget-exceeded': 'settings.pets.createError.imageTooLarge',
+  'invalid-image': 'settings.pets.createError.invalidImage',
+  'missing-image': 'settings.pets.createError.invalidImage',
+  'symlink-image': 'settings.pets.createError.invalidImage',
+  'invalid-renderer': 'settings.pets.createError.invalidImage',
+  'invalid-sprite-version': 'settings.pets.createError.invalidImage',
+  'invalid-manifest-version': 'settings.pets.createError.invalidImage',
+  'root-invalid': 'settings.pets.createError.storage',
+  'directory-changed': 'settings.pets.createError.storage',
+  'io-error': 'settings.pets.createError.storage',
+}
+
+function petCreateErrorKey(method: PetCreationMethod, code: string): TranslationKey {
+  if (code === 'invalid-image-dimensions') {
+    return method === 'image'
+      ? 'settings.pets.createError.imageDimensions'
+      : 'settings.pets.createError.atlasDimensions'
+  }
+  return PET_CREATE_ERROR_KEYS[code] ?? 'settings.pets.createError'
+}
 
 export function PetSettings() {
   const t = useTranslation()
@@ -184,25 +211,35 @@ export function PetSettings() {
     setSaveError(null)
 
     const host = getDesktopHost()
-    let created: { id: string } | null
+    let created: { id: string } | { errorCode: string } | null
     try {
       const input = {
         slug: createForm.slug,
         displayName: createForm.displayName.trim(),
         description: createForm.description.trim(),
+        dialogTitle: createMethod === 'image'
+          ? t('settings.pets.dialog.imageTitle')
+          : t('settings.pets.dialog.atlasTitle'),
+        dialogFilterName: createMethod === 'image'
+          ? t('settings.pets.dialog.imageFilter')
+          : t('settings.pets.dialog.atlasFilter'),
       }
       created = createMethod === 'image'
         ? await host.pets.createFromImage(input)
         : await host.pets.createFromAtlas(input)
-    } catch (error) {
-      setCreateError(error instanceof Error && error.message
-        ? error.message
-        : t('settings.pets.createError'))
+    } catch {
+      setCreateError(t('settings.pets.createError'))
       setCreateBusy(false)
       return
     }
 
     if (!created) {
+      setCreateBusy(false)
+      return
+    }
+
+    if ('errorCode' in created) {
+      setCreateError(t(petCreateErrorKey(createMethod, created.errorCode)))
       setCreateBusy(false)
       return
     }
@@ -347,10 +384,10 @@ export function PetSettings() {
             </div>
             <div className="border-t border-[var(--color-border)]/70 pt-4">
               <ToggleRow
-                label={t('settings.pets.collapsed')}
-                description={t('settings.pets.collapsedDescription')}
-                checked={preferences.collapsed}
-                onChange={(checked) => void updatePreferences({ collapsed: checked })}
+                label={t('settings.pets.showTaskPanel')}
+                description={t('settings.pets.showTaskPanelDescription')}
+                checked={preferences.showTaskPanel}
+                onChange={(checked) => void updatePreferences({ showTaskPanel: checked })}
               />
             </div>
           </section>

@@ -281,6 +281,11 @@ export class AgentService {
       throw ApiError.badRequest('Agent project cwd must be an existing directory')
     }
 
+    // Agent CRUD must observe repository boundaries as they exist now. A
+    // long-running desktop session may have resolved this directory before a
+    // nested repository was initialized, leaving findGitRoot's LRU entry
+    // pointing at an ancestor repository.
+    findGitRoot.cache.delete(realCwd)
     const projectRoot = findGitRoot(realCwd) ?? realCwd
     const realProjectRoot = await fs.realpath(projectRoot)
     const worktreeAgentsCandidate = path.join(

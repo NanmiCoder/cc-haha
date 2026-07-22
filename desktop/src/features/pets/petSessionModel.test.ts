@@ -47,7 +47,7 @@ function chat(overrides: Partial<PerSessionState>): PerSessionState {
 }
 
 describe('pet session activity model', () => {
-  it('maps permission, failure, running, review, and idle in priority order', () => {
+  it('maps actionable states in priority order and treats completed review markers as idle', () => {
     const sessions = [
       session('idle', '2026-07-19T12:04:00Z'),
       session('running', '2026-07-19T12:03:00Z'),
@@ -70,9 +70,9 @@ describe('pet session activity model', () => {
     expect(activities.map(({ session: item, status }) => [item.id, status])).toEqual([
       ['waiting', 'waiting'],
       ['failed', 'failed'],
-      ['review', 'review'],
       ['running', 'running'],
       ['idle', 'idle'],
+      ['review', 'idle'],
     ])
   })
 
@@ -107,7 +107,7 @@ describe('pet session activity model', () => {
     )).toBe('waiting')
   })
 
-  it('counts running background agents and read-only observed sessions', () => {
+  it('counts running background agents and ignores legacy review markers', () => {
     expect(resolvePetSessionStatus(chat({
       backgroundAgentTasks: {
         agent: {
@@ -124,7 +124,7 @@ describe('pet session activity model', () => {
       chats: {},
       observedStatuses: { remote: 'review' },
     })
-    expect(activity?.status).toBe('review')
+    expect(activity?.status).toBe('idle')
   })
 
   it('shows current streaming progress before the previous assistant reply', () => {

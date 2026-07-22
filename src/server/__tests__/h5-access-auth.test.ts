@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { startServer } from '../index.js'
+import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import {
   clearFilesystemAccessRootsForTests,
   registerFilesystemAccessRoot,
@@ -26,6 +26,7 @@ let originalLocalAccessToken: string | undefined
 let originalPetAccessToken: string | undefined
 let originalServerPort = 3456
 const PHONE_ORIGIN = 'https://phone.example'
+const SERVER_STOP_WAIT_MS = 500
 
 async function waitForServer(url: string): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -78,9 +79,24 @@ async function startRemoteServer(options: { authRequired?: boolean } = {}): Prom
   await waitForServer(`${baseUrl}/health`)
 }
 
-async function restartRemoteServer(options: { authRequired?: boolean } = {}): Promise<void> {
-  server?.stop(true)
+async function stopRemoteServer(): Promise<void> {
+  const runningServer = server
   server = undefined
+  await stopServerRuntimeForShutdown({ waitForCli: false })
+  if (!runningServer) return
+
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    runningServer.stop(true),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, SERVER_STOP_WAIT_MS)
+    }),
+  ])
+  if (timeout) clearTimeout(timeout)
+}
+
+async function restartRemoteServer(options: { authRequired?: boolean } = {}): Promise<void> {
+  await stopRemoteServer()
   await startRemoteServer(options)
 }
 
@@ -133,15 +149,24 @@ async function enableH5Access(options: {
 function expectWebSocketOpen(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url)
+    let opened = false
     const timeout = setTimeout(() => {
       ws.close()
       reject(new Error(`Timed out opening websocket: ${url}`))
     }, 5000)
 
     ws.addEventListener('open', () => {
-      clearTimeout(timeout)
+      opened = true
       ws.close()
-      resolve()
+    })
+
+    ws.addEventListener('close', () => {
+      clearTimeout(timeout)
+      if (opened) {
+        resolve()
+      } else {
+        reject(new Error(`WebSocket closed before upgrade completed: ${url}`))
+      }
     })
 
     ws.addEventListener('error', () => {
@@ -215,8 +240,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  server?.stop(true)
-  server = undefined
+  await stopRemoteServer()
   clearFilesystemAccessRootsForTests()
   ProviderService.setServerPort(originalServerPort)
 
@@ -236,7 +260,12 @@ afterEach(async () => {
   if (originalPetAccessToken === undefined) delete process.env.CC_HAHA_PET_ACCESS_TOKEN
   else process.env.CC_HAHA_PET_ACCESS_TOKEN = originalPetAccessToken
 
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(tmpDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  })
 })
 
 describe('remote H5 auth and CORS integration', () => {
@@ -382,6 +411,7 @@ describe('remote H5 auth and CORS integration', () => {
         enabled: false,
         selectedPetId: 'dada-code',
         size: 144,
+        showTaskPanel: false,
         collapsed: true,
         motionEnabled: true,
         lastSessionId: null,

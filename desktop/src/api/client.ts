@@ -101,7 +101,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     }
 
     if (res.status === 204) return undefined as T
-    return res.json() as Promise<T>
+    return await res.json() as T
   } catch (err) {
     if (timedOut) {
       const timeoutError = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
@@ -158,6 +158,8 @@ export function rawRecordDiagnosticEvent(event: {
     headers: buildHeaders(),
     body: JSON.stringify(event),
     signal: controller.signal,
+  }).then(async response => {
+    await response.arrayBuffer()
   })
     .catch(() => undefined)
     .finally(() => clearTimeout(timeout))

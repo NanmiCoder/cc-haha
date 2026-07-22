@@ -42,6 +42,7 @@ type CLITaskStore = {
 let taskRequestSequence = 0
 let taskRequestGeneration = 0
 const latestAppliedTaskRequestBySession = new Map<string, number>()
+const activeTaskPollBySession = new Map<string, Promise<void>>()
 
 type TaskRequest = {
   requestId: number
@@ -130,22 +131,36 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
       })
     }
 
-    const request = beginTaskRequest()
-    try {
-      const { tasks } = await cliTasksApi.getTasksForList(sessionId)
-      if (
-        canApplyTaskResponse(sessionId, request)
-        && get().sessionId === sessionId
-        && !get().resetting
-      ) {
-        markTaskResponseApplied(sessionId, request)
-        set((state) => ({
-          tasks,
-          ...resolveDismissState(tasks, state.dismissedCompletionKey),
-        }))
+    const activePoll = activeTaskPollBySession.get(sessionId)
+    if (activePoll) return activePoll
+
+    const poll = (async () => {
+      const request = beginTaskRequest()
+      try {
+        const { tasks } = await cliTasksApi.getTasksForList(sessionId)
+        if (
+          canApplyTaskResponse(sessionId, request)
+          && get().sessionId === sessionId
+          && !get().resetting
+        ) {
+          markTaskResponseApplied(sessionId, request)
+          set((state) => ({
+            tasks,
+            ...resolveDismissState(tasks, state.dismissedCompletionKey),
+          }))
+        }
+      } catch {
+        // Preserve the last known task state across transient polling failures.
       }
-    } catch {
-      // Preserve the last known task state across transient polling failures.
+    })()
+
+    activeTaskPollBySession.set(sessionId, poll)
+    try {
+      await poll
+    } finally {
+      if (activeTaskPollBySession.get(sessionId) === poll) {
+        activeTaskPollBySession.delete(sessionId)
+      }
     }
   },
 

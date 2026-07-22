@@ -220,12 +220,6 @@ describe('local index reconciliation watcher', () => {
     const scope = await createTempDir()
     const projectDir = join(scope, 'projects', '-repo')
     await mkdir(projectDir, { recursive: true })
-    const entered = { resolve: () => {}, promise: Promise.resolve() }
-    let resolveEntered!: () => void
-    entered.promise = new Promise<void>(resolve => {
-      resolveEntered = resolve
-    })
-    entered.resolve = resolveEntered
     let releaseFirst!: () => void
     const firstRelease = new Promise<void>(resolve => {
       releaseFirst = resolve
@@ -240,20 +234,24 @@ describe('local index reconciliation watcher', () => {
       onBatch: async batch => {
         batches.push(batch)
         if (batches.length === 1) {
-          entered.resolve()
           await firstRelease
         }
       },
     })
     await watcher.start()
-    await entered.promise
-    watcher.queueTranscriptPath(join(projectDir, 'late.jsonl'))
-    const stopping = watcher.stop()
-    releaseFirst()
-    await stopping
-    await Bun.sleep(40)
+    try {
+      await waitFor(() => batches.length > 0)
+      watcher.queueTranscriptPath(join(projectDir, 'late.jsonl'))
+      const stopping = watcher.stop()
+      releaseFirst()
+      await stopping
+      await Bun.sleep(40)
 
-    expect(batches).toEqual([{ paths: [], fullSweep: true }])
+      expect(batches).toEqual([{ paths: [], fullSweep: true }])
+    } finally {
+      releaseFirst()
+      await watcher.stop()
+    }
   })
 
   test('reports watch failure once per attempt and retries with bounded backoff', async () => {

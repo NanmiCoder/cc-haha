@@ -42,6 +42,7 @@ import {
   isPetSessionInProjection,
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
+import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -73,6 +74,7 @@ const PORT = SERVER_OPTIONS.port
 const HOST = SERVER_OPTIONS.host
 const SEARCH_INDEX_PRIMARY_WAIT_MS = 30_000
 const SEARCH_INDEX_PRIMARY_POLL_MS = 50
+export const HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS = 0
 
 type BackgroundIndexStartupOptions = {
   startPrimary?: () => Promise<void>
@@ -211,6 +213,10 @@ export function startServer(port = PORT, host = HOST) {
       ? '127.0.0.1'
       : host
 
+  // Chromium can keep HTTP/1.1 sockets pooled longer than Bun's request idle
+  // timeout. On Windows, reusing a socket after Bun timed it out can leave the
+  // request waiting for response headers until the renderer's 120s deadline.
+  // Let the client own the lifetime of these local pooled connections instead.
   /**
    * Explicit deployment auth remains a stronger override than H5-scoped
    * request gating.
@@ -226,11 +232,27 @@ export function startServer(port = PORT, host = HOST) {
     server = Bun.serve<WebSocketData>({
       port,
       hostname: host,
-      idleTimeout: 60,
+      idleTimeout: HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS,
 
       async fetch(req, server) {
-        await ensurePersistentStorageUpgraded()
         const url = new URL(req.url)
+
+        // Startup probes must not wait on migrations, config reads, or auth.
+        // Electron deliberately uses this endpoint to decide when the sidecar
+        // is ready, so keep it independent of every other runtime subsystem.
+        if (url.pathname === '/health') {
+          return Response.json(
+            { status: 'ok', timestamp: new Date().toISOString() },
+            {
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-store',
+              },
+            },
+          )
+        }
+
+        await ensurePersistentStorageUpgraded()
         const origin = req.headers.get('Origin')
         const clientAddress = server.requestIP(req)?.address ?? null
         const localTokenOverride = url.searchParams.get('localToken') ?? url.searchParams.get('token')
@@ -479,7 +501,10 @@ export function startServer(port = PORT, host = HOST) {
           }
 
           try {
-            const response = await handleApiRequest(req, url)
+            const response = await settleResponseOnRequestAbort(
+              req,
+              handleApiRequest(req, url),
+            )
             return withCors(response, cors)
           } catch (error) {
             void diagnosticsService.recordEvent({
@@ -529,18 +554,6 @@ export function startServer(port = PORT, host = HOST) {
               { status: 500 },
             ), cors)
           }
-        }
-
-        // Health check
-        if (url.pathname === '/health') {
-          if (cors.rejected) {
-            return corsRejectedResponse(cors)
-          }
-
-          return Response.json(
-            { status: 'ok', timestamp: new Date().toISOString() },
-            { headers: cors.headers },
-          )
         }
 
         // Static H5 shell/assets are non-secret bootstrap content and must load

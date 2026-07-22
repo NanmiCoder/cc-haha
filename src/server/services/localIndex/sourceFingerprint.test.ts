@@ -112,6 +112,7 @@ describe('source fingerprint transitions', () => {
       path,
       indexedBytes: Buffer.byteLength(original),
       parserVersion: 1,
+      identityResolver: stats => `${stats.dev}:${stats.ino}`,
     })
     const replacedPath = `${path}.old`
     await rename(path, replacedPath)
@@ -120,6 +121,7 @@ describe('source fingerprint transitions', () => {
       path,
       previous: beforeReplacement,
       parserVersion: 1,
+      identityResolver: stats => `${stats.dev}:${stats.ino}`,
     })).toEqual({ kind: 'rebuild', reason: 'replace' })
 
     const beforeRewrite = await captureSourceFingerprint({

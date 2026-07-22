@@ -39,6 +39,8 @@ import { getCwd } from '../../utils/cwd.js'
 import { AGENT_COLORS } from '../../tools/AgentTool/agentColorManager.js'
 import { parseEffortValue } from '../../utils/effort.js'
 import { reloadSessionComponents } from '../services/sessionComponentReloadService.js'
+import { getAllBaseTools } from '../../tools.js'
+import { filterToolsForAgent } from '../../tools/AgentTool/agentToolUtils.js'
 
 const agentService = new AgentService()
 
@@ -89,6 +91,7 @@ async function handleAgents(
     const resolvedAgents = resolveAgentOverrides(allAgents, activeAgents)
 
     return Response.json({
+      availableTools: getAvailableCustomAgentTools(),
       activeAgents: await Promise.all(
         activeAgents.map(agent => serializeAgentForRequest(agent, true, cwd)),
       ),
@@ -160,6 +163,21 @@ async function handleAgents(
     `Method ${method} not allowed on /api/agents${agentName ? `/${agentName}` : ''}`,
     'METHOD_NOT_ALLOWED',
   )
+}
+
+function getAvailableCustomAgentTools(): string[] {
+  const enabledTools = getAllBaseTools().filter(tool => {
+    try {
+      return tool.isEnabled()
+    } catch {
+      return false
+    }
+  })
+  return filterToolsForAgent({
+    tools: enabledTools,
+    isBuiltIn: false,
+    isAsync: true,
+  }).map(tool => tool.name).sort((a, b) => a.localeCompare(b))
 }
 
 // ─── Tasks API ─────────────────────────────────────────────────────────────

@@ -44,6 +44,7 @@ export type AgentMutationInput = {
 export type AgentListResponse = {
   activeAgents: AgentDefinition[]
   allAgents: AgentDefinition[]
+  availableTools?: string[]
 }
 
 export type AgentMutationResponse = {

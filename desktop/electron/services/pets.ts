@@ -211,6 +211,10 @@ class PetPackageError extends Error {
   }
 }
 
+export function getPetPackageErrorCode(error: unknown): CustomPetLoadErrorCode {
+  return error instanceof PetPackageError ? error.code : 'io-error'
+}
+
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error
 }

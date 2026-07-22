@@ -32,7 +32,9 @@ export function resolvePetSessionStatus(
   if (chat?.messages.at(-1)?.type === 'error') return 'failed'
   if (observed === 'failed') return 'failed'
   if (chat?.historyStatus === 'error') return 'failed'
-  if (review || observed === 'review') return 'review'
+  // Older servers reported every successful turn as review while its tab was
+  // still open. Completion is idle unless a real actionable state is present.
+  if (review || observed === 'review') return 'idle'
   return 'idle'
 }
 

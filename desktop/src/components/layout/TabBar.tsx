@@ -418,6 +418,7 @@ export function TabBar() {
             key={tab.sessionId}
             ref={(node) => { tabRefs.current.set(tab.sessionId, node) }}
             tab={tab}
+            displayTitle={tab.type === 'settings' ? t('settings.title') : tab.title}
             isRunning={runningSessionIds.has(tab.sessionId)}
             isActive={tab.sessionId === activeTabId}
             isDragOver={dragOverIndex === index}
@@ -568,6 +569,7 @@ export function TabBar() {
 
 const TabItem = forwardRef<HTMLDivElement, {
   tab: Tab
+  displayTitle: string
   isRunning: boolean
   isActive: boolean
   isDragOver: boolean
@@ -578,7 +580,7 @@ const TabItem = forwardRef<HTMLDivElement, {
   onClose: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onMouseDown: (event: React.MouseEvent) => void
-}>(({ tab, isRunning, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
+}>(({ tab, displayTitle, isRunning, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
   return (
     <div
       ref={ref}
@@ -627,12 +629,12 @@ const TabItem = forwardRef<HTMLDivElement, {
       )}
 
       <span className={`flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
-        {tab.title || 'Untitled'}
+        {displayTitle || 'Untitled'}
       </span>
 
       <button
         type="button"
-        aria-label={`Close ${tab.title || 'Untitled'}`}
+        aria-label={`Close ${displayTitle || 'Untitled'}`}
         onMouseDown={(e) => { e.stopPropagation() }}
         onClick={(e) => { e.stopPropagation(); onClose() }}
         className="flex-shrink-0 -mr-1 inline-flex h-6 w-6 items-center justify-center rounded-md bg-transparent p-0 opacity-0 transition-[background-color,opacity,color] text-[var(--color-text-tertiary)] group-hover:opacity-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"

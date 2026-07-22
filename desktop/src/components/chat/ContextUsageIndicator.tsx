@@ -21,7 +21,10 @@ type Props = {
 }
 
 const ACTIVE_REFRESH_MS = 30_000
-const CONTEXT_REQUEST_TIMEOUT_MS = 20_000
+// The server bounds the CLI control request at 20s. Keep the HTTP deadline
+// comfortably later so the server can return a transcript estimate instead of
+// racing a client abort that can strand loopback sockets on Windows.
+const CONTEXT_REQUEST_TIMEOUT_MS = 30_000
 const AUTO_REFRESH_MIN_INTERVAL_MS = 10_000
 // Right after a compaction the CLI may still be busy finishing the turn, so
 // the forced refresh can time out — retry once instead of keeping the stale

@@ -310,36 +310,39 @@ describe('ConversationService', () => {
     expect(env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE).not.toContain('myself_code')
   })
 
-  test('buildChildEnv inherits exported terminal shell variables for desktop CLI sessions', async () => {
-    const shellPath = path.join(tmpDir, 'zsh')
-    const nodeBin = path.join(tmpDir, 'node-bin')
-    const nvmDir = path.join(tmpDir, '.nvm')
-    await fs.mkdir(nodeBin, { recursive: true })
-    await fs.mkdir(nvmDir, { recursive: true })
-    await writeFakeZsh(shellPath)
-    await fs.writeFile(
-      path.join(tmpDir, '.zshrc'),
-      [
-        `export NVM_DIR="${nvmDir}"`,
-        `export PATH="${nodeBin}:$PATH"`,
-        '',
-      ].join('\n'),
-    )
+  test.skipIf(process.platform === 'win32')(
+    'buildChildEnv inherits exported terminal shell variables for desktop CLI sessions',
+    async () => {
+      const shellPath = path.join(tmpDir, 'zsh')
+      const nodeBin = path.join(tmpDir, 'node-bin')
+      const nvmDir = path.join(tmpDir, '.nvm')
+      await fs.mkdir(nodeBin, { recursive: true })
+      await fs.mkdir(nvmDir, { recursive: true })
+      await writeFakeZsh(shellPath)
+      await fs.writeFile(
+        path.join(tmpDir, '.zshrc'),
+        [
+          `export NVM_DIR="${nvmDir}"`,
+          `export PATH="${nodeBin}:$PATH"`,
+          '',
+        ].join('\n'),
+      )
 
-    delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
-    process.env.HOME = tmpDir
-    process.env.SHELL = shellPath
-    process.env.PATH = '/usr/bin:/bin'
-    delete process.env.ZDOTDIR
-    resetTerminalShellEnvironmentCacheForTests()
+      delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
+      process.env.HOME = tmpDir
+      process.env.SHELL = shellPath
+      process.env.PATH = '/usr/bin:/bin'
+      delete process.env.ZDOTDIR
+      resetTerminalShellEnvironmentCacheForTests()
 
-    const service = new ConversationService() as any
-    const env = (await service.buildChildEnv(tmpDir)) as Record<string, string>
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv(tmpDir)) as Record<string, string>
 
-    expect(env.NVM_DIR).toBe(nvmDir)
-    expect(env.PATH.split(path.delimiter)[0]).toBe(nodeBin)
-    expect(env.PATH.split(path.delimiter)).toContain('/usr/bin')
-  })
+      expect(env.NVM_DIR).toBe(nvmDir)
+      expect(env.PATH.split(path.delimiter)[0]).toBe(nodeBin)
+      expect(env.PATH.split(path.delimiter)).toContain('/usr/bin')
+    },
+  )
 
   test('strips inherited provider env when desktop provider config exists', async () => {
     const ccHahaDir = path.join(tmpDir, 'cc-haha')

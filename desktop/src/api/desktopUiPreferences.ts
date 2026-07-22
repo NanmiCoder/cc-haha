@@ -19,6 +19,7 @@ export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
   size: number
+  showTaskPanel: boolean
   collapsed: boolean
   motionEnabled: boolean
   lastSessionId: string | null

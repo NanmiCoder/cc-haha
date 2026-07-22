@@ -77,7 +77,9 @@ describe('HahaGrokOAuthService', () => {
       accessToken: 'grok-access',
       refreshToken: 'grok-refresh',
     })
-    expect((await fs.stat(getHahaGrokOAuthFilePath())).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await fs.stat(getHahaGrokOAuthFilePath())).mode & 0o777).toBe(0o600)
+    }
   })
 
   test('refreshes an expiring token and preserves an unrotated refresh token', async () => {

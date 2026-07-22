@@ -160,7 +160,7 @@ describe('readCompleteJsonlRange', () => {
         }
         return {
           size: payload.length,
-          mtimeMs: 1,
+          mtimeMs: race === 'replace' ? 2 : 1,
           dev: 2,
           ino: race === 'replace' ? 4 : 3,
         }

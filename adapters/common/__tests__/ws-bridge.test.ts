@@ -2,6 +2,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { WsBridge } from '../ws-bridge.js'
 import { WebSocketServer, type WebSocket as WsServerSocket } from 'ws'
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  return predicate()
+}
+
 describe('WsBridge', () => {
   let bridge: WsBridge
 
@@ -58,8 +70,16 @@ describe('WsBridge', () => {
     expect(bridge.hasSession('a')).toBe(false)
     expect(bridge.hasSession('b')).toBe(false)
 
-    await new Promise((resolve) => setTimeout(resolve, 20))
     for (const ws of sockets) {
+      const settled = await waitFor(() => (
+        ws.readyState === ws.CLOSED
+        && ws.listenerCount('open') === 0
+        && ws.listenerCount('error') === 0
+        && ws.listenerCount('close') === 0
+      ))
+      expect(settled).toBe(true)
+      expect(ws.readyState).toBe(ws.CLOSED)
+      expect(ws.listenerCount('open')).toBe(0)
       expect(ws.listenerCount('error')).toBe(0)
       expect(ws.listenerCount('close')).toBe(0)
     }

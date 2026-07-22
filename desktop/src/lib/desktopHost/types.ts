@@ -173,11 +173,13 @@ export type DesktopPetCreateInput = {
   slug: string
   displayName: string
   description: string
+  dialogTitle?: string
+  dialogFilterName?: string
 }
 
-export type DesktopPetCreateResult = {
-  id: string
-}
+export type DesktopPetCreateResult =
+  | { id: string }
+  | { errorCode: string }
 
 export type DesktopPetWindowDrag = {
   phase: 'start' | 'move' | 'end'

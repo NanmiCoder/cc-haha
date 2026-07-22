@@ -151,10 +151,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 async function createWorkspaceApiGitRepo(baseDir: string): Promise<string> {
-  const workDir = path.join(
-    baseDir,
-    `workspace-api-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  const workDir = await fs.mkdtemp(path.join(baseDir, 'w-'))
 
   const javaControllerDir = path.join(
     workDir,

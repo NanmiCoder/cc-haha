@@ -1699,6 +1699,46 @@ html[data-window-kind='pet'] #root {
   will-change: transform;
 }
 
+.pet-mascot-wrap {
+  position: relative;
+  order: 2;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  pointer-events: none;
+}
+
+.pet-task-badge {
+  position: absolute;
+  z-index: 12;
+  top: 8px;
+  right: 2px;
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  padding: 0 6px;
+  background: rgba(14, 58, 91, 0.94);
+  box-shadow: 0 5px 14px rgba(13, 31, 48, 0.26);
+  color: white;
+  cursor: pointer;
+  font: 650 12px/1 var(--font-body);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.pet-task-badge:hover {
+  background: rgba(20, 76, 116, 0.98);
+  transform: translateY(-1px);
+}
+
+.pet-task-badge:focus-visible {
+  outline: 2px solid rgba(95, 179, 255, 0.78);
+  outline-offset: 2px;
+}
+
 .pet-mascot-button[data-dragging='true'] {
   cursor: grabbing;
   transform: scale(0.96);
@@ -1787,14 +1827,18 @@ html[data-window-kind='pet'] #root {
 
 .pet-activity-card {
   position: relative;
-  z-index: 5;
+  z-index: 15;
   box-sizing: border-box;
-  width: 100%;
+  order: 1;
+  width: calc(100% - 32px);
+  max-width: 360px;
   flex: 0 0 auto;
-  overflow: hidden;
+  overflow: visible;
+  /* Keep the card, collapse control, and visible mascot as one compact stack. */
+  margin-bottom: 12px;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 24px;
-  padding: 6px 50px 6px 7px;
+  padding: 6px 7px;
   background: rgba(255, 255, 255, 0.8);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.68),
@@ -1807,7 +1851,7 @@ html[data-window-kind='pet'] #root {
 
 .pet-activity-card[data-expanded='true'] {
   border-radius: 22px;
-  padding-right: 48px;
+  padding-right: 7px;
 }
 
 html[data-theme='dark'] .pet-activity-card {
@@ -1860,7 +1904,7 @@ html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'
   width: 100%;
   min-height: 52px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   border: 0;
   border-radius: 17px;
   padding: 7px 10px;
@@ -1953,41 +1997,44 @@ html[data-theme='dark'] .pet-session-status {
 
 .pet-panel-toggle {
   position: absolute;
-  top: 50%;
-  right: 8px;
+  z-index: 13;
+  right: 50%;
+  bottom: -31px;
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 25px;
+  height: 25px;
   place-items: center;
-  border: 0;
   border-radius: 999px;
-  background: transparent;
-  color: rgba(66, 62, 74, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(52, 55, 61, 0.72);
+  color: rgba(255, 255, 255, 0.88);
   cursor: pointer;
-  transform: translateY(-50%);
+  transform: translateX(50%);
   transition: background 140ms ease, color 140ms ease, transform 140ms ease;
   -webkit-app-region: no-drag;
 }
 
 .pet-activity-card[data-expanded='true'] .pet-panel-toggle {
-  top: 8px;
-  transform: none;
+  top: auto;
+  transform: translateX(50%);
 }
 
 .pet-panel-toggle:hover {
-  background: rgba(77, 71, 89, 0.09);
-  color: rgba(38, 35, 44, 0.9);
+  background: rgba(43, 47, 54, 0.88);
+  color: white;
 }
 
 .pet-panel-toggle:active {
-  transform: translateY(-50%) scale(0.94);
+  transform: translateX(50%) scale(0.94);
 }
 
 .pet-activity-card[data-expanded='true'] .pet-panel-toggle:active {
-  transform: scale(0.94);
+  transform: translateX(50%) scale(0.94);
 }
 
 html[data-theme='dark'] .pet-panel-toggle {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(36, 39, 45, 0.82);
   color: rgba(239, 235, 246, 0.62);
 }
 

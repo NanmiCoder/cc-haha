@@ -5,7 +5,6 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { WorkspaceDiffSurface } from './WorkspaceDiffSurface'
 import {
   WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD,
-  WORKSPACE_PREVIEW_LINE_LIMIT,
   WorkspaceDiffSurface as ExportedWorkspaceDiffSurface,
 } from './WorkspaceCodeSurface'
 
@@ -349,25 +348,23 @@ describe('WorkspaceDiffSurface', () => {
     expect(screen.getByRole('textbox', { name: 'Review comment' })).toHaveValue('Keep this collapsed draft')
   })
 
-  it('uses plain text instead of Shiki after expanding a diff beyond the large preview threshold', () => {
-    const additions = Array.from(
+  it('uses plain text instead of Shiki beyond the large preview threshold', () => {
+    const structuralMetadata = Array.from(
       { length: WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD + 1 },
-      (_, index) => `+const value${index} = ${index}`,
+      () => '--- a/src/large.ts',
     )
     const largeDiff = [
       'diff --git a/src/large.ts b/src/large.ts',
-      '--- a/src/large.ts',
       '+++ b/src/large.ts',
-      `@@ -0,0 +1,${additions.length} @@`,
-      ...additions,
+      ...structuralMetadata,
+      '@@ -0,0 +1 @@',
+      '+const value = 1',
     ].join('\n')
-    render(<WorkspaceDiffSurface value={largeDiff} path="src/large.ts" lineLimit={1} />)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show all loaded lines' }))
+    render(<WorkspaceDiffSurface value={largeDiff} path="src/large.ts" />)
 
     expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'plain')
     expect(highlightRequestSpy).not.toHaveBeenCalled()
-    expect(getCodeRow('const value5000 = 5000')).toHaveTextContent('const value5000 = 5000')
+    expect(getCodeRow('const value = 1')).toHaveTextContent('const value = 1')
   })
 
   it('renders parsed file headers and keeps multiple files visually separated', () => {
@@ -478,7 +475,7 @@ describe('WorkspaceDiffSurface', () => {
 
   it('does not request Shiki highlighting again for each controlled draft change', () => {
     const additions = Array.from(
-      { length: WORKSPACE_PREVIEW_LINE_LIMIT - 4 },
+      { length: 20 },
       (_, index) => `+const value${index + 1} = ${index + 1}`,
     )
     const nearLimitDiff = [

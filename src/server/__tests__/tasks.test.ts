@@ -18,6 +18,15 @@ const taskFixture = (overrides: Record<string, unknown>) => ({
   ...overrides,
 })
 
+async function rmWithRetry(targetPath: string): Promise<void> {
+  await fs.rm(targetPath, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === 'win32' ? 5 : 0,
+    retryDelay: 100,
+  })
+}
+
 // ============================================================================
 // TaskService unit tests
 // ============================================================================
@@ -135,8 +144,10 @@ describe('Tasks API', () => {
   })
 
   afterEach(async () => {
-    server?.stop()
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    server?.stop(true)
+    const { stopServerRuntimeForShutdown } = await import('../../server/index.js')
+    await stopServerRuntimeForShutdown()
+    await rmWithRetry(tmpDir)
     delete process.env.CLAUDE_CONFIG_DIR
   })
 

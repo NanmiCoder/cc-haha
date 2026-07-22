@@ -12,6 +12,7 @@ const DEFAULT_PET_PREFERENCES = {
   enabled: false,
   selectedPetId: 'dada-code',
   size: 144,
+  showTaskPanel: false,
   collapsed: false,
   motionEnabled: true,
   lastSessionId: null,
@@ -65,7 +66,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(result.exists).toBe(false)
     expect(result.preferences).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       profile: {
         displayName: 'cc-haha',
         subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -109,7 +110,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(before.exists).toBe(true)
     expect(before.preferences).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -127,7 +128,7 @@ describe('DesktopUiPreferencesService', () => {
       },
     })
     expect(after).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -220,7 +221,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       futureField: { keep: true },
       profile: {
         displayName: 'Local Operator',
@@ -253,13 +254,14 @@ describe('DesktopUiPreferencesService', () => {
       enabled: false,
       selectedPetId: 'huhu-plan',
       size: 144,
+      showTaskPanel: false,
       collapsed: false,
       motionEnabled: true,
       lastSessionId: 'session-before',
     })
 
     await Promise.all([
-      settingsRenderer.updatePetPreferences({ size: 176, motionEnabled: false }),
+      settingsRenderer.updatePetPreferences({ size: 176, showTaskPanel: true, motionEnabled: false }),
       petRenderer.updatePetPreferences({ collapsed: true, lastSessionId: 'session-after' }),
     ])
 
@@ -268,18 +270,19 @@ describe('DesktopUiPreferencesService', () => {
       enabled: false,
       selectedPetId: 'huhu-plan',
       size: 176,
+      showTaskPanel: true,
       collapsed: true,
       motionEnabled: false,
       lastSessionId: 'session-after',
     })
   })
 
-  test('patches an old-schema pet while preserving its other fields and unknown root fields', async () => {
+  test('migrates a schema-3 pet to a hidden task panel while preserving other and unknown fields', async () => {
     await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'cc-haha', 'desktop-ui.json'),
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         futureField: { keep: true },
         pet: {
           futurePetField: { keep: 'pet-too' },
@@ -297,13 +300,14 @@ describe('DesktopUiPreferencesService', () => {
     const after = await new DesktopUiPreferencesService().updatePetPreferences({ enabled: true })
 
     expect(after).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       futureField: { keep: true },
       pet: {
         futurePetField: { keep: 'pet-too' },
         enabled: true,
         selectedPetId: 'custom:rocky-bot',
         size: 168,
+        showTaskPanel: false,
         collapsed: true,
         motionEnabled: false,
         lastSessionId: 'session-old',
@@ -385,7 +389,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       profile: {
         displayName: 'Claude Captain',
         subtitle: 'local.example/profile',
@@ -456,7 +460,7 @@ describe('desktop UI preferences API', () => {
     expect(putBody).toEqual({
       ok: true,
       preferences: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -482,7 +486,7 @@ describe('desktop UI preferences API', () => {
     expect(getBody).toEqual({
       exists: true,
       preferences: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -506,6 +510,7 @@ describe('desktop UI preferences API', () => {
       enabled: true,
       selectedPetId: '  seedy  ',
       size: 40,
+      showTaskPanel: true,
       collapsed: false,
       motionEnabled: true,
       lastSessionId: 'session-42',
@@ -517,11 +522,12 @@ describe('desktop UI preferences API', () => {
     await expect(putRes.json()).resolves.toMatchObject({
       ok: true,
       preferences: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         pet: {
           enabled: true,
           selectedPetId: 'seedy',
           size: 96,
+          showTaskPanel: true,
           collapsed: false,
           motionEnabled: true,
           lastSessionId: 'session-42',

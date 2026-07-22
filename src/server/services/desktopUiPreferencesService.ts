@@ -6,7 +6,7 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 
-const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 3
+const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 4
 const MAX_PROJECT_PREFERENCE_ENTRIES = 2_000
 const MAX_PROFILE_DISPLAY_NAME_LENGTH = 80
 const MAX_PROFILE_SUBTITLE_LENGTH = 160
@@ -44,6 +44,7 @@ export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
   size: number
+  showTaskPanel: boolean
   collapsed: boolean
   motionEnabled: boolean
   lastSessionId: string | null
@@ -81,6 +82,7 @@ const DEFAULT_PET_PREFERENCES: DesktopPetPreferences = {
   enabled: false,
   selectedPetId: DEFAULT_PET_ID,
   size: DEFAULT_PET_SIZE,
+  showTaskPanel: false,
   collapsed: false,
   motionEnabled: true,
   lastSessionId: null,
@@ -196,6 +198,9 @@ export function normalizeDesktopPetPreferences(value: unknown): DesktopPetPrefer
     enabled: typeof record.enabled === 'boolean' ? record.enabled : DEFAULT_PET_PREFERENCES.enabled,
     selectedPetId: normalizePetId(record.selectedPetId),
     size: normalizePetSize(record.size),
+    showTaskPanel: typeof record.showTaskPanel === 'boolean'
+      ? record.showTaskPanel
+      : DEFAULT_PET_PREFERENCES.showTaskPanel,
     collapsed: typeof record.collapsed === 'boolean' ? record.collapsed : DEFAULT_PET_PREFERENCES.collapsed,
     motionEnabled: typeof record.motionEnabled === 'boolean'
       ? record.motionEnabled

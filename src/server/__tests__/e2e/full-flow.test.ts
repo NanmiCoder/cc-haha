@@ -74,6 +74,18 @@ async function startTestServer() {
   baseUrl = `http://127.0.0.1:${server.port}`
 }
 
+async function stopTestServer() {
+  server?.stop(true)
+  const { stopServerRuntimeForShutdown } = await import('../../index.js')
+  await stopServerRuntimeForShutdown()
+  await fs.rm(tmpDir, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === 'win32' ? 5 : 0,
+    retryDelay: 100,
+  })
+}
+
 async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: any }> {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
@@ -89,10 +101,7 @@ describe('E2E: Full Flow', () => {
     await startTestServer()
   })
 
-  afterAll(async () => {
-    server?.stop()
-    await fs.rm(tmpDir, { recursive: true, force: true })
-  })
+  afterAll(stopTestServer)
 
   // =============================================
   // 1. Health & Status
@@ -100,19 +109,21 @@ describe('E2E: Full Flow', () => {
 
   it('should return healthy status', async () => {
     const res = await fetch(`${baseUrl}/health`)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const data = await res.json()
     expect(data.status).toBe('ok')
   })
 
   it('should return server status', async () => {
-    const { data } = await api('GET', '/api/status')
+    const response = await fetch(`${baseUrl}/api/status`)
+    const data = await response.json()
     expect(data.status).toBe('ok')
     expect(data.version).toBeDefined()
   })
 
   it('should return diagnostics', async () => {
     const { data } = await api('GET', '/api/status/diagnostics')
-    expect(data.platform).toBe('darwin')
+    expect(data.platform).toBe(process.platform)
     expect(data.configDir).toBe(tmpDir)
   })
 
