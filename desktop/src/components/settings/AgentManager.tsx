@@ -6,6 +6,7 @@ import {
   Boxes,
   Bolt,
   Braces,
+  ChevronDown,
   CircleAlert,
   Folder,
   Hammer,
@@ -34,6 +35,8 @@ import { useUIStore } from '../../stores/uiStore'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Button } from '../shared/Button'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
+import { DirectoryPicker } from '../shared/DirectoryPicker'
+import { Dropdown } from '../shared/Dropdown'
 import { Input } from '../shared/Input'
 import { Modal } from '../shared/Modal'
 
@@ -63,6 +66,16 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/
 type ToolAccessMode = 'inherit' | 'none' | 'custom'
 
+function getAgentProjectPath(agent?: AgentDefinition): string | undefined {
+  if (agent?.source !== 'projectSettings' || !agent.baseDir) return undefined
+  const normalized = agent.baseDir.replace(/\\/g, '/').replace(/\/+$/, '')
+  const suffix = '/.claude/agents'
+  if (!normalized.toLowerCase().endsWith(suffix)) return undefined
+  const projectPath = normalized.slice(0, -suffix.length)
+  if (!projectPath) return '/'
+  return /^[A-Za-z]:$/.test(projectPath) ? `${projectPath}/` : projectPath
+}
+
 export function AgentManager() {
   const {
     activeAgents,
@@ -84,8 +97,13 @@ export function AgentManager() {
 
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = getSessionBrowsablePath(activeSession)
+  const [agentContextPath, setAgentContextPath] = useState<string | undefined>(currentWorkDir)
+  const contextSessionId = sessions.find(
+    (session) => getSessionBrowsablePath(session) === agentContextPath,
+  )?.id
 
   useEffect(() => {
+    setAgentContextPath(currentWorkDir)
     void fetchAgents(currentWorkDir)
   }, [fetchAgents, currentWorkDir])
 
@@ -127,8 +145,8 @@ export function AgentManager() {
             size="sm"
             icon={<RefreshCw size={14} />}
             onClick={() => void retryMutationRefresh(
-              currentWorkDir,
-              activeSessionId || undefined,
+              agentContextPath,
+              contextSessionId,
             )}
           >
             {t('common.retry')}
@@ -169,7 +187,7 @@ export function AgentManager() {
                 variant="secondary"
                 size="sm"
                 icon={<RefreshCw size={14} />}
-                onClick={() => void fetchAgents(currentWorkDir)}
+                onClick={() => void fetchAgents(agentContextPath)}
               >
                 {t('common.retry')}
               </Button>
@@ -271,15 +289,16 @@ export function AgentManager() {
         <AgentFormModal
           mode={formState.mode}
           agent={formState.agent}
-          cwd={currentWorkDir}
-          sessionId={activeSessionId || undefined}
+          cwd={agentContextPath}
+          sessionId={contextSessionId}
+          onProjectContextChange={setAgentContextPath}
           onClose={() => setFormState(null)}
         />
       )}
       <AgentDeleteDialog
         agent={deleteTarget}
-        cwd={currentWorkDir}
-        sessionId={activeSessionId || undefined}
+        cwd={agentContextPath}
+        sessionId={contextSessionId}
         onClose={() => setDeleteTarget(null)}
       />
     </div>
@@ -397,21 +416,27 @@ function AgentFormModal({
   agent,
   cwd,
   sessionId,
+  onProjectContextChange,
   onClose,
 }: {
   mode: 'create' | 'edit'
   agent?: AgentDefinition
   cwd?: string
   sessionId?: string
+  onProjectContextChange: (path: string) => void
   onClose: () => void
 }) {
   const t = useTranslation()
   const createAgent = useAgentStore((state) => state.createAgent)
   const updateAgent = useAgentStore((state) => state.updateAgent)
   const isMutating = useAgentStore((state) => state.isMutating)
+  const sessions = useSessionStore((state) => state.sessions)
   const initialScope = agent?.source === 'projectSettings' ? 'project' : 'user'
   const initialModel = agent?.model || 'inherit'
   const [scope, setScope] = useState<AgentScope>(initialScope)
+  const [projectPath, setProjectPath] = useState(
+    initialScope === 'project' ? getAgentProjectPath(agent) || cwd || '' : cwd || '',
+  )
   const [name, setName] = useState(agent?.agentType || '')
   const [description, setDescription] = useState(agent?.description || '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt || '')
@@ -445,16 +470,17 @@ function AgentFormModal({
     if (mode === 'create' && !systemPrompt.trim()) nextErrors.systemPrompt = t('settings.agents.form.systemPromptRequired')
     if (modelChoice === 'custom' && !customModel.trim()) nextErrors.customModel = t('settings.agents.form.customModelRequired')
     if (toolAccess === 'custom' && parsedTools.length === 0) nextErrors.tools = t('settings.agents.form.toolsCustomRequired')
-    if (scope === 'project' && !cwd) nextErrors.scope = t('settings.agents.form.projectUnavailable')
+    if (scope === 'project' && !projectPath) nextErrors.scope = t('settings.agents.form.projectUnavailable')
     setFieldErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
     const toolSelectionIsUnchanged = mode === 'edit' &&
       toolAccess === initialToolAccess &&
       (toolAccess !== 'custom' || tools === initialToolsText)
+    const targetCwd = scope === 'project' ? projectPath : cwd
     const input: AgentMutationInput = {
       scope,
-      ...(cwd ? { cwd } : {}),
+      ...(targetCwd ? { cwd: targetCwd } : {}),
       ...(mode === 'edit' && agent?.target ? { target: agent.target } : {}),
       name: trimmedName,
       description: description.trim(),
@@ -481,11 +507,15 @@ function AgentFormModal({
 
     setSubmitError(null)
     try {
+      const targetSessionId = scope === 'project'
+        ? sessions.find((session) => getSessionBrowsablePath(session) === projectPath)?.id
+        : sessionId
       if (mode === 'edit' && agent) {
-        await updateAgent(agent.agentType, input, sessionId)
+        await updateAgent(agent.agentType, input, targetSessionId)
       } else {
-        await createAgent(input, sessionId)
+        await createAgent(input, targetSessionId)
       }
+      if (scope === 'project' && targetCwd) onProjectContextChange(targetCwd)
       onClose()
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : t('settings.agents.form.saveError'))
@@ -507,21 +537,50 @@ function AgentFormModal({
     >
       <div className="grid gap-4">
         <Field label={t('settings.agents.form.scope')} error={fieldErrors.scope} required>
-          <select
-            aria-label={t('settings.agents.form.scope')}
-            value={scope}
-            disabled={mode === 'edit'}
-            onChange={(event) => setScope(event.target.value as AgentScope)}
-            className={selectClassName}
-          >
-            <option value="user">{t('settings.agents.form.scopeUser')}</option>
-            <option value="project" disabled={!cwd}>{t('settings.agents.form.scopeProject')}</option>
-          </select>
-          {!cwd && <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.agents.form.projectUnavailable')}</p>}
-          {scope === 'project' && cwd && (
-            <p className="break-all text-xs text-[var(--color-text-tertiary)]">
-              {t('settings.agents.form.projectTarget', { path: cwd })}
-            </p>
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label={t('settings.agents.form.scope')}>
+            {([
+              { value: 'user' as const, label: t('settings.agents.form.scopeUser'), icon: <User size={16} /> },
+              { value: 'project' as const, label: t('settings.agents.form.scopeProject'), icon: <Folder size={16} /> },
+            ]).map((option) => {
+              const selected = scope === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={selected}
+                  disabled={mode === 'edit'}
+                  onClick={() => setScope(option.value)}
+                  className={`flex min-h-16 items-center gap-3 rounded-[var(--radius-lg)] border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selected
+                      ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+                  }`}
+                >
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                    selected ? 'bg-[var(--color-primary-fixed)] text-[var(--color-brand)]' : 'bg-[var(--color-surface-container-high)]'
+                  }`}>
+                    {option.icon}
+                  </span>
+                  <span className="text-sm font-semibold">{option.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {scope === 'project' && (
+            <div className="mt-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                    {projectPath
+                      ? t('settings.agents.form.projectTarget', { path: projectPath })
+                      : t('settings.agents.form.projectUnavailable')}
+                  </p>
+                </div>
+                {mode === 'create' && (
+                  <DirectoryPicker value={projectPath} onChange={setProjectPath} />
+                )}
+              </div>
+            </div>
           )}
         </Field>
 
@@ -560,18 +619,28 @@ function AgentFormModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t('settings.agents.form.model')}>
-            <select aria-label={t('settings.agents.form.model')} value={modelChoice} onChange={(event) => setModelChoice(event.target.value)} className={selectClassName}>
-              <option value="inherit">{t('settings.agents.form.inherit')}</option>
-              {BUILT_IN_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
-              <option value="custom">{t('settings.agents.form.customModel')}</option>
-            </select>
+            <AgentSelect
+              label={t('settings.agents.form.model')}
+              value={modelChoice}
+              onChange={setModelChoice}
+              items={[
+                { value: 'inherit', label: t('settings.agents.form.inherit') },
+                ...BUILT_IN_MODELS.map((model) => ({ value: model, label: model })),
+                { value: 'custom', label: t('settings.agents.form.customModel') },
+              ]}
+            />
           </Field>
           <Field label={t('settings.agents.form.effort')}>
-            <select aria-label={t('settings.agents.form.effort')} value={effort} onChange={(event) => setEffort(event.target.value)} className={selectClassName}>
-              <option value="inherit">{t('settings.agents.form.inherit')}</option>
-              {hasLegacyEffort && <option value={initialEffort}>{initialEffort}</option>}
-              {EFFORTS.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            <AgentSelect
+              label={t('settings.agents.form.effort')}
+              value={effort}
+              onChange={setEffort}
+              items={[
+                { value: 'inherit', label: t('settings.agents.form.inherit') },
+                ...(hasLegacyEffort ? [{ value: initialEffort, label: initialEffort }] : []),
+                ...EFFORTS.map((value) => ({ value, label: value })),
+              ]}
+            />
           </Field>
         </div>
 
@@ -586,16 +655,16 @@ function AgentFormModal({
         )}
 
         <Field label={t('settings.agents.form.tools')}>
-          <select
-            aria-label={t('settings.agents.form.tools')}
+          <AgentSelect<ToolAccessMode>
+            label={t('settings.agents.form.tools')}
             value={toolAccess}
-            onChange={(event) => setToolAccess(event.target.value as ToolAccessMode)}
-            className={selectClassName}
-          >
-            <option value="inherit">{t('settings.agents.form.toolsInherit')}</option>
-            <option value="none">{t('settings.agents.form.toolsNone')}</option>
-            <option value="custom">{t('settings.agents.form.toolsCustom')}</option>
-          </select>
+            onChange={setToolAccess}
+            items={[
+              { value: 'inherit', label: t('settings.agents.form.toolsInherit') },
+              { value: 'none', label: t('settings.agents.form.toolsNone') },
+              { value: 'custom', label: t('settings.agents.form.toolsCustom') },
+            ]}
+          />
         </Field>
         <p className="-mt-3 text-xs text-[var(--color-text-tertiary)]">
           {toolAccess === 'inherit'
@@ -616,10 +685,19 @@ function AgentFormModal({
         )}
 
         <Field label={t('settings.agents.form.color')}>
-          <select aria-label={t('settings.agents.form.color')} value={color} onChange={(event) => setColor(event.target.value)} className={selectClassName}>
-            <option value="">{t('settings.agents.form.noColor')}</option>
-            {Object.keys(AGENT_COLORS).map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
+          <AgentSelect
+            label={t('settings.agents.form.color')}
+            value={color}
+            onChange={setColor}
+            items={[
+              { value: '', label: t('settings.agents.form.noColor') },
+              ...Object.keys(AGENT_COLORS).map((value) => ({
+                value,
+                label: value,
+                icon: <span className="h-3 w-3 rounded-full" style={{ backgroundColor: AGENT_COLORS[value] }} />,
+              })),
+            ]}
+          />
         </Field>
 
         {submitError && (
@@ -756,6 +834,42 @@ function getAgentSourceAccentClass(source: AgentSource) {
   }
 }
 
+function AgentSelect<T extends string>({
+  label,
+  items,
+  value,
+  onChange,
+}: {
+  label: string
+  items: Array<{ value: T; label: string; icon?: ReactNode }>
+  value: T
+  onChange: (value: T) => void
+}) {
+  const selected = items.find((item) => item.value === value) ?? items[0]
+  return (
+    <Dropdown<T>
+      items={items}
+      value={value}
+      onChange={onChange}
+      width="100%"
+      maxHeight={280}
+      placement="top"
+      className="block w-full"
+      trigger={(
+        <button
+          type="button"
+          aria-label={label}
+          className="flex h-10 w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-left text-sm text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)] focus-visible:border-[var(--color-border-focus)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+        >
+          {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
+          <span className="min-w-0 flex-1 truncate">{selected?.label ?? value}</span>
+          <ChevronDown size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </button>
+      )}
+    />
+  )
+}
+
 function Field({ label, error, required, children }: { label: string; error?: string; required?: boolean; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
@@ -794,5 +908,4 @@ function DetailStat({ label, value, icon }: { label: string; value: string; icon
   )
 }
 
-const selectClassName = 'h-10 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50'
 const textAreaClassName = 'min-h-32 resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'

@@ -171,7 +171,16 @@ function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
     terminalSessionChatStates.delete(sessionId)
     return
   }
-  terminalSessionChatStates.set(sessionId, cliMsg.is_error ? 'failed' : 'review')
+  if (cliMsg.is_error) {
+    terminalSessionChatStates.set(sessionId, 'failed')
+    return
+  }
+
+  // A successful turn only needs review while a full client still has the
+  // session open. The pet observes historical sessions independently, so a
+  // sticky review marker here would keep a closed/completed tab in its badge.
+  if (hasActiveFullClients(sessionId)) terminalSessionChatStates.set(sessionId, 'review')
+  else terminalSessionChatStates.delete(sessionId)
 }
 
 type CliBackgroundTaskLifecycle = {
@@ -337,6 +346,11 @@ export type WebSocketData = {
 // legitimately watch the same running session at the same time.
 const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 let activePetClient: ServerWebSocket<WebSocketData> | null = null
+
+function hasActiveFullClients(sessionId: string): boolean {
+  return Array.from(activeSessions.get(sessionId) ?? [])
+    .some((client) => client.data.clientKind !== 'pet')
+}
 const clientOutputCallbacks = new Map<
   ServerWebSocket<WebSocketData>,
   {
@@ -522,6 +536,16 @@ export const handleWebSocket = {
       return
     }
     removeClientOutputCallback(ws)
+
+    // Closing the last full session tab acknowledges a successful completed
+    // turn even when the read-only pet client remains connected. Preserve
+    // failed states so the pet can continue surfacing work that needs attention.
+    if (
+      !hasActiveFullClients(sessionId) &&
+      terminalSessionChatStates.get(sessionId) === 'review'
+    ) {
+      terminalSessionChatStates.delete(sessionId)
+    }
 
     if (hasActiveClients(sessionId)) {
       return

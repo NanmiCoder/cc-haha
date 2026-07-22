@@ -15,6 +15,7 @@ type DropdownProps<T extends string> = {
   width?: CSSProperties['width']
   maxHeight?: CSSProperties['maxHeight']
   align?: 'left' | 'right'
+  placement?: 'bottom' | 'top'
   className?: string
 }
 
@@ -26,6 +27,7 @@ export function Dropdown<T extends string>({
   width = 320,
   maxHeight,
   align = 'left',
+  placement = 'bottom',
   className = '',
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false)
@@ -39,13 +41,16 @@ export function Dropdown<T extends string>({
       }
     }
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleEsc)
+    document.addEventListener('keydown', handleEsc, true)
     return () => {
       document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleEsc)
+      document.removeEventListener('keydown', handleEsc, true)
     }
   }, [open])
 
@@ -58,12 +63,13 @@ export function Dropdown<T extends string>({
       {open && (
         <div
           className={`
-            absolute z-50 mt-1 rounded-[var(--radius-lg)]
+            absolute z-50 rounded-[var(--radius-lg)]
             bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]
             shadow-[var(--shadow-dropdown)]
-            animate-in fade-in slide-in-from-top-1
+            animate-in fade-in
             ${maxHeight ? 'overflow-y-auto' : 'overflow-hidden'}
             ${align === 'right' ? 'right-0' : 'left-0'}
+            ${placement === 'top' ? 'bottom-full mb-1 slide-in-from-bottom-1' : 'top-full mt-1 slide-in-from-top-1'}
           `}
           style={{ width, maxHeight }}
         >
@@ -86,7 +92,7 @@ export function Dropdown<T extends string>({
                 )}
               </div>
               {item.value === value && (
-                <span className="material-symbols-outlined flex-shrink-0 text-[16px] text-[var(--color-brand)]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                <span aria-hidden="true" className="material-symbols-outlined flex-shrink-0 text-[16px] text-[var(--color-brand)]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
               )}
             </button>
           ))}
