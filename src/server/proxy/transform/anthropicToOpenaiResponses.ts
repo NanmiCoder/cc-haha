@@ -10,7 +10,7 @@ import type {
   AnthropicMessage,
   OpenAIResponsesRequest,
   OpenAIResponsesInputItem,
-  OpenAIChatContentPart,
+  OpenAIResponsesInputContentPart,
 } from './types.js'
 import { stripLeadingBillingHeader } from './billingHeader.js'
 import { normalizeOpenAIReasoningEffort } from './effort.js'
@@ -106,6 +106,19 @@ export function anthropicToOpenaiResponses(
   return result
 }
 
+function convertContentBlock(
+  block: Extract<AnthropicContentBlock, { type: 'text' | 'image' }>,
+): OpenAIResponsesInputContentPart {
+  if (block.type === 'text') {
+    return { type: 'input_text', text: block.text }
+  }
+
+  return {
+    type: 'input_image',
+    image_url: `data:${block.source.media_type};base64,${block.source.data}`,
+  }
+}
+
 function convertMessageToInputItems(msg: AnthropicMessage, output: OpenAIResponsesInputItem[]): void {
   const content = msg.content
 
@@ -121,27 +134,28 @@ function convertMessageToInputItems(msg: AnthropicMessage, output: OpenAIRespons
   }
 
   // Collect text/image parts and handle tool blocks separately
-  const contentParts: (string | OpenAIChatContentPart)[] = []
+  const contentParts: OpenAIResponsesInputContentPart[] = []
+
+  const flushContentParts = (): void => {
+    if (contentParts.length === 0) return
+
+    if (contentParts.every((part) => part.type === 'input_text')) {
+      const messageContent = contentParts.map((part) => part.text).join('')
+      if (messageContent) {
+        output.push({ type: 'message', role: msg.role, content: messageContent })
+      }
+    } else {
+      output.push({ type: 'message', role: msg.role, content: [...contentParts] })
+    }
+    contentParts.length = 0
+  }
 
   for (const block of content) {
-    if (block.type === 'text') {
-      contentParts.push(block.text)
-    } else if (block.type === 'image') {
-      contentParts.push({
-        type: 'image_url',
-        image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` },
-      })
+    if (block.type === 'text' || block.type === 'image') {
+      contentParts.push(convertContentBlock(block))
     } else if (block.type === 'tool_use') {
       // Flush any accumulated content first
-      if (contentParts.length > 0) {
-        const flatContent = contentParts.length === 1 && typeof contentParts[0] === 'string'
-          ? contentParts[0]
-          : contentParts.map((p) => typeof p === 'string' ? p : '').join('')
-        if (flatContent) {
-          output.push({ type: 'message', role: msg.role, content: flatContent })
-        }
-        contentParts.length = 0
-      }
+      flushContentParts()
       // Lift to function_call item
       output.push({
         type: 'function_call',
@@ -150,30 +164,30 @@ function convertMessageToInputItems(msg: AnthropicMessage, output: OpenAIRespons
         arguments: typeof block.input === 'string' ? block.input : JSON.stringify(block.input),
       })
     } else if (block.type === 'tool_result') {
+      // Flush any accumulated content first
+      flushContentParts()
       // Lift to function_call_output item
       const resultContent = typeof block.content === 'string'
         ? block.content
         : Array.isArray(block.content)
-          ? block.content.filter((b): b is Extract<AnthropicContentBlock, { type: 'text' }> => b.type === 'text').map((b) => b.text).join('\n')
+          ? block.content.filter((part): part is Extract<AnthropicContentBlock, { type: 'text' | 'image' }> => (
+              part.type === 'text' || part.type === 'image'
+            )).map(convertContentBlock)
           : ''
+      const resultOutput = Array.isArray(resultContent) && resultContent.every((part) => part.type === 'input_text')
+        ? resultContent.map((part) => part.text).join('\n')
+        : resultContent
       output.push({
         type: 'function_call_output',
         call_id: block.tool_use_id,
-        output: resultContent,
+        output: resultOutput,
       })
     }
     // Skip thinking blocks
   }
 
   // Flush remaining content
-  if (contentParts.length > 0) {
-    const flatContent = contentParts.length === 1 && typeof contentParts[0] === 'string'
-      ? contentParts[0]
-      : contentParts.map((p) => typeof p === 'string' ? p : '').join('')
-    if (flatContent) {
-      output.push({ type: 'message', role: msg.role, content: flatContent })
-    }
-  }
+  flushContentParts()
 }
 
 function convertToolChoice(choice: unknown): unknown {
