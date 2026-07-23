@@ -32,6 +32,7 @@ export type SessionListItem = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: ReasoningEffortLevel
+  side?: boolean
 }
 
 export type SessionWorkspaceState = 'available' | 'worktree_removed' | 'missing'
