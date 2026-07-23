@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useUIStore } from '../stores/uiStore'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 import { browserHost } from '../lib/desktopHost/browserHost'
 
@@ -22,6 +23,7 @@ const terminalMocks = vi.hoisted(() => {
     getSelection: vi.fn(),
     hasSelection: vi.fn(),
     paste: vi.fn(),
+    options: { theme: {} },
   }
   const fitInstance = {
     fit: vi.fn(),
@@ -30,6 +32,7 @@ const terminalMocks = vi.hoisted(() => {
     available: false,
     terminalInstance,
     fitInstance,
+    terminalOptions: [] as unknown[],
     spawn: vi.fn(),
     write: vi.fn(),
     resize: vi.fn(),
@@ -42,7 +45,11 @@ const terminalMocks = vi.hoisted(() => {
 })
 
 vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn(() => terminalMocks.terminalInstance),
+  Terminal: vi.fn((options) => {
+    terminalMocks.terminalOptions.push(options)
+    terminalMocks.terminalInstance.options = options
+    return terminalMocks.terminalInstance
+  }),
 }))
 
 vi.mock('@xterm/addon-fit', () => ({
@@ -69,6 +76,7 @@ describe('TerminalSettings', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     useSettingsStore.setState({ locale: 'en' })
+    useUIStore.getState().setTheme('white')
     useSettingsStore.setState({
       desktopTerminal: {
         startupShell: 'system',
@@ -97,6 +105,8 @@ describe('TerminalSettings', () => {
     terminalMocks.terminalInstance.getSelection.mockReset()
     terminalMocks.terminalInstance.hasSelection.mockReset()
     terminalMocks.terminalInstance.paste.mockClear()
+    terminalMocks.terminalInstance.options = { theme: {} }
+    terminalMocks.terminalOptions.length = 0
     terminalMocks.terminalInstance.getSelection.mockReturnValue('')
     terminalMocks.terminalInstance.hasSelection.mockReturnValue(false)
     terminalMocks.fitInstance.fit.mockClear()
@@ -190,8 +200,35 @@ describe('TerminalSettings', () => {
 
     await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
     expect(screen.getByTestId('settings-terminal-toolbar')).toHaveTextContent('/bin/zsh')
+    expect(screen.getByTestId('settings-terminal-toolbar')).toHaveAttribute('data-terminal-chrome', 'integrated')
+    expect(screen.getByTestId('terminal-toolbar-identity')).toBeInTheDocument()
+    expect(document.querySelector('[class*="color-terminal-danger"]')).not.toBeInTheDocument()
+    expect(document.querySelector('[class*="color-terminal-warning"]')).not.toBeInTheDocument()
     expect(screen.getByTestId('settings-terminal-frame')).toBeInTheDocument()
     expect(screen.queryByText('Host shell')).not.toBeInTheDocument()
+  })
+
+  it('uses the app theme for xterm and updates a running terminal when the theme changes', async () => {
+    terminalMocks.available = true
+
+    render(<TerminalSettings />)
+
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+    expect(terminalMocks.terminalOptions.at(-1)).toMatchObject({
+      theme: {
+        background: '#FFFFFF',
+        foreground: '#242424',
+      },
+    })
+
+    act(() => useUIStore.getState().setTheme('dark'))
+
+    await waitFor(() => {
+      expect(terminalMocks.terminalInstance.options.theme).toMatchObject({
+        background: '#121212',
+        foreground: '#D7D2D0',
+      })
+    })
   })
 
   it('shows setup guidance from the terminal info button', () => {
