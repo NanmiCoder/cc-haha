@@ -79,6 +79,19 @@ describe('PR quality workflow', () => {
     expect(workflow).toContain('retention-days: 14')
   })
 
+  test('installs and validates the isolated React site for docs changes', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    const docsSteps = jobs['docs-checks'].steps ?? []
+    const runDocs = docsSteps.find((step) => step.name === 'Run docs checks')
+
+    expect(workflow).toContain('cache-dependency-path: site/package-lock.json')
+    expect(runDocs?.run).toBe(
+      'npm --prefix site ci && npm --prefix site run build && npm --prefix site run check',
+    )
+    expect(workflow).not.toContain('vitepress')
+  })
+
   test('keeps required PR checks deterministic and secret-free', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
 
@@ -103,5 +116,19 @@ describe('PR quality workflow', () => {
     expect(workflow).toContain('require_selected "provider-contract-checks"')
     expect(workflow).toContain('require_selected "chat-contract-checks"')
     expect(workflow).toContain('require_selected "coverage-checks"')
+  })
+})
+
+describe('docs deployment workflow', () => {
+  test('builds and uploads the isolated React site', () => {
+    const workflow = readFileSync('.github/workflows/deploy-docs.yml', 'utf8')
+
+    expect(workflow).toContain("      - 'site/**'")
+    expect(workflow).toContain('cache-dependency-path: site/package-lock.json')
+    expect(workflow).toContain('run: npm --prefix site ci')
+    expect(workflow).toContain('run: npm --prefix site run build')
+    expect(workflow).toContain('path: site/dist')
+    expect(workflow).not.toContain('vitepress')
+    expect(workflow).not.toContain('docs/.vitepress/dist')
   })
 })

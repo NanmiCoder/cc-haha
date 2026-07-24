@@ -33,6 +33,7 @@ describe('evaluateChangePolicy', () => {
   test('keeps docs-only changes on the docs lane', () => {
     const result = evaluateChangePolicy([
       'docs/index.md',
+      'site/src/App.tsx',
       'README.md',
     ])
 

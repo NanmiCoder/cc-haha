@@ -1,394 +1,202 @@
-# 架构设计
+# 桌面端架构
 
-> 从 Electron host 到 CLI 子进程，桌面端的三层通信架构。
+> 本页面向维护者，说明 Claude Code Haha 桌面端当前的 Electron、Bun Server 和 CLI 运行边界。
 
----
+## 架构概览
 
-## 技术栈
+桌面端不是把 CLI 直接嵌进 React。它由四类进程协作：
 
-### 前端
-
-| 技术 | 版本 | 职责 |
-|------|------|------|
-| React | 18 | UI 框架 |
-| Zustand | 5 | 状态管理 |
-| Vite | 6 | 构建工具 |
-| Tailwind CSS | 4 | 样式 |
-| Shiki | 4 | 代码高亮 |
-| Mermaid | 11 | 图表渲染 |
-| marked + DOMPurify | - | Markdown 渲染 |
-| react-diff-viewer | 4 | Diff 展示 |
-| Lucide React | - | 图标 |
-
-### 桌面层
-
-| 技术 | 版本 | 职责 |
-|------|------|------|
-| Electron | - | 跨平台桌面 host，管理 Chromium renderer、窗口、IPC 和系统能力 |
-| electron-builder | - | macOS/Windows/Linux 打包与 release artifact 生成 |
-| electron-updater | - | 自动更新检查、下载与安装 |
-| node-pty | - | Electron main 中的终端 PTY runtime |
-| `desktop/src-tauri` 资源目录 | - | 历史资源位置，暂存 sidecar 二进制、图标和 preview agent；不再作为桌面 runtime |
-
-### 服务端
-
-| 技术 | 职责 |
-|------|------|
-| Bun | 运行时 + 构建工具 |
-| Bun.serve | HTTP/WebSocket 服务器 |
-
-### 字体
-
-- **Inter** — 正文
-- **Manrope** — 标题
-- **JetBrains Mono** — 代码
-- **Material Symbols Outlined** — 图标
-
----
-
-## 三层架构
-
-```
-┌─────────────────────────────────────┐
-│         Electron Host (main/preload) │
-│  ┌─────────────────────────────┐    │
-│  │   Chromium Renderer         │    │  ← React 用户界面
-│  └───────────┬─────────────────┘    │
-│              │ HTTP + WebSocket      │
-│  ┌───────────▼─────────────────┐    │
-│  │   Server Sidecar (Bun)      │    │  ← API 服务 + 会话管理
-│  │   Port: 动态分配             │    │
-│  └───────────┬─────────────────┘    │
-│              │ 子进程 spawn          │
-│  ┌───────────▼─────────────────┐    │
-│  │   CLI 子进程                 │    │  ← AI 对话 + 工具执行
-│  └─────────────────────────────┘    │
-│                                     │
-│  ┌─────────────────────────────┐    │
-│  │   Adapter Sidecar (可选)    │    │  ← Telegram/飞书接入
-│  └─────────────────────────────┘    │
-└─────────────────────────────────────┘
+```text
+Electron main
+├── Chromium renderer（React UI）
+├── claude-sidecar server
+│   ├── Bun.serve HTTP API
+│   ├── Bun WebSocket 会话网关
+│   └── 按会话启动 CLI 子进程
+└── claude-sidecar adapters（按平台独立启动）
+    ├── Telegram
+    ├── Feishu
+    ├── WeChat
+    ├── DingTalk
+    └── WhatsApp
 ```
 
-### 第一层：Electron Host
+- **Electron main** 负责窗口、系统对话框、更新、终端、原生预览、宠物窗口和 Sidecar 生命周期。
+- **Renderer** 只负责界面，通过 preload 暴露的 `window.desktopHost` 使用原生能力。
+- **Server Sidecar** 是桌面端和 H5 共用的本地服务，提供 REST、WebSocket、Provider 代理和会话管理。
+- **CLI 子进程** 执行模型请求、工具调用和 Agent 编排。
+- **Adapter Sidecar** 把 IM 平台消息桥接到同一套 Server/CLI 会话。
 
-**职责**：窗口管理、Sidecar 进程编排、原生 API 桥接
+`desktop/src-tauri/` 目前只是保留打包资源和历史代码的位置，不是桌面运行时。当前桌面 Host 是 Electron。
 
-核心文件位于 `desktop/electron/`，通过 preload 暴露 `window.desktopHost`，renderer 只调用 typed host contract，不直接调用 Electron IPC。
+## 当前技术栈
 
-| 能力 | 说明 |
-|------|------|
-| `runtime.getServerUrl` | 前端获取 Server Sidecar 的 HTTP 地址 |
-| `dialogs.open/save` | 系统文件/目录选择与保存对话框 |
-| `shell.open/openPath` | 外链与本地路径打开，main 侧做 scheme/path allowlist |
-| `updates.check/download/install` | electron-updater 检查、下载、安装与 relaunch |
-| `terminal.*` | node-pty 会话创建、写入、resize、kill 和事件转发 |
-| `preview.*` | WebContentsView 预览面板与 preview-agent message bridge |
-| `appMode.*` | 默认/便携模式和 `CLAUDE_CONFIG_DIR` 启动语义 |
+| 层 | 主要技术 | 用途 |
+|---|---|---|
+| Renderer | React 18、Vite 8、TypeScript、Zustand 5 | 桌面 UI 与状态管理 |
+| 样式与内容 | Tailwind CSS 4、Marked、DOMPurify、Shiki 4、Mermaid、KaTeX | 布局、Markdown、代码和图表 |
+| Diff | `react-diff-viewer-continued` | 对话和工作区中的 Diff 展示 |
+| Electron Host | Electron、electron-builder、electron-updater | 原生窗口、打包和更新 |
+| 终端 | node-pty、xterm.js | 原生 PTY 与终端渲染 |
+| 本地服务 | Bun、`Bun.serve` | HTTP API 与 WebSocket |
 
-**状态管理**：
+版本以 `desktop/package.json` 为准。本页只列会影响架构理解的主版本，避免复制完整依赖清单。
 
-| 模块 | 说明 |
-|------|------|
-| `serverRuntime.ts` | server/adapters sidecar 生命周期、动态端口、日志和 env 注入 |
-| `sidecarManager.ts` | sidecar 二进制定位、参数构造、子进程管理 |
-| `windows.ts` | 窗口状态持久化、显示/聚焦、close-to-hide 生命周期 |
-| `updater.ts` | 更新元数据归一化、下载进度和安装前状态校验 |
+## Electron Host
 
-**启动流程**：
+核心入口与边界：
 
-1. 应用启动时解析便携模式，必要时设置 `CLAUDE_CONFIG_DIR`。
-2. 创建 `BrowserWindow` 并注入 preload host；dev 模式只允许 localhost renderer，packaged 模式加载 `app.asar/dist/index.html`。
-3. renderer 调用 `runtime.getServerUrl()`，Electron host 启动 `claude-sidecar server --app-root ... --host 0.0.0.0 --port {dynamic}`。
-4. server 健康检查通过后，React 继续加载设置、会话和 WebSocket。
-5. 修改 IM adapter 配置后，renderer 调用 `adapters.restartSidecar()`，host 重启 `claude-sidecar adapters` 并注入 `ADAPTER_SERVER_URL`。
+| 路径 | 职责 |
+|---|---|
+| `desktop/electron/main.ts` | Electron main 入口、窗口与 IPC 注册 |
+| `desktop/electron/preload.ts` | 向主 renderer 暴露类型化 Host API |
+| `desktop/electron/preview-preload.ts` | 原生网页预览的隔离桥接 |
+| `desktop/electron/pet-preload.ts` | 宠物窗口的最小能力桥接 |
+| `desktop/electron/ipc/` | IPC channel 注册和 payload 校验 |
+| `desktop/electron/services/` | Sidecar、更新、终端、预览、窗口、代理等系统服务 |
 
-**退出处理**：窗口默认 close-to-hide；明确退出、更新安装或 app mode restart 前会停止 server/adapters sidecar。
+Renderer 不应直接导入 Electron，也不应自行拼接任意 IPC channel。新增原生能力时，应同时更新 Host contract、main 侧校验和相关测试。
 
-**平台差异**：
-- **macOS**：overlay titlebar + 自定义菜单（关于、设置 Cmd+,、编辑、窗口）
-- **Windows**：`set_decorations(false)` 隐藏原生标题栏，前端自定义渲染 `TitleBar` + `WindowControls`
+### 启动流程
 
-### 第二层：Server Sidecar
+1. Electron 解析默认或便携存储模式，并准备应用配置目录。
+2. Host 选择可用端口，启动统一的 `claude-sidecar server` 二进制。
+3. Sidecar 从 `src/server/index.ts` 进入 `startServer()`，使用 `Bun.serve` 同时承载 HTTP 和 WebSocket。
+4. 健康检查通过后，Renderer 获取 loopback Server URL 并加载会话与设置。
+5. Host 根据已配置的平台启动对应 Adapter Sidecar。
+6. Server 在用户开始会话时按需启动 CLI 子进程。
 
-**职责**：HTTP REST API + WebSocket 网关 + 会话管理 + 协议代理
+Server 可绑定局域网可访问地址以支持 H5，但桌面 Renderer 使用 loopback 控制地址。H5、远程访问和宠物窗口分别经过其对应的 Token 与能力限制，不能因为本地 Server 已启动就假定所有来源都可信。
 
-核心文件 `src/server/`（项目根目录），分层结构：
+### Sidecar 入口
 
+`desktop/sidecars/claude-sidecar.ts` 是统一入口：
+
+```text
+claude-sidecar server   --app-root <path> --host <host> --port <port>
+claude-sidecar cli      --app-root <path> [CLI arguments]
+claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp
 ```
+
+Sidecar 在导入业务模块前设置 `CLAUDE_APP_ROOT`、`CALLER_DIR` 和启动参数，因为 Server、CLI 与 Adapter 的顶层模块会读取这些值。
+
+## Server Sidecar
+
+真实 Server 入口是 `src/server/index.ts`，不是单独的 `server.ts` 包装层。
+
+```text
 src/server/
-├── index.ts              # 入口
-├── server.ts             # HTTP 服务器
-├── router.ts             # 路由注册
-├── sessionManager.ts     # 会话管理器
-├── api/                  # REST 路由层 (14 个模块)
-├── services/             # 业务服务层 (14 个模块)
-├── ws/                   # WebSocket 处理
-├── proxy/                # API 代理（Anthropic/OpenAI 协议转换）
-├── middleware/            # auth、cors、errorHandler
-└── config/               # Provider 预设
+├── index.ts          # Bun.serve、鉴权、CORS、升级和静态 H5
+├── router.ts         # REST 资源路由
+├── api/              # API 边界
+├── services/         # 会话、Provider、索引、诊断等业务服务
+├── ws/               # WebSocket 协议与会话生命周期
+├── proxy/            # Provider 协议与流式响应转换
+├── middleware/       # Auth、CORS 和错误边界
+└── config/           # Provider 预设
 ```
 
-### 第三层：CLI 子进程
+`Bun.serve` 的同一个 `fetch` 边界处理：
 
-**职责**：AI 对话核心、工具执行、Agent 编排
+- `/api/*` REST 请求
+- `/ws/:sessionId` 桌面、H5 和宠物客户端连接
+- `/sdk/:sessionId` CLI 内部连接
+- OAuth 回调
+- 受限的预览与本地文件访问
+- 打包后的 H5 静态资源
 
-Server 为每个 Session spawn 一个 CLI 子进程，通过 stdin/stdout JSON 通信。
+鉴权规则按客户端能力区分。新增路由时，必须先确定它属于本地桌面、H5、宠物、内部 SDK 还是公开静态资源，再放进对应的认证和 CORS 边界。
 
-### Sidecar 构建
+## WebSocket 语义
 
-使用 Bun 编译为独立二进制（`desktop/scripts/build-sidecars.ts`）：
+Renderer 为每个会话维护一条连接：
 
-三种模式共用一个入口 `desktop/sidecars/claude-sidecar.ts`：
-- `server` — 启动 HTTP/WS 服务
-- `cli` — 启动 CLI 子进程
-- `adapters` — 启动 IM 适配器（解析 `--feishu`/`--telegram` 参数，检查凭据后按需加载）
-
-编译产物仍放置在 `desktop/src-tauri/binaries/`，作为历史稳定资源目录；Electron Builder 通过 `files` 和 `asarUnpack` 把它们打入 `app.asar.unpacked`。
-
----
-
-## WebSocket 通信协议
-
-### 连接地址
-
-```
-ws://127.0.0.1:{port}/ws/{sessionId}
+```text
+ws://<server>/ws/<sessionId>
 ```
 
-前端通过 `WebSocketManager`（per-session 连接）管理，支持自动重连、消息队列缓冲、ping 心跳保活。
+如果 Server 启用了认证，客户端会把 Token 放在连接查询参数中。连接成功后，Server 会发送当前会话标识、尚未处理的权限请求快照和运行状态。
 
-### 客户端 → 服务端
+### 心跳与重连
 
-| type | 说明 |
-|------|------|
-| `user_message` | 用户消息（含 content, attachments） |
-| `permission_response` | 权限审批（requestId, allowed, rule） |
-| `set_permission_mode` | 切换权限模式 |
-| `stop_generation` | 停止生成 |
-| `ping` | 心跳 |
+当前 `desktop/src/api/websocket.ts` 的行为是：
 
-### 服务端 → 客户端
+- 连接后每 30 秒发送一次 `ping`。
+- 10 秒内没有收到 `pong`，客户端主动关闭连接并进入重连。
+- 重连延迟从 1 秒开始指数增长，最高封顶 30 秒。
+- 自动重连没有固定的最大尝试次数；显式关闭会话才停止。
+- 断线期间发送的消息进入内存队列。
+- 重连成功后先发送队列中的消息，再发送 `sync_state` 获取 Server 的权威运行状态。
 
-| type | 说明 |
-|------|------|
-| `connected` | 连接成功 |
-| `status` | 状态变更（thinking/generating） |
-| `content_start` / `content_delta` | 流式文本 |
-| `thinking` | Extended Thinking |
-| `tool_use_complete` | 工具调用就绪 |
-| `tool_result` | 工具执行结果 |
-| `permission_request` | 权限请求 |
-| `message_complete` | 消息完成（含 Token 统计） |
-| `error` | 错误通知 |
-| `session_title_updated` | 标题更新 |
-| `team_update` / `team_created` / `team_deleted` | 团队事件 |
-| `task_update` | 任务变更 |
-| `pong` | 心跳响应 |
+因此，不应把旧文档里的“最多重试 10 次”当成当前语义。
 
-### 连接管理
+### 客户端断开不等于停止任务
 
-- **心跳**：30s 间隔 ping/pong
-- **重连**：指数退避 `min(1000ms × 2^n, 30000ms)`，最多 10 次
-- **缓冲**：未连接时消息暂存队列，恢复后自动发送
+最后一个客户端断开后：
 
----
+- 正在运行的前台回合或后台任务继续执行。
+- 工作结束后才进入空闲宽限期。
+- 客户端在宽限期内重连会取消清理。
+- 超过宽限期且没有客户端，Server 才停止对应 CLI。
+- 等待权限的会话有独立的有界清理策略，避免永久占用进程。
 
-## HTTP API
+这让手机锁屏、Renderer 刷新或短暂网络切换不会直接中断正在运行的任务。
 
-### 会话
+## CLI 与 Provider 代理
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| `GET` | `/api/sessions` | 列表（支持 project/limit/offset 筛选） |
-| `POST` | `/api/sessions` | 创建 |
-| `GET` | `/api/sessions/:id/messages` | 历史消息 |
-| `PATCH` | `/api/sessions/:id` | 重命名 |
-| `DELETE` | `/api/sessions/:id` | 删除 |
-| `GET` | `/api/sessions/:id/git-info` | Git 信息 |
-| `GET` | `/api/sessions/:id/slash-commands` | 可用斜杠命令 |
-| `GET` | `/api/sessions/recent-projects` | 最近项目 |
+Server 按会话启动 CLI，并通过内部协议转发输出、权限请求、工具结果和后台任务状态。会话的 Provider、模型、effort 和权限模式由 Server/CLI 共同维护，Renderer 不是唯一真相来源。
 
-### 模型与提供商
+`src/server/proxy/` 处理支持的 Provider 协议：
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| `GET/PUT` | `/api/models/current` | 当前模型 |
-| `GET` | `/api/models` | 可用模型列表 |
-| `GET/PUT` | `/api/effort` | Effort 级别 |
-| `GET/POST/PUT/DELETE` | `/api/providers` | 提供商 CRUD |
-| `POST` | `/api/providers/:id/activate` | 激活 |
-| `POST` | `/api/providers/:id/test` | 测试连接 |
-| `GET` | `/api/providers/presets` | 预设列表 |
+- Anthropic Messages
+- OpenAI Chat Completions
+- OpenAI Responses
 
-### 定时任务
+Provider 的模型映射、认证方式和上下文设置以实际 Provider 配置为准，不应在架构文档中硬编码厂商清单。
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| `GET/POST/PUT/DELETE` | `/api/scheduled-tasks` | 任务 CRUD |
-| `POST` | `/api/scheduled-tasks/:id/run` | 手动运行 |
-| `GET` | `/api/scheduled-tasks/runs` | 运行记录 |
+## IM Adapter
 
-### 其他
+每个平台使用独立 Adapter Sidecar，避免一个平台的凭据或启动失败拖垮其他平台。
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| `GET` | `/api/teams` | Agent 团队 |
-| `GET` | `/api/teams/:name/members/:agentId/transcript` | 成员转录 |
-| `GET` | `/api/agents` | Agent 定义 |
-| `GET` | `/api/skills` | 技能列表 |
-| `GET/PUT` | `/api/adapters` | 适配器配置 |
-| `GET/PUT` | `/api/settings/user` | 用户设置 |
-| `GET/PUT` | `/api/permissions/mode` | 权限模式 |
-| `GET` | `/api/tasks/lists` | CLI 任务清单 |
-| `GET` | `/health` | 健康检查 |
-
----
-
-## 状态管理
-
-使用 Zustand，按领域拆分为 12 个 Store：
-
-| Store | 核心状态 |
-|-------|----------|
-| `chatStore` | per-session 消息、流式状态、权限请求、Token 统计 |
-| `sessionStore` | 会话列表、activeSessionId、项目筛选 |
-| `tabStore` | 标签页顺序（localStorage 持久化） |
-| `settingsStore` | 权限模式、当前模型、effort、语言 |
-| `providerStore` | Provider 列表、activeId |
-| `uiStore` | 主题、侧边栏、activeView、Toast、设置标签页 |
-| `taskStore` | 定时任务、运行记录 |
-| `teamStore` | 团队列表、成员转录轮询 |
-| `agentStore` | Agent 定义列表 |
-| `skillStore` | 技能元数据、详情 |
-| `adapterStore` | 适配器配置、配对码 |
-| `cliTaskStore` | per-session CLI 任务追踪 |
-
-### 数据流
-
-```
-用户操作 → Component → Store → API/WebSocket → Server → Store → Component 重渲染
+```text
+IM 平台
+  → adapters/<platform>
+  → adapters/common WebSocket bridge
+  → Server Sidecar
+  → CLI 会话
 ```
 
-### 持久化
+共享层位于 `adapters/common/`，负责配置、配对、会话映射、消息缓冲、去重、附件和 Server WebSocket 桥接。当前平台目录包括：
 
-| 数据 | 存储 |
-|------|------|
-| 标签页状态 | `localStorage` |
-| 语言偏好 | `localStorage` |
-| 会话数据 | Server JSONL (`~/.claude/sessions/`) |
-| 设置 | Server API |
-| 适配器配置 | `~/.claude/adapters.json` |
+- `adapters/telegram/`
+- `adapters/feishu/`
+- `adapters/wechat/`
+- `adapters/dingtalk/`
+- `adapters/whatsapp/`
 
----
+## 持久化边界
 
-## 协议代理层
+不同数据不共享同一个存储：
 
-Server 内置代理层（`src/server/proxy/`），统一不同 AI 提供商的 API 格式。
+| 数据 | 主要边界 |
+|---|---|
+| Renderer UI 偏好与打开标签 | 浏览器存储及其迁移 |
+| 会话与消息 | Server/CLI 管理的本地会话数据 |
+| Provider、H5、Computer Use 等设置 | Server 管理的配置文件 |
+| Electron 窗口和原生状态 | Electron user data / 应用模式目录 |
+| IM 配置和配对状态 | Adapter 配置与各平台状态目录 |
 
-### 支持格式
+任何 JSON、`localStorage` 或应用配置形状变化都必须带前向迁移和旧数据回归测试。不要直接覆盖用户的共享 Claude 配置，也不要在测试中读取真实用户目录。
 
-| 格式 | 典型提供商 |
-|------|-----------|
-| `anthropic` | Anthropic、OpenRouter、MiniMax |
-| `openai_chat` | OpenAI、DeepSeek、Ollama |
-| `openai_responses` | OpenAI Responses API |
+## 构建与验证
 
-### 模型映射
+桌面构建由 `desktop/package.json` 的脚本编排：
 
-每个 Provider 配置 4 个模型槽位：`main`、`haiku`、`sonnet`、`opus`，前端按槽位名调用，代理层自动映射为实际模型名。
-
----
-
-## 适配器架构
-
-适配器系统让 Telegram/飞书等 IM 平台接入 Claude Code。
-
-```
-IM 平台 → Adapter 进程 → HTTP + WebSocket → Server → CLI
+```bash
+cd desktop
+bun run build:sidecars
+bun run build
+bun run build:electron
 ```
 
-### 共享模块 `adapters/common/`
-
-| 模块 | 职责 |
-|------|------|
-| `config.ts` | 配置加载（env > JSON > 默认值） |
-| `ws-bridge.ts` | WebSocket 桥接（心跳、重连、消息路由） |
-| `pairing.ts` | 用户配对（6 位安全码、速率限制） |
-| `session-store.ts` | Chat → Session 映射持久化 |
-| `message-buffer.ts` | 流式缓冲（500ms / 200 字符阈值） |
-| `message-dedup.ts` | 消息去重 |
-| `chat-queue.ts` | 同一 Chat 消息串行队列 |
-| `http-client.ts` | HTTP 客户端 |
-
-### 分片限制
-
-- Telegram: 4000 字符/消息
-- 飞书: 30000 字符/消息
-
----
-
-## 项目目录结构
-
-```
-desktop/
-├── src/                              # React 前端
-│   ├── api/                         #   API 客户端 (15 个模块)
-│   ├── components/
-│   │   ├── layout/                  #   AppShell, Sidebar, TabBar, TitleBar,
-│   │   │                            #   WindowControls, StatusBar, ContentRouter,
-│   │   │                            #   ProjectFilter
-│   │   ├── chat/                    #   ChatInput, MessageList, AssistantMessage,
-│   │   │                            #   ToolCallBlock, ToolCallGroup, ThinkingBlock,
-│   │   │                            #   PermissionDialog, CodeViewer, DiffViewer,
-│   │   │                            #   ImageGalleryModal, StreamingIndicator ...
-│   │   ├── shared/                  #   Button, Modal, Toast, Spinner,
-│   │   │                            #   UpdateChecker, DirectoryPicker ...
-│   │   ├── controls/                #   ModelSelector, PermissionModeSelector
-│   │   ├── markdown/                #   MarkdownRenderer, MermaidRenderer
-│   │   ├── skills/                  #   SkillList, SkillDetail
-│   │   ├── tasks/                   #   TaskList, TaskRow, NewTaskModal,
-│   │   │                            #   DayOfWeekPicker, PromptEditor ...
-│   │   └── teams/                   #   TeamStatusBar
-│   ├── pages/                       #   ActiveSession, EmptySession, Settings,
-│   │                                #   AdapterSettings, AgentTeams, ScheduledTasks,
-│   │                                #   ComputerUseSettings, ToolInspection ...
-│   ├── stores/                      #   12 个 Zustand store
-│   ├── types/                       #   TypeScript 类型 (9 个模块)
-│   ├── hooks/                       #   useKeyboardShortcuts
-│   ├── i18n/                        #   中/英 国际化
-│   ├── config/                      #   providerPresets, spinnerVerbs
-│   └── lib/                         #   desktopRuntime, cronDescribe, parseRunOutput
-├── src-tauri/
-│   ├── binaries/                    #   Electron 打包使用的 sidecar 二进制
-│   ├── resources/preview-agent.js   #   预览页面注入脚本
-│   ├── src/main.rs                  #   历史 Tauri 入口，非当前 runtime
-│   ├── src/lib.rs                   #   历史 Tauri host，非当前 runtime
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── electron/
-│   ├── main.ts                      #   Electron main 入口
-│   ├── preload.ts                   #   renderer host bridge
-│   ├── preview-preload.ts           #   preview WebContentsView bridge
-│   ├── ipc/                         #   channel registry + payload validators
-│   └── services/                    #   dialogs, shell, updater, terminal, preview ...
-├── sidecars/
-│   └── claude-sidecar.ts            #   统一入口 (server/cli/adapters)
-└── scripts/
-    ├── build-sidecars.ts
-    ├── build-macos-arm64.sh
-    └── build-windows-x64.ps1
-
-src/server/                           # 服务端（项目根目录）
-├── api/                             #   REST 路由 (14 个模块)
-├── services/                        #   业务服务 (14 个模块)
-├── ws/                              #   WebSocket 处理
-├── proxy/                           #   协议代理转换
-├── middleware/                      #   auth, cors, errorHandler
-└── config/                          #   Provider 预设
-
-adapters/                             # IM 适配器
-├── common/                          #   共享模块 (8 个)
-├── telegram/                        #   Telegram Bot
-└── feishu/                          #   飞书 Bot
-```
+`electron:package` 在此基础上运行 electron-builder。打包产物验证只能证明资源和安装包结构正确；涉及窗口、权限、终端、预览、更新或 Computer Use 的用户流程，还需要真实桌面 Smoke 验证。
