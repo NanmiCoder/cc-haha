@@ -1,0 +1,26 @@
+{
+  "name": "claude-code-haha-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/generate-docs-manifest.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/generate-docs-manifest.mjs",
+    "build": "vite build",
+    "postbuild": "node scripts/prepare-static-output.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check": "npm run check:docs"
+  },
+  "dependencies": {
+    "dompurify": "^3.3.0",
+    "marked": "^17.0.5",
+    "mermaid": "^11.14.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "vite": "^8.0.10"
+  }
+}

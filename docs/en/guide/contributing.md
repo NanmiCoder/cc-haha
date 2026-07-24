@@ -143,7 +143,7 @@ bun run check:native      # Desktop sidecars, Electron host, and package-smoke c
 bun run check:provider-contract # Offline provider/runtime/proxy contract tests
 bun run check:chat-contract     # WebSocket, session, and desktop chat-store contracts
 bun run check:persistence-upgrade # Persistence migrations and old-fixture compatibility
-bun run check:docs        # Docs build, using npm ci + docs:build
+bun run check:docs        # Isolated install, build, and validation for the site/ React docs
 bun run check:quarantine  # Maintainer baseline/release quarantine audit
 bun run check:coverage    # Root, desktop, and adapter coverage reports plus ratchet enforcement
 ```

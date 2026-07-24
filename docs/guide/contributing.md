@@ -143,7 +143,7 @@ bun run check:native      # 桌面 sidecar、Electron host 与 package-smoke 检
 bun run check:provider-contract # Provider/runtime/proxy 的离线契约测试
 bun run check:chat-contract     # WebSocket、会话与桌面 chat store 契约测试
 bun run check:persistence-upgrade # 持久化迁移和旧 fixture 兼容性
-bun run check:docs        # 文档构建，使用 npm ci + docs:build
+bun run check:docs        # 独立安装、构建并检查 site/ React 文档站
 bun run check:quarantine  # 维护者 baseline/release quarantine 审计
 bun run check:coverage    # root、desktop、adapters 覆盖率报告和 ratchet 门禁
 ```

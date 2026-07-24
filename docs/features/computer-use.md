@@ -1,176 +1,54 @@
-# Computer Use 功能指南
+# Computer Use 使用指南
 
+Computer Use 允许模型读取屏幕并操作鼠标、键盘、应用和剪贴板。它直接作用于当前电脑，启用前请先理解授权范围和平台差异。
 
-> **魔改说明**：本功能是基于 Claude Code 泄露源码中的 Computer Use（内部代号 "Chicago"）进行的**深度改造版本**。官方实现依赖 Anthropic 内部私有原生模块（`@ant/computer-use-swift`、`@ant/computer-use-input`），无法公开获取。我们**替换了整个底层操作层**，使用 Python bridge 实现所有系统交互——macOS 使用 `pyautogui` + `mss` + `pyobjc`，Windows 使用 `pyautogui` + `mss` + `win32gui` + `psutil`，使得任何人都可以在 macOS 和 Windows 上运行 Computer Use 功能。
+## 支持平台
 
----
+| 平台 | 状态 | 关键差异 |
+|---|---|---|
+| macOS Apple Silicon / Intel | 支持 | 需要“辅助功能”和“屏幕录制”权限；支持原生截图过滤 |
+| Windows | 支持 | 使用 Windows Python 运行时；截图不会过滤未授权窗口 |
+| Linux | 不支持 | 当前没有 Linux 执行器 |
 
-## 目录
-
-- [功能简介](#功能简介)
-- [支持的设备与平台](#支持的设备与平台)
-- [工作原理](#工作原理)
-- [快速开始](#快速开始)
-- [使用方式](#使用方式)
-- [安全机制](#安全机制)
-- [环境变量](#环境变量)
-- [技术架构详解](#技术架构详解)
-- [我们尝试过的方案](#我们尝试过的方案)
-- [已知限制](#已知限制)
-- [参考项目与致谢](#参考项目与致谢)
-
----
-
-## 功能简介
-
-Computer Use 让 AI 模型能够**直接控制你的电脑**——截屏、移动鼠标、点击按钮、输入文字、管理应用窗口。
-
-支持的操作（共 24 个 MCP 工具）：
-
-| 类别 | 工具 |
-|------|------|
-| 截屏 | `screenshot`、`zoom` |
-| 鼠标 | `left_click`、`right_click`、`middle_click`、`double_click`、`triple_click`、`left_click_drag`、`mouse_move`、`left_mouse_down`、`left_mouse_up`、`cursor_position`、`scroll` |
-| 键盘 | `type`、`key`、`hold_key` |
-| 应用 | `open_application`、`switch_display` |
-| 权限 | `request_access`、`list_granted_applications` |
-| 剪贴板 | `read_clipboard`、`write_clipboard` |
-| 其他 | `wait`、`computer_batch` |
-
----
-
-## 支持的设备与平台
-
-| 平台 | 芯片 | 状态 | 说明 |
-|------|------|------|------|
-| macOS | Apple Silicon (M1/M2/M3/M4) | ✅ 完整支持 | 推荐平台 |
-| macOS | Intel x86_64 | ✅ 完整支持 | |
-| Windows | x64 | ✅ 完整支持 | 使用 `win32gui` + `psutil` + `pyperclip` + `screeninfo` 替代 macOS 专有 API |
-| Linux | 任意 | ⚠️ 理论可行 | 需替换平台专有部分为 `wmctrl` + `xdotool`，当前未适配 |
-
-### 运行环境要求
-
-- [Bun](https://bun.sh) >= 1.1.0
-- Python >= 3.8（首次运行自动创建 venv 并安装依赖）
-- **macOS**：系统权限 Accessibility（辅助功能）+ Screen Recording（屏幕录制）
-- **Windows**：无需额外权限配置
-
----
-
-## 工作原理
-
-Computer Use 的核心是一个**截图-分析-操作**的闭环：
-
-```
-┌──────────────────────────────────────────────┐
-│  AI 模型（Claude / 其他 Anthropic 协议模型）     │
-│                                               │
-│  1. 收到用户请求 "打开网易云搜索喜欢你"            │
-│  2. 调用 screenshot 工具 → 收到屏幕截图           │
-│  3. 模型分析截图像素，识别 UI 元素位置              │
-│     → "搜索框在 (756, 342)"                     │
-│  4. 调用 left_click { coordinate: [756, 342] }  │
-│  5. 调用 type { text: "喜欢你" }                 │
-│  6. 再次 screenshot → 确认结果 → 下一步...        │
-└──────────────┬───────────────────────────────┘
-               │ MCP Tool Call
-               ▼
-┌──────────────────────────────────────────────┐
-│  TypeScript 工具层                              │
-│  (vendor/computer-use-mcp)                     │
-│                                               │
-│  - 安全检查（应用白名单、TCC 权限）               │
-│  - 坐标模式转换（pixels / normalized）           │
-│  - 工具分发 → executor                          │
-└──────────────┬───────────────────────────────┘
-               │ callPythonHelper()
-               ▼
-┌──────────────────────────────────────────────┐
-│  Python Bridge                                │
-│  macOS: runtime/mac_helper.py                 │
-│  Windows: runtime/win_helper.py               │
-│                                               │
-│  pyautogui.click(756, 342)  ← 鼠标控制         │
-│  mss.grab(monitor)          ← 截图             │
-│  macOS: NSWorkspace.open()  ← 应用管理          │
-│  Windows: win32gui / psutil ← 应用管理          │
-└──────────────────────────────────────────────┘
-```
-
-**关键：坐标分析完全由模型的视觉能力完成**——模型"看"截图就像人看屏幕一样，直接从像素中识别按钮、输入框等 UI 元素的位置。
-
----
+打包桌面端不要求用户安装 Bun。Computer Use 需要可用的 Python 3，应用会在用户配置目录下创建隔离的虚拟环境并安装平台依赖。
 
 ## 快速开始
 
-### 1. 安装依赖
+### 桌面端
+
+1. 打开“设置 → Computer Use”。
+2. 开启 Computer Use。
+3. 检查 Python 状态；自动检测失败时，可选择 Python 可执行文件。
+4. 执行安装或修复，让应用创建虚拟环境和安装依赖。
+5. macOS 用户授予“辅助功能”和“屏幕录制”权限，然后重新检查。
+6. 选择允许控制的应用，并按需要开启剪贴板和系统组合键权限。
+7. 新建会话，用自然语言描述目标和允许操作的应用。
+
+可以从简单、可撤销的任务开始：
+
+```text
+截取当前屏幕并告诉我你看到了什么。
+打开 Notes，新建一条标题为“测试”的空白笔记。
+在已授权的应用中，帮我找到设置入口，但不要修改任何内容。
+```
+
+### CLI
+
+源码模式需要先安装项目依赖，并保证 Python 3 可用：
 
 ```bash
 bun install
-```
-
-### 2. 确保 Python 3 可用
-
-```bash
-python3 --version  # 需要 >= 3.8
-```
-
-> Python 依赖会在首次使用 Computer Use 时**自动安装**到 `.runtime/venv/`，无需手动操作。
-
-### 3. 授予 macOS 权限
-
-#### Accessibility（辅助功能）
-
-```bash
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-```
-
-将你的**终端应用**（如 iTerm、Terminal、Ghostty 等）添加到允许列表。
-
-#### Screen Recording（屏幕录制）
-
-```bash
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-```
-
-同样添加你的终端应用。授权后可能需要**重启终端**。
-
-### 4. 启动
-
-```bash
+python3 --version
 ./bin/claude-haha
 ```
 
-### 5. 使用
-
-在对话中用自然语言请求即可：
-
-```
-> 帮我打开网易云音乐，搜索一首歌
-> 截个屏看看当前桌面
-> 帮我在 VS Code 里打开终端
-```
-
----
-
-## 使用方式
-
-首次使用 Computer Use 时，系统会弹出**应用授权对话框**，你需要选择允许 Claude 操作的应用。
-
-- 模型会先调用 `request_access` 请求权限
-- 你在终端中确认允许哪些应用
-- 之后模型就可以截图、点击、输入了
-
-### 禁用 Computer Use
-
-如果你只想使用普通 Coding Agent，不希望暴露 `computer-use` MCP 工具，可以使用任一方式禁用：
+可以通过环境变量关闭动态 Computer Use MCP：
 
 ```bash
-claude-haha --no-computer-use
-CLAUDE_COMPUTER_USE_ENABLED=0 claude-haha
+CLAUDE_COMPUTER_USE_ENABLED=0 ./bin/claude-haha
 ```
 
-也可以写入全局配置文件 `~/.claude/cc-haha/computer-use-config.json`：
+也可以在 `~/.claude/cc-haha/computer-use-config.json` 中设置：
 
 ```json
 {
@@ -178,164 +56,134 @@ CLAUDE_COMPUTER_USE_ENABLED=0 claude-haha
 }
 ```
 
-桌面端的 Settings > Computer Use 开关写入同一个配置。关闭后，新会话不会注入 `computer-use` 动态 MCP，也不会把桌面控制工具加入 `allowedTools`。
+桌面设置页修改的是同一份托管配置。优先使用设置页，不要手工覆盖其中未知字段。
 
----
+## 工具与 Teach 能力
 
-## 安全机制
+代码中定义了 27 个 Computer Use 工具：
 
-| 机制 | 说明 |
-|------|------|
-| **应用白名单** | 每次会话需要明确授权允许操作的应用 |
-| **并发保护** | 同一时间只有一个 Claude 会话可使用 Computer Use（文件锁机制） |
-| **剪贴板保护** | 通过剪贴板输入文本时会自动保存和恢复原始剪贴板内容 |
-| **操作确认** | 敏感操作（如系统快捷键）需要额外授权 |
+| 类别 | 工具 |
+|---|---|
+| 授权 | `request_access`、`list_granted_applications` |
+| 截图 | `screenshot`、`zoom` |
+| 鼠标 | `left_click`、`right_click`、`middle_click`、`double_click`、`triple_click`、`left_click_drag`、`mouse_move`、`left_mouse_down`、`left_mouse_up`、`cursor_position`、`scroll` |
+| 键盘 | `type`、`key`、`hold_key` |
+| 应用 | `open_application`、`switch_display` |
+| 剪贴板 | `read_clipboard`、`write_clipboard` |
+| 控制流 | `wait`、`computer_batch` |
+| Teach | `request_teach_access`、`teach_step`、`teach_batch` |
 
-> 注意：由于底层改为 Python bridge，原生方案中的全局 Escape 快捷键中止和操作前自动隐藏应用功能暂不可用。可使用 `Ctrl+C` 中止。
+基础控制能力包含 24 个工具。Teach 的 3 个工具只在宿主启用 Teach capability 时公开；未启用时，当前会话只会看到基础工具。
 
----
+Teach 用于“带着用户一步一步操作”的场景：
 
-## 环境变量
+1. `request_teach_access` 请求教学所需的应用授权。
+2. `teach_step` 展示一个带锚点的说明，并等待用户点击下一步。
+3. `teach_batch` 把可以预判的多个教学步骤合并，减少模型往返。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CLAUDE_COMPUTER_USE_ENABLED` | `1` | 设为 `0` 可禁用 Computer Use |
-| `CLAUDE_COMPUTER_USE_COORDINATE_MODE` | `pixels` | 坐标模式：`pixels` 或 `normalized_0_100` |
-| `CLAUDE_COMPUTER_USE_CLIPBOARD_PASTE` | `1` | 是否启用剪贴板粘贴输入 |
-| `CLAUDE_COMPUTER_USE_MOUSE_ANIMATION` | `1` | 是否启用鼠标动画 |
-| `CLAUDE_COMPUTER_USE_HIDE_BEFORE_ACTION` | `0` | 操作前是否隐藏其他窗口 |
-| `CLAUDE_COMPUTER_USE_DEBUG` | `0` | 调试模式 |
+Teach 授权与普通控制授权相互独立。教学步骤仍经过应用白名单和输入安全检查；用户退出教学后，模型不应继续调用 Teach 工具。
 
----
+## 工作原理
 
-## 技术架构详解
+Computer Use 使用“截图 → 分析 → 操作 → 再截图”的闭环：
 
-### 整体分层
-
-```
-src/
-├── vendor/computer-use-mcp/     ← MCP 工具定义与分发（12 个文件）
-│   ├── tools.ts                 ← 24 个工具的 schema 定义
-│   ├── toolCalls.ts             ← 安全检查 + 工具分发
-│   ├── mcpServer.ts             ← MCP 服务器创建
-│   ├── types.ts                 ← 全部类型定义
-│   └── ...
-├── utils/computerUse/
-│   ├── executor.ts              ← 执行器（调用 Python bridge）
-│   ├── pythonBridge.ts          ← Python 子进程管理
-│   ├── hostAdapter.ts           ← 权限检查适配器
-│   ├── gates.ts                 ← 功能开关（已绕过灰度）
-│   ├── wrapper.tsx              ← MCP 工具覆写层
-│   ├── setup.ts                 ← MCP 配置初始化
-│   └── ...
-└── runtime/
-    ├── mac_helper.py            ← macOS Python 实现
-    ├── win_helper.py            ← Windows Python 实现
-    ├── requirements.txt         ← macOS Python 依赖
-    └── requirements-win.txt     ← Windows Python 依赖
+```text
+模型
+  → 调用 Computer Use MCP 工具
+  → TypeScript 调度与安全检查
+  → Python Bridge
+  → macOS / Windows 系统操作
+  → 截图或操作结果返回模型
 ```
 
-### 灰度控制绕过
+- 工具定义与授权逻辑位于 `src/vendor/computer-use-mcp/`。
+- CLI 集成和 Python Bridge 位于 `src/utils/computerUse/`。
+- 平台执行器位于 `runtime/mac_helper.py` 和 `runtime/win_helper.py`。
+- 桌面安装、权限和预授权由 `src/server/api/computer-use.ts` 与 `desktop/src/pages/ComputerUseSettings.tsx` 管理。
 
-官方 Claude Code 中 Computer Use 通过三层门控限制访问：
+## 授权模型
 
-| 层级 | 原始机制 | 我们的处理 |
-|------|----------|-----------|
-| 编译时 | `feature('CHICAGO_MCP')` (Bun 编译宏) | 替换为 `true` |
-| 订阅检查 | `hasRequiredSubscription()` (Max/Pro) | `getChicagoEnabled()` 直接返回 `true` |
-| 远程配置 | GrowthBook `tengu_malort_pedway` | 同上，不再依赖远程配置 |
-| 默认禁用 | `isDefaultDisabledBuiltin('computer-use')` | `isDefaultDisabledBuiltin()` 返回 `false` |
+### 应用授权
 
-### Python Bridge 工作机制
+模型必须先调用 `request_access`，说明需要哪些应用以及原因。用户可以批准或拒绝。设置页中的预授权应用是默认授权配置，不代表任意应用都可以被控制；运行中新增应用仍需要走相应授权流程。
 
-```typescript
-// pythonBridge.ts
-async function callPythonHelper<T>(command: string, payload: object): Promise<T> {
-  await ensureBootstrapped()  // 首次调用自动创建 venv + pip install
-  
-  // 调用: python3 runtime/mac_helper.py <command> --payload '{...}'
-  const result = execFile(pythonBin, ['mac_helper.py', command, '--payload', JSON.stringify(payload)])
-  
-  return JSON.parse(result.stdout)  // { ok: true, result: T }
-}
-```
+应用按能力分为三个等级：
 
-首次运行自动完成：
-1. 创建 Python 虚拟环境 (`.runtime/venv/`)
-2. 安装 pip
-3. 按平台安装依赖：
-   - **macOS**: `mss`, `Pillow`, `pyautogui`, `pyobjc-*`（`requirements.txt`）
-   - **Windows**: `mss`, `Pillow`, `pyautogui`, `win32gui`, `psutil`, `pyperclip`, `screeninfo`（`requirements-win.txt`）
-4. SHA256 哈希验证（仅 requirements 变更时重新安装）
+| 等级 | 能力 |
+|---|---|
+| `read` | 读取截图，不执行输入 |
+| `click` | 点击、移动和滚动，不输入文字或执行高权限动作 |
+| `full` | 在其他安全检查通过后允许键盘、拖拽等完整操作 |
 
----
+### 剪贴板与系统组合键
 
-## 我们尝试过的方案
+剪贴板读取、剪贴板写入和系统级组合键是单独的授权标志。允许控制某个应用，不会自动获得这些权限。
 
-### 方案一：从 Claude Code 二进制提取原生 .node 模块 ❌
+### 并发
 
-**思路**：从已安装的 Claude Code 二进制 (`~/.local/share/claude/versions/2.1.91`，189MB Mach-O) 中定位并提取嵌入的原生 NAPI 模块。
+Computer Use 使用会话锁防止多个会话同时争夺鼠标和键盘。看到“正在被其他会话使用”时，应先停止或完成原会话，而不是删除锁文件。
 
-**实施**：
-- 成功从 Bun `$bunfs` 虚拟文件系统中提取了 `computer-use-swift.node` (ARM64 424KB + x64 430KB) 和 `computer-use-input.node` (ARM64 836KB + x64 821KB)
-- 同步方法（TCC 权限检查、显示枚举）正常工作
-- 创建了 npm 包装包并通过 workspace 注册
+## 平台安全边界
 
-**失败原因**：
-- Swift 异步方法（`screenshot.captureExcluding`）的 continuation 永远不会 resume
-- 根因：提取的 .node 文件是针对 Claude Code 内置的 Bun 运行时编译的，与用户系统的 Bun 版本的 N-API 异步实现不兼容
-- 错误信息：`SWIFT TASK CONTINUATION MISUSE: captureScreenWithExclusion leaked its continuation without resuming it`
+### macOS
 
-### 方案二：创建空 Stub 包 ❌
+- 需要“辅助功能”才能输入和操作应用。
+- 需要“屏幕录制”才能截图。
+- 截图支持原生窗口过滤，只保留授权应用和桌面。
 
-**思路**：为 `@ant/computer-use-mcp`、`@ant/computer-use-input`、`@ant/computer-use-swift` 创建最小化的 stub 包，使代码能编译加载。
+### Windows
 
-**失败原因**：代码能编译但 MCP 服务器注册后无法执行任何实际操作——截图、点击等全部报错。
+- 当前截图过滤能力为 `none`：截图中可能出现所有可见窗口。
+- 应用白名单仍会阻止把输入动作发送给未授权的前台应用。
+- 因为截图本身不做过滤，开始前应主动关闭或最小化包含敏感信息的窗口。
 
-### 方案三：Python Bridge 替代原生模块 ✅（当前方案）
+### 当前明确没有的保护
 
-**思路**：参考 [wimi321/macos-computer-use-skill](https://github.com/wimi321/macos-computer-use-skill)，用 Python 子进程替代所有原生模块调用。
+- **没有全局 Escape 中止热键。** 桌面端应使用当前任务的停止操作；CLI 运行可用终端中断。
+- **不会在每次操作前自动隐藏未授权窗口。** 不要依赖自动隐藏来保护敏感内容。
+- **像素陈旧验证默认关闭。** UI 变化后，模型应重新截图再点击。
 
-**优势**：
-- 零二进制依赖，不依赖特定 Bun/Node 版本
-- 纯 Python 实现，首次运行自动安装
-- 截图、鼠标、键盘、应用管理全部可用
-- macOS ARM64 + x86_64 均支持
+这些限制是当前实现边界，不应在文档或 UI 中描述成已经可用。
 
----
+## Python 运行时
 
-## 已知限制
+首次安装或修复时，应用会：
 
-| 限制 | 说明 |
-|------|------|
-| 不支持 Linux | 需要适配平台专有 API 部分 |
-| 无全局 Escape 中止 | 原生方案用 CGEventTap 实现，Python 版暂不支持，用 `Ctrl+C` 代替 |
-| 操作前不自动隐藏窗口 | 原生方案的 `prepareDisplay` 依赖 Swift，Python 版未实现 |
-| 性能略低 | Python 进程启动 ~100ms 开销，但模型思考时间通常是秒级，用户感知不到 |
-| 像素验证关闭 | `pixelValidation` 默认关闭 |
+1. 把当前平台的 helper 和 requirements 同步到用户配置目录。
+2. 使用自动检测或用户选择的 Python 创建 venv。
+3. 安装或升级 pip。
+4. 按 requirements 内容哈希决定是否重新安装依赖。
+5. 通过 JSON payload 调用平台 helper，并解析统一 JSON 结果。
 
----
+macOS 主要依赖 `mss`、Pillow、PyAutoGUI 和 PyObjC；Windows 还使用 pywin32、psutil、pyperclip 与 screeninfo。准确版本约束以 `runtime/requirements*.txt` 为准。
 
-## 参考项目与致谢
+## 故障排查
 
-本功能的实现参考了以下开源项目，在此致以感谢：
+### macOS 仍提示缺少权限
 
-| 项目 | 许可证 | 贡献 |
-|------|--------|------|
-| [wimi321/macos-computer-use-skill](https://github.com/wimi321/macos-computer-use-skill) | MIT | Python bridge 架构、`mac_helper.py` 运行时、`executor.ts` 适配方案。该项目从 Claude Code 工作流中提取了可复用的 TypeScript 逻辑，并用完全公开的 Python 库替代了私有原生模块 |
-| [domdomegg/computer-use-mcp](https://github.com/domdomegg/computer-use-mcp) | MIT | 独立的 Computer Use MCP 服务器实现（基于 nut.js），跨平台可用。在方案调研阶段提供了参考 |
-| [paoloanzn/free-code](https://github.com/paoloanzn/free-code) | - | Feature flag 系统分析和构建系统参考 |
-| [oboard/claude-code-rev](https://github.com/oboard/claude-code-rev) | - | 泄露源码的早期恢复工作，提供了 stub 包的参考实现 |
+- 确认授权的是实际启动 Claude Code Haha 的应用。
+- 权限变更后完全退出并重新打开应用。
+- 在设置页重新执行权限检查。
 
-### 底层依赖
+### Python 安装失败
 
-| 库 | 平台 | 用途 |
-|----|------|------|
-| [pyautogui](https://github.com/asweigart/pyautogui) | 跨平台 | 鼠标和键盘控制 |
-| [mss](https://github.com/BoboTiG/python-mss) | 跨平台 | 屏幕截图 |
-| [Pillow](https://github.com/python-pillow/Pillow) | 跨平台 | 图像处理和压缩 |
-| [pyobjc](https://github.com/ronaldoussoren/pyobjc) | macOS | Cocoa/Quartz 框架绑定（应用管理、显示枚举） |
-| [pywin32](https://github.com/mhammond/pywin32) | Windows | Win32 API 绑定（窗口管理） |
-| [psutil](https://github.com/giampaolo/psutil) | Windows | 进程管理（应用列表、进程操作） |
-| [pyperclip](https://github.com/asweigart/pyperclip) | Windows | 剪贴板操作 |
-| [screeninfo](https://github.com/rr-/screeninfo) | Windows | 显示器信息（多屏支持） |
+- 在设置页选择明确的 Python 3 可执行文件。
+- 确认该 Python 支持 `venv`。
+- 使用“安装/修复”重新创建运行时。
+- 查看“诊断”页中的 Computer Use 安装日志。
+
+### 截图可以但点击失败
+
+- 确认目标应用处于授权列表。
+- 确认它是当前前台应用。
+- 检查授权等级是否允许该动作。
+- UI 已变化时重新截图，不要复用旧坐标。
+
+### Windows 截图出现其他窗口
+
+这是当前 Windows 截图能力的已知边界。输入白名单不会过滤截图内容；执行前请关闭或最小化敏感窗口。
+
+## 深入阅读
+
+- [Computer Use 架构](./computer-use-architecture.md)
+- [桌面端架构](../desktop/02-architecture.md)
