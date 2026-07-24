@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type WheelEvent } from 'react'
-import { Info } from 'lucide-react'
+import {
+  Eraser,
+  ExternalLink,
+  Info,
+  Plus,
+  RotateCcw,
+  SquareTerminal,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
+import type { ITheme } from '@xterm/xterm'
 import { useTranslation, type TranslationKey } from '../i18n'
 import { terminalApi } from '../api/terminal'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useUIStore } from '../stores/uiStore'
 import { Dropdown } from '../components/shared/Dropdown'
 import { Input } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
-import type { DesktopTerminalStartupShell } from '../types/settings'
+import type { DesktopTerminalStartupShell, ThemeMode } from '../types/settings'
 import { getDesktopHost } from '../lib/desktopHost'
 import {
   attachTerminalRuntime,
@@ -27,6 +38,57 @@ const STATUS_LABEL_KEYS: Record<TerminalStatus, TranslationKey> = {
   exited: 'settings.terminal.status.exited',
   error: 'settings.terminal.status.error',
   unavailable: 'settings.terminal.status.unavailable',
+}
+
+function getTerminalTheme(theme: ThemeMode): ITheme {
+  if (theme === 'dark') {
+    return {
+      background: '#121212',
+      foreground: '#D7D2D0',
+      cursor: '#F5F5F5',
+      selectionBackground: '#4A4746',
+      black: '#1F1F1F',
+      red: '#FF6D67',
+      green: '#7EF18A',
+      yellow: '#F8C55F',
+      blue: '#77A8FF',
+      magenta: '#D699FF',
+      cyan: '#61D6D6',
+      white: '#D7D2D0',
+      brightBlack: '#8F8683',
+      brightRed: '#FF8A85',
+      brightGreen: '#9FF7A7',
+      brightYellow: '#FFDD7A',
+      brightBlue: '#A6C5FF',
+      brightMagenta: '#E3B8FF',
+      brightCyan: '#8CEEEE',
+      brightWhite: '#FFFFFF',
+    }
+  }
+
+  const warm = theme === 'light'
+  return {
+    background: warm ? '#FBFAF6' : '#FFFFFF',
+    foreground: warm ? '#2B2926' : '#242424',
+    cursor: warm ? '#2B2926' : '#242424',
+    selectionBackground: warm ? '#DDD9CF' : '#DDE8F7',
+    black: '#242424',
+    red: '#C94747',
+    green: '#237B4B',
+    yellow: '#8A6200',
+    blue: '#2563EB',
+    magenta: '#7C3AED',
+    cyan: '#087F8C',
+    white: '#6B6B6B',
+    brightBlack: '#737373',
+    brightRed: '#DC4C4C',
+    brightGreen: '#16845B',
+    brightYellow: '#9A6C00',
+    brightBlue: '#1D67E8',
+    brightMagenta: '#8B4BE8',
+    brightCyan: '#057A87',
+    brightWhite: '#171717',
+  }
 }
 
 function findScrollableAncestor(element: HTMLElement, deltaY: number): HTMLElement | null {
@@ -74,6 +136,9 @@ export function TerminalSettings({
   const t = useTranslation()
   const desktopTerminal = useSettingsStore((state) => state.desktopTerminal)
   const setDesktopTerminal = useSettingsStore((state) => state.setDesktopTerminal)
+  const theme = useUIStore((state) => state.theme)
+  const themeRef = useRef(theme)
+  themeRef.current = theme
   const hostRef = useRef<HTMLDivElement | null>(null)
   const lifecycleVersionRef = useRef(0)
   const localRuntimeIdRef = useRef<string | null>(null)
@@ -226,28 +291,7 @@ export function TerminalSettings({
           fontSize: 12,
           lineHeight: 1.25,
           scrollback: 4000,
-          theme: {
-            background: '#121212',
-            foreground: '#d7d2d0',
-            cursor: '#ffb59f',
-            selectionBackground: '#5f4a40',
-            black: '#1f1f1f',
-            red: '#ff6d67',
-            green: '#7ef18a',
-            yellow: '#f8c55f',
-            blue: '#77a8ff',
-            magenta: '#d699ff',
-            cyan: '#61d6d6',
-            white: '#d7d2d0',
-            brightBlack: '#8f8683',
-            brightRed: '#ff8a85',
-            brightGreen: '#9ff7a7',
-            brightYellow: '#ffdd7a',
-            brightBlue: '#a6c5ff',
-            brightMagenta: '#e3b8ff',
-            brightCyan: '#8ceeee',
-            brightWhite: '#ffffff',
-          },
+          theme: getTerminalTheme(themeRef.current),
         })
         fit = new FitAddonModule.FitAddon()
         const activeTerminal = terminal
@@ -376,6 +420,11 @@ export function TerminalSettings({
     }
   }, [active, resizeSession])
 
+  useEffect(() => {
+    if (!runtime.terminal) return
+    runtime.terminal.options.theme = getTerminalTheme(theme)
+  }, [runtime, theme])
+
   const clearTerminal = () => {
     runtime.terminal?.clear()
   }
@@ -443,19 +492,24 @@ export function TerminalSettings({
   return (
     <div className={`flex h-full flex-col overflow-hidden ${
       docked
-        ? 'min-h-0 bg-[var(--color-surface-container-lowest)] px-3 py-1.5'
+        ? 'min-h-0 bg-[var(--color-surface-glass)] px-3 pb-2 backdrop-blur-xl'
         : workspace
           ? 'min-h-0 bg-[var(--color-surface)] px-5 py-4'
           : 'min-h-[min(720px,calc(100vh-8rem))]'
     }`}>
       <div
         data-testid="settings-terminal-toolbar"
-        className={`${docked ? 'mb-1.5 min-h-8' : 'mb-2 min-h-9'} flex min-w-0 flex-wrap items-center gap-2`}
+        data-terminal-chrome="integrated"
+        className={`${docked ? 'min-h-10 border-b border-[var(--color-border)]' : 'mb-2 min-h-10'} flex min-w-0 flex-wrap items-center gap-2`}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--color-terminal-danger)]" aria-hidden="true" />
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--color-terminal-warning)]" aria-hidden="true" />
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--color-terminal-accent)]" aria-hidden="true" />
+          <span
+            data-testid="terminal-toolbar-identity"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]"
+            aria-hidden="true"
+          >
+            <SquareTerminal className="h-4 w-4" strokeWidth={1.9} />
+          </span>
           <h2 className={`${docked ? 'text-[13px]' : 'text-sm'} shrink-0 font-semibold text-[var(--color-text-primary)]`}>
             {t('settings.terminal.title')}
           </h2>
@@ -470,58 +524,42 @@ export function TerminalSettings({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-0.5">
           {onOpenInTab && (
-            <button
-              type="button"
+            <TerminalToolbarAction
+              icon={ExternalLink}
+              label={t('terminal.openInTab')}
               onClick={onOpenInTab}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-            >
-              <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-              {t('terminal.openInTab')}
-            </button>
+            />
           )}
           {onNewTerminal && (
-            <button
-              type="button"
+            <TerminalToolbarAction
+              icon={Plus}
+              label={t('terminal.newTab')}
               onClick={onNewTerminal}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-            >
-              <span className="material-symbols-outlined text-[16px]">add</span>
-              {t('terminal.newTab')}
-            </button>
+            />
           )}
-          <button
-            type="button"
+          <TerminalToolbarAction
+            icon={Eraser}
+            label={t('settings.terminal.clear')}
             onClick={clearTerminal}
             disabled={!runtime.terminal}
-            className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="material-symbols-outlined text-[16px]">mop</span>
-            {t('settings.terminal.clear')}
-          </button>
-          <button
-            type="button"
+          />
+          <TerminalToolbarAction
+            icon={RotateCcw}
+            label={t('settings.terminal.restart')}
             onClick={() => void startTerminal()}
             disabled={status === 'starting'}
-            className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-2.5 text-xs font-medium text-[var(--color-surface)] transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-            {t('settings.terminal.restart')}
-          </button>
+          />
           {onClose && (
-            <button
-              type="button"
+            <TerminalToolbarAction
+              icon={X}
+              label={t('terminal.closePanel')}
               onClick={onClose}
-              aria-label={t('terminal.closePanel')}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-            >
-              <span className="material-symbols-outlined text-[17px]">close</span>
-            </button>
+            />
           )}
         </div>
       </div>
-
       {error && (
         <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-error)]/20 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)]">
           {error}
@@ -624,7 +662,7 @@ export function TerminalSettings({
           data-testid="settings-terminal-frame"
           onKeyDownCapture={handleTerminalKeyDownCapture}
           onWheelCapture={handleTerminalWheelCapture}
-          className="min-h-0 flex-1 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-terminal-border)] bg-[var(--color-terminal-bg)] shadow-[var(--shadow-dropdown)]"
+          className={`${docked ? 'mt-2 rounded-[var(--radius-lg)] shadow-none' : 'rounded-[var(--radius-lg)] shadow-[var(--shadow-dropdown)]'} min-h-0 flex-1 overflow-hidden border border-[var(--color-terminal-border)] bg-[var(--color-terminal-bg)]`}
         >
           <div
             ref={hostRef}
@@ -739,6 +777,31 @@ function TerminalHelpHint({ compact = false }: { compact?: boolean }) {
         {t('settings.terminal.description')}
       </span>
     </span>
+  )
+}
+
+function TerminalToolbarAction({
+  icon: Icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: LucideIcon
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-[background-color,color,opacity] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" strokeWidth={1.9} />
+    </button>
   )
 }
 

@@ -574,14 +574,14 @@
   --color-diff-title-border: #DAC1BA;
 
   /* Terminal */
-  --color-terminal-header: #2D2D2D;
-  --color-terminal-bg: #1E1E1E;
-  --color-terminal-border: #1A1A1A;
-  --color-terminal-fg: #D4D4D4;
-  --color-terminal-muted: #999999;
-  --color-terminal-accent: #28C840;
-  --color-terminal-danger: #FF5F57;
-  --color-terminal-warning: #FEBC2E;
+  --color-terminal-header: rgba(255, 255, 255, 0.82);
+  --color-terminal-bg: #FBFAF6;
+  --color-terminal-border: rgba(214, 211, 203, 0.72);
+  --color-terminal-fg: #2B2926;
+  --color-terminal-muted: #7B7770;
+  --color-terminal-accent: #237B4B;
+  --color-terminal-danger: #C94747;
+  --color-terminal-warning: #8A6200;
 
   /* Misc */
   --color-window-close-hover: #E81123;
@@ -783,14 +783,14 @@
   --color-diff-title-color: #667085;
   --color-diff-title-border: #DDE3EA;
 
-  --color-terminal-header: #1F2937;
-  --color-terminal-bg: #111827;
-  --color-terminal-border: #0F172A;
-  --color-terminal-fg: #E5E7EB;
-  --color-terminal-muted: #9CA3AF;
-  --color-terminal-accent: #32D583;
-  --color-terminal-danger: #F97066;
-  --color-terminal-warning: #FDB022;
+  --color-terminal-header: rgba(255, 255, 255, 0.92);
+  --color-terminal-bg: #FFFFFF;
+  --color-terminal-border: rgba(227, 227, 227, 0.88);
+  --color-terminal-fg: #242424;
+  --color-terminal-muted: #737373;
+  --color-terminal-accent: #237B4B;
+  --color-terminal-danger: #C94747;
+  --color-terminal-warning: #8A6200;
 
   --color-window-close-hover: #E5484D;
   --color-selection-bg: rgba(255, 219, 208, 0.9);
