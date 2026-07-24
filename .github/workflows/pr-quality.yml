@@ -245,8 +245,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: site/package-lock.json
       - name: Run docs checks
-        run: npm ci && npm run docs:build
+        run: npm --prefix site ci && npm --prefix site run build && npm --prefix site run check
 
   coverage-checks:
     name: coverage-checks

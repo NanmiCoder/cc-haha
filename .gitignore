@@ -64,9 +64,6 @@ credentials*.json
 # Temp markdown snapshots
 sidebar-snapshot.md
 
-# VitePress
-docs/.vitepress/dist
-docs/.vitepress/cache
 runtime/__pycache__
 
 # IDE

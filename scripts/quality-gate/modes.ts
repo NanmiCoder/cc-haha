@@ -109,7 +109,7 @@ export function lanesForMode(mode: QualityGateMode, baselineTargets: BaselineTar
     {
       id: 'docs-checks',
       title: 'Docs checks',
-      description: 'Run docs install and VitePress build when docs paths changed.',
+      description: 'Install, build, and validate the React site when docs or site paths change.',
       kind: 'command',
       command: ['bun', 'run', 'check:docs'],
       impactRequiredCheck: 'bun run check:docs',

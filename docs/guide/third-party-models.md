@@ -1,265 +1,98 @@
-# 使用第三方模型（OpenAI / DeepSeek / 本地模型）
+# 第三方模型
 
-本项目基于 Anthropic 协议与 LLM 通信。通过协议转换代理，可以使用 OpenAI、DeepSeek、Ollama 等任意模型。
+Claude Code Haha 可以连接 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses 三类接口。对桌面端用户来说，最可靠的入口不是手写环境变量，而是 **设置 → Providers**：应用会保存认证方式、模型映射，并在需要时启动本机协议代理。
 
-## 原理
+## 推荐配置流程
 
-```
-claude-code-haha ──Anthropic协议──▶ LiteLLM Proxy ──OpenAI协议──▶ 目标模型 API
-                                      (协议转换)
-```
+1. 打开桌面端的 **设置 → Providers**。
+2. 选择内置预设，或新建自定义 Provider。
+3. 填写 Base URL、认证信息和协议格式。
+4. 至少配置主模型；服务商使用不同模型名时，再配置 Haiku、Sonnet 和 Opus 槽位。
+5. 先点击测试，确认认证和模型可用，再激活 Provider。
+6. 新建会话验证工具调用；只返回文本并不代表 Agent 工作流完整可用。
 
-本项目发出 Anthropic Messages API 请求，LiteLLM 代理将其自动转换为 OpenAI Chat Completions API 格式并转发给目标模型。
+激活后，桌面端和由它启动的 CLI 会复用同一份 Provider 配置。不要再把另一套旧密钥写进 `.env` 或 `~/.claude/settings.json`。
 
----
+## 选择正确的协议
 
-## 方式一：LiteLLM 代理（推荐）
+| Provider 格式 | 上游接口 | 适用场景 |
+|----------------|----------|----------|
+| `anthropic` | Anthropic Messages | 服务商原生兼容 Anthropic 请求与响应 |
+| `openai_chat` | `/v1/chat/completions` | 服务商提供 OpenAI Chat Completions |
+| `openai_responses` | `/v1/responses` | 服务商提供 OpenAI Responses |
 
-[LiteLLM](https://github.com/BerriAI/litellm) 是一个支持 100+ LLM 的统一代理网关（41k+ GitHub Stars），原生支持接收 Anthropic 协议请求。
+`anthropic` 会直接请求服务商，不替换协议。`openai_chat` 和 `openai_responses` 会由 Claude Code Haha 在本机启动回环代理，把 Claude Agent 流量转换成所选协议。这个代理只用于当前运行时，不需要把端口手工暴露到局域网。
 
-### 1. 安装 LiteLLM
+如果提供商同时宣传“OpenAI 兼容”和“Anthropic 兼容”，以它实际实现完整、工具调用稳定的接口为准。不要仅根据 URL 中是否含有 `/v1` 推断协议。
 
-```bash
-pip install 'litellm[proxy]'
-```
+## 认证与模型映射
 
-### 2. 创建配置文件
+认证头由服务商决定：
 
-新建 `litellm_config.yaml`：
+- Anthropic API Key 通常使用 `x-api-key`。
+- Bearer Token 通常使用 `Authorization: Bearer`。
+- OpenAI 兼容服务通常使用 Bearer Token，但私有网关可能不同。
 
-#### 使用 OpenAI 模型
+模型槽位不是额外下载的模型，而是 Claude Agent 在不同任务中请求的逻辑档位。主模型必须能处理工具调用；其他槽位可以映射到同一个模型，也可以按成本和能力分别配置。某个服务商不支持的槽位可以留空。
 
-```yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+模型名和服务商能力会持续变化，所以本文不维护一份容易过期的型号清单。请在 Provider 设置页使用服务商当前返回的模型 ID，并通过测试按钮确认。
 
-litellm_settings:
-  drop_params: true  # 丢弃 Anthropic 专有参数（thinking 等）
-```
+## 内置运行时
 
-#### 使用 DeepSeek 模型
+Claude Code Haha 还提供 Claude、OpenAI 和 Grok 的内置运行时。可用的登录方式取决于当前版本和本机账号状态；按照 Provider 页面显示的授权流程完成登录即可。
 
-```yaml
-model_list:
-  - model_name: deepseek-chat
-    litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
-      api_base: https://api.deepseek.com
+内置运行时与“自定义兼容接口”是两条路径。已有官方账号时优先使用内置运行时；连接中转服务、自建网关或本地模型时再创建自定义 Provider。
 
-litellm_settings:
-  drop_params: true
-```
+## 仅使用 CLI
 
-#### 使用 Ollama 本地模型
-
-```yaml
-model_list:
-  - model_name: llama3
-    litellm_params:
-      model: ollama/llama3
-      api_base: http://localhost:11434
-
-litellm_settings:
-  drop_params: true
-```
-
-#### 使用多个模型（可在启动后切换）
-
-```yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: deepseek-chat
-    litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
-      api_base: https://api.deepseek.com
-
-  - model_name: llama3
-    litellm_params:
-      model: ollama/llama3
-      api_base: http://localhost:11434
-
-litellm_settings:
-  drop_params: true
-```
-
-### 3. 启动代理
+纯 CLI 用户可以直接配置 Anthropic Messages 兼容端点：
 
 ```bash
-# 设置目标模型的 API Key
-export OPENAI_API_KEY=sk-xxx
-# 或
-export DEEPSEEK_API_KEY=sk-xxx
-
-# 启动代理
-litellm --config litellm_config.yaml --port 4000
-```
-
-代理启动后会在 `http://localhost:4000` 监听，并暴露 Anthropic 兼容的 `/v1/messages` 端点。
-
-### 4. 配置本项目
-
-有两种配置方式，任选其一：
-
-#### 方式 A：通过 `.env` 文件
-
-```bash
-ANTHROPIC_AUTH_TOKEN=sk-anything
-ANTHROPIC_BASE_URL=http://localhost:4000
-ANTHROPIC_MODEL=gpt-4o
-ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-4o
-ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-4o
-ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-4o
-API_TIMEOUT_MS=3000000
-DISABLE_TELEMETRY=1
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-```
-
-#### 方式 B：通过 `~/.claude/settings.json`
-
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-anything",
-    "ANTHROPIC_BASE_URL": "http://localhost:4000",
-    "ANTHROPIC_MODEL": "gpt-4o",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-4o",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-4o",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-4o",
-    "API_TIMEOUT_MS": "3000000",
-    "DISABLE_TELEMETRY": "1",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  }
-}
-```
-
-> **说明**：`ANTHROPIC_AUTH_TOKEN` 的值在使用 LiteLLM 代理时可以是任意字符串（LiteLLM 会用自己配置的 key 转发），除非你在 LiteLLM 端设置了 `master_key` 校验。
-
-### 5. 启动并验证
-
-```bash
+ANTHROPIC_AUTH_TOKEN=sk-example
+ANTHROPIC_BASE_URL=https://provider.example.com/anthropic
+ANTHROPIC_MODEL=provider-model
 ./bin/claude-haha
 ```
 
-如果一切正常，你应该能看到正常的对话界面，实际调用的是你配置的目标模型。
+这个方式不会自动把 Anthropic 请求转换成 OpenAI 协议。OpenAI Chat Completions 或 Responses 服务应先在桌面端创建 Provider，让应用管理协议代理。完整变量和生效顺序见 [环境变量](./env-vars.md)。
 
----
+Azure OpenAI 使用项目内置的专用 Responses 路径，配置项见 [Azure OpenAI 环境变量](./env-vars.md#azure-openai)。
 
-## 方式二：直连兼容 Anthropic 协议的第三方服务
+## LiteLLM：进阶兼容层
 
-部分第三方服务直接兼容 Anthropic Messages API，无需额外代理：
+只有在服务商没有可靠的 Anthropic 接口、又无法直接使用 Provider 协议转换时，才需要额外部署 LiteLLM。它会增加一个服务、一次协议转换和一层排查成本。
 
-### OpenRouter
-
-```bash
-ANTHROPIC_AUTH_TOKEN=sk-or-v1-xxx
-ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
-ANTHROPIC_MODEL=openai/gpt-4o
-ANTHROPIC_DEFAULT_SONNET_MODEL=openai/gpt-4o
-ANTHROPIC_DEFAULT_HAIKU_MODEL=openai/gpt-4o-mini
-ANTHROPIC_DEFAULT_OPUS_MODEL=openai/gpt-4o
-DISABLE_TELEMETRY=1
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-```
-
-### MiniMax（已在 .env.example 中配置）
-
-MiniMax 提供 Anthropic 兼容接口，支持直接接入，无需代理。可用模型：
-
-| 模型 | 说明 |
-|------|------|
-| `MiniMax-M3` | 默认推荐，最新一代综合性能优秀，支持 1M 上下文 |
-| `MiniMax-M2.7` | 上一代稳定版本 |
-| `MiniMax-M2.7-highspeed` | 响应更快，适合对速度有要求的场景 |
-
-```bash
-ANTHROPIC_AUTH_TOKEN=your_minimax_api_key_here
-# 海外用户使用 api.minimax.io，国内用户可改为 api.minimaxi.com
-ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
-ANTHROPIC_MODEL=MiniMax-M3
-ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M3
-ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.7-highspeed
-ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M3
-API_TIMEOUT_MS=3000000
-DISABLE_TELEMETRY=1
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-```
-
-> **获取 API Key**：访问 [MiniMax 开放平台](https://platform.minimax.io) 注册并获取 API Key。
-
----
-
-## 方式三：其他代理工具
-
-社区还有一些专门为 Claude Code 做的代理工具：
-
-| 工具 | 说明 | 链接 |
-|------|------|------|
-| **a2o** | Anthropic → OpenAI 单二进制文件，零依赖 | [Twitter](https://x.com/mantou543/status/2018846154855940200) |
-| **Empero Proxy** | 完整的 Anthropic Messages API 转 OpenAI 代理 | [Twitter](https://x.com/EmperoAI/status/2036840854065762551) |
-| **Alma** | 内置 OpenAI → Anthropic 转换代理的客户端 | [Twitter](https://x.com/yetone/status/2003508782127833332) |
-| **Chutes** | Docker 容器，支持 60+ 开源模型 | [Twitter](https://x.com/chutes_ai/status/2027039742915662232) |
-
----
-
-## 注意事项与已知限制
-
-### 1. `drop_params: true` 很重要
-
-本项目会发送 Anthropic 专有参数（如 `thinking`、`cache_control`），这些参数在 OpenAI API 中不存在。LiteLLM 配置中必须设置 `drop_params: true`，否则请求会报错。
-
-### 2. Extended Thinking 不可用
-
-Anthropic 的 Extended Thinking 功能是专有特性，其他模型不支持。使用第三方模型时此功能自动失效。
-
-### 3. Prompt Caching 不可用
-
-`cache_control` 是 Anthropic 专有功能。使用第三方模型时，prompt caching 不会生效（但不会导致报错，会被 `drop_params` 忽略）。
-
-### 4. 工具调用兼容性
-
-本项目大量使用工具调用（tool_use），LiteLLM 会自动转换 Anthropic tool_use 格式到 OpenAI function_calling 格式。大部分情况下可以正常工作，但某些复杂工具调用可能存在兼容性问题。如遇问题，建议使用能力较强的模型（如 GPT-4o）。
-
-### 5. 遥测和非必要网络请求
-
-建议配置以下环境变量以避免不必要的网络请求：
-```
-DISABLE_TELEMETRY=1
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-```
-
----
-
-## FAQ
-
-### Q: LiteLLM 代理报错 `/v1/responses` 找不到？
-
-部分 OpenAI 兼容服务只支持 `/v1/chat/completions`。在 LiteLLM 配置中添加：
+最小示例：
 
 ```yaml
-litellm_settings:
-  use_chat_completions_url_for_anthropic_messages: true
+model_list:
+  - model_name: provider-model
+    litellm_params:
+      model: openai/provider-model
+      api_base: https://provider.example.com/v1
+      api_key: os.environ/PROVIDER_API_KEY
 ```
 
-### Q: `ANTHROPIC_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN` 有什么区别？
+启动 LiteLLM 后，把它的 Anthropic 兼容地址作为 `anthropic` Provider 接入。部署、鉴权和模型前缀以 [LiteLLM 官方文档](https://docs.litellm.ai/) 为准。
 
-- `ANTHROPIC_API_KEY` → 通过 `x-api-key` 请求头发送
-- `ANTHROPIC_AUTH_TOKEN` → 通过 `Authorization: Bearer` 请求头发送
+## 能力边界
 
-LiteLLM 代理默认接受 Bearer Token 格式，建议使用 `ANTHROPIC_AUTH_TOKEN`。
+第三方模型要稳定运行 Agent 工作流，至少需要：
 
-### Q: 可以同时配置多个模型吗？
+- 正确处理多轮消息、system 内容和工具调用；
+- 保留 tool call ID，并能接收对应的 tool result；
+- 支持足够长的上下文和输出；
+- 在流式模式下发送结构完整、顺序正确的事件。
 
-可以。在 `litellm_config.yaml` 中配置多个 `model_name`，然后通过修改 `ANTHROPIC_MODEL` 切换。
+思考模式、effort、Prompt Cache、图像输入和结构化输出是否可用，取决于所选协议、服务商和具体模型，不能统一认定为“支持”或“不支持”。遇到问题时先关闭可选能力，验证最小文本与工具调用，再逐项恢复。
 
-### Q: 本地 Ollama 模型效果不好怎么办？
+## 常见问题
 
-本项目的系统提示和工具调用对模型能力要求较高。建议使用参数量较大的模型（如 Llama 3 70B+, Qwen 72B+），小模型可能无法正确处理工具调用。
+| 现象 | 优先检查 |
+|------|----------|
+| `401` / `403` | 认证头类型、Token 权限、Base URL 是否属于同一服务 |
+| `404` | Provider 格式是否选错、Base URL 是否重复包含接口路径 |
+| 模型不存在 | 使用服务商真实模型 ID，不要沿用其他平台的别名 |
+| 一直输出文本但不执行工具 | 模型或网关是否完整支持工具调用 |
+| 切换 Provider 后仍请求旧地址 | 是否同时在 `.env`、`settings.json` 和桌面端保存了配置 |
+| 流式响应中断 | 先关闭可选能力，并检查网关是否改写或缓冲事件流 |
