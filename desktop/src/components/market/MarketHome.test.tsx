@@ -7,6 +7,10 @@ import { useMarketStore } from '../../stores/marketStore'
 import type { NormalizedSkill } from '../../types/market'
 import { MarketHome } from './MarketHome'
 
+vi.mock('./InstalledSkillsOverview', () => ({
+  InstalledSkillsOverview: () => <section>Installed skills overview</section>,
+}))
+
 function makeSkill(overrides: Partial<NormalizedSkill> = {}): NormalizedSkill {
   return {
     id: 'clawhub:demo',
@@ -47,6 +51,7 @@ describe('MarketHome', () => {
   it('renders the compact catalog header, command bar, sources and semantic cards', () => {
     render(<MarketHome onRequestInstall={vi.fn()} />)
 
+    expect(screen.getByText('Installed skills overview')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Skills Market' })).toBeInTheDocument()
     expect(screen.getByTestId('market-search-input')).toBeInTheDocument()
     expect(screen.getByTestId('market-filter-bar')).toBeInTheDocument()
