@@ -118,7 +118,13 @@ describe('formatToolUse', () => {
 
     expect(result).toBe('🔧 Read  …/project/src/index.ts')
   })
+
+  it('shortens Windows paths in file tool summaries', () => {
+    const result = formatToolUse('Read', { file_path: 'C:\\Users\\test\\project\\src\\index.ts' })
+    expect(result).toBe('🔧 Read  …/project/src/index.ts')
+  })
 })
+
 
 describe('formatPermissionRequest', () => {
   it('includes tool name, input preview, and request ID', () => {
