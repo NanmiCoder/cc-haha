@@ -49,6 +49,7 @@ import { ActivitySettings } from './ActivitySettings'
 import { MemorySettings } from './MemorySettings'
 import { PetSettings } from '../features/pets/PetSettings'
 import { useUIStore } from '../stores/uiStore'
+import { applyPreset } from '../stores/uiStore'
 import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
 import { ChatGPTOfficialLogin } from '../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../components/settings/GrokOfficialLogin'
@@ -2240,6 +2241,135 @@ export function GeneralSettings() {
     { value: 'dark', label: t('settings.general.appearance.dark') },
   ]
 
+  // Preset theme overlay
+  const DEFAULT_PRESETS: Array<{ value: string; label: string }> = [
+    { value: '', label: 'None' },
+    { value: 'cyberpunk-dark', label: 'Cyberpunk·霓虹绿' },
+    { value: 'ember-dark', label: 'Ember·熔炉暖' },
+    { value: 'midnight-dark', label: 'Midnight·暗紫' },
+    { value: 'mono-dark', label: 'Mono·极简灰' },
+    { value: 'nous-dark', label: 'Nous·经典蓝' },
+    { value: 'slate-dark', label: 'Slate·石板灰' },
+    { value: 'monochromator-light-amber-dark', label: 'Monochromator Amber' },
+    { value: 'monochromator-light-amethyst-dark', label: 'Monochromator Amethyst' },
+    { value: 'monochromator-light-aquamarine-dark', label: 'Monochromator Aquamarine' },
+    { value: 'monochromator-light-dark', label: 'Monochromator Default' },
+    { value: 'monochromator-light-emerald-dark', label: 'Monochromator Emerald' },
+    { value: 'monochromator-light-plain-dark', label: 'Monochromator Plain' },
+    { value: 'monochromator-light-ruby-dark', label: 'Monochromator Ruby' },
+    { value: 'monochromator-light-sulfur-dark', label: 'Monochromator Sulfur' },
+    { value: 'catppuccin-frappé-dark', label: 'Catppuccin Frappé' },
+    { value: 'catppuccin-latte-dark', label: 'Catppuccin Latte' },
+    { value: 'catppuccin-macchiato-dark', label: 'Catppuccin Macchiato' },
+    { value: 'catppuccin-mocha-dark', label: 'Catppuccin Mocha' },
+    { value: 'jetbrains-darcula-dark', label: 'JetBrains Darcula' },
+    { value: 'fullstacksjs-dark', label: 'FullstacksJS Dark' },
+    { value: 's-kill-dark', label: 'FullstacksJS Legacy' },
+    { value: 'fullstacksjs-dark', label: 'FullstacksJS Main' },
+    { value: 'fullstacksjs-dark', label: 'FullstacksJS Warm' },
+    { value: 'ember-dark-dark', label: 'Hearth Ember Dark' },
+    { value: 'ember-light-dark', label: 'Hearth Ember Light' },
+    { value: 'moss-dark-dark', label: 'Hearth Moss Dark' },
+    { value: 'moss-light-dark', label: 'Hearth Moss Light' },
+    { value: 'gruvbox-dark-hard-dark', label: 'Gruvbox Dark Hard' },
+    { value: 'gruvbox-dark-medium-dark', label: 'Gruvbox Dark Medium' },
+    { value: 'gruvbox-dark-soft-dark', label: 'Gruvbox Dark Soft' },
+    { value: 'gruvbox-light-hard-dark', label: 'Gruvbox Light Hard' },
+    { value: 'gruvbox-light-medium-dark', label: 'Gruvbox Light Medium' },
+    { value: 'gruvbox-light-soft-dark', label: 'Gruvbox Light Soft' },
+    { value: 'monokai-classic-dark', label: 'Monokai Classic' },
+    { value: 'monokai-pro-(filter-machine)-dark', label: 'Monokai Pro Machine' },
+    { value: 'monokai-pro-(filter-octagon)-dark', label: 'Monokai Pro Octagon' },
+    { value: 'monokai-pro-(filter-ristretto)-dark', label: 'Monokai Pro Ristretto' },
+    { value: 'monokai-pro-(filter-spectrum)-dark', label: 'Monokai Pro Spectrum' },
+    { value: 'monokai-pro-dark', label: 'Monokai Pro' },
+    { value: 'monokai-pro-light-dark', label: 'Monokai Pro Light' },
+    { value: 'deliriumtheme-aquarelle-cymbidium-dark', label: 'Delirium Cymbidium' },
+    { value: 'deliriumtheme-aquarelle-hydrangea-dark', label: 'Delirium Hydrangea' },
+    { value: 'deliriumtheme-aquarelle-lilac-dark', label: 'Delirium Lilac' },
+    { value: 'deliriumtheme-aquarelle-pumpkin-dark', label: 'Delirium Pumpkin' },
+    { value: 'deliriumtheme-aquarelle-swamp-dark', label: 'Delirium Swamp' },
+    { value: 'deliriumtheme-everforest-dark', label: 'Everforest' },
+    { value: 'deliriumtheme-everforest-dark-dark', label: 'Everforest Dark' },
+    { value: 'deliriumtheme-everforest-light-dark', label: 'Everforest Light' },
+    { value: 'deliriumtheme-everforest-lilac-dark', label: 'Everforest Lilac' },
+    { value: 'deliriumtheme-jetbrain-dark-dark', label: 'JetBrain Dark' },
+    { value: 'deliriumtheme-jetbrain-light-dark', label: 'JetBrain Light' },
+    { value: 'deliriumtheme-pumpkin-dark-dark', label: 'Pumpkin Dark' },
+    { value: 'deliriumtheme-pumpkin-dark', label: 'Pumpkin' },
+    { value: 'rosé-pine-dark', label: 'Rosé Pine' },
+    { value: 'rosé-pine-dawn-dark', label: 'Rosé Pine Dawn' },
+    { value: 'rosé-pine-moon-dark', label: 'Rosé Pine Moon' },
+    { value: 'pittaya-theme-dark', label: 'Pittaya Dark' },
+    { value: 'pittaya-theme-light-dark', label: 'Pittaya Light' },
+    { value: 'one-dark-pro-dark', label: 'One Dark Pro' },
+    { value: 'dracula-dark', label: 'Dracula' },
+    { value: 'nord-dark', label: 'Nord' },
+    { value: 'github-dark-dark', label: 'GitHub Dark' },
+    { value: 'tokyo-night-dark', label: 'Tokyo Night' },
+    { value: 'night-owl-dark', label: 'Night Owl' },
+    { value: 'shades-of-purple-dark', label: 'Shades of Purple' },
+    { value: 'webstorm-theme-dark', label: 'WebStorm' },
+    { value: 'darcula-dark', label: 'Darcula' },
+    { value: 'dark-dark', label: 'Dark' },
+    { value: 'light-dark', label: 'Light' },
+    { value: 'webstorm-darcula-dark', label: 'WebStorm Darcula' },
+    { value: 'webstorm-dark-dark', label: 'WebStorm Dark' },
+    { value: 'webstorm-darker-dark', label: 'WebStorm Darker' },
+    { value: 'webstorm-light-dark', label: 'WebStorm Light' },
+    { value: 'berlin-dark', label: 'Berlin' },
+    { value: 'bogotá-dark', label: 'Bogotá' },
+    { value: 'helsinki-dark', label: 'Helsinki' },
+    { value: 'lahabana-dark', label: 'Lahabana' },
+    { value: 'london-dark', label: 'London' },
+    { value: 'madrid-dark', label: 'Madrid' },
+    { value: 'miami-dark', label: 'Miami' },
+    { value: 'oslo-dark', label: 'Oslo' },
+    { value: 'paris-dark', label: 'Paris' },
+    { value: 'praha-dark', label: 'Praha' },
+    { value: 'tokio-dark', label: 'Tokio' },
+    { value: 'x-dark', label: 'X' },
+    { value: 'claude-dark-dark', label: 'Claude Dark' },
+    { value: 'claude-light-dark', label: 'Claude Light' },
+    { value: 'first-blush-dark', label: '晨露未干·Morning Dew' },
+    { value: 'throat-song-dark', label: '被填满的满足·Fullness' },
+    { value: 'split-open-dark', label: '撕开的温柔·Torn Tenderness' },
+    { value: 'petal-inside-dark', label: '软成一滩水·Melted' },
+    { value: 'keepers-bruise-dark', label: '你留下的颜色·Your Mark' },
+    { value: 'secret-skin-dark', label: '只属于我们的暗号·Our Secret' },
+  ]
+  const [presets, setPresets] = useState(DEFAULT_PRESETS)
+  const [presetIndex, setPresetIndex] = useState(() => {
+    try {
+      const active = localStorage.getItem('cc-haha-theme-preset') ?? ''
+      const idx = DEFAULT_PRESETS.findIndex(p => p.value === active)
+      return idx >= 0 ? idx : 0
+    } catch { return 0 }
+  })
+  const selectPreset = (index: number) => {
+    setPresetIndex(index)
+    const preset = presets[index]
+    if (preset) applyPreset(preset.value)
+  }
+  const deletePreset = () => {
+    if (presetIndex === 0) return  // can't delete "None"
+    const deleted = presets[presetIndex]
+    if (!deleted) return
+    if (!window.confirm(`Delete theme "${deleted.label}"?`)) return
+    setPresets(prev => prev.filter((_, i) => i !== presetIndex))
+    setPresetIndex(i => Math.min(i, presets.length - 2))
+    // Persist deletion
+    try {
+      const list = JSON.parse(localStorage.getItem('cc-haha-deleted-presets') ?? '[]') as string[]
+      if (deleted && !list.includes(deleted.value)) {
+        list.push(deleted.value)
+        localStorage.setItem('cc-haha-deleted-presets', JSON.stringify(list))
+      }
+    } catch { /* ignore */ }
+  }
+  const prevPreset = () => selectPreset((presetIndex - 1 + presets.length) % presets.length)
+  const nextPreset = () => selectPreset((presetIndex + 1) % presets.length)
+
   const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
     { value: 'auto', label: t('settings.general.webSearch.mode.auto') },
     { value: 'tavily', label: t('settings.general.webSearch.mode.tavily') },
@@ -2618,14 +2748,14 @@ export function GeneralSettings() {
       {/* Appearance selector */}
       <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.appearanceTitle')}</h2>
       <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.appearanceDescription')}</p>
-      <div className="flex gap-2 mb-8">
+      <div className="flex items-center gap-2 mb-8">
         {THEMES.map(({ value, label }) => (
           <button
             key={value}
-            onClick={() => void setTheme(value)}
-            aria-pressed={theme === value}
-            className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-all ${
-              theme === value
+            onClick={() => { selectPreset(0); void setTheme(value) }}
+            aria-pressed={theme === value && presetIndex === 0}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+              theme === value && presetIndex === 0
                 ? 'bg-[image:var(--gradient-btn-primary)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-button-primary)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
             }`}
@@ -2633,6 +2763,37 @@ export function GeneralSettings() {
             {label}
           </button>
         ))}
+        <select
+          value={String(presetIndex)}
+          onChange={(e) => selectPreset(Number(e.target.value))}
+          className="h-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-text-primary)] outline-none"
+        >
+          {presets.map((p, i) => (
+            <option key={p.value} value={i}>{p.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={prevPreset}
+          aria-label="Previous preset"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+        >
+          <span className="material-symbols-outlined text-[14px]">keyboard_arrow_up</span>
+        </button>
+        <button
+          onClick={nextPreset}
+          aria-label="Next preset"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+        >
+          <span className="material-symbols-outlined text-[14px]">keyboard_arrow_down</span>
+        </button>
+        <button
+          onClick={deletePreset}
+          disabled={presetIndex === 0}
+          aria-label="Remove this theme from list"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-[10px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-error)] disabled:opacity-30"
+        >
+          <span className="material-symbols-outlined text-[14px]">close</span>
+        </button>
       </div>
 
       {/* Language selector */}
