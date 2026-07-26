@@ -114,7 +114,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   }
 
   return (
-    <div className={`overflow-hidden rounded-lg border border-[var(--color-border)]/50 bg-[var(--color-surface-container-lowest)] ${
+    <div className={`overflow-hidden rounded-lg ${
       compact ? 'mb-0' : 'mb-2'
     }`}>
       <button
@@ -392,7 +392,7 @@ function renderResultOutput(
       <div className={`overflow-hidden rounded-lg border ${
         result.isError
           ? 'border-[var(--color-error)]/20 bg-[var(--color-error-container)]/60'
-          : 'border-[var(--color-border)] bg-[var(--color-surface)]'
+          : ''
       }`}>
         <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
           <span>{result.isError ? t?.('tool.errorOutput') ?? 'Error Output' : t?.('tool.toolOutput') ?? 'Tool Output'}</span>
@@ -435,7 +435,7 @@ function renderDetails(
 
   const text = JSON.stringify(obj, null, 2)
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="overflow-hidden rounded-lg">
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         <span>{t?.('tool.toolInput') ?? 'Tool Input'}</span>
         <CopyButton
@@ -630,7 +630,7 @@ function renderWriterPreview(
   }, t)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="overflow-hidden rounded-lg">
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         <span>{t?.('tool.writerPreview') ?? 'Writer'}</span>
         <span className="font-[var(--font-mono)] normal-case tracking-normal tabular-nums">
@@ -651,7 +651,7 @@ function renderPartialInput(
   const formattedInput = formatPartialJsonInput(partialInput)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="overflow-hidden rounded-lg">
       <div className="border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         {t?.('tool.partialInput') ?? 'Partial input'}
       </div>
