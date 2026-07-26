@@ -1,4 +1,4 @@
-import { ArrowLeft, FolderOpen, Globe, Maximize2, X } from 'lucide-react'
+import { ArrowLeft, FolderOpen, Globe, Maximize2, SquareTerminal, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import {
   useWorkspacePanelStore,
@@ -8,6 +8,7 @@ import { useBrowserPanelStore } from '../../stores/browserPanelStore'
 import { WORKBENCH_TAB_PREFIX, useTabStore } from '../../stores/tabStore'
 import { WorkspacePanel } from '../workspace/WorkspacePanel'
 import { BrowserSurface } from '../browser/BrowserSurface'
+import { TerminalSettings } from '../../pages/TerminalSettings'
 
 type WorkbenchPanelProps = {
   sessionId: string
@@ -17,11 +18,12 @@ type WorkbenchPanelProps = {
 
 const MODE_ITEMS: ReadonlyArray<{
   mode: WorkbenchMode
-  labelKey: 'workbench.modeWorkspace' | 'workbench.modeBrowser'
+  labelKey: any
   Icon: typeof FolderOpen
 }> = [
   { mode: 'workspace', labelKey: 'workbench.modeWorkspace', Icon: FolderOpen },
   { mode: 'browser', labelKey: 'workbench.modeBrowser', Icon: Globe },
+  { mode: 'terminal' as any, labelKey: 'workbench.modeTerminal', Icon: SquareTerminal },
 ]
 
 /**
@@ -140,6 +142,13 @@ export function WorkbenchPanel({ sessionId, variant = 'panel', onClose }: Workbe
       <div className="flex min-h-0 flex-1 flex-col">
         {mode === 'browser' ? (
           <BrowserSurface sessionId={sessionId} />
+        ) : (mode as string) === 'terminal' ? (
+          <TerminalSettings
+            workspace
+            docked
+            runtimeId={`workbench-terminal-${sessionId}`}
+            onClose={() => setMode(sessionId, 'workspace')}
+          />
         ) : (
           <WorkspacePanel sessionId={sessionId} embedded forceVisible={isTabVariant} />
         )}
