@@ -4,6 +4,7 @@ import {
   getBundledRipgrepName,
   stageRipgrepLicenses,
 } from './prepare-ripgrep'
+import { ensureWindowsSandboxRuntime } from './prepare-windows-sandbox'
 
 const desktopRoot = path.resolve(import.meta.dir, '..')
 const repoRoot = path.resolve(desktopRoot, '..')
@@ -30,6 +31,7 @@ if (scanExit !== 0) {
 }
 
 await mkdir(binariesDir, { recursive: true })
+await ensureWindowsSandboxRuntime({ targetTriple, binariesDir })
 await stageRipgrepLicenses(binariesDir)
 await stageHostRipgrepForOfflineBuild()
 

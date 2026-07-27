@@ -83,6 +83,7 @@
     "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
     "prepare:ripgrep": "bun run ./scripts/prepare-ripgrep.ts",
+    "prepare:windows-sandbox": "bun run ./scripts/prepare-windows-sandbox.ts",
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
     "test:compiled-sidecar-smoke": "CC_HAHA_RUN_COMPILED_SIDECAR_SMOKE=1 bun run test -- --run scripts/build-sidecars.test.ts",
     "clean:electron-output": "bun run ./scripts/clean-electron-output.ts",

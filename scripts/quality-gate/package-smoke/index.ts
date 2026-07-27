@@ -668,6 +668,39 @@ function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport) {
         ? join(sidecarDir, sidecarNeedle.slice(1))
         : sidecarDir,
     )
+    const sandboxTriple = report.arch === 'arm64'
+      ? 'aarch64-pc-windows-msvc'
+      : 'x86_64-pc-windows-msvc'
+    addPresenceCheck(
+      report,
+      rootDir,
+      report.arch ? `Windows ${report.arch} sandbox launcher` : 'Windows sandbox launcher',
+      join(sidecarDir, `cc-haha-windows-sandbox-${sandboxTriple}.exe`),
+    )
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Windows sandbox setup helper',
+      join(sidecarDir, 'codex-windows-sandbox-setup.exe'),
+    )
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Windows sandbox command runner',
+      join(sidecarDir, 'codex-command-runner.exe'),
+    )
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Windows sandbox build manifest',
+      join(sidecarDir, 'windows-sandbox-manifest.json'),
+    )
+    addPresenceCheck(
+      report,
+      rootDir,
+      'Windows sandbox Apache license',
+      join(sidecarDir, 'codex-windows-sandbox-licenses', 'LICENSE'),
+    )
     addMatchCheck(
       report,
       rootDir,

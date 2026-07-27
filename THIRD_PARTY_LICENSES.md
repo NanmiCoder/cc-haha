@@ -10,6 +10,14 @@ This project includes code and binaries from the following open source projects.
 - License: dual-licensed under MIT or the Unlicense
 - License texts: bundled beside the executable under `ripgrep-licenses/`
 
+## OpenAI Codex Windows sandbox
+
+- Project: OpenAI Codex (https://github.com/openai/codex)
+- Included as: pinned Windows sandbox launcher, setup helper, and command runner
+- Version: 0.145.0
+- License: Apache License 2.0
+- License text: bundled beside the executables under `codex-windows-sandbox-licenses/`
+
 ## claude-tap
 
 - Project: claude-tap (https://github.com/liaohch3/claude-tap)

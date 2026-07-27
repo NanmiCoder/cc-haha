@@ -45,6 +45,22 @@ function writeFile(rootDir: string, relativePath: string, content = 'ok') {
     for (const licenseName of ['COPYING', 'LICENSE-MIT', 'UNLICENSE']) {
       writeFileSync(join(licensesDir, licenseName), content)
     }
+    if (fileName.endsWith('-pc-windows-msvc.exe')) {
+      const targetTriple = fileName.replace(/^claude-sidecar-/, '').replace(/\.exe$/, '')
+      writeFileSync(
+        join(dirname(fullPath), `cc-haha-windows-sandbox-${targetTriple}.exe`),
+        content,
+      )
+      writeFileSync(join(dirname(fullPath), 'codex-windows-sandbox-setup.exe'), content)
+      writeFileSync(join(dirname(fullPath), 'codex-command-runner.exe'), content)
+      writeFileSync(
+        join(dirname(fullPath), 'windows-sandbox-manifest.json'),
+        JSON.stringify({ targetTriple }),
+      )
+      const sandboxLicensesDir = join(dirname(fullPath), 'codex-windows-sandbox-licenses')
+      mkdirSync(sandboxLicensesDir, { recursive: true })
+      writeFileSync(join(sandboxLicensesDir, 'LICENSE'), content)
+    }
   }
 }
 
@@ -356,7 +372,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/windows-x64')).toBe(true)
+    expect(report.artifactsDir).toBe(join(rootDir, 'desktop', 'build-artifacts', 'windows-x64'))
   })
 
   test('passes Windows arm64 checks only when arm64 sidecar and node-pty native module are present', async () => {
@@ -426,6 +442,24 @@ describe('packaged artifact inspection', () => {
     expect(report.notes.join('\n')).toContain('Windows app-update.yml was not required')
   })
 
+  test('fails Windows inspection when the sandbox command runner is missing', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+
+    const binariesDir = 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/src-tauri/binaries'
+    writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/Claude Code Haha.exe')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar')
+    writeFile(rootDir, `${binariesDir}/claude-sidecar-x86_64-pc-windows-msvc.exe`)
+    writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/pty.node')
+    rmSync(join(rootDir, binariesDir, 'codex-command-runner.exe'))
+
+    const report = await inspectPackagedArtifacts(rootDir, { platform: 'windows', packageKind: 'dir' })
+
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some((check) => check.label === 'Windows sandbox command runner')).toBe(true)
+  })
+
   test('does not treat the win-unpacked app executable as a Windows release installer', async () => {
     const rootDir = createRepoRoot()
     tempDirs.push(rootDir)
@@ -487,7 +521,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/linux-x64')).toBe(true)
+    expect(report.artifactsDir).toBe(join(rootDir, 'desktop', 'build-artifacts', 'linux-x64'))
   })
 
   test('accepts Linux architecture-specific update metadata from arm64 builds', async () => {
@@ -558,7 +592,9 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.passedChecks.some((check) => check.path.includes('linux-arm64-unpacked/resources/app.asar'))).toBe(true)
+    expect(report.passedChecks.some(
+      check => check.path.endsWith(join('linux-arm64-unpacked', 'resources', 'app.asar')),
+    )).toBe(true)
   })
 
   test('passes Linux directory-only checks for electron-builder --dir output', async () => {
