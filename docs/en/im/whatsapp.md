@@ -1,83 +1,80 @@
+---
+title: WhatsApp Integration
+nav_title: WhatsApp
+description: Scan from Linked devices on your phone to attach the Desktop app as a logged-in WhatsApp Web device.
+order: 5
+---
+
 # WhatsApp Integration
 
-The WhatsApp adapter uses a personal WhatsApp Web linked-device session through `@whiskeysockets/baileys`. It is not the official WhatsApp Business Platform or Cloud API.
+For users outside mainland China: no Meta developer account is required, and one QR scan lets your personal WhatsApp number drive the Desktop app. In exchange, this is a WhatsApp Web linked-device login rather than the official Cloud API — no official SLA, template messages, or broadcast capability. It handles personal private chats only, not groups, channels, or status. Permission approval is text replies.
 
-It handles personal private chats only. Groups, channels, and status broadcasts are not supported.
+## This is not "creating a bot"
 
-## What linked-device access means
+What the integration really does is attach the Desktop app as one more logged-in Web device on your WhatsApp account. So there is no Meta for Developers app, no WhatsApp Business Account, and no Phone Number ID, access token, webhook URL, or message template review.
 
-You do not need a Meta developer app, WABA, Phone Number ID, Cloud API access token, webhook, or message template.
+The person on the other side is talking to the WhatsApp account you bound, not to a separately created bot.
 
-Instead:
-
-1. Desktop creates a WhatsApp Web login QR code.
-2. You scan it from **WhatsApp → Linked devices**.
-3. Local Baileys auth state is saved.
-4. The adapter observes private messages received by that account.
-5. Only allowlisted or paired senders can reach a Claude Code session.
-
-The chat recipient is the WhatsApp account you bound, not a separately created bot.
+For customer service, template messages, an official SLA, or broadcasting, you would need the official Cloud API instead, which is a separate implementation. See the [Linked Devices help page](https://faq.whatsapp.com/1317564962315842/) and the [WhatsApp Cloud API overview](https://developers.facebook.com/docs/whatsapp/cloud-api/overview).
 
 ## Bind the account
 
-Open **Settings → IM Integration → WhatsApp**:
+1. Open **Settings → IM Adapters** and select the **WhatsApp** tab.
+2. Select **Scan to Bind**.
+3. On your phone, open **WhatsApp → Settings → Linked devices**.
+4. Scan the QR code shown in Desktop.
+5. Wait for the status to read **WhatsApp is bound**.
 
-1. Select **Scan to bind**.
-2. Open **Linked devices** on the phone.
-3. Scan the QR code.
-4. Wait for Desktop to confirm the binding.
-
-The default local auth directory is:
+The login state is saved locally and the adapter restarts on its own; no separate save is needed. The default directory is:
 
 ```text
 ~/.claude/whatsapp-auth/default
 ```
 
-Do not publish or share this directory.
+That directory is equivalent to a credential that can send and receive messages as you. Do not share it and do not commit it.
 
 ## Authorize a sender
 
-Linked-device login does not authorize all contacts.
+Linked-device login attaches the account; it does not authorize your contacts.
 
-Generate a six-character pairing code in Desktop, then send it in a private WhatsApp chat to the bound account. The sender’s JID is added to `whatsapp.pairedUsers`.
+1. Back at the top of the page, under **Pairing**, select **Generate Code**.
+2. From the account you want to authorize, send the six-character code to the bound account in a private chat.
+3. Once pairing is confirmed, that JID is recorded in the local authorization list.
 
-Known JIDs can be entered in `Allowed Users`, for example:
+Known JIDs can instead be entered in **Allowed Users** as a country code plus phone number:
 
 ```text
-<country-code><phone-number>@s.whatsapp.net
+15551234567@s.whatsapp.net
 ```
+
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated.
 
 ## Commands
 
-- `/start` or `/help`
-- `/projects`
-- `/status`
-- `/clear`
-- `/new [project]`
-- `/stop`
+- `/start` or `/help` — show help and available commands
+- `/projects` — list recent projects and switch
+- `/status` — current project, model, and run state
+- `/new [project]` — start a new session or switch projects
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
 
-## Permission approval
+## Approval and reply behavior
 
-WhatsApp uses explicit text replies:
+WhatsApp has no tappable buttons, so a permission request is answered by replying as the message instructs:
 
 - `1` or `/allow <requestId>` — allow once
 - `2` or `/always <requestId>` — persist the matching approval
 - `3` or `/deny <requestId>` — deny
 
-## Reply behavior
-
-- Thinking can produce a short status message.
-- Completed text is split into platform-sized messages.
-- Recognized Markdown image output can be sent as an image message.
-- The adapter does not depend on editing one WhatsApp message for token-level streaming.
+The adapter does not rely on repeatedly editing one message for token-level streaming: a short status message is sent while Claude thinks, completed text is split into platform-sized messages, and Markdown image output is recognized and sent as an image message.
 
 ## Unbind
 
-Use the WhatsApp settings page to unbind, remove local auth state, and scan again. Removing only a paired user revokes that sender without unlinking the account.
+**Unbind WhatsApp account** removes the locally stored login state, after which you have to scan again. To revoke a single person instead, select **Unbind** next to their name under **Paired Users**; the account link itself is unaffected.
 
 ## Development
 
-Packaged Desktop starts the sidecar automatically. For source development:
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -89,8 +86,18 @@ Optional overrides:
 
 ```bash
 export WHATSAPP_AUTH_DIR="$HOME/.claude/whatsapp-auth/default"
-export WHATSAPP_ACCOUNT_JID="<country-code><phone-number>@s.whatsapp.net"
+export WHATSAPP_ACCOUNT_JID="15551234567@s.whatsapp.net"
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-If the adapter reports that no account is bound, complete QR binding in Desktop first; the manual adapter command does not provide a separate login UI.
+## Troubleshooting
+
+**The adapter reports no bound account.** Complete QR binding in Desktop first; `bun run whatsapp` has no login UI of its own.
+
+**Still unauthorized after binding.** Scanning binds the account, not the sender. Generate a pairing code and send it from the chat you want to authorize.
+
+**WhatsApp reports a logout.** Unbind in Settings and scan again. Removing the device under **Linked devices** on your phone also logs it out.
+
+## Source
+
+`index.ts`, `protocol.ts`, `session.ts`, and `media.ts` under `adapters/whatsapp/`, plus `pairing.ts`, `session-store.ts`, and `ws-bridge.ts` under `adapters/common/`.

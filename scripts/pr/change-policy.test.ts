@@ -129,7 +129,7 @@ describe('evaluateChangePolicy', () => {
     const result = evaluateChangePolicy([
       '.github/CODEOWNERS',
       '.github/copilot-instructions.md',
-      'docs/guide/contributing.md',
+      'docs/internals/contributing.md',
     ])
 
     expect(result.checks.policy).toBe(true)

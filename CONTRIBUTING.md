@@ -66,4 +66,4 @@ bun run quality:smoke --provider-model <provider:model>
 
 ## 更多
 
-完整质量门禁和覆盖率说明见 [贡献指南](docs/guide/contributing.md)；`AGENTS.md` 仅保留 Agent 的高信号入口与路由。
+完整质量门禁和覆盖率说明见 [贡献指南](docs/internals/contributing.md)；`AGENTS.md` 仅保留 Agent 的高信号入口与路由。

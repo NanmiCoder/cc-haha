@@ -1,203 +1,120 @@
-# Desktop Pets
+---
+title: Desktop pet
+nav_title: Desktop pet
+description: A little robot on your desktop that shows you how the current task is going.
+order: 8
+---
 
-Desktop Pets are optional companions that live in a small transparent window outside the main app. They reflect a few useful session states, provide a quick way back to active sessions, and can be replaced with your own local artwork.
+# Desktop pet
 
-Pets are an **Electron Desktop feature**. They do not appear in H5 or the browser-only Web UI.
+A small robot that floats above your desktop and acts out what's happening on this machine — head down and busy while a task runs, glancing around while it waits for your approval, slumped over when something failed. Glance at it while you're doing something else and you'll know whether to switch back.
 
-![Desktop Pet settings with the four built-in companions and appearance controls](../../images/desktop_ui/14_pet_settings_overview.png)
+It's a status indicator and a shortcut, nothing more. It can't approve permissions for you, and you can't type into it.
 
-## Enable a pet
+## Turning it on
 
-1. Open **Settings → Pets**.
-2. Turn on **Show desktop pet**.
-3. Choose one of the four built-in companions:
-   - **Dada**, the coding companion;
-   - **Huhu**, the planning companion;
-   - **Bubu**, the fixing companion;
-   - **Huihui**, the building companion.
-4. Adjust the size between `96px` and `192px`.
-5. Choose whether to play animations and show the active-task panel.
+The pet is **off by default**:
 
-The selected pet, size, window position, animation preference, and task-panel preference are restored between launches.
+1. Click **Settings** at the bottom of the sidebar.
+2. Choose the **Pets** tab.
+3. Pick one from **Built-in pets**.
+4. Turn on **Show desktop pet**.
 
-## Interact with the floating pet
+![Settings → Pets: four built-in pets and appearance controls](../../images/app/settings-pets.webp)
 
-| Action | Result |
+## The four built-in pets
+
+| Character | Who it is |
 |---|---|
-| Move the pointer near an idle pet | Its gaze follows the pointer; entering the pet also triggers a short jump |
-| Click the pet | Bring the main Claude Code Haha window forward and play a wave |
-| Drag the pet | Move the floating window; the pet runs in the drag direction |
-| Right-click the pet | Open the menu for closing the pet window |
-| Click the numbered task badge | Expand the active-session panel |
-| Click a session in the panel | Return to that session in the main window |
-| Click the arrow below the task list | Collapse the panel back to the numbered badge |
+| Dada | A steady coding robot that helps build ideas one block at a time |
+| Huhu | A pencil-and-notepad planning robot that maps a way through complex tasks |
+| Bubu | A wrench-carrying repair robot with a knack for spotting and fixing cracks |
+| Huihui | A gear-carrying build robot that perks up whenever a new reply arrives |
 
-The pet can visibly distinguish working, waiting for you, failed, and idle states. The panel is a navigator, not an approval surface: return to the main app to handle any pending interaction, approve or deny a tool, stop work, or inspect full output.
+Switching characters updates an already-open pet window immediately.
 
-When there are no active sessions, the task panel stays hidden. Disabling **Show active task panel** keeps active work behind the numbered badge instead of removing or stopping it.
+## Interacting with it
 
-The animation switch affects the pet only. Turning it off does not stop sessions. Claude Code Haha also respects the operating system’s reduced-motion preference.
+![The pet floating on the desktop](../../images/app/pet-desktop.webp)
 
-## Create a custom pet
+- **Hover** — while idle it hops, and its gaze follows your pointer.
+- **Click** — brings the main window forward with a wave. Note that it only raises the window; it doesn't jump into a particular session.
+- **Drag** — move it anywhere on the desktop. It tries to return to the same spot next launch.
+- **Right-click** — choose **Close pet** from the system menu. That closes the floating window only; no task is stopped. To bring it back, return to **Settings → Pets**.
 
-Select **Add pet** under **Your pets**. The dialog offers three ways to make one. Images are processed entirely on your own computer: nothing is uploaded, and no chat quota is used.
+With **Show active task panel** enabled, a panel appears beside the pet whenever work is in flight, grouped by state:
 
-![Custom pet creation dialog with three ways to make a pet](../../images/desktop_ui/15_pet_create_methods.png)
+- **Working** — a session, background task, or agent is running.
+- **Waiting for you** — something needs a permission approval or other input.
+- **Needs attention** — the last run failed.
 
-Before choosing a file, enter:
+Clicking a row raises the main window and opens that session. Permissions are still approved in the main window. With the panel off, active work collapses to a numeric badge you can click to expand.
 
-- a Pet ID of at most 73 characters, containing only lowercase letters, numbers, and single hyphens, such as `docs-helper`;
-- a display name;
-- a short description.
+## Appearance controls
 
-The ID must be unique among your custom pets.
+- **Pet size** — anywhere between 96 and 192 pixels.
+- **Play animations** — turn it off and the pet stays but stops moving. Useful when you want it quieter without dismissing it.
+- **Show active task panel** — see above.
+- **Collapsed by default** — show just the pet and expand the task panel only when you want it.
 
-### Option 1: use a picture you already have
+## Making your own
 
-The quickest route, about a minute. Pick a static image with a transparent background and the app adds breathing, floating and status motion locally.
+Click **Add pet** to the right of **Your pets**. Every image is processed on your own machine — nothing is uploaded, and nothing costs conversation credits.
 
-The image must have:
+All three routes ask for the same three fields first: a **pet ID** (lowercase letters, digits, and single hyphens, e.g. `moon-cat`), a **display name**, and a **description**.
 
-- PNG or WebP format (APNG and animated WebP are rejected);
-- width and height between `32px` and `4096px`;
-- no more than `16,777,216` total pixels;
-- a file size no larger than `8MB`.
+### Route 1: use an image you already have
 
-This kind of pet only sways gently. It **will not run, and it will not track your cursor**. For full motion, use option 2.
+The quickest — about a minute. Pick a static PNG or WebP with a transparent background and the app adds gentle breathing and floating motion.
 
-### Option 2: draw one with AI that runs and jumps
+This kind of pet **won't run, wave, or track your cursor**. For that, use one of the routes below.
 
-About ten minutes, and you need an AI that can draw. The dialog walks you through the prompt, the reference template and the checks.
+### Route 2: have an AI draw an action sheet
 
-#### Step 1: have an AI draw an action sheet
+About ten minutes and an image-generating AI. The dialog already contains a complete prompt and a reference template; click **Copy this prompt** and paste it into the AI, replacing the two "character" lines with what you want.
 
-Open any AI that can draw (Nano Banana, ChatGPT image generation, Midjourney, Stable Diffusion and Jimeng all work — these are examples, not endorsements) and send it the whole block below, replacing the two "Character" lines with what you want:
+What it needs to draw is an **8-column by 9-row** action sheet, one frame per cell:
 
-```text
-Draw me a game character action sheet (sprite sheet).
-
-[Character]
-A round-headed orange kitten wearing a small blue scarf, chibi
-three-heads-tall proportions, 3D cartoon render, soft glossy
-surface, bright cheerful colours.
-(Replace these lines with your own character - the more specific the better)
-
-[Whole image]
-- Fully transparent background: no backdrop colour, no grid lines, no text, no drop shadow
-- Divide the image evenly into 8 columns x 9 rows, 72 equally sized cells
-- One action frame per cell, character centred with a little margin around it
-- Every cell must show the same character with identical proportions, colours and art style
-- Leave unused cells fully transparent
-
-[What to draw in each row]
-Row 1, first 6 cells: standing still with a gentle breathing bob
-Row 2, all 8 cells: a full run cycle facing right, always facing right
-Row 3, first 4 cells: raising a hand and waving hello
-Row 4, first 5 cells: crouch, leap, land
-Row 5, all 8 cells: dejected and downcast, head lowered, sighing
-Row 6, first 6 cells: waiting in place, glancing around
-Row 7, first 6 cells: head down, busy working
-Row 8, all 8 cells: head and gaze starting straight up, turning slowly to the right through upper-right, right and lower-right, ending near straight down
-Row 9, all 8 cells: continuing from straight down, turning left through lower-left, left and upper-left, back to near straight up
-```
-
-Getting it wrong on the first try is normal. Ask for a redraw, or say "keep the character, redraw row 2 only".
-
-#### Step 2: check it against the template
-
-![Action sheet template: 8 columns by 9 rows, labelled with what each row should contain](../../images/desktop_ui/17_pet_action_sheet_en.png)
-
-When the picture is ready, check three things before importing:
-
-1. **The background is see-through, not white.** A white backdrop becomes a square on your desktop; this is the most common mistake.
-2. **8 cells across, 9 rows down**, one action per cell.
-3. **The same character throughout**, with no change of face, colours or proportions.
-
-**Save the template** in the dialog writes this reference image to disk so you can lay out frames against it.
-
-#### Step 3: pick the file
-
-Fill in the ID, name and description, then select the picture. **You do not need to resize anything** — see "Sizes are aligned for you" below.
-
-### Option 3: I already have an action sheet
-
-If you have drawn a sheet already, or hold a finished atlas, this path skips the walkthrough and goes straight to the form. Validation is identical to option 2.
-
-### What to draw in each row
-
-You only draw **nine rows**; the app derives the rest:
-
-| Row | Content | Frames needed |
-|-----|---------|---------------|
-| 1 | Idle: standing still with a gentle breathing bob | 6 |
-| 2 | Run right: full run cycle, always facing right | 8 |
-| 3 | Wave: raise a hand and greet | 4 |
+| Row | Content | Frames used |
+|---|---|---|
+| 1 | Idle: standing still with a slight breathing motion | 6 |
+| 2 | Run right: a full run cycle, always facing right | 8 |
+| 3 | Wave: raising a hand in greeting | 4 |
 | 4 | Jump: crouch, leap, land | 5 |
-| 5 | Fail: discouraged, head down, sighing | 8 |
-| 6 | Wait: looking around, shifting in place | 6 |
+| 5 | Fail: dejected, head down, sighing | 8 |
+| 6 | Wait: looking around, pacing in place | 6 |
 | 7 | Work: head down, busy | 6 |
-| 8 | Gaze, upper half: straight up turning clockwise to near straight down | 8 |
-| 9 | Gaze, lower half: continuing from straight down back to near straight up | 8 |
+| 8 | Gaze, upper arc: from straight up around to nearly straight down | 8 |
+| 9 | Gaze, lower arc: from straight down back around to nearly straight up | 8 |
 
-Notes:
+"Run left" doesn't need drawing — the app mirrors row 2 horizontally. The last two rows are optional too; repeat the first idle frame and the pet simply won't track your cursor.
 
-- **You do not draw "run left".** The app mirrors row 2 horizontally to produce it.
-- **The last two rows are optional in practice.** Repeat the first idle frame and the pet simply will not track your cursor; everything else still works.
-- Leave unused cells at the right of each row fully transparent.
+When the image comes back, check three things against the template in the dialog: the background is genuinely transparent rather than white, it really is 8 across by 9 down, and it's the same character in all nine rows. If not, ask the AI to redraw — "keep the character, redraw row 2 only" works well.
 
-### Sizes are aligned for you
+### Route 3: I already have an action sheet
 
-After you pick the file, the app assembles the runtime atlas locally: it slices the sheet on an 8 × 9 grid, rescales each cell to `192 × 208`, centres the character, mirrors the run row, and fills in the remaining runtime rows to reach `1536 × 2288`.
+Skip the tutorial and go straight to the form. The validation rules are identical to route 2.
 
-That means:
+### You don't have to compute the size
 
-- **Exact dimensions are not required.** Common AI output sizes such as `1024 × 1152` work; a ratio close to 8:9 gives the best result. The reference size is `1536 × 1872`.
-- **A finished `1536 × 2288` atlas is kept byte-for-byte** and is never resampled.
-- The assembled file stays under `8MB`; WebP encoding is used automatically if a lossless PNG would exceed it.
+Once you pick the image, the app assembles the runtime atlas locally: it slices the 8×9 grid, scales proportionally, centers the character in each cell, mirrors the run-left row, and fills in the remaining rows.
 
-### Common problems
+So the **dimensions don't need to be exact**. Common AI output sizes like `1024 × 1152` work fine, and anything close to an 8:9 ratio works best. An existing `1536 × 2288` atlas is kept as-is and never rescaled.
 
-| Message | Cause and fix |
-|---------|---------------|
-| This image has no transparent background… | The sheet was exported on a white or coloured backdrop. Ask for a transparent PNG, or remove the background with an editor. |
-| This image cannot be sliced into 8 columns by 9 rows | The row or column count is off. Confirm 8 across and 9 down, or use a finished `1536 × 2288` atlas. |
-| That image could not be read | An animated file (APNG / animated WebP) or a corrupt one. Use a static PNG or WebP. |
-| That image is too big | The source exceeds 8 MB. Compress it, or ask for smaller output. |
-| A pet with this ID already exists | Choose a different Pet ID, or remove the existing one (see "Storage and removal"). |
+The image itself must be: a static PNG or WebP (no animated formats), between 32 and 4096 pixels on each side, at most 16,777,216 pixels total, and under 8 MB.
 
-When the size, format, or image content does not meet these rules, the app refuses to create the pet and shows the matching error instead of adding an invalid entry.
+:::warning
+The most common failure is a **white background**. A white-backed image becomes a rectangle sitting on your desktop, so the app rejects it outright. Have the AI re-export a transparent PNG, or remove the background yourself.
+:::
 
-After a successful import, the new pet is selected automatically and appears under **Your pets**.
+## Where they live, and deleting one
 
-![A locally imported custom pet selected in Desktop Pet settings](../../images/desktop_ui/16_pet_custom_result.png)
+Custom pet packages live in `${CLAUDE_CONFIG_DIR:-~/.claude}/cc-haha/pets`, and there's an **Open folder** button at the bottom of the settings page. Each pet gets its own subdirectory containing `pet.json` and its images.
 
-## Storage and removal
+There's no delete button in the UI yet. To remove one: select a built-in pet first, click **Open folder**, delete only that pet's subdirectory, then click **Refresh** back in settings. Don't delete the whole `pets` or `cc-haha` directory.
 
-Custom pet packages are stored under:
+A hand-edited `pet.json` or a swapped image may fail validation; invalid packages are skipped and reported in the settings page.
 
-```text
-${CLAUDE_CONFIG_DIR:-~/.claude}/cc-haha/pets
-```
+## Limits
 
-Use **Open folder** in Pet settings to open the resolved directory. This is also the current removal path:
-
-1. Select a built-in pet first if the package you are removing is active.
-2. Open the custom pet folder.
-3. Remove only the custom pet’s own package directory.
-4. Return to Pet settings and select **Refresh**.
-
-Closing or disabling the floating window does not delete a custom pet. If a selected package goes missing, the app falls back to a built-in pet.
-
-The loader skips invalid or unsafe packages and reports how many folders could not be loaded. Do not replace package files while an import is still running, and avoid symbolic links or unsupported animated image formats.
-
-## Privacy, safety, and boundaries
-
-- Image selection, validation, copying, and lightweight animation are local operations.
-- Importing a pet does not send the image to the selected chat model.
-- A pet can show summarized task state and navigate to a session, but it cannot approve permissions, answer model questions, or control a task directly.
-- Pets do not run in H5, IM integrations, or a browser-only deployment.
-- The pet observes the local Desktop service; it is not a cloud monitor and does not stay active after the Desktop app exits.
-- Always-on-top behavior, dragging across displays, and window placement can vary by operating system and desktop environment.
-- A successful application build does not by itself prove pet-window behavior on every supported operating system.
-
-If the pet does not move, check both **Play animations** and the operating system’s reduced-motion setting. If it does not appear at all, turn **Show desktop pet** off and on once, then restart the Desktop app before editing stored files manually.
+The pet is desktop-only and never appears in H5. It stops working when you quit the app or the machine sleeps. Always-on-top behavior, dragging, and multi-monitor placement are all subject to what each operating system allows.

@@ -1,59 +1,37 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
+
+import { readImageSize } from './image-size.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const siteDir = path.resolve(scriptDir, '..')
 const repoDir = path.resolve(siteDir, '..')
 const docsDir = path.join(repoDir, 'docs')
-const outputPath = path.join(siteDir, 'src', 'generated', 'docs-manifest.js')
+const generatedDir = path.join(siteDir, 'src', 'generated')
+const contentDir = path.join(generatedDir, 'content')
 
 export const paths = {
+  contentDir,
   docsDir,
-  outputPath,
+  generatedDir,
   repoDir,
   siteDir
 }
 
-const excludedDirectoryNames = new Set(['superpowers', 'ui-clone'])
-const excludedFiles = new Set(['index.md', 'en/index.md', 'AGENTS.md'])
+const excludedDirectoryNames = new Set(['superpowers', 'ui-clone', 'public', 'images'])
+const excludedFiles = new Set(['AGENTS.md'])
 
-const sectionLabels = {
-  zh: {
-    guide: '开始使用',
-    desktop: '桌面应用',
-    features: '核心能力',
-    im: '消息接入',
-    agent: '多 Agent',
-    skills: '技能系统',
-    memory: '记忆系统',
-    channel: 'Channel 研究',
-    reference: '参考资料'
-  },
-  en: {
-    guide: 'Get started',
-    desktop: 'Desktop app',
-    features: 'Core capabilities',
-    im: 'Messaging',
-    agent: 'Multi-agent',
-    skills: 'Skills',
-    memory: 'Memory',
-    channel: 'Channel research',
-    reference: 'Reference'
-  }
-}
-
-const sectionOrder = [
-  'guide',
-  'desktop',
-  'features',
-  'im',
-  'agent',
-  'skills',
-  'memory',
-  'channel',
-  'reference'
+/** 分区顺序与标题。新增一个 docs/ 顶层目录时在这里登记，否则会排到最后并显示裸目录名。 */
+export const sections = [
+  { id: 'start', zh: '开始使用', en: 'Get started' },
+  { id: 'desktop', zh: '桌面端功能', en: 'Desktop app' },
+  { id: 'im', zh: 'IM 接入', en: 'Messaging' },
+  { id: 'cli', zh: '命令行', en: 'Command line' },
+  { id: 'internals', zh: '深入原理', en: 'Internals' }
 ]
+
+const sectionIndex = new Map(sections.map((section, index) => [section.id, index]))
 
 function toPosix(value) {
   return value.split(path.sep).join('/')
@@ -64,7 +42,7 @@ function shouldInclude(relativePath) {
   const parts = normalized.split('/')
 
   return normalized.endsWith('.md')
-    && !excludedFiles.has(normalized)
+    && !excludedFiles.has(path.posix.basename(normalized))
     && !parts.some((part) => excludedDirectoryNames.has(part))
 }
 
@@ -129,22 +107,16 @@ function plainText(value) {
 }
 
 function extractTitle(body, frontmatter, fallback) {
-  if (frontmatter.title) {
-    return plainText(frontmatter.title)
-  }
-
+  if (frontmatter.title) return plainText(frontmatter.title)
   const heading = body.match(/^#\s+(.+)$/m)
   return heading ? plainText(heading[1]) : fallback
 }
 
 function extractDescription(body, frontmatter) {
-  if (frontmatter.description) {
-    return plainText(frontmatter.description).slice(0, 180)
-  }
+  if (frontmatter.description) return plainText(frontmatter.description).slice(0, 180)
 
   const withoutFences = body.replace(/```[\s\S]*?```/g, '')
-  const paragraphs = withoutFences.split(/\n\s*\n/)
-  const paragraph = paragraphs.find((candidate) => {
+  const paragraph = withoutFences.split(/\n\s*\n/).find((candidate) => {
     const value = candidate.trim()
     return value
       && !value.startsWith('#')
@@ -157,19 +129,19 @@ function extractDescription(body, frontmatter) {
   return plainText(paragraph || '').slice(0, 180)
 }
 
+/** 搜索用的正文摘要：去掉代码块和标记，保留可读文字。 */
+function searchBody(body) {
+  return plainText(body.replace(/```[\s\S]*?```/g, ' ')).slice(0, 1400)
+}
+
 function routeFromRelativePath(relativePath) {
   const withoutExtension = relativePath.replace(/\.md$/i, '')
   const withoutIndex = withoutExtension.replace(/(^|\/)index$/i, '$1')
   return `/${withoutIndex}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
 }
 
-function sortKey(relativePath) {
-  const basename = path.posix.basename(relativePath, '.md')
-  if (basename === 'index') {
-    return '0000-index'
-  }
-
-  return basename.replace(/^(\d+)-/, (_, value) => value.padStart(4, '0'))
+function moduleIdFor(relativePath) {
+  return relativePath.replace(/\.md$/i, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
 function buildRecord(relativePath, markdown) {
@@ -184,121 +156,160 @@ function buildRecord(relativePath, markdown) {
     ? section
     : basename.replace(/^\d+-/, '').replaceAll('-', ' ')
 
+  const title = extractTitle(body, attributes, fallbackTitle)
+  const explicitOrder = Number.parseInt(attributes.order ?? '', 10)
+
   return {
-    slug: route.replace(/^\//, ''),
-    path: route,
-    locale,
-    section,
-    title: extractTitle(body, attributes, fallbackTitle),
+    body,
+    content: markdown,
     description: extractDescription(body, attributes),
+    locale,
+    moduleId: moduleIdFor(relativePath),
+    navTitle: attributes.nav_title ? plainText(attributes.nav_title) : title,
+    order: Number.isFinite(explicitOrder) ? explicitOrder : (basename === 'index' ? 0 : 900),
+    path: route,
+    search: searchBody(body),
+    section,
+    sectionRank: sectionIndex.has(section) ? sectionIndex.get(section) : 999,
+    slug: route.replace(/^\//, ''),
     sourcePath: `docs/${relativePath}`,
-    sortKey: sortKey(relativePath),
-    content: markdown
+    title
   }
 }
 
-function buildNavigation(records, locale) {
-  const localeRecords = records.filter((record) => record.locale === locale)
-  const sections = [...new Set(localeRecords.map((record) => record.section))]
-    .sort((left, right) => {
-      const leftIndex = sectionOrder.indexOf(left)
-      const rightIndex = sectionOrder.indexOf(right)
-      return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
-        - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex)
-        || left.localeCompare(right)
-    })
-
-  return sections.map((section) => ({
-    key: section,
-    title: sectionLabels[locale][section] || section,
-    items: localeRecords
-      .filter((record) => record.section === section)
-      .sort((left, right) => left.sortKey.localeCompare(right.sortKey))
-      .map(({ content, sortKey: _sortKey, section: _section, ...item }) => item)
-  }))
+function sortRecords(records) {
+  return [...records].sort((left, right) => {
+    if (left.locale !== right.locale) return left.locale.localeCompare(right.locale)
+    if (left.sectionRank !== right.sectionRank) return left.sectionRank - right.sectionRank
+    if (left.section !== right.section) return left.section.localeCompare(right.section)
+    if (left.order !== right.order) return left.order - right.order
+    return left.title.localeCompare(right.title)
+  })
 }
 
-function serialize(value) {
-  return JSON.stringify(value, null, 2)
-    .replaceAll('\u2028', '\\u2028')
-    .replaceAll('\u2029', '\\u2029')
+async function emptyDirectory(directory) {
+  await fs.rm(directory, { force: true, recursive: true })
+  await fs.mkdir(directory, { recursive: true })
+}
+
+const IMAGE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.gif'])
+
+/**
+ * 站点资源路径 → 像素尺寸。渲染时写进 <img width height>，
+ * 浏览器就能在图片下载完之前留出正确的位置，懒加载不再让正文跳动。
+ */
+async function collectImageSizes(directory, prefix = '') {
+  const sizes = {}
+  let entries
+
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true })
+  } catch {
+    return sizes
+  }
+
+  for (const entry of entries) {
+    const absolutePath = path.join(directory, entry.name)
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+
+    if (entry.isDirectory()) {
+      Object.assign(sizes, await collectImageSizes(absolutePath, relativePath))
+      continue
+    }
+
+    if (!IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
+
+    const size = await readImageSize(absolutePath)
+    if (size?.width && size?.height) sizes[`/${relativePath}`] = [size.width, size.height]
+  }
+
+  return sizes
 }
 
 export async function generateDocsManifest() {
   const relativePaths = await listMarkdownFiles(docsDir)
-  const records = await Promise.all(relativePaths.map(async (relativePath) => {
+  const records = []
+
+  for (const relativePath of relativePaths) {
     const markdown = await fs.readFile(path.join(docsDir, relativePath), 'utf8')
-    return buildRecord(relativePath, markdown)
+    records.push(buildRecord(relativePath, markdown))
+  }
+
+  const sorted = sortRecords(records)
+
+  await fs.mkdir(generatedDir, { recursive: true })
+  await emptyDirectory(contentDir)
+
+  // 每篇正文单独成模块，路由表里用动态 import 拿 —— 打开一篇文档不再下载全部 80 篇。
+  // 写的是去掉 frontmatter 之后的 body，渲染层拿到就能直接解析。
+  for (const record of sorted) {
+    await fs.writeFile(
+      path.join(contentDir, `${record.moduleId}.js`),
+      `export default ${JSON.stringify(record.body)}\n`,
+      'utf8'
+    )
+  }
+
+  const index = sorted.map((record) => ({
+    description: record.description,
+    locale: record.locale,
+    navTitle: record.navTitle,
+    order: record.order,
+    path: record.path,
+    section: record.section,
+    slug: record.slug,
+    sourcePath: record.sourcePath,
+    title: record.title
   }))
 
-  records.sort((left, right) => left.path.localeCompare(right.path))
-  const navigation = {
-    zh: buildNavigation(records, 'zh'),
-    en: buildNavigation(records, 'en')
-  }
+  const loaders = sorted
+    .map((record) => `  ${JSON.stringify(record.path)}: () => import('./content/${record.moduleId}.js'),`)
+    .join('\n')
 
-  const moduleSource = `// Generated by site/scripts/generate-docs-manifest.mjs. Do not edit.
-export const docsManifest = ${serialize(records)}
+  const imageSizes = await collectImageSizes(path.join(docsDir, 'images'), 'images')
 
-export const docsNavigation = ${serialize(navigation)}
+  await fs.writeFile(
+    path.join(generatedDir, 'docs-index.js'),
+    [
+      '// 由 scripts/generate-docs-manifest.mjs 生成，请勿手工编辑。',
+      `export const sections = ${JSON.stringify(sections, null, 2)}`,
+      '',
+      `export const docsIndex = ${JSON.stringify(index, null, 2)}`,
+      '',
+      `export const imageSizes = ${JSON.stringify(imageSizes)}`,
+      '',
+      'export const docsContent = {',
+      loaders,
+      '}',
+      ''
+    ].join('\n'),
+    'utf8'
+  )
 
-export const docsBySlug = Object.fromEntries(
-  docsManifest.flatMap((document) => [
-    [document.slug, document],
-    [document.path, document],
-    [\`\${document.path}/\`, document]
-  ])
-)
+  await fs.writeFile(
+    path.join(generatedDir, 'search-index.js'),
+    [
+      '// 由 scripts/generate-docs-manifest.mjs 生成，请勿手工编辑。',
+      `export default ${JSON.stringify(sorted.map((record) => ({
+        d: record.description,
+        l: record.locale,
+        p: record.path,
+        s: record.section,
+        t: record.title,
+        x: record.search
+      })))}`,
+      ''
+    ].join('\n'),
+    'utf8'
+  )
 
-export function normalizeDocsPath(value) {
-  const pathname = String(value || '/').split(/[?#]/, 1)[0]
-  const decoded = decodeURIComponent(pathname)
-  const withoutHtml = decoded.replace(/(?:\\/index)?\\.html$/i, '')
-  const withoutMarkdown = withoutHtml.replace(/\\.md$/i, '')
-  const normalized = \`/\${withoutMarkdown}\`.replace(/\\/+/g, '/').replace(/\\/$/, '')
-  return normalized || '/'
+  return { records: sorted, sections }
 }
 
-export function resolveDocsPath(value) {
-  const normalized = normalizeDocsPath(value)
-  return docsBySlug[normalized]
-    || docsBySlug[normalized.replace(/^\\//, '')]
-    || null
-}
+const invokedDirectly = process.argv[1]
+  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
-export function resolveDocsHref(href, sourcePath) {
-  if (!href || /^(?:[a-z]+:|\\/\\/|#)/i.test(href)) {
-    return href
-  }
-
-  const suffixIndex = href.search(/[?#]/)
-  const pathname = suffixIndex === -1 ? href : href.slice(0, suffixIndex)
-  const suffix = suffixIndex === -1 ? '' : href.slice(suffixIndex)
-  if (pathname.startsWith('/')) {
-    return \`\${normalizeDocsPath(pathname)}\${suffix}\`
-  }
-
-  const sourceRelative = sourcePath.replace(/^docs\\//, '')
-  const resolved = new URL(pathname, \`https://docs.local/\${sourceRelative}\`).pathname
-  const isMarkdown = /\\.md$/i.test(resolved)
-  const target = isMarkdown ? normalizeDocsPath(resolved) : resolved
-  return \`\${target}\${suffix}\`
-}
-`
-
-  await fs.mkdir(path.dirname(outputPath), { recursive: true })
-  const current = await fs.readFile(outputPath, 'utf8').catch(() => '')
-  if (current !== moduleSource) {
-    await fs.writeFile(outputPath, moduleSource)
-  }
-
-  return { records, navigation, outputPath }
-}
-
-const isDirectRun = process.argv[1]
-  && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
-
-if (isDirectRun) {
+if (invokedDirectly) {
   const { records } = await generateDocsManifest()
-  console.log(`Generated ${records.length} documentation routes.`)
+  console.log(`Generated docs index for ${records.length} pages.`)
 }

@@ -137,8 +137,8 @@ const policyExactPaths = new Set([
   '.github/pull_request_template.md',
   'AGENTS.md',
   'CONTRIBUTING.md',
-  'docs/en/guide/contributing.md',
-  'docs/guide/contributing.md',
+  'docs/en/internals/contributing.md',
+  'docs/internals/contributing.md',
   'package.json',
 ])
 

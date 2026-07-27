@@ -80,8 +80,8 @@ describe('feature quality contract', () => {
       scripts?: Record<string, string>
     }
     const prePushHook = readFileSync('scripts/git-hooks/pre-push', 'utf8')
-    const contributing = readFileSync('docs/guide/contributing.md', 'utf8')
-    const englishContributing = readFileSync('docs/en/guide/contributing.md', 'utf8')
+    const contributing = readFileSync('docs/internals/contributing.md', 'utf8')
+    const englishContributing = readFileSync('docs/en/internals/contributing.md', 'utf8')
     const rootContributing = readFileSync('CONTRIBUTING.md', 'utf8')
 
     expect(packageJson.scripts?.verify).toBe('bun run quality:pr')

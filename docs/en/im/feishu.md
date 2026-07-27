@@ -1,59 +1,70 @@
+---
+title: Feishu Integration
+nav_title: Feishu
+description: Create a Feishu bot from the official template and drive Desktop sessions from a private chat with card-based approval.
+order: 1
+---
+
 # Feishu Integration
 
-The Feishu adapter connects an enterprise custom app to local Desktop sessions. It handles `p2p` private chats only; group chats are not supported.
+Best for teams already on Feishu: an official template creates a bot with every required permission preconfigured, and permission requests arrive as interactive cards you can tap. Common commands can be exposed as a bot menu. It handles private (`p2p`) chats only, and changing the bot configuration means publishing a new version in the developer console.
 
-## Create the Feishu app
+## Create the bot
 
-Feishu provides a template with the messaging, event, and card capabilities needed by this integration:
+Open [Create a Feishu bot](https://open.feishu.cn/page/openclaw?form=multiAgent). This is the official OpenClaw template, with messaging, event subscription, and card callback permissions already granted — no scopes to add by hand. The **Create Feishu bot** button under **Settings → IM Adapters → Feishu** opens the same page.
 
-[Create a Feishu bot from the template](https://open.feishu.cn/page/openclaw?form=multiAgent)
+Choose a name, create the app, then keep its **App ID** and **App Secret** for the next step.
 
-Choose a name, create the app, and save its **App ID** and **App Secret**.
+## Configure the bot menu
 
-In the [Feishu developer console](https://open.feishu.cn/app?lang=en-US), create and publish a bot version. Optional menu entries can invoke:
+This step is optional. With a menu, you can switch projects and start sessions by tapping instead of typing.
 
-- `/projects`
-- `/new`
-- `/clear`
+In the [Feishu developer console](https://open.feishu.cn/app?lang=en-US), open your bot and go to its bot menu configuration. Add three entries, each with a label of your choice and one of these commands:
 
-The app must be published before users can reliably receive the configured bot behavior.
+- `/projects` — list recent projects and switch
+- `/new` — start a new session
+- `/clear` — clear the current context
 
-## Configure Desktop
+Save the menu, then publish a new application version. Menu changes take effect only after publishing.
 
-Open **Settings → IM Integration → Feishu**:
+## Enter credentials in Desktop
 
-1. Enter the App ID and App Secret.
-2. Generate a six-character pairing code.
-3. Save the configuration.
-4. Send a private message to the bot and provide the code.
+1. Open **Settings → IM Adapters** and select the **Feishu** tab.
+2. Paste the values into **App ID** and **App Secret**.
+3. Leave **Encrypt Key** and **Verification Token** empty; the template bot does not need them.
+4. Enable **Streaming Card Mode** if you want long replies to update one card in place.
+5. Select **Save**.
 
-Pairing codes expire after 60 minutes, work once, and are rate limited after repeated failures. App credentials do not authorize every organization user.
+**Allowed Users** can stay empty. When it is, only paired accounts are accepted, which is usually what you want.
+
+## Pair your account
+
+At the top of the page, under **Pairing**, select **Generate Code**. The six-character code is written to local configuration immediately — no separate save.
+
+Send any message to your new bot in Feishu, then send the code when prompted. Once pairing is confirmed you can talk to Claude Code directly.
+
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated.
 
 ## Commands
 
+Alongside the menu buttons, these work in the chat box at any time:
+
 - `/help` or `帮助`
 - `/status` or `状态`
-- `/clear` or `清空`
 - `/projects` or `项目列表`
 - `/new` or `新会话`
+- `/clear` or `清空`
 - `/stop` or `停止`
 
-## Permission approval
+## Approval and reply behavior
 
-Permission requests are sent as interactive cards. Selecting allow or deny returns the result to the pending Desktop session.
+Permission requests arrive as interactive cards. Selecting allow or deny returns the result to the pending Desktop session.
 
-If card actions do not work, confirm that the latest application version is published and includes the required card-action capability.
-
-## Reply behavior
-
-- Normal text uses Feishu post messages.
-- Permission approval uses cards.
-- Streaming output prefers patching the same message.
-- Long completed content is split to respect platform limits.
+Normal replies use Feishu post messages. Streaming output prefers patching the same message, and long completed text is split to respect platform limits.
 
 ## Development
 
-Packaged Desktop starts the sidecar automatically. For source development:
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -69,4 +80,16 @@ export FEISHU_APP_SECRET="xxx"
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-If messages are missing, confirm that the app is published, the conversation is a private chat, and the sender is paired or explicitly allowlisted.
+## Troubleshooting
+
+**No messages arrive.** Confirm the app is published — menu edits require a new version — and that the conversation is a private chat rather than a group.
+
+**Card buttons do nothing.** The card action capability usually did not ship with the published version. Publish again from the developer console.
+
+**Still unauthorized.** Check that the code is within its 60-minute window, that it is the current one, and that the account now appears under **Paired Users** in Desktop.
+
+**Session not restored after a restart.** Verify that `~/.claude/adapter-sessions.json` is writable and that the session still exists in Desktop.
+
+## Source
+
+`adapters/feishu/index.ts`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.

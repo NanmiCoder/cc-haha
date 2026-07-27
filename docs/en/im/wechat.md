@@ -1,79 +1,75 @@
+---
+title: WeChat Integration
+nav_title: WeChat
+description: Scan a QR code in Settings to log in a WeChat bot account, then authorize individual users with a pairing code.
+order: 3
+---
+
 # WeChat Integration
 
-The WeChat adapter binds a bot account by QR code, then authorizes individual private-chat users through pairing or an allowlist.
+For people who only want to use WeChat: the whole setup is one QR scan, with no developer platform to register on. The trade-off is that permission approval is text replies rather than tappable buttons, and only private chats are supported.
 
-It supports text, transcribed voice content, image and file attachments, project selection, status, stop, and text-based permission approval. Group chats are not supported.
+Besides text, this path also accepts transcribed voice content, images, and file attachments.
 
-## Bind the WeChat bot account
+## Bind the bot account
 
-Open **Settings → IM Integration → WeChat**:
+1. Open **Settings → IM Adapters** and select the **WeChat** tab.
+2. Select **Scan to Bind**.
+3. Scan the QR code with WeChat and confirm the login on your phone.
+4. Wait for the status to read **WeChat is bound**.
 
-1. Select **Scan to bind**.
-2. Scan the QR code with WeChat.
-3. Confirm the login in WeChat.
-4. Wait for Desktop to show the bound state.
-5. Save the configuration.
+Credentials are written to local configuration and the adapter restarts on its own; no separate save is needed. The tab then offers **Rescan** and **Unbind WeChat account**.
 
-Desktop stores the returned `accountId`, `botToken`, `baseUrl`, and `userId` in the `wechat` section of `~/.claude/adapters.json`, then restarts the adapter sidecar.
-
-Binding credentials does not authorize every WeChat user.
+Binding the bot account is not the same as allowing every WeChat contact. Who may use it is decided in the next step.
 
 ## Authorize a user
 
-Generate a pairing code at the top of **IM Integration**, then send the six-character code to the bound bot in a private chat.
+1. Back at the top of the page, under **Pairing**, select **Generate Code**.
+2. Send the six-character code to the bound bot in WeChat.
+3. Once pairing is confirmed, you can send messages directly.
 
-The code:
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated.
 
-- expires after 60 minutes;
-- can be used once;
-- is replaced immediately when a new code is generated;
-- is rate limited after repeated failures.
-
-Known WeChat user IDs can instead be entered in `Allowed Users`.
+Known WeChat user IDs can instead be entered in **Allowed Users**, separated by commas. That suits a fixed allowlist but is less convenient than pairing.
 
 ## Projects and sessions
 
-With a default project configured, the first accepted message creates or resumes a session in that directory.
+With **Default Project** set, the first accepted message opens a session in that directory. Without it, the bot lists recent projects; reply with a number, project name, or absolute path.
 
-Without a default project, the adapter returns recent projects. Reply with a number, project name, or absolute path. The resulting chat-to-session mapping is stored in `~/.claude/adapter-sessions.json`.
-
-Use `/new` to choose another project and start a new session.
+Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` picks another project; `/clear` empties the context while keeping the project binding.
 
 ## Commands
 
-- `/help` or `帮助`
-- `/status` or `状态`
-- `/projects` or `项目列表`
-- `/new` or `新会话`
-- `/new <number, project name, or absolute path>`
-- `/clear` or `清空`
-- `/stop` or `停止`
+WeChat has no configurable menu, so the chat box is the only entry point. After pairing, the bot suggests `/help`.
 
-## Permission approval
+- `/help` or `帮助` — show available commands
+- `/status` or `状态` — project, branch, model, run state, and task summary
+- `/projects` or `项目列表` — list recent projects again
+- `/new` or `新会话` — clear the current binding and choose a project
+- `/new <number, project name, or absolute path>` — start directly in that project
+- `/clear` or `清空` — clear context, keep the project binding
+- `/stop` or `停止` — stop the current generation
 
-Reply to the text approval message with:
+## Approval and reply behavior
+
+A permission request arrives as text containing a request ID. Reply with one of:
 
 - `/allow <requestId>` — allow once
 - `/always <requestId>` — persist the matching approval
 - `/deny <requestId>` — deny
 
-The adapter sends the response back to the pending Desktop session.
-
-## Attachments and replies
-
-- WeChat messages are received through long polling.
-- Long text is split into platform-sized messages.
-- Images enter model input as inline images.
-- Other files are downloaded to a local temporary path for the session.
-- Shared attachment size limits are enforced.
+Messages are received through long polling and long replies are split into platform-sized messages. A typing indicator is shown while Claude thinks or runs tools. Images enter model input inline; other files are downloaded to a local temporary path. Oversized attachments are reported back in the chat.
 
 ## Unbind
 
-Unbinding the WeChat account clears its credentials and platform authorization lists. Removing one paired user only revokes that user.
+Two levels:
+
+- **Unbind WeChat account** clears the bot credentials and this platform's authorization lists. Binding again means scanning again.
+- **Unbind** next to a name under **Paired Users** revokes only that person. They need a fresh pairing code afterwards.
 
 ## Development
 
-Packaged Desktop starts the sidecar automatically. For source development:
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -91,4 +87,20 @@ export WECHAT_USER_ID="..."
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-If messages are rejected, confirm that Desktop is running, the account is bound, the sender is paired or allowlisted, and both adapter state files are writable.
+Normal Desktop use needs none of these; QR binding writes the local configuration.
+
+## Troubleshooting
+
+**Still unauthorized after a successful scan.** That is the expected flow. Scanning only stores bot credentials; the individual user still has to send a pairing code or appear in **Allowed Users**.
+
+**The QR code expired.** Select **Scan to Bind** again. WeChat login QR codes are short-lived.
+
+**The adapter reports a missing WeChat account.** Neither the environment variables nor `wechat.accountId` / `wechat.botToken` in `~/.claude/adapters.json` took effect. Complete QR binding in Settings first.
+
+**No replies.** Confirm Desktop is running, the tab reads **WeChat is bound**, the sender is paired or allowlisted, and `~/.claude/adapters.json` is writable. When running from source, also confirm `ADAPTER_SERVER_URL` points at the running Desktop server.
+
+**Session not restored after a restart.** Verify that `~/.claude/adapter-sessions.json` is writable and that the session still exists in Desktop.
+
+## Source
+
+`index.ts`, `protocol.ts`, and `media.ts` under `adapters/wechat/`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.

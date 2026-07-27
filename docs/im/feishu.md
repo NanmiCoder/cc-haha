@@ -1,120 +1,102 @@
+---
+title: 飞书接入
+nav_title: 飞书
+description: 用官方模板一键创建飞书机器人，在飞书单聊里驱动桌面端并用卡片批权限。
+order: 1
+---
+
 # 飞书接入
 
-> 飞书 Adapter 的接入教程。官方已经提供了**预配好权限的模板机器人**，跟着下面几步点一点就能完成接入。
+适合国内团队：飞书官方给了一个权限预配好的模板机器人，点几下就能建出来，权限审批是可点的交互卡片，还能把常用命令做成机器人菜单。限制是只处理单聊（`p2p`），不处理群聊；改机器人配置要回开放平台发一次新版本。
 
-## 适用场景
+## 一键创建机器人
 
-飞书方案适合在中国区环境下通过企业自建应用私聊 Claude Code。当前实现只处理 `p2p` 私聊，不处理群聊。
+打开[创建飞书机器人](https://open.feishu.cn/page/openclaw?form=multiAgent)。这是官方为 OpenClaw 预配好消息、事件订阅、卡片回调等全部权限的模板，不需要再手动加 scope。桌面端「设置」→「IM 接入」→「飞书」里的「一键创建飞书机器人」按钮打开的也是这个页面。
 
-实现入口：`adapters/feishu/index.ts`
+![模板创建入口](../images/im/feishu/01-create-app-entry.png)
 
-## 1. 一键创建飞书机器人
+给机器人取个名字，点创建。
 
-直接打开下面的链接创建机器人——这是官方为 OpenClaw 提前配好所有权限（消息、事件、卡片回调等）的模板，省去手动配 scope 和事件订阅：
+![给机器人取名](../images/im/feishu/02-name-bot.png)
 
-👉 [立即创建飞书机器人](https://open.feishu.cn/page/openclaw?form=multiAgent)
+创建成功后把**App ID**和**App Secret**留着，下一步要填进桌面端。
 
-![一键创建入口](../images/im/feishu/01-create-app-entry.png)
+## 配置机器人菜单
 
-随便给你自己的机器人取一个名字，点击创建：
+这一步可选，但配了之后在飞书里就能点按钮切项目、开新会话，不用手打命令。
 
-![取名并创建](../images/im/feishu/02-name-bot.png)
+进入[飞书开放平台](https://open.feishu.cn/app?lang=zh-CN)，选中刚创建的机器人。
 
-创建成功后，把 **App ID** 和 **App Secret** 保存下来，接着去配置机器人菜单。
+![开放平台里的机器人](../images/im/feishu/03-dev-console.png)
 
-## 2. 配置自定义菜单（/projects /new /clear）
+打开「机器人菜单」。
 
-进入[飞书开发者后台](https://open.feishu.cn/app?lang=zh-CN)，选择刚创建的机器人，进入机器人配置页：
+![进入机器人菜单](../images/im/feishu/04-menu-enter.png)
 
-![开发者后台](../images/im/feishu/03-dev-console.png)
+依次添加三个命令，每个都是一样的填法：菜单名称自定，命令填下面的值。
 
-进入「机器人菜单」开始配置：
+- `/projects` — 列出最近项目并切换
+- `/new` — 开一条新会话
+- `/clear` — 清空当前上下文
 
-![进入菜单配置](../images/im/feishu/04-menu-enter.png)
+![添加 menu 命令](../images/im/feishu/05-menu-projects.png)
 
-依次添加 3 个命令：
-
-**/projects** — 切换最近使用的项目
-
-![菜单 /projects](../images/im/feishu/05-menu-projects.png)
-
-**/new** — 开启新对话
-
-![菜单 /new](../images/im/feishu/06-menu-new.png)
-
-**/clear** — 清空上下文
-
-![菜单 /clear](../images/im/feishu/07-menu-clear.png)
-
-三个都配好后点击保存：
+三个都加完后保存。
 
 ![保存菜单](../images/im/feishu/08-menu-save.png)
 
-最后点击「创建新版本并发布」让菜单生效：
+菜单只有发布后才生效，点「创建新版本并发布」。
 
-![创建版本并发布](../images/im/feishu/09-publish-version.png)
+![创建新版本并发布](../images/im/feishu/09-publish-version.png)
 
-**命令作用说明：**
+## 在桌面端填凭据
 
-- `/projects`：列出最近使用的项目，支持切换当前会话绑定的目录
-- `/new`：开启新对话
-- `/clear`：清空当前会话上下文
+1. 打开「设置」→「IM 接入」，切到「飞书」Tab。
+2. 把上一步的 App ID 和 App Secret 填进「App ID」和「App Secret」。
+3. 「Encrypt Key」和「Verification Token」留空即可，模板机器人不需要。
+4. 需要长时间流式更新同一张卡片时，勾上「流式卡片模式」。
+5. 点「保存」。
 
-## 3. 在 Claude Code Haha 桌面端填写
+![填写 App ID 和 App Secret](../images/im/feishu/10-fill-app-credentials.png)
 
-### 3.1 填写 App ID / App Secret
+「允许的用户」可以留空。留空时只有完成配对的人能用，这通常就是你想要的。
 
-打开桌面端 `设置 → IM 接入 → 飞书`，把前面拿到的两把钥匙填进去：
+## 配对
 
-![填写 App ID / App Secret](../images/im/feishu/10-fill-app-credentials.png)
-
-### 3.2 生成配对码
-
-点击「生成配对码」按钮，得到 6 位码：
+回到页面顶部的「配对管理」，点「生成配对码」，会出现一枚 6 位码。这一步会立即写入本机配置，不需要再点保存。
 
 ![生成配对码](../images/im/feishu/11-generate-pairing-code.png)
 
-![配对码详情](../images/im/feishu/12-pairing-code-detail.png)
+在飞书里私聊刚创建的机器人，随便发一条消息，按提示把这枚码发过去。
 
-**记得点保存！！**
+![在飞书里发送配对码](../images/im/feishu/13-send-code-in-feishu.png)
 
-## 4. 飞书机器人与桌面端配对
-
-随便给刚才创建的机器人发送一条消息，按提示把上一步的 6 位配对码发给它：
-
-![在飞书里发配对码](../images/im/feishu/13-send-code-in-feishu.png)
-
-看到配对成功提示后，就可以用飞书在手机上远程驱动桌面端 Claude Code Haha 了：
+看到配对成功提示，就可以直接对话了。
 
 ![配对成功](../images/im/feishu/14-pair-success.png)
 
-![可以开始对话](../images/im/feishu/15-pair-done.png)
+配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。
 
 ## 支持的命令
 
-除菜单按钮外，飞书 adapter 还支持文本命令和中文别名：
+除菜单按钮外，聊天框里随时可以打：
 
 - `/help` 或 `帮助`
 - `/status` 或 `状态`
-- `/clear` 或 `清空`
 - `/projects` 或 `项目列表`
 - `/new` 或 `新会话`
+- `/clear` 或 `清空`
 - `/stop` 或 `停止`
 
-## 权限审批
+## 权限审批与消息表现
 
-当 Claude 请求敏感权限时，adapter 会在飞书里发送交互卡片，点击「允许 / 拒绝」即可把结果回传给桌面端。
+Claude 请求敏感权限时，飞书里会收到一张交互卡片，点「允许」或「拒绝」，结果直接回传给桌面端会话。
 
-## 返回消息的表现
+普通回复走飞书的富文本消息，流式内容优先原地更新同一条消息，完成后过长的正文会自动分片发送。
 
-- 普通文本通过 `post` 消息发送
-- 权限审批通过卡片发送
-- 流式内容优先 patch 同一条消息
-- 完成后按 30000 字左右分片
+## 本地开发启动
 
-## 启动 adapter
-
-桌面端会自动把 adapter 作为 sidecar 拉起。如果你在本地开发，需要手动启动：
+发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
 
 ```bash
 cd adapters
@@ -122,7 +104,7 @@ bun install
 bun run feishu
 ```
 
-## 环境变量覆盖（可选）
+可选的环境变量覆盖：
 
 ```bash
 export FEISHU_APP_ID="cli_xxx"
@@ -132,35 +114,14 @@ export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 
 ## 常见问题
 
-### 一键创建后的机器人权限够用吗？
+**收不到消息**：确认机器人已发布（改过菜单要重新「创建新版本并发布」），以及聊天窗口是和机器人的单聊而不是群。
 
-OpenClaw 官方模板已预配 `im:message`、`im:message:send_as_bot`、`im:resource`、`im.message.receive_v1`、`card.action.trigger` 等所有所需权限，**不需要再手动去配 scope 或事件订阅**。
+**权限卡片点了没反应**：一般是卡片回调能力没随版本发布，回开放平台重新发一次版本。
 
-### 收不到消息
+**一直提示未授权**：检查配对码是否还在 60 分钟有效期内、发的是不是当前这一枚（重新生成后旧码失效），以及这个飞书账号是否已经出现在桌面端的「已配对用户」列表里。
 
-优先检查：
-
-- 机器人是否已发布（菜单改完需要「创建新版本并发布」）
-- 是否真的是和 bot 的私聊，而不是群聊
-
-### 权限按钮点了没反应
-
-通常是 `card.action.trigger` 没生效，重新在开发者后台发布一次版本即可。
-
-### 一直提示未授权
-
-- 配对码是否仍在 60 分钟有效期内
-- 发的是不是桌面端当前这一枚（重新生成后旧的立即失效）
-- `feishu.pairedUsers` 里是否已经写入当前 `open_id`
-
-### 会话没恢复
-
-检查 `~/.claude/adapter-sessions.json` 是否能正常写入，以及 Desktop server 里的 session 是否仍存在。
+**重启后会话没接回来**：检查 `~/.claude/adapter-sessions.json` 能否正常写入，以及桌面端里那条会话是否还在。
 
 ## 源码入口
 
-- `adapters/feishu/index.ts`
-- `adapters/common/pairing.ts`
-- `adapters/common/session-store.ts`
-- `adapters/common/ws-bridge.ts`
-- `adapters/common/http-client.ts`
+`adapters/feishu/index.ts`，以及 `adapters/common/` 下的 `pairing.ts`、`session-store.ts`、`ws-bridge.ts`、`http-client.ts`。

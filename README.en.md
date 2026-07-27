@@ -20,7 +20,7 @@
 
 </div>
 
-A Claude Code build repaired from the source leaked from Anthropic's npm registry on 2026-03-31. Claude Code Haha is now primarily a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, right-side file changes, code diffs, permission review, provider setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
+A Claude Code build repaired from the source leaked from Anthropic's npm registry on 2026-03-31. Claude Code Haha is now primarily a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, workspace changes and diff review, permission approval, model setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
 
 <p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#more-documentation">More Docs</a>
@@ -30,26 +30,24 @@ A Claude Code build repaired from the source leaked from Anthropic's npm registr
 
 ## Desktop Preview
 
-The Claude Code Haha desktop app brings sessions, multi-project navigation, branch / Worktree controls, right-side file changes, code diffs, permission review, provider setup, and remote access into one graphical workspace for daily development flows beyond the terminal.
+The Claude Code Haha desktop app brings sessions, multi-project navigation, branch / Worktree controls, file changes, diff review, permission approval, model setup, and remote access into one graphical workspace for daily development beyond the terminal.
+
+v0.5.0 shipped a full UI redesign — six colour themes that can follow your system's light/dark setting. All four shots below are from a real v0.5.0 build.
 
 <p align="center">
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
   &nbsp;
-  <a href="docs/desktop/04-installation.md"><img src="https://img.shields.io/badge/📖_Install_Guide-Guide-gray?style=for-the-badge" alt="Install Guide"></a>
+  <a href="docs/en/start/install.md"><img src="https://img.shields.io/badge/📖_Install_Guide-Guide-gray?style=for-the-badge" alt="Install Guide"></a>
 </p>
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/10_desktop_workspace.png" alt="Desktop workspace"><br><b>Desktop Workspace</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/13_workspace_changes_worktree.png" alt="Right-side changes and Worktree"><br><b>Right-side Changes & Worktree</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/02_edit_code.png" alt="Code editing"><br><b>Code Editing & Diff View</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/03_ask_question_and_permission.png" alt="Permission control"><br><b>Permission Review & AI Questions</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/session-main.webp" alt="Desktop session view"><br><b>Session, tool calls & inline diff</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/workspace-diff.webp" alt="Workspace diff review"><br><b>Review every edit, file by file</b></td>
   </tr>
   <tr>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/12_h5_access.png" alt="H5 remote access"><br><b>H5 Remote Access</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/11_token_usage.png" alt="Token usage"><br><b>Token Usage</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/06_settings_computer_use.png" alt="Computer Use"><br><b>Computer Use</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/08_scheduled_task.png" alt="Scheduled tasks"><br><b>Scheduled Tasks</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/session-dark.webp" alt="Session view in the dark theme"><br><b>Six themes, optionally following the system</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/skill-market.webp" alt="Skill marketplace"><br><b>Skill marketplace with source and safety labels</b></td>
   </tr>
 </table>
 
@@ -59,7 +57,7 @@ The Claude Code Haha desktop app brings sessions, multi-project navigation, bran
 
 1. Download the macOS / Windows / Linux desktop installer from [Releases](https://github.com/NanmiCoder/cc-haha/releases).
 2. On first launch, configure your model provider, API key, and default model in Settings.
-3. Public macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway". See the [desktop installation guide](docs/desktop/04-installation.md).
+3. Public macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway". See the [desktop installation guide](docs/en/start/install.md).
 
 ## Run the CLI from Source
 
@@ -71,44 +69,39 @@ cp .env.example .env
 ./bin/claude-haha
 ```
 
-See [environment variables](docs/en/guide/env-vars.md) and [global usage](docs/en/guide/global-usage.md) for more configuration options.
+See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/index.md) for more configuration options.
 
 ---
 
 ## Desktop Highlights
 
-- **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place.
+- **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place, with a resizable sidebar.
 - **Branch / Worktree launch**: choose a repository branch and decide whether to use the current working tree or an isolated Worktree.
-- **Right-side file changes**: review changed files, added/removed lines, and current workspace state while chatting.
-- **Visual code changes**: inspect edits, file writes, and diffs directly in the desktop app.
-- **Permission review**: approve risky commands, tool calls, and model follow-up questions in the GUI.
-- **Multi-provider setup**: configure Anthropic-compatible APIs, third-party models, WebSearch fallback, and local options.
-- **Skill Marketplace**: discover, preview, install, and manage third-party skills from ClawHub / SkillHub in the desktop app.
-- **Session Activity Panel**: review tasks, background tasks, SubAgents, team activity, and sources in one side panel.
+- **Review edits file by file**: the workspace lists this turn's changes; open any file for a syntax-highlighted diff, or undo the whole turn.
+- **Five permission modes**: from "ask every time" to "skip permissions" — risky commands, tool calls, and follow-up questions are all approved in the GUI.
+- **Bring your own model**: sign in to Claude, ChatGPT, or Grok; use presets for DeepSeek, Kimi, Zhipu GLM and others; or point it at LM Studio and Ollama running locally.
+- **Six colour themes**: white, paper, warm classic, celadon, ink night, and ink blue — optionally following your system's light/dark setting.
+- **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status shown up front.
+- **Session activity panel**: track task progress, background tasks, SubAgents, and sources in one side panel.
 - **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization.
-- **H5 remote access**: open the current desktop session from a phone or another device with a one-time token.
-- **IM integration**: chat, switch projects, and approve actions through Telegram / Feishu / WeChat / DingTalk.
-- **Scheduled tasks and usage stats**: create planned tasks and track local token usage trends.
+- **Desktop pets**: Dada, Huhu, Bubu, and Huihui change what they do with the task at hand — or raise one of your own (off by default).
+- **H5 remote access**: scan a QR code to continue the session in your phone browser; locking the screen won't kill a running task.
+- **IM integration**: chat, switch projects, and approve actions through Telegram / Feishu / WeChat / DingTalk / WhatsApp.
+- **Scheduled tasks and usage stats**: run planned tasks in their own sessions and track local token usage trends.
 
 ---
 
 ## More Documentation
 
-| Document | Description |
+Full documentation site: <https://claudecode-haha.relakkesyang.org>
+
+| Section | Documents |
 |------|------|
-| [Environment Variables](docs/en/guide/env-vars.md) | Full env var reference and configuration methods |
-| [Third-Party Models](docs/en/guide/third-party-models.md) | Using OpenAI / DeepSeek / Ollama and other non-Anthropic models |
-| [Contributing](docs/en/guide/contributing.md) | Local tests, live model baselines, PR gates, and release gates |
-| [Memory System](docs/memory/01-usage-guide.md) | Cross-session persistent memory usage and implementation |
-| [Multi-Agent System](docs/agent/01-usage-guide.md) | Agent orchestration, parallel tasks and Teams collaboration |
-| [Skills System](docs/skills/01-usage-guide.md) | Extensible capability plugins, custom workflows and conditional activation |
-| [IM Integration](docs/im/) | Remote chat, project switching, and permission approval via Telegram / Feishu / WeChat / DingTalk |
-| [Computer Use](docs/en/features/computer-use.md) | Desktop control (screenshots, mouse, keyboard) — [Architecture](docs/en/features/computer-use-architecture.md) |
-| [Desktop App](docs/desktop/) | Electron + React GUI client — [Quick Start](docs/desktop/01-quick-start.md) \| [Architecture](docs/desktop/02-architecture.md) \| [Installation](docs/desktop/04-installation.md) |
-| [Global Usage](docs/en/guide/global-usage.md) | Run claude-haha from any directory |
-| [FAQ](docs/en/guide/faq.md) | Common error troubleshooting |
-| [Source Fixes](docs/en/reference/fixes.md) | Fixes compared with the original leaked source |
-| [Project Structure](docs/en/reference/project-structure.md) | Code directory structure |
+| **Getting started** | [What this is](docs/en/start/index.md) · [Download and install](docs/en/start/install.md) · [Connect a model provider](docs/en/start/models.md) · [Your first session](docs/en/start/first-session.md) · [Troubleshooting](docs/en/start/troubleshooting.md) |
+| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Computer Use](docs/en/desktop/computer-use.md) · [Desktop pets](docs/en/desktop/pets.md) · [Phone H5 and IM relay](docs/en/desktop/remote.md) |
+| **IM integrations** | [Overview and pairing](docs/en/im/index.md) · [Feishu](docs/en/im/feishu.md) · [Telegram](docs/en/im/telegram.md) · [WeChat](docs/en/im/wechat.md) · [DingTalk](docs/en/im/dingtalk.md) · [WhatsApp](docs/en/im/whatsapp.md) |
+| **CLI** | [Install and run](docs/en/cli/index.md) · [Command reference](docs/en/cli/reference.md) · [Environment variables](docs/en/cli/env.md) |
+| **Internals** | [Multi-agent system](docs/en/internals/agent.md) · [Skills system](docs/en/internals/skills.md) · [Memory system](docs/en/internals/memory.md) · [Computer Use architecture](docs/en/internals/computer-use.md) · [Local server and API](docs/en/internals/server.md) · [Channel system](docs/en/internals/channel.md) · [Project structure](docs/en/internals/structure.md) · [Contributing and quality gates](docs/en/internals/contributing.md) |
 
 ---
 

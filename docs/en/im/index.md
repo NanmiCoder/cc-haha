@@ -1,76 +1,94 @@
+---
+title: IM Integrations
+nav_title: Overview
+description: Bridge Feishu, Telegram, WeChat, DingTalk, or WhatsApp private chats into the Desktop app and continue the same session from your phone.
+order: 0
+---
+
 # IM Integrations
 
-Claude Code Haha can bridge private messages from WeChat, DingTalk, WhatsApp, Telegram, and Feishu into local Desktop sessions.
+A session running in the Desktop app can be reached from a private chat on your phone. Once bound, a message in Feishu, Telegram, WeChat, DingTalk, or WhatsApp drives the Claude Code session on your own machine: start a long task before you leave, then follow the progress, approve permissions, and switch projects from the road.
 
-These integrations do not make the local agent public. A user is accepted only when they are explicitly listed in `allowedUsers` or have completed pairing.
+The chat partner is a bot or account you bound yourself. Messages reach your local Desktop app; no intermediate service holds your code.
 
-## Current architecture
+![Settings shows pairing management on top and one tab per platform](../../images/app/settings-im.webp)
 
-The supported path is the Desktop adapter architecture:
+## What you get
 
-```mermaid
-flowchart LR
-    A["Desktop Settings"] --> B["/api/adapters"]
-    B --> C["~/.claude/adapters.json"]
-    C --> D["Platform adapter sidecar"]
-    D --> E["Pairing and allowlist check"]
-    E --> F["HTTP session creation"]
-    F --> G["/ws/:sessionId"]
-    G --> H["Claude Code session"]
-```
+- **The same session, continued.** Messages sent from your phone enter the Claude Code session on your computer, where file edits, commands, and reads really happen.
+- **Project switching.** `/projects` lists recent projects and switches to the one you pick; `/new` starts a fresh session.
+- **Permission approval.** When Claude wants to write a file or run a risky command, the request is pushed to the chat. Feishu and DingTalk send interactive cards, Telegram sends buttons, WeChat and WhatsApp expect a text reply.
+- **Status and stop.** `/status` reports the current project, model, and run state; `/stop` interrupts the current turn.
 
-Platform adapters are separate local processes. They read their platform configuration, enforce authorization, map a private chat to a project session, and bridge messages over the Desktop server.
+The Desktop app has to stay running. The chat side is only a remote control.
 
-This is different from the upstream Claude Code Channel/MCP research retained under [Channel System](../channel/).
+## Choosing a platform
 
-## Set up an integration
+All five expose the same capabilities. They differ in setup cost and approval experience.
 
-1. Keep the Desktop app running.
-2. Open **Settings → IM Integration**.
-3. Configure or bind one platform.
-4. Set a default project if desired.
-5. Generate a six-character pairing code.
-6. Send the code in a private chat with the bot or bound account.
+| Platform | How you connect | Best for | Known limits |
+|---|---|---|---|
+| Feishu | Create a bot from the official template, paste its App ID and App Secret | Teams that want one-tap permission approval | Private (`p2p`) chats only; menu changes require publishing a new app version |
+| Telegram | Ask `@BotFather` for a Bot Token, paste it into Settings | Individuals who can reach Telegram; fastest setup | Private chats only |
+| WeChat | Scan a QR code in Settings to log in a bot account | People who only want WeChat | Private chats only; permission approval is text replies |
+| DingTalk | Scan a QR code in Settings; credentials are filled in for you | Organizations already on DingTalk | Private chats only; interactive approval cards need an extra template ID |
+| WhatsApp | Scan from **Linked devices** on your phone | Users outside mainland China | Personal linked-device login, not the official Cloud API; personal private chats only |
 
-The code expires after 60 minutes, can be used once, and is invalidated when a new code is generated. Repeated failures are rate limited.
+If you have no preference, start with Telegram or Feishu — their approval flows are the most comfortable.
 
-## Platforms
+## Pairing flow
 
-- [WeChat](./wechat.md) — QR-bound bot account, private chats
-- [DingTalk](./dingtalk.md) — DingTalk Stream, private chats
-- [WhatsApp](./whatsapp.md) — personal linked-device session through WhatsApp Web
-- [Telegram](./telegram.md) — BotFather token, private chats
-- [Feishu](./feishu.md) — enterprise custom app, `p2p` chats
+Binding happens in two layers: first the Desktop app gets platform credentials, then your personal account is authorized with a pairing code. The second layer is identical everywhere.
 
-## Local state
+1. Open **Settings → IM Adapters**.
+2. Bind one platform in its tab: Feishu and Telegram take credentials, WeChat, DingTalk, and WhatsApp use a QR code.
+3. Pick a directory under **Default Project**.
+4. Select **Save**.
+5. Back at the top, in **Pairing**, select **Generate Code** to get a six-character code.
+6. Send that code to your bot in a private chat on the matching platform.
+7. Once pairing is confirmed, anything you type goes to Claude Code.
 
-`~/.claude/adapters.json` stores platform configuration, allowlists, and pairing state. Sensitive fields returned by the settings API are masked.
+A code is valid for 60 minutes, works once, and is invalidated the moment a new one is generated. The code itself is platform-neutral — it binds whichever account sends it. Five failed attempts within five minutes trigger rate limiting.
 
-`~/.claude/adapter-sessions.json` stores chat-to-session mappings, including the session ID, working directory, and update time. This allows an adapter to reconnect to an existing session after restart.
+Generating a code and QR binding are written to local configuration immediately. **Save** is only needed for typed values such as App ID, Bot Token, **Allowed Users**, and **Default Project**.
 
-Both paths follow `CLAUDE_CONFIG_DIR` when a custom data directory is active.
+Paired accounts appear under **Paired Users**, where **Unbind** revokes one of them. A revoked user needs a fresh code.
 
-## Authorization model
+## Default project decides where work happens
 
-- `allowedUsers` and `pairedUsers` are combined.
-- If both are empty, access is denied.
-- Binding a bot or linked account does not authorize its contacts.
-- Removing a paired user requires that user to pair again.
-- Removing platform credentials stops that platform from connecting.
+**Default Project** is the working directory for new IM sessions. With it set, the first message from your phone opens a session in that directory. Left empty, the bot lists recent projects and asks you to choose.
+
+Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` changes the directory; `/clear` empties the context while keeping the project binding.
 
 ## Common commands
 
-The exact presentation differs by platform, but adapters support the same core operations:
+Entry points differ slightly per platform — Feishu can expose commands as a bot menu — but these work everywhere:
 
-- `/help` — show available commands
-- `/status` — show the current project, model, and run state
-- `/projects` — list or switch recent projects
-- `/new` — start a new session or choose another project
-- `/clear` — clear current context while keeping the project binding
+- `/help` — list available commands
+- `/status` — current project, model, and run state
+- `/projects` — list recent projects and switch
+- `/new` — start a new session, optionally with a project number or path
+- `/clear` — clear context, keep the project binding
 - `/stop` — stop the current generation
 
-Permission requests are returned as platform buttons, cards, or explicit text commands. A request ID must match the pending Desktop session request.
+WeChat, DingTalk, and Feishu also accept Chinese aliases such as `帮助`, `状态`, `项目列表`, `新会话`, `清空`, and `停止`.
 
-## Development
+## Security
 
-Packaged Desktop starts configured adapter sidecars automatically. Manual `bun run <platform>` commands are for source development and isolated troubleshooting.
+::: warning This is a remote control for your computer
+A paired account can make Claude read files, write files, and run commands on your machine. Send pairing codes only to yourself, never post one in a group, and never commit bot credentials.
+:::
+
+Authorization is the union of **Allowed Users** and paired users. When both are empty, every sender is rejected. Binding a bot or a linked account does not authorize its contacts.
+
+Platform credentials, pairing state, and allowlists live in `~/.claude/adapters.json`; chat-to-session mappings live in `~/.claude/adapter-sessions.json`. Both stay on your machine, both contain material that can drive it, and neither should be shared. Sensitive fields are masked when the settings page reads the configuration back. Both paths follow `CLAUDE_CONFIG_DIR` when a custom data directory is active.
+
+For a full mobile interface rather than a chat window, see [H5 access](../desktop/remote.md).
+
+## Per-platform guides
+
+- [Feishu](./feishu.md) — template bot, card approval
+- [Telegram](./telegram.md) — BotFather token, button approval
+- [WeChat](./wechat.md) — QR-bound account, text approval
+- [DingTalk](./dingtalk.md) — QR authorization, AI Card streaming
+- [WhatsApp](./whatsapp.md) — personal linked device, text approval

@@ -1,44 +1,81 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-export function DocToc({ headings, locale, onAnchorNavigate }) {
-  const [activeId, setActiveId] = useState(null)
+/** 高亮当前正在读的小节。用 IntersectionObserver 跟踪标题的进出。 */
+function useActiveHeading(headings) {
+  const [active, setActive] = useState(headings[0]?.id)
 
   useEffect(() => {
-    if (!headings.length) return undefined
+    if (headings.length === 0) return undefined
+    setActive(headings[0].id)
+    // 没有 IntersectionObserver 就退化成「高亮第一节」，不能让整棵树炸掉。
+    if (typeof IntersectionObserver === 'undefined') return undefined
 
-    const sections = headings
-      .map((heading) => document.getElementById(heading.id))
-      .filter(Boolean)
-    if (!sections.length) return undefined
+    const seen = new Map()
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) seen.set(entry.target.id, entry.isIntersecting)
+        const visible = headings.find((heading) => seen.get(heading.id))
+        if (visible) setActive(visible.id)
+      },
+      { rootMargin: '-80px 0px -70% 0px', threshold: 0 }
+    )
 
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) setActiveId(entry.target.id)
-      })
-    }, { rootMargin: '-72px 0px -68% 0px', threshold: 0 })
+    for (const heading of headings) {
+      const node = document.getElementById(heading.id)
+      if (node) observer.observe(node)
+    }
 
-    sections.forEach((section) => observer.observe(section))
     return () => observer.disconnect()
   }, [headings])
 
-  if (!headings.length) return null
+  return active
+}
+
+export function DocToc({ headings, locale, onAnchorNavigate }) {
+  const active = useActiveHeading(headings)
+  const scope = useRef(null)
+
+  // 长文的目录本身会溢出成滚动区。高亮项一旦滚出可视范围，目录就不再
+  // 指示"我读到哪了" —— internals 那批四十来条的页面读到一半就失去定位。
+  useEffect(() => {
+    if (!active) return
+    const node = scope.current?.querySelector('[aria-current="true"]')
+    const list = scope.current
+    if (!node || !list || list.scrollHeight <= list.clientHeight) return
+
+    // 直接改容器的 scrollTop，不用 scrollIntoView —— 后者会向上遍历所有可
+    // 滚动祖先，有把整个页面也滚一下的风险，那会和用户自己的滚动打架。
+    const item = node.getBoundingClientRect()
+    const box = list.getBoundingClientRect()
+
+    if (item.top < box.top) list.scrollTop -= box.top - item.top
+    else if (item.bottom > box.bottom) list.scrollTop += item.bottom - box.bottom
+  }, [active])
+
+  if (headings.length < 2) return null
+
+  const title = locale === 'en' ? 'On this page' : '本页内容'
 
   return (
-    <aside className="doc-toc" aria-label="On this page">
-      <p>{locale === 'en' ? 'On this page' : '本页内容'}</p>
-      <ol>
+    <nav aria-label={title} className="doc-toc" ref={scope}>
+      <div className="doc-toc__title">{title}</div>
+      <ul className="doc-toc__list">
         {headings.map((heading) => (
-          <li className={`doc-toc__depth-${heading.depth}`} key={heading.id}>
+          <li key={heading.id}>
             <a
-              className={heading.id === activeId ? 'is-active' : undefined}
-              href={`#${heading.id}`}
-              onClick={(event) => onAnchorNavigate?.(event, heading.id)}
+              aria-current={heading.id === active ? 'true' : undefined}
+              className="doc-toc__link"
+              data-depth={heading.depth}
+              href={`#${encodeURIComponent(heading.id)}`}
+              onClick={(event) => onAnchorNavigate(event, heading.id)}
             >
               {heading.text}
             </a>
           </li>
         ))}
-      </ol>
-    </aside>
+      </ul>
+    </nav>
   )
 }
+
+export default DocToc

@@ -1,29 +1,36 @@
-import React from 'react'
 import { toSiteHref } from '../content/docs'
 
-export function DocPager({ next, onNavigate, previous }) {
-  function handleClick(event, route) {
-    if (!onNavigate) return
-    event.preventDefault()
-    onNavigate(route)
-  }
+const copy = {
+  zh: { label: '上一篇 / 下一篇', next: '下一篇', previous: '上一篇' },
+  en: { label: 'Previous and next page', next: 'Next', previous: 'Previous' }
+}
 
+export function DocPager({ locale = 'zh', next, onNavigate, previous }) {
   if (!previous && !next) return null
+  const c = copy[locale] || copy.zh
+
+  const link = (doc, direction) => (
+    <a
+      className={`doc-pager__link doc-pager__link--${direction}`}
+      href={toSiteHref(doc.route)}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) return
+        event.preventDefault()
+        onNavigate(doc.route)
+      }}
+    >
+      <span className="doc-pager__dir">{direction === 'next' ? c.next : c.previous}</span>
+      <span className="doc-pager__title">{doc.label}</span>
+      {doc.section && <span className="doc-pager__section">{doc.section}</span>}
+    </a>
+  )
 
   return (
-    <nav className="doc-pager" aria-label="Adjacent documentation">
-      {previous ? (
-        <a href={toSiteHref(previous.route)} onClick={(event) => handleClick(event, previous.route)}>
-          <small>← Previous</small>
-          <span>{previous.title}</span>
-        </a>
-      ) : <span />}
-      {next ? (
-        <a href={toSiteHref(next.route)} onClick={(event) => handleClick(event, next.route)}>
-          <small>Next →</small>
-          <span>{next.title}</span>
-        </a>
-      ) : <span />}
+    <nav aria-label={c.label} className="doc-pager">
+      {previous ? link(previous, 'previous') : <span />}
+      {next && link(next, 'next')}
     </nav>
   )
 }
+
+export default DocPager

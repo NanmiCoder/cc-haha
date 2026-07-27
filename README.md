@@ -20,7 +20,7 @@
 
 </div>
 
-Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude Code 源码修复而来，现在主要是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限审批、模型提供商、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
+Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude Code 源码修复而来，现在主要是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、工作区改动与 Diff 审阅、权限审批、模型配置、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
 
 <p align="center">
   <a href="#桌面端预览">桌面端预览</a> · <a href="#安装桌面端">安装桌面端</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#更多文档">更多文档</a>
@@ -30,26 +30,24 @@ Claude Code Haha 基于 2026-03-31 从 Anthropic npm registry 泄露的 Claude C
 
 ## 桌面端预览
 
-Claude Code Haha 的桌面端把会话、多项目、分支 / Worktree、右侧代码改动、代码 Diff、权限确认、提供商配置和远程入口集中到一个图形化工作台里，适合不想长期停留在终端里的日常开发工作流。
+Claude Code Haha 的桌面端把会话、多项目、分支 / Worktree、代码改动、Diff 评审、权限确认、模型配置和远程入口收进一个图形化工作台，适合不想长期停留在终端里的日常开发。
+
+v0.5.0 做了一次全量 UI 重设计（「纸·墨·印」），六套配色可跟随系统深浅色切换。下面四张都拍自 v0.5.0 真机。
 
 <p align="center">
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_下载桌面端-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="下载桌面端"></a>
   &nbsp;
-  <a href="docs/desktop/04-installation.md"><img src="https://img.shields.io/badge/📖_安装指南-Guide-gray?style=for-the-badge" alt="安装指南"></a>
+  <a href="docs/start/install.md"><img src="https://img.shields.io/badge/📖_安装指南-Guide-gray?style=for-the-badge" alt="安装指南"></a>
 </p>
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/10_desktop_workspace.png" alt="桌面端工作台"><br><b>桌面端工作台</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/13_workspace_changes_worktree.png" alt="右侧代码改动与 Worktree"><br><b>右侧代码改动 & Worktree</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/02_edit_code.png" alt="代码编辑"><br><b>代码编辑 & Diff 视图</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/03_ask_question_and_permission.png" alt="权限控制"><br><b>权限控制 & AI 提问</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/session-main.webp" alt="桌面端会话主界面"><br><b>会话、工具调用与内联 Diff</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/workspace-diff.webp" alt="工作区 Diff 评审"><br><b>改动逐个文件审阅</b></td>
   </tr>
   <tr>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/12_h5_access.png" alt="H5 访问"><br><b>H5 远程访问</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/11_token_usage.png" alt="Token 用量"><br><b>Token 用量统计</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/06_settings_computer_use.png" alt="Computer Use"><br><b>Computer Use</b></td>
-    <td align="center" width="25%"><img src="docs/images/desktop_ui/08_scheduled_task.png" alt="定时任务"><br><b>定时任务</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/session-dark.webp" alt="墨夜主题下的会话界面"><br><b>六套配色，可跟随系统深浅色</b></td>
+    <td align="center" width="50%"><img src="docs/images/app/skill-market.webp" alt="技能市场"><br><b>技能市场，装前先看来源与安全状态</b></td>
   </tr>
 </table>
 
@@ -59,7 +57,7 @@ Claude Code Haha 的桌面端把会话、多项目、分支 / Worktree、右侧�
 
 1. 前往 [Releases](https://github.com/NanmiCoder/cc-haha/releases) 下载 macOS / Windows / Linux 桌面端安装包。
 2. 首次启动后，在桌面端设置里配置模型提供商、API Key 和默认模型。
-3. 正式 macOS Release 需要经过签名和公证；如果安装的是 draft/unsigned 临时包，首次打开可能仍需手动放行。Windows 未签名安装包可能出现 SmartScreen 提示，点「更多信息」→「仍要运行」即可。详见 [桌面端安装指南](docs/desktop/04-installation.md)。
+3. 正式 macOS Release 需要经过签名和公证；如果安装的是 draft/unsigned 临时包，首次打开可能仍需手动放行。Windows 未签名安装包可能出现 SmartScreen 提示，点「更多信息」→「仍要运行」即可。详见 [桌面端安装指南](docs/start/install.md)。
 
 ## 从源码启动 CLI
 
@@ -71,44 +69,39 @@ cp .env.example .env
 ./bin/claude-haha
 ```
 
-更多配置见 [环境变量](docs/guide/env-vars.md) 和 [全局使用](docs/guide/global-usage.md)。
+更多配置见 [环境变量](docs/cli/env.md) 和 [命令行安装与启动](docs/cli/index.md)。
 
 ---
 
 ## 桌面端亮点
 
-- **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理。
-- **分支 / Worktree 启动**：新会话可以选择仓库分支，并决定使用当前工作树还是隔离 Worktree。
-- **右侧代码改动面板**：聊天时直接在右侧查看已更改文件、增删行和当前工作区状态。
-- **代码修改可视化**：直接查看 AI 对文件的编辑、Diff 和执行过程。
-- **权限与确认流**：危险命令、工具调用和 AI 反问可以在桌面端集中审批。
-- **多模型提供商**：支持 Anthropic 兼容 API、第三方模型、WebSearch fallback 和本地配置。
-- **技能市场**：在桌面端发现、预览、安装和管理 ClawHub / SkillHub 第三方技能。
-- **会话活动面板**：集中查看任务、后台任务、SubAgent、团队活动和 sources。
+- **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理，侧边栏宽度可拖拽。
+- **分支 / Worktree 启动**：新会话可以选择仓库分支，并决定用当前工作树还是隔离 Worktree。
+- **改动逐个文件审阅**：右侧工作区列出本轮改动，点开就是带语法高亮的 Diff，整轮可撤销。
+- **五档权限模式**：从「询问权限」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
+- **模型自选**：Claude / ChatGPT / Grok 官方账号可直接登录；DeepSeek、Kimi、智谱 GLM 等第三方 API 有现成预设；LM Studio、Ollama 的本地模型也接得上。
+- **六套配色主题**：纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝，可跟随系统深浅色自动切换。
+- **技能市场**：发现、预览、安装 ClawHub / SkillHub 的第三方技能，来源和安全状态摆在明处。
+- **会话活动面板**：集中查看任务进度、后台任务、SubAgent 与来源。
 - **Computer Use**：让 Agent 在授权后截图、点击、输入并控制桌面应用。
-- **H5 远程访问**：用一次性令牌在手机或其他设备上接入当前桌面端会话。
-- **IM 接入**：通过 Telegram / 飞书 / 微信 / 钉钉远程对话、切换项目和审批权限。
-- **定时任务与用量统计**：在桌面端创建计划任务，并查看本机 Token 使用趋势。
+- **桌面宠物**：搭搭、弧弧、补补、回回随任务状态换动作，也能自己做一只（默认关闭）。
+- **H5 远程访问**：扫码用手机浏览器接入当前会话，锁屏切后台都不打断正在跑的任务。
+- **IM 接入**：通过 Telegram / 飞书 / 微信 / 钉钉 / WhatsApp 远程对话、切换项目和审批权限。
+- **定时任务与用量统计**：创建计划任务在独立会话执行，并查看本机 Token 使用趋势。
 
 ---
 
 ## 更多文档
 
-| 文档 | 说明 |
+完整文档站：<https://claudecode-haha.relakkesyang.org>
+
+| 分区 | 文档 |
 |------|------|
-| [环境变量](docs/guide/env-vars.md) | 完整环境变量参考和配置方式 |
-| [第三方模型](docs/guide/third-party-models.md) | 接入 OpenAI / DeepSeek / Ollama 等非 Anthropic 模型 |
-| [贡献与质量门禁](docs/guide/contributing.md) | 本地测试、真实模型 baseline、PR 和 release 门禁 |
-| [记忆系统](docs/memory/01-usage-guide.md) | 跨会话持久化记忆的使用与实现 |
-| [多 Agent 系统](docs/agent/01-usage-guide.md) | 多代理编排、并行任务执行与 Teams 协作 |
-| [Skills 系统](docs/skills/01-usage-guide.md) | 可扩展能力插件、自定义工作流与条件激活 |
-| [IM 接入](docs/im/) | 通过 Telegram / 飞书 / 微信 / 钉钉远程对话、切换项目和审批权限 |
-| [Computer Use](docs/features/computer-use.md) | 桌面控制功能（截屏、鼠标、键盘）— [架构解析](docs/features/computer-use-architecture.md) |
-| [桌面端](docs/desktop/) | Electron + React 图形化客户端 — [快速上手](docs/desktop/01-quick-start.md) \| [架构设计](docs/desktop/02-architecture.md) \| [安装指南](docs/desktop/04-installation.md) |
-| [全局使用](docs/guide/global-usage.md) | 在任意目录启动 claude-haha |
-| [常见问题](docs/guide/faq.md) | 常见错误排查 |
-| [源码修复记录](docs/reference/fixes.md) | 相对于原始泄露源码的修复内容 |
-| [项目结构](docs/reference/project-structure.md) | 代码目录结构说明 |
+| **开始使用** | [这是什么](docs/start/index.md) · [下载与安装](docs/start/install.md) · [连接模型服务](docs/start/models.md) · [跑通第一条会话](docs/start/first-session.md) · [故障排查](docs/start/troubleshooting.md) |
+| **桌面端功能** | [功能总览](docs/desktop/index.md) · [Computer Use](docs/desktop/computer-use.md) · [桌面宠物](docs/desktop/pets.md) · [手机 H5 与 IM 接力](docs/desktop/remote.md) |
+| **IM 接入** | [总览与配对流程](docs/im/index.md) · [飞书](docs/im/feishu.md) · [Telegram](docs/im/telegram.md) · [微信](docs/im/wechat.md) · [钉钉](docs/im/dingtalk.md) · [WhatsApp](docs/im/whatsapp.md) |
+| **命令行** | [安装与启动](docs/cli/index.md) · [命令参考](docs/cli/reference.md) · [环境变量](docs/cli/env.md) |
+| **深入原理** | [桌面端架构](docs/internals/desktop.md) · [多 Agent 系统](docs/internals/agent.md) · [Skills 系统](docs/internals/skills.md) · [记忆系统](docs/internals/memory.md) · [Computer Use 架构](docs/internals/computer-use.md) · [本地 Server 与 API](docs/internals/server.md) · [Channel 系统](docs/internals/channel.md) · [项目结构](docs/internals/structure.md) · [参与贡献与质量门禁](docs/internals/contributing.md) |
 
 ---
 

@@ -61,7 +61,7 @@ Additional invariants:
 
 ## Deeper Guides
 
-- Contributor workflow and quality lanes: `CONTRIBUTING.md` and `docs/guide/contributing.md`
+- Contributor workflow and quality lanes: `CONTRIBUTING.md` and `docs/internals/contributing.md`
 - Package scripts and path routing: `package.json` and `scripts/pr/change-policy.ts`
 - PR evidence contract: `.github/pull_request_template.md`
 - Desktop release and auto-update runbook: `docs/desktop/10-release-auto-update.md`

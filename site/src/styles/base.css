@@ -1,0 +1,750 @@
+/* ============================================================================
+   Claude Code Haha — 文档站设计系统
+   色板取自桌面端「纸·墨·印」的「纯白」与「墨夜」两套主题，
+   保证网站和应用是同一个产品。字体自托管，零 CDN 依赖。
+   ========================================================================== */
+
+/* ── 自托管字体（与桌面端同一批文件）──────────────────────────────
+   中文刻意不加载 webfont：Noto Serif SC 的 CJK 切片每字重约 6MB，
+   落到系统宋体/苹方就是桌面端本身的观感。 */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: swap;
+  src: url('/fonts/noto-serif-sc-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: swap;
+  src: url('/fonts/noto-serif-sc-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 刻度（与主题无关）───────────────────────────────────────── */
+
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-serif: 'Noto Serif SC', 'Songti SC', 'Source Han Serif SC', 'SimSun', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 字号 */
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 20px;
+  --fs-3xl: 24px;
+  --fs-4xl: 30px;
+  --fs-5xl: 38px;
+
+  /* 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --sp-20: 80px;
+  --sp-24: 96px;
+  --sp-32: 128px;
+
+  /* 圆角（与桌面端一致） */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 13px;
+  --r-xl: 17px;
+  --r-2xl: 20px;
+  --r-3xl: 24px;
+  --r-full: 9999px;
+
+  /* 版心 */
+  --w-page: 1180px;
+  --w-prose: 748px;
+  --w-sidebar: 258px;
+  --w-toc: 208px;
+  --h-header: 60px;
+
+  /* 动效 */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 120ms;
+  --t-base: 200ms;
+
+  /* 层级 */
+  --z-sticky: 20;
+  --z-nav: 30;
+  --z-scrim: 40;
+  --z-drawer: 50;
+  --z-dialog: 60;
+  --z-popover: 75;
+}
+
+/* ── 浅色：桌面端「纯白」───────────────────────────────────────── */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-sunken: #fafaf8;
+  --surface-muted: #f6f6f3;
+  --surface-hover: #f0efe9;
+  --surface-active: #ebe9e2;
+
+  --text: #1f1c17;
+  --text-2: #5d5850;
+  --text-3: #777269;
+
+  --border: #ebe9e2;
+  --border-strong: #d8d5cc;
+  --border-control: #918e87;
+
+  --brand: #96442b;
+  --brand-hover: #7c3620;
+  --brand-soft: #f6ece5;
+  --brand-soft-hover: #efded4;
+  --brand-border: #e6cdbf;
+  --on-brand: #fbf6ec;
+  /* 压在 --brand-soft 上的文字。浅色下与 --brand 同色够用，深色下必须提亮，
+     否则只有 4.32:1 —— 侧栏当前项和巡览当前 tab 都吃这个色。 */
+  --on-brand-soft: #96442b;
+
+  --ink: #1f1c17;
+  --on-ink: #ffffff;
+
+  --ok: #3e8153;
+  --ok-soft: #e8f2e9;
+  --ok-ink: #3a784d;
+  --warn: #a8751f;
+  --warn-soft: #f8f0dc;
+  --warn-ink: #90641b;
+  --danger: #c74436;
+  --danger-soft: #faece8;
+  --danger-ink: #bd4133;
+  --info: #3b7068;
+  --info-soft: #f1f5f4;
+  --info-ink: #35655e;
+
+  --code-bg: #f7f7f4;
+  --code-border: #ebe9e2;
+
+  --shadow-sm: 0 1px 3px rgba(30, 28, 22, 0.04), 0 6px 24px rgba(30, 28, 22, 0.06);
+  --shadow-md: 0 1px 2px rgba(30, 28, 22, 0.05), 0 14px 44px rgba(30, 28, 22, 0.08);
+  --shadow-lg: 0 8px 24px rgba(30, 28, 22, 0.1), 0 24px 64px rgba(30, 28, 22, 0.15);
+
+  --scrim: rgba(19, 17, 14, 0.42);
+  --glass: rgba(255, 255, 255, 0.86);
+
+  /* 语法高亮 */
+  --c-comment: #756f63;
+  --c-string: #437220;
+  --c-keyword: #b8533b;
+  --c-function: #1d5a8c;
+  --c-number: #1b7a6a;
+  --c-property: #7a3e20;
+  --c-type: #7e5520;
+  --c-punct: #5c504a;
+}
+
+/* ── 深色：桌面端「墨夜」───────────────────────────────────────── */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #201d17;
+  --surface: #252119;
+  --surface-sunken: #1a1813;
+  --surface-muted: #2b271f;
+  --surface-hover: #2f2b22;
+  --surface-active: #383226;
+
+  --text: #ede6d6;
+  --text-2: #a79b83;
+  --text-3: #918777;
+
+  --border: #383226;
+  --border-strong: #4c4433;
+  --border-control: #756d5c;
+
+  --brand: #d07b52;
+  --brand-hover: #de8f66;
+  --brand-soft: #3b2a1e;
+  --brand-soft-hover: #493424;
+  --brand-border: #59402c;
+  --on-brand: #201d17;
+  --on-brand-soft: #e5a582;
+
+  --ink: #ede6d6;
+  --on-ink: #201d17;
+
+  --ok: #6fae7f;
+  --ok-soft: #24301f;
+  --ok-ink: #86bd94;
+  --warn: #d0a04a;
+  --warn-soft: #332a17;
+  --warn-ink: #ddb469;
+  --danger: #e0705f;
+  --danger-soft: #392119;
+  --danger-ink: #ea8877;
+  --info: #6aa79c;
+  --info-soft: #1f2b28;
+  --info-ink: #83bcb1;
+
+  --code-bg: #1a1813;
+  --code-border: #383226;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28), 0 6px 24px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 44px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4), 0 24px 64px rgba(0, 0, 0, 0.5);
+
+  --scrim: rgba(8, 7, 5, 0.6);
+  --glass: rgba(32, 29, 23, 0.86);
+
+  --c-comment: #8f8674;
+  --c-string: #97bd6c;
+  --c-keyword: #e08a6c;
+  --c-function: #7fb4dd;
+  --c-number: #6ec2ad;
+  --c-property: #dba679;
+  --c-type: #d8bb7c;
+  --c-punct: #a79b83;
+}
+
+/* ── 重置与基础 ─────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--h-header) + var(--sp-6));
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--brand-border);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 0;
+}
+
+/* ── 通用件 ─────────────────────────────────────────────────── */
+
+.u-shell {
+  width: 100%;
+  max-width: var(--w-page);
+  margin: 0 auto;
+  padding-inline: var(--sp-6);
+}
+
+.u-skip {
+  position: fixed;
+  z-index: 999;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: var(--fs-sm);
+  transform: translateY(-200%);
+}
+
+.u-skip:focus {
+  transform: translateY(0);
+}
+
+/* 跳过链接和换页会把焦点搬进 <main>，这是给读屏用的落点，
+   不需要围着整块正文画一圈焦点环。 */
+main[tabindex='-1']:focus,
+main[tabindex='-1']:focus-visible {
+  outline: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 10px var(--sp-5);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--t-base) var(--ease), border-color var(--t-base) var(--ease),
+    color var(--t-base) var(--ease), transform var(--t-fast) var(--ease);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+/* 主按钮是墨色实心，hover 才转陶土 —— 与桌面端一致 */
+.btn--primary {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.btn--primary:hover {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+.btn--ghost {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn--ghost:hover {
+  border-color: var(--border-control);
+  background: var(--surface-hover);
+}
+
+.btn--quiet {
+  padding: 8px var(--sp-3);
+  color: var(--text-2);
+}
+
+.btn--quiet:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.u-kicker {
+  margin: 0 0 var(--sp-3);
+  color: var(--brand);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.u-lede {
+  color: var(--text-2);
+  font-size: var(--fs-xl);
+  line-height: 1.7;
+}
+
+/* ── 站点头（首页与文档共用一套）────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  z-index: var(--z-nav);
+  top: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--h-header);
+  max-width: calc(var(--w-page) + 240px);
+  margin: 0 auto;
+  padding-inline: var(--sp-6);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-right: auto;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+}
+
+.brand b {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.site-nav a {
+  padding: 7px var(--sp-3);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: var(--fs-base);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.site-nav a:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.site-nav a[aria-current='page'] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.header-menu-btn {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .site-nav {
+    position: fixed;
+    z-index: var(--z-drawer);
+    top: var(--h-header);
+    right: 0;
+    left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: var(--sp-3);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-8px);
+    opacity: 0;
+    pointer-events: none;
+    /* opacity:0 挡得住鼠标，挡不住 Tab —— 收起来的菜单必须 visibility:hidden，
+       否则键盘用户会在看不见的地方连按 4 下空焦点。延迟到淡出结束再隐藏。 */
+    visibility: hidden;
+    transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease),
+      visibility 0s linear var(--t-base);
+  }
+
+  .site-nav[data-open='true'] {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease),
+      visibility 0s;
+  }
+
+  .site-nav a {
+    padding: var(--sp-3);
+    font-size: var(--fs-lg);
+  }
+
+  .header-menu-btn {
+    display: inline-flex;
+  }
+
+  .header-download {
+    display: none;
+  }
+
+  /* 下拉导航展开时锁住背景滚动，免得菜单浮在原地、正文却滑走了 */
+  html:has(.site-nav[data-open='true']) {
+    overflow: hidden;
+  }
+}
+
+/* ── 搜索 ───────────────────────────────────────────────────── */
+
+.search-scrim {
+  position: fixed;
+  z-index: var(--z-dialog);
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  padding: clamp(48px, 10vh, 120px) var(--sp-5) var(--sp-5);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+.search-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(540px, 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.search-dialog__field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+.search-dialog__field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+/* 输入框一打开就自动聚焦，整行都套个焦点环反而吵。
+   焦点落在它身上时给整条 field 一道底边，键盘用户仍看得到落点。 */
+.search-dialog__field:focus-within {
+  border-bottom-color: var(--brand);
+  box-shadow: inset 0 -1px 0 var(--brand);
+}
+
+.search-dialog__field input:focus-visible {
+  outline: none;
+}
+
+.search-dialog__field input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-dialog__body {
+  flex: 1;
+  padding: var(--sp-2);
+  overflow-y: auto;
+}
+
+.search-dialog__hint {
+  padding: var(--sp-8) var(--sp-4);
+  color: var(--text-3);
+  font-size: var(--fs-base);
+  text-align: center;
+}
+
+.search-result {
+  display: block;
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  text-align: left;
+}
+
+.search-result[data-active='true'] {
+  background: var(--surface-hover);
+}
+
+.search-result__section {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.search-result__title {
+  display: block;
+  margin: 1px 0 3px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+
+.search-result__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.search-dialog__foot {
+  display: flex;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* ── 加载态与 404 ───────────────────────────────────────────── */
+
+.page-loading {
+  min-height: 60vh;
+}
+
+.doc-loading {
+  padding: var(--sp-16) 0;
+  color: var(--text-3);
+}
+
+.not-found {
+  display: grid;
+  place-content: center;
+  min-height: 78vh;
+  padding: var(--sp-8);
+  text-align: center;
+}
+
+.not-found > p:first-child {
+  color: var(--brand);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.08em;
+}
+
+.not-found h1 {
+  max-width: 640px;
+  margin: var(--sp-4) auto var(--sp-3);
+  font-size: var(--fs-4xl);
+}
+
+.not-found__hint {
+  max-width: 480px;
+  margin: 0 auto;
+  color: var(--text-2);
+}
+
+.not-found__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  justify-content: center;
+  margin-top: var(--sp-8);
+}
