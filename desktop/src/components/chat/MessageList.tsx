@@ -8,6 +8,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspacePanelStore, type WorkspacePanelOrigin } from '../../stores/workspacePanelStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+import { MessageNavigation } from './MessageNavigation'
 import { useTeamStore } from '../../stores/teamStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
@@ -543,6 +544,7 @@ function SelectableChatMessage({
     <div
       ref={rootRef}
       data-chat-selectable-message={role}
+      data-message-id={messageId}
       onPointerDown={(event) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return
         lastSelectionPointerRef.current = getSelectionPointer(event)
@@ -1940,6 +1942,38 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
     scrollToBottom('auto')
   }, [scrollToBottom])
 
+  const handleNavigateToMessage = useCallback((messageId: string) => {
+    const scrollToElement = () => {
+      const el = document.querySelector(`[data-message-id="${messageId}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return true
+      }
+      return false
+    }
+
+    if (scrollToElement()) return
+
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    const messageIndex = messages.findIndex((m) => m.id === messageId)
+    if (messageIndex === -1) return
+
+    const totalMessages = messages.length
+    if (totalMessages === 0) return
+
+    const scrollHeight = container.scrollHeight - container.clientHeight
+    const estimatedPosition = (messageIndex / totalMessages) * scrollHeight
+    container.scrollTop = Math.max(0, estimatedPosition - container.clientHeight / 3)
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToElement()
+      })
+    })
+  }, [messages])
+
   useEffect(() => {
     const content = scrollContentRef.current
     if (!content || typeof ResizeObserver === 'undefined') return
@@ -2723,6 +2757,11 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
           {t('chat.jumpToLatest')}
         </Button>
       )}
+
+      <MessageNavigation
+        messages={messages}
+        onNavigate={handleNavigateToMessage}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmTurnCard)}
