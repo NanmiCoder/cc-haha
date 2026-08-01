@@ -610,7 +610,7 @@ describe('buildSessionActivityModel', () => {
     expect(model.badgeCount).toBe(0)
   })
 
-  it('drops tasks deleted by TaskUpdate instead of showing them as pending', () => {
+  it('hides tasks while a TaskUpdate deletion is pending', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
       messages: [
@@ -673,6 +673,128 @@ describe('buildSessionActivityModel', () => {
       expect.objectContaining({ id: '2', label: '给 summarize 加空数组保护', status: 'completed' }),
     ])
     expect(model.badgeCount).toBe(0)
+  })
+
+  it('matches TaskUpdate deletion results by toolUseId and keeps tasks whose deletions fail', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [
+        {
+          id: 'task-create-1',
+          type: 'tool_use',
+          toolName: 'TaskCreate',
+          toolUseId: 'task-create-call-1',
+          input: { subject: 'Delete succeeds' },
+          timestamp: 1000,
+        },
+        {
+          id: 'task-create-result-1',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-1',
+          content: 'Task #1 created successfully: Delete succeeds',
+          isError: false,
+          timestamp: 1001,
+        },
+        {
+          id: 'task-create-2',
+          type: 'tool_use',
+          toolName: 'TaskCreate',
+          toolUseId: 'task-create-call-2',
+          input: { subject: 'Recoverable delete failure' },
+          timestamp: 1002,
+        },
+        {
+          id: 'task-create-result-2',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-2',
+          content: 'Task #2 created successfully: Recoverable delete failure',
+          isError: false,
+          timestamp: 1003,
+        },
+        {
+          id: 'task-create-3',
+          type: 'tool_use',
+          toolName: 'TaskCreate',
+          toolUseId: 'task-create-call-3',
+          input: { subject: 'Error delete failure' },
+          timestamp: 1004,
+        },
+        {
+          id: 'task-create-result-3',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-3',
+          content: 'Task #3 created successfully: Error delete failure',
+          isError: false,
+          timestamp: 1005,
+        },
+        {
+          id: 'task-delete-1',
+          type: 'tool_use',
+          toolName: 'TaskUpdate',
+          toolUseId: 'task-delete-call-1',
+          input: { taskId: '1', status: 'deleted' },
+          timestamp: 1006,
+        },
+        {
+          id: 'task-delete-2',
+          type: 'tool_use',
+          toolName: 'TaskUpdate',
+          toolUseId: 'task-delete-call-2',
+          input: { taskId: '2', status: 'deleted' },
+          timestamp: 1007,
+        },
+        {
+          id: 'task-delete-3',
+          type: 'tool_use',
+          toolName: 'TaskUpdate',
+          toolUseId: 'task-delete-call-3',
+          input: { taskId: '3', status: 'deleted' },
+          timestamp: 1008,
+        },
+        // Results arrive in a different order from the tool calls. They must be
+        // matched by toolUseId rather than by task ID or message adjacency.
+        {
+          id: 'task-delete-result-3',
+          type: 'tool_result',
+          toolUseId: 'task-delete-call-3',
+          content: 'Failed to delete task',
+          isError: true,
+          timestamp: 1009,
+        },
+        {
+          id: 'task-delete-result-2',
+          type: 'tool_result',
+          toolUseId: 'task-delete-call-2',
+          content: 'Task not found',
+          isError: false,
+          timestamp: 1010,
+        },
+        {
+          id: 'task-delete-result-1',
+          type: 'tool_result',
+          toolUseId: 'task-delete-call-1',
+          content: 'Updated task #1 deleted',
+          isError: false,
+          timestamp: 1011,
+        },
+      ],
+      // A refresh can still contain all three tasks while tool results are being
+      // reconciled. Only the confirmed deletion should hide its stale live row.
+      tasks: [
+        task({ id: '1', subject: 'Delete succeeds', status: 'pending' }),
+        task({ id: '2', subject: 'Recoverable delete failure', status: 'pending' }),
+        task({ id: '3', subject: 'Error delete failure', status: 'pending' }),
+      ],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(model.sections.tasks.rows).toEqual([
+      expect.objectContaining({ id: '2', label: 'Recoverable delete failure', status: 'pending' }),
+      expect.objectContaining({ id: '3', label: 'Error delete failure', status: 'pending' }),
+    ])
+    expect(model.badgeCount).toBe(2)
   })
 
   it('does not invent a row for a TaskUpdate deletion without a matching TaskCreate', () => {

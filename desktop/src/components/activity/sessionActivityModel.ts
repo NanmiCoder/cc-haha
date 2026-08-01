@@ -263,12 +263,29 @@ function isDeletedStatus(input: Record<string, unknown>): boolean {
   return stringField(input, 'status') === 'deleted'
 }
 
+type ToolResultMessage = Extract<UIMessage, { type: 'tool_result' }>
+
+function collectToolResultsByUseId(messages: UIMessage[]): Map<string, ToolResultMessage> {
+  const resultsByToolUseId = new Map<string, ToolResultMessage>()
+  for (const message of messages) {
+    if (message.type === 'tool_result') {
+      resultsByToolUseId.set(message.toolUseId, message)
+    }
+  }
+  return resultsByToolUseId
+}
+
+function shouldApplyTaskUpdate(taskId: string, result?: ToolResultMessage): boolean {
+  return !result || (!result.isError && parseUpdatedTaskId(result.content) === taskId)
+}
+
 /**
  * TaskUpdate 的 deleted 是删除动作而非状态，删除可能发生在创建它的那一轮之后，
  * 所以要跨轮次收集，避免已删任务留在历史统计里。
  */
 function collectDeletedTaskIds(messages: UIMessage[]): Set<string> {
   const deletedTaskIds = new Set<string>()
+  const resultsByToolUseId = collectToolResultsByUseId(messages)
 
   for (const message of messages) {
     if (message.type !== 'tool_use' || message.toolName !== 'TaskUpdate') continue
@@ -277,7 +294,9 @@ function collectDeletedTaskIds(messages: UIMessage[]): Set<string> {
     if (!isDeletedStatus(input)) continue
 
     const taskId = taskIdFromInput(input)
-    if (taskId) deletedTaskIds.add(taskId)
+    if (!taskId) continue
+    if (!shouldApplyTaskUpdate(taskId, resultsByToolUseId.get(message.toolUseId))) continue
+    deletedTaskIds.add(taskId)
   }
 
   return deletedTaskIds
@@ -456,12 +475,7 @@ function buildAgentRowsFromMessages(messages: UIMessage[]): ActivityRow[] {
 }
 
 function buildTaskRowsFromTaskTools(messages: UIMessage[]): ActivityRow[] {
-  const resultsByToolUseId = new Map<string, Extract<UIMessage, { type: 'tool_result' }>>()
-  for (const message of messages) {
-    if (message.type === 'tool_result') {
-      resultsByToolUseId.set(message.toolUseId, message)
-    }
-  }
+  const resultsByToolUseId = collectToolResultsByUseId(messages)
 
   const rowsByTaskId = new Map<string, ActivityRow>()
   let createIndex = 0
@@ -484,17 +498,17 @@ function buildTaskRowsFromTaskTools(messages: UIMessage[]): ActivityRow[] {
       const taskId = taskIdFromInput(input)
       if (!taskId) continue
 
+      // TaskUpdate intentionally reports recoverable failures such as "Task not found"
+      // as non-error tool results. Keep optimistic updates while a call is pending, but
+      // discard its input once the corresponding result proves it did not succeed.
+      const result = resultsByToolUseId.get(message.toolUseId)
+      if (!shouldApplyTaskUpdate(taskId, result)) continue
+
       // deleted 不是一种任务状态：CLI 侧 TaskUpdateTool 会真的删掉任务文件
       if (isDeletedStatus(input)) {
         rowsByTaskId.delete(taskId)
         continue
       }
-
-      // TaskUpdate intentionally reports recoverable failures such as "Task not found"
-      // as non-error tool results. Keep optimistic updates while a call is pending, but
-      // discard its input once the corresponding result proves it did not succeed.
-      const result = resultsByToolUseId.get(message.toolUseId)
-      if (result && (result.isError || parseUpdatedTaskId(result.content) !== taskId)) continue
 
       const existing = rowsByTaskId.get(taskId)
       const activeForm = stringField(input, 'activeForm')
