@@ -43,6 +43,21 @@ function isProjectScoped(server: Pick<McpServerRecord, 'scope'>) {
   return server.scope === 'local' || server.scope === 'project'
 }
 
+function projectPathIdentity(projectPath?: string) {
+  const value = projectPath ?? ''
+  if (!/^(?:[A-Za-z]:[\\/]|\\\\)/.test(value)) return value
+  return value.replace(/\\/g, '/')
+}
+
+function dedupeProjectPaths(projectPaths: string[]) {
+  const uniquePaths = new Map<string, string>()
+  for (const projectPath of projectPaths) {
+    const identity = projectPathIdentity(projectPath)
+    if (!uniquePaths.has(identity)) uniquePaths.set(identity, projectPath)
+  }
+  return [...uniquePaths.values()]
+}
+
 function attachProjectPath(server: McpServerRecord, cwd?: string) {
   if (!isProjectScoped(server)) {
     return {
@@ -60,7 +75,7 @@ function attachProjectPath(server: McpServerRecord, cwd?: string) {
 function isSameServer(a: Pick<McpServerRecord, 'name' | 'scope' | 'projectPath'>, b: Pick<McpServerRecord, 'name' | 'scope' | 'projectPath'>) {
   if (a.name !== b.name || a.scope !== b.scope) return false
   if (!isProjectScoped(a) && !isProjectScoped(b)) return true
-  return (a.projectPath ?? '') === (b.projectPath ?? '')
+  return projectPathIdentity(a.projectPath) === projectPathIdentity(b.projectPath)
 }
 
 function replaceServer(
@@ -88,8 +103,8 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     const requestId = ++fetchServersRequestId
     set({ isLoading: true, error: null })
     try {
-      const normalizedPaths = Array.from(new Set((projectPaths ?? []).filter(Boolean)))
-      const contexts = normalizedPaths.length > 0 ? normalizedPaths : [fallbackCwd].filter(Boolean)
+      const uniquePaths = dedupeProjectPaths((projectPaths ?? []).filter(Boolean))
+      const contexts = uniquePaths.length > 0 ? uniquePaths : [fallbackCwd].filter(Boolean)
 
       const responses = await Promise.all(
         (contexts.length > 0 ? contexts : [undefined]).map(async (cwd) => {
@@ -106,7 +121,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
         for (const server of group) {
           const key =
             server.scope === 'local' || server.scope === 'project'
-              ? `${server.scope}:${server.projectPath}:${server.name}`
+              ? `${server.scope}:${projectPathIdentity(server.projectPath)}:${server.name}`
               : `${server.scope}:${server.name}`
           if (!deduped.has(key)) {
             deduped.set(key, server)
