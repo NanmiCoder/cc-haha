@@ -294,6 +294,12 @@ function parseCreatedTaskResult(content: unknown): { id: string; subject?: strin
   }
 }
 
+function parseUpdatedTaskId(content: unknown): string | null {
+  const text = extractTextContent(content)
+  const match = text.match(/^Updated task #(\S+)(?:\s|$)/i)
+  return match?.[1] ?? null
+}
+
 function buildTaskToolRow(
   id: string,
   input: Record<string, unknown>,
@@ -483,6 +489,12 @@ function buildTaskRowsFromTaskTools(messages: UIMessage[]): ActivityRow[] {
         rowsByTaskId.delete(taskId)
         continue
       }
+
+      // TaskUpdate intentionally reports recoverable failures such as "Task not found"
+      // as non-error tool results. Keep optimistic updates while a call is pending, but
+      // discard its input once the corresponding result proves it did not succeed.
+      const result = resultsByToolUseId.get(message.toolUseId)
+      if (result && (result.isError || parseUpdatedTaskId(result.content) !== taskId)) continue
 
       const existing = rowsByTaskId.get(taskId)
       const activeForm = stringField(input, 'activeForm')

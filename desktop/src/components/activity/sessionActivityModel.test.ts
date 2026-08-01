@@ -541,6 +541,75 @@ describe('buildSessionActivityModel', () => {
     expect(model.badgeCount).toBe(1)
   })
 
+  it('keeps the last successful task status when a later TaskUpdate fails', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [
+        {
+          id: 'task-create-1',
+          type: 'tool_use',
+          toolName: 'TaskCreate',
+          toolUseId: 'task-create-call-1',
+          input: { subject: 'Review the activity panel' },
+          timestamp: 1000,
+        },
+        {
+          id: 'task-create-result-1',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-1',
+          content: 'Task #2 created successfully: Review the activity panel',
+          isError: false,
+          timestamp: 1001,
+        },
+        {
+          id: 'task-completed',
+          type: 'tool_use',
+          toolName: 'TaskUpdate',
+          toolUseId: 'task-completed-call',
+          input: { taskId: '2', status: 'completed' },
+          timestamp: 1002,
+        },
+        {
+          id: 'task-completed-result',
+          type: 'tool_result',
+          toolUseId: 'task-completed-call',
+          content: 'Updated task #2 status',
+          isError: false,
+          timestamp: 1003,
+        },
+        {
+          id: 'task-reopen',
+          type: 'tool_use',
+          toolName: 'TaskUpdate',
+          toolUseId: 'task-reopen-call',
+          input: { taskId: '2', status: 'in_progress' },
+          timestamp: 1004,
+        },
+        {
+          id: 'task-reopen-result',
+          type: 'tool_result',
+          toolUseId: 'task-reopen-call',
+          content: 'Task not found',
+          isError: false,
+          timestamp: 1005,
+        },
+      ],
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(model.sections.tasks.rows).toEqual([
+      expect.objectContaining({
+        id: '2',
+        label: 'Review the activity panel',
+        status: 'completed',
+      }),
+    ])
+    expect(model.badgeCount).toBe(0)
+  })
+
   it('drops tasks deleted by TaskUpdate instead of showing them as pending', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
