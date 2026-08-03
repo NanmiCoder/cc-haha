@@ -3124,4 +3124,156 @@ describe('WorkspacePanel', () => {
     expect(view.queryByText('cached')).toBeNull()
     expect(view.getByTestId('workspace-preview-content').getAttribute('aria-busy')).toBe('false')
   })
+
+  it('refreshes root and expanded subdirectories in all-files view and displays new files', async () => {
+    const sessionId = 'session-refresh-expanded-tree'
+
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        [sessionId]: { isOpen: true, activeView: 'all', hasUserSelectedView: true },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        [sessionId]: {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      expandedPathsBySession: {
+        ...state.expandedPathsBySession,
+        [sessionId]: ['src'],
+      },
+      treeBySessionPath: {
+        ...state.treeBySessionPath,
+        [sessionId]: {
+          '': {
+            state: 'ok',
+            path: '',
+            entries: [{ name: 'src', path: 'src', isDirectory: true }],
+          },
+          src: {
+            state: 'ok',
+            path: 'src',
+            entries: [{ name: 'a.ts', path: 'src/a.ts', isDirectory: false }],
+          },
+        },
+      },
+    }))
+
+    getMocks().getWorkspaceTreeMock.mockImplementation(async (_sessionId: string, path = '') => {
+      if (path === '') {
+        return {
+          state: 'ok',
+          path: '',
+          entries: [{ name: 'src', path: 'src', isDirectory: true }],
+        }
+      }
+      if (path === 'src') {
+        return {
+          state: 'ok',
+          path: 'src',
+          entries: [
+            { name: 'a.ts', path: 'src/a.ts', isDirectory: false },
+            { name: 'b.ts', path: 'src/b.ts', isDirectory: false },
+          ],
+        }
+      }
+      return { state: 'ok', path, entries: [] }
+    })
+
+    const view = await renderPanel(sessionId)
+
+    expect(await view.findByText('a.ts')).toBeTruthy()
+    expect(view.queryByText('b.ts')).toBeNull()
+
+    const refreshButton = view.getByRole('button', { name: /Refresh|刷新/ })
+    await clickElement(refreshButton)
+
+    await waitFor(() => {
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith(sessionId, '')
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith(sessionId, 'src')
+    })
+    expect(await view.findByText('b.ts')).toBeTruthy()
+  })
+
+  it('re-searches and refreshes workspace tree when refresh is clicked in search mode', async () => {
+    const sessionId = 'session-refresh-search'
+
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        [sessionId]: { isOpen: true, activeView: 'all', hasUserSelectedView: true },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        [sessionId]: {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+      expandedPathsBySession: {
+        ...state.expandedPathsBySession,
+        [sessionId]: ['src'],
+      },
+      treeBySessionPath: {
+        ...state.treeBySessionPath,
+        [sessionId]: {
+          '': {
+            state: 'ok',
+            path: '',
+            entries: [{ name: 'src', path: 'src', isDirectory: true }],
+          },
+          src: {
+            state: 'ok',
+            path: 'src',
+            entries: [{ name: 'app.ts', path: 'src/app.ts', isDirectory: false }],
+          },
+        },
+      },
+    }))
+
+    getMocks().searchWorkspaceMock.mockResolvedValue({
+      state: 'ok',
+      query: 'app',
+      truncated: false,
+      entries: [{ name: 'app.ts', path: 'src/app.ts', isDirectory: false }],
+    })
+    getMocks().getWorkspaceTreeMock.mockImplementation(async (_sessionId: string, path = '') => ({
+      state: 'ok',
+      path,
+      entries: path === ''
+        ? [{ name: 'src', path: 'src', isDirectory: true }]
+        : [{ name: 'app.ts', path: 'src/app.ts', isDirectory: false }],
+    }))
+
+    const view = await renderPanel(sessionId)
+
+    fireEvent.change(view.getByPlaceholderText('Search all files...'), {
+      target: { value: 'app' },
+    })
+
+    expect(await view.findByText('app.ts')).toBeTruthy()
+    getMocks().getWorkspaceTreeMock.mockClear()
+    getMocks().searchWorkspaceMock.mockClear()
+
+    const refreshButton = view.getByRole('button', { name: /Refresh|刷新/ })
+    await clickElement(refreshButton)
+
+    await waitFor(() => {
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith(sessionId, '')
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith(sessionId, 'src')
+      expect(getMocks().searchWorkspaceMock).toHaveBeenCalledWith(sessionId, 'app')
+    })
+  })
 })
