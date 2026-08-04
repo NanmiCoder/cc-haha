@@ -79,6 +79,20 @@ describe('PR quality workflow', () => {
     expect(workflow).toContain('retention-days: 14')
   })
 
+  test('installs ripgrep only for the coverage lane', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    const coverageSteps = jobs['coverage-checks'].steps ?? []
+    const ripgrepSteps = Object.values(jobs)
+      .flatMap(job => job.steps ?? [])
+      .filter(step => step.name === 'Install ripgrep')
+
+    expect(ripgrepSteps).toHaveLength(1)
+    expect(coverageSteps.find(step => step.name === 'Install ripgrep')?.run).toBe(
+      'sudo apt-get install -y ripgrep && rg --version',
+    )
+  })
+
   test('installs and validates the isolated React site for docs changes', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
     const jobs = workflowJobs(workflow)

@@ -3,20 +3,23 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 
+import { MANAGED_PROVIDER_ENV_KEYS } from '../server/services/providerRuntimeEnv.js'
+import { resetModelStringsForTestingOnly } from '../bootstrap/state.js'
 import { applySafeConfigEnvironmentVariables } from './managedEnv.js'
+import { resetSettingsCache } from './settings/settingsCache.js'
 
 let tmpDir: string
-const originalEnv = {
-  CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
-  CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST,
-  CC_HAHA_LOCAL_ACCESS_TOKEN: process.env.CC_HAHA_LOCAL_ACCESS_TOKEN,
-  ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
-  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
-}
+const TEST_ENV_KEYS = [
+  'CLAUDE_CONFIG_DIR',
+  'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+  'CC_HAHA_LOCAL_ACCESS_TOKEN',
+  ...MANAGED_PROVIDER_ENV_KEYS,
+] as const
+const originalEnv = Object.fromEntries(
+  TEST_ENV_KEYS.map(key => [key, process.env[key]]),
+) as Record<(typeof TEST_ENV_KEYS)[number], string | undefined>
 
-function restoreEnv(key: keyof typeof originalEnv): void {
+function restoreEnv(key: (typeof TEST_ENV_KEYS)[number]): void {
   const value = originalEnv[key]
   if (value === undefined) {
     delete process.env[key]
@@ -33,13 +36,9 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 describe('managedEnv', () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'managed-env-'))
+    for (const key of TEST_ENV_KEYS) delete process.env[key]
     process.env.CLAUDE_CONFIG_DIR = tmpDir
-    delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
-    delete process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
-    delete process.env.ANTHROPIC_BASE_URL
-    delete process.env.ANTHROPIC_API_KEY
-    delete process.env.ANTHROPIC_AUTH_TOKEN
-    delete process.env.ANTHROPIC_MODEL
+    resetSettingsCache()
   })
 
   afterEach(async () => {
@@ -47,13 +46,9 @@ describe('managedEnv', () => {
       .then((mod) => mod.stopStandaloneProviderProxyForTests?.())
       .catch(() => {})
     await fs.rm(tmpDir, { recursive: true, force: true })
-    restoreEnv('CLAUDE_CONFIG_DIR')
-    restoreEnv('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST')
-    restoreEnv('CC_HAHA_LOCAL_ACCESS_TOKEN')
-    restoreEnv('ANTHROPIC_BASE_URL')
-    restoreEnv('ANTHROPIC_API_KEY')
-    restoreEnv('ANTHROPIC_AUTH_TOKEN')
-    restoreEnv('ANTHROPIC_MODEL')
+    for (const key of TEST_ENV_KEYS) restoreEnv(key)
+    resetSettingsCache()
+    resetModelStringsForTestingOnly()
   })
 
   test('starts a standalone provider proxy for CLI-only OpenAI-compatible providers', async () => {

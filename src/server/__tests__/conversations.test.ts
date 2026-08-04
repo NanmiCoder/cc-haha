@@ -2044,6 +2044,7 @@ describe('WebSocket Chat Integration', () => {
   }
   const originalCliPath = process.env.CLAUDE_CLI_PATH
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalProviderServerPort = ProviderService.getServerPort()
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-conv-'))
@@ -2067,6 +2068,7 @@ describe('WebSocket Chat Integration', () => {
     server?.stop(true)
     const { stopServerRuntimeForShutdown } = await import('../index.js')
     await stopServerRuntimeForShutdown()
+    ProviderService.setServerPort(originalProviderServerPort)
     if (tmpDir) {
       await rmWithRetry(tmpDir)
     }

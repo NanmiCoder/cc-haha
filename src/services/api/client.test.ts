@@ -1,16 +1,20 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { GROK_OAUTH_DUMMY_KEY } from '../grokAuth/fetch.js'
 
-mock.module('src/utils/http.js', () => ({
-  getAuthHeaders: mock(() => ({})),
-  getMCPUserAgent: mock(() => 'client-test-agent'),
-  getUserAgent: mock(() => 'client-test-agent'),
-  getWebFetchUserAgent: mock(() => 'client-test-agent'),
-  withOAuth401Retry: mock(async <T>(fn: () => Promise<T>) => fn()),
-}))
+const httpModule = await import('src/utils/http.js')
+
+spyOn(httpModule, 'getAuthHeaders').mockImplementation(() => ({}))
+spyOn(httpModule, 'getMCPUserAgent').mockImplementation(() => 'client-test-agent')
+spyOn(httpModule, 'getUserAgent').mockImplementation(() => 'client-test-agent')
+spyOn(httpModule, 'getWebFetchUserAgent').mockImplementation(() => 'client-test-agent')
+spyOn(httpModule, 'withOAuth401Retry').mockImplementation(async <T>(fn: () => Promise<T>) => fn())
+
+afterAll(() => {
+  mock.restore()
+})
 
 describe('resolveAnthropicClientApiKey', () => {
   test('does not inherit a local api key when a provider auth token is explicit', async () => {

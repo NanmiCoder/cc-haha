@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import type { AppState } from '../../state/AppState.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type {
@@ -38,46 +38,40 @@ const startInProcessTeammateMock = mock((_config: unknown) => {})
 const execFileNoThrowModule = await import('../../utils/execFileNoThrow.js')
 const taskFrameworkModule = await import('../../utils/task/framework.js')
 const teamHelpersModule = await import('../../utils/swarm/teamHelpers.js')
+const backendRegistryModule = await import('../../utils/swarm/backends/registry.js')
+const backendDetectionModule = await import('../../utils/swarm/backends/detection.js')
+const teammateLayoutModule = await import('../../utils/swarm/teammateLayoutManager.js')
+const inProcessRunnerModule = await import('../../utils/swarm/inProcessRunner.js')
+const spawnInProcessModule = await import('../../utils/swarm/spawnInProcess.js')
+const teammateMailboxModule = await import('../../utils/teammateMailbox.js')
 const mutateTeamFileAsyncActual = teamHelpersModule.mutateTeamFileAsync
 const readTeamFileAsyncActual = teamHelpersModule.readTeamFileAsync
 
-mock.module('../../utils/swarm/backends/registry.js', () => ({
-  detectAndGetBackend: async () => ({
+function installTestDoubles(): void {
+  spyOn(backendRegistryModule, 'detectAndGetBackend').mockImplementation(async () => ({
     backend: { type: 'tmux' },
     needsIt2Setup: false,
-  }),
-  getBackendByType: () => ({ killPane: async () => {} }),
-  isInProcessEnabled: () => spawnMode === 'in-process',
-  markInProcessFallback: () => {},
-  resetBackendDetection: () => {},
-}))
+  }) as any)
+  spyOn(backendRegistryModule, 'getBackendByType').mockImplementation(() => ({ killPane: async () => {} }) as any)
+  spyOn(backendRegistryModule, 'isInProcessEnabled').mockImplementation(() => spawnMode === 'in-process')
+  spyOn(backendRegistryModule, 'markInProcessFallback').mockImplementation(() => {})
+  spyOn(backendRegistryModule, 'resetBackendDetection').mockImplementation(() => {})
 
-mock.module('../../utils/swarm/backends/detection.js', () => ({
-  isTmuxAvailable: async () => true,
-}))
+  spyOn(backendDetectionModule, 'isTmuxAvailable').mockImplementation(async () => true)
 
-mock.module('../../utils/swarm/teammateLayoutManager.js', () => ({
-  assignTeammateColor: () => 'blue',
-  createTeammatePaneInSwarmView: async () => ({
+  spyOn(teammateLayoutModule, 'assignTeammateColor').mockImplementation(() => 'blue')
+  spyOn(teammateLayoutModule, 'createTeammatePaneInSwarmView').mockImplementation(async () => ({
     paneId: '%split',
     isFirstTeammate: false,
-  }),
-  enablePaneBorderStatus: async () => {},
-  isInsideTmux: async () => true,
-  sendCommandToPane: sendCommandToPaneMock,
-}))
+  }) as any)
+  spyOn(teammateLayoutModule, 'enablePaneBorderStatus').mockImplementation(async () => {})
+  spyOn(teammateLayoutModule, 'isInsideTmux').mockImplementation(() => true)
+  spyOn(teammateLayoutModule, 'sendCommandToPane').mockImplementation(sendCommandToPaneMock)
 
-mock.module('../../utils/swarm/inProcessRunner.js', () => ({
-  startInProcessTeammate: startInProcessTeammateMock,
-}))
+  spyOn(inProcessRunnerModule, 'startInProcessTeammate').mockImplementation(startInProcessTeammateMock as any)
+  spyOn(spawnInProcessModule, 'spawnInProcessTeammate').mockImplementation(spawnInProcessTeammateMock as any)
 
-mock.module('../../utils/swarm/spawnInProcess.js', () => ({
-  spawnInProcessTeammate: spawnInProcessTeammateMock,
-}))
-
-mock.module('../../utils/swarm/teamHelpers.js', () => ({
-  ...teamHelpersModule,
-  mutateTeamFileAsync: async (
+  spyOn(teamHelpersModule, 'mutateTeamFileAsync').mockImplementation(async (
     teamName: string,
     mutate: (teamFile: { members: unknown[] }) => void,
   ) => {
@@ -85,33 +79,24 @@ mock.module('../../utils/swarm/teamHelpers.js', () => ({
       return mutateTeamFileAsyncActual(teamName, mutate)
     }
     mutate({ members: [] })
-  },
-  readTeamFileAsync: async (teamName: string) =>
+  })
+  spyOn(teamHelpersModule, 'readTeamFileAsync').mockImplementation(async (teamName: string) =>
     teamName === 'review-team'
       ? null
-      : readTeamFileAsyncActual(teamName),
-  sanitizeAgentName: (name: string) => name.replaceAll('@', '-'),
-  sanitizeName: (name: string) =>
-    name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
-}))
+      : readTeamFileAsyncActual(teamName))
+  spyOn(teamHelpersModule, 'sanitizeAgentName').mockImplementation((name: string) => name.replaceAll('@', '-'))
+  spyOn(teamHelpersModule, 'sanitizeName').mockImplementation((name: string) =>
+  name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase())
 
-mock.module('../../utils/task/framework.js', () => ({
-  ...taskFrameworkModule,
-  registerTask: () => {},
-}))
-
-mock.module('../../utils/teammateMailbox.js', () => ({
-  writeToMailbox: async () => {},
-}))
-
-mock.module('../../utils/execFileNoThrow.js', () => ({
-  ...execFileNoThrowModule,
-  execFileNoThrow: execFileNoThrowMock,
-}))
+  spyOn(taskFrameworkModule, 'registerTask').mockImplementation(() => {})
+  spyOn(teammateMailboxModule, 'writeToMailbox').mockImplementation(async () => {})
+  spyOn(execFileNoThrowModule, 'execFileNoThrow').mockImplementation(execFileNoThrowMock as any)
+}
 
 const { spawnTeammate } = await import('./spawnMultiAgent.js')
 
 beforeEach(() => {
+  installTestDoubles()
   delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
   spawnMode = 'split-pane'
   paneCommands.length = 0
@@ -122,7 +107,8 @@ beforeEach(() => {
   startInProcessTeammateMock.mockClear()
 })
 
-afterAll(() => {
+afterEach(() => {
+  mock.restore()
   if (originalSubagentModel === undefined) {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
   } else {
