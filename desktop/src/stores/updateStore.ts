@@ -195,6 +195,24 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
   initialize: async () => {
     if (!getUpdateHost()) return
+
+    // Deployment mode gate: in private-cloud mode, skip automatic update
+    // checks entirely. The public update feed (app-update.yml) is unreachable
+    // in private environments, so checking would only produce timeouts.
+    //
+    // MVP note: a configured updateServerUrl SHOULD override this via
+    // electron-updater setFeedURL, but that requires extending the Electron
+    // updater service contract (main-process IPC + ElectronUpdaterLike type).
+    // Deferred to P1; for now private-cloud always skips to stay safe.
+    const { deploymentMode, privateCloudConfig } = useSettingsStore.getState()
+    if (deploymentMode === 'private-cloud') {
+      const hasUrl = Boolean(privateCloudConfig.updateServerUrl?.trim())
+      if (!hasUrl) return
+      // updateServerUrl is set but setFeedURL override is not yet wired (P1).
+      // Skip rather than hit the public feed with wrong semantics.
+      return
+    }
+
     if (!startupCheckPromise) {
       startupCheckPromise = (async () => {
         await new Promise((resolve) => setTimeout(resolve, 5000))

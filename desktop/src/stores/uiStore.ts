@@ -242,6 +242,7 @@ export type SettingsTab =
   | 'skills'
   | 'memory'
   | 'plugins'
+  | 'deploymentMode'
   | 'pets'
   | 'computerUse'
   | 'trace'

@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { logForDebugging } from '../../utils/debug.js'
+import { deploymentModeService } from '../../server/services/deploymentModeService.js'
 import { errorMessage } from '../../utils/errors.js'
 
 type RegistryServer = {
@@ -32,6 +33,12 @@ function normalizeUrl(url: string): string | undefined {
  */
 export async function prefetchOfficialMcpUrls(): Promise<void> {
   if (process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC) {
+    return
+  }
+  // Private-cloud mode: the official MCP registry is a public-internet
+  // dependency. Short-circuit so we never issue the request.
+  if (deploymentModeService.isPrivateCloud()) {
+    logForDebugging('[mcp-registry] Skipped in private-cloud mode')
     return
   }
 

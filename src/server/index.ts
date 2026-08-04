@@ -25,6 +25,7 @@ import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
+import { deploymentModeService } from './services/deploymentModeService.js'
 import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
 import { handleStaticH5Request } from './staticH5.js'
 import {
@@ -202,8 +203,13 @@ function originFromUrl(value: string | null): string | null {
   }
 }
 
-export function startServer(port = PORT, host = HOST) {
+export async function startServer(port = PORT, host = HOST) {
   enableConfigs()
+  // Initialize deployment mode before route registration so feature gates
+  // can influence which routes are registered / services initialized. Await
+  // so the mode is resolved before any request is dispatched (the feature
+  // gate in router.ts depends on the service being initialized).
+  await deploymentModeService.initFromSettingsFile()
   // Warm the synchronous disconnect-grace cache from managed settings so the
   // first client disconnect honors the configured value (issue #764).
   void refreshDisconnectGraceMs()
@@ -602,7 +608,7 @@ export function startServer(port = PORT, host = HOST) {
     )
   })
 
-  console.log(`[Server] Claude Code API server running at http://${host}:${serverPort}`)
+  console.log(`[Server] 千川小致 API server running at http://${host}:${serverPort}`)
   return server
 }
 

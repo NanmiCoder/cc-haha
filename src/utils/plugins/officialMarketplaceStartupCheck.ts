@@ -14,6 +14,7 @@ import { logEvent } from '../../services/analytics/index.js'
 import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
 import { isEnvTruthy } from '../envUtils.js'
+import { deploymentModeService } from '../../server/services/deploymentModeService.js'
 import { toError } from '../errors.js'
 import { logError } from '../log.js'
 import { checkGitAvailable, markGitUnavailable } from './gitAvailability.js'
@@ -145,6 +146,13 @@ export type OfficialMarketplaceCheckResult = {
  * @returns Result indicating whether installation succeeded or was skipped
  */
 export async function checkAndInstallOfficialMarketplace(): Promise<OfficialMarketplaceCheckResult> {
+  // Private-cloud mode: the official Anthropic marketplace is a public-internet
+  // dependency (GCS fetch + git clone). Short-circuit before any network call.
+  if (deploymentModeService.isPrivateCloud()) {
+    logForDebugging('Official marketplace auto-install skipped in private-cloud mode')
+    return { installed: false, skipped: true, reason: 'policy_blocked' }
+  }
+
   const config = getGlobalConfig()
 
   // Check if we should retry installation

@@ -24,6 +24,7 @@ import {
   type WebSearchSettings,
 } from '../types/settings'
 import type { TraceCaptureSettings } from '../types/trace'
+import type { DeploymentMode, PrivateCloudConfig } from '../types/deploymentMode'
 import { getDesktopHost } from '../lib/desktopHost'
 import type { Locale } from '../i18n'
 import {
@@ -108,6 +109,10 @@ type SettingsStore = {
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
   setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
+
+  deploymentMode: DeploymentMode
+  privateCloudConfig: PrivateCloudConfig
+  setDeploymentMode: (mode: DeploymentMode, config?: PrivateCloudConfig) => Promise<void>
   enableH5Access: () => Promise<string>
   disableH5Access: () => Promise<void>
   regenerateH5AccessToken: () => Promise<string>
@@ -215,6 +220,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     configDirSource: 'system',
   },
   appModeRequiresRestart: false,
+  deploymentMode: 'public',
+  privateCloudConfig: {},
   setUiZoom: (zoom: number) => {
     const level = normalizeAppZoomLevel(zoom)
     set({ uiZoom: level })
@@ -262,6 +269,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         h5AccessDiagnostics: h5AccessResult.diagnostics,
         h5AccessError: h5AccessResult.error,
         responseLanguage: typeof userSettings.language === 'string' ? userSettings.language : '',
+        deploymentMode:
+          userSettings.deploymentMode === 'private-cloud' ? 'private-cloud' : 'public',
+        privateCloudConfig:
+          userSettings.deploymentMode === 'private-cloud' && userSettings.privateCloud
+            ? (userSettings.privateCloud as PrivateCloudConfig)
+            : {},
         isLoading: false,
         error: null,
       })
@@ -501,6 +514,27 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ network: next })
     } catch (error) {
       set({ network: prev })
+      throw error
+    }
+  },
+
+  setDeploymentMode: async (mode, config) => {
+    // Optimistically apply locally; persist via the user settings API. The
+    // caller (Settings UI) is responsible for prompting a restart after this
+    // resolves, since mode only takes effect at process startup (OQ-2).
+    const prevMode = get().deploymentMode
+    const prevConfig = get().privateCloudConfig
+    set({
+      deploymentMode: mode,
+      privateCloudConfig: mode === 'private-cloud' ? (config ?? prevConfig) : {},
+    })
+    try {
+      await settingsApi.updateUser({
+        deploymentMode: mode,
+        privateCloud: mode === 'private-cloud' ? (config ?? prevConfig) : {},
+      })
+    } catch (error) {
+      set({ deploymentMode: prevMode, privateCloudConfig: prevConfig })
       throw error
     }
   },

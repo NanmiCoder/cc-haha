@@ -29,6 +29,22 @@ import { handleOpenTargetsApi } from './api/open-targets.js'
 import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
+import { deploymentModeService } from './services/deploymentModeService.js'
+
+/**
+ * API resources disabled in private-cloud mode.
+ *
+ * The deployment mode service gates public-internet-dependent features. When
+ * private-cloud is active, these routes return 404 instead of dispatching to
+ * their handlers — this is a hard guard so even a stray frontend call cannot
+ * reach the public endpoints.
+ */
+const PRIVATE_CLOUD_DISABLED_RESOURCES = new Set([
+  'market',             // skill marketplace (ClawHub/SkillHub)
+  'haha-oauth',         // Claude official OAuth
+  'haha-openai-oauth',  // ChatGPT official OAuth
+  'haha-grok-oauth',    // Grok official OAuth
+])
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -36,6 +52,14 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // Route to appropriate handler based on the second segment
   const resource = segments[1]
+
+  // Feature gate: hard-disable public-internet routes in private-cloud mode.
+  if (deploymentModeService.isPrivateCloud() && PRIVATE_CLOUD_DISABLED_RESOURCES.has(resource)) {
+    return Response.json(
+      { error: 'Not Found', message: `Resource unavailable in private-cloud mode: ${resource}` },
+      { status: 404 },
+    )
+  }
 
   switch (resource) {
     case 'sessions': {
