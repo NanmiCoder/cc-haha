@@ -262,6 +262,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      - name: Install ripgrep
+        run: sudo apt-get install -y ripgrep && rg --version
       - name: Install root dependencies
         run: bun install --frozen-lockfile
       - name: Install desktop dependencies
