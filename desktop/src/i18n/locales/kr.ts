@@ -44,6 +44,7 @@ export const kr: Record<TranslationKey, string> = {
   // ─── Sidebar ──────────────────────────────────────
   'sidebar.newSession': '새 세션',
   'sidebar.scheduled': '예약 작업',
+  'sidebar.campusMonitor': '캠퍼스 여론',
   'sidebar.skills': '스킬',
   'sidebar.terminal': '터미널',
   'sidebar.settings': '설정',

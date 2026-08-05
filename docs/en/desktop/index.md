@@ -13,7 +13,7 @@ This page is a map, not a manual. One line per feature — click through for the
 
 ## Three places to know
 
-- **Sidebar** — under the brand seal: New session, Scheduled, Skills Market. Below that, the search bar and your projects and past sessions. Settings sits at the bottom. Drag the edge to resize it.
+- **Sidebar** — under the brand seal: New session, Campus monitor, Scheduled, Skills Market. Below that, the search bar and your projects and past sessions. Settings sits at the bottom. Drag the edge to resize it.
 - **Tab bar** — sessions side by side, switched like browser tabs. The four buttons on the right are Activity, Open project, Open terminal, and Show/hide workspace.
 - **Composer toolbar** — left to right: attachments, permission mode, launch location, context usage ring, model and effort, and the run button.
 
@@ -22,6 +22,7 @@ This page is a map, not a manual. One line per feature — click through for the
 - [Sessions, permissions, and review](./sessions.md) — starting a session, reading tool cards, answering permission prompts, undoing a turn that went wrong.
 - [Workspace](./workspace.md) — the right-hand panel: changed files, diff review, line comments, isolated worktrees, built-in browser.
 - [Settings reference](./settings.md) — all 16 tabs, one paragraph each: themes, languages, proxy, terminal, MCP, token usage.
+- [Campus monitor](./campus-monitor.md) — open the existing event list and let chats query and maintain campus events through MCP.
 
 ## Getting more work out of it
 

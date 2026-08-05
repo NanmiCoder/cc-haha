@@ -44,6 +44,7 @@ export const jp: Record<TranslationKey, string> = {
   // ─── Sidebar ──────────────────────────────────────
   'sidebar.newSession': '新しいセッション',
   'sidebar.scheduled': 'スケジュール',
+  'sidebar.campusMonitor': 'キャンパス世論',
   'sidebar.skills': 'スキル',
   'sidebar.terminal': 'ターミナル',
   'sidebar.settings': '設定',

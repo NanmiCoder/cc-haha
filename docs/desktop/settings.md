@@ -61,6 +61,8 @@ Windows 用户可以在这里指定启动 Shell（系统默认 / PowerShell 7 / 
 
 顶部三个数字是服务总数、当前已连接、需要处理。STDIO 类型的命令会直接在你的机器上运行，Node、Python、Bun 这些运行时需要你自己装好并保证在 PATH 里。
 
+要连接本机的校园事件管理面，按[校园舆情](./campus-monitor.md)中的 HTTP MCP 配置填写即可。
+
 ## Agents
 
 浏览已安装的 Agent，创建自己的。见[子 Agent 与任务拆分](./agents.md)。

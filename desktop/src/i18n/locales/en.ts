@@ -42,6 +42,7 @@ export const en = {
   // ─── Sidebar ──────────────────────────────────────
   'sidebar.newSession': 'New session',
   'sidebar.scheduled': 'Scheduled',
+  'sidebar.campusMonitor': 'Campus monitor',
   'sidebar.skills': 'Skills',
   'sidebar.terminal': 'Terminal',
   'sidebar.settings': 'Settings',

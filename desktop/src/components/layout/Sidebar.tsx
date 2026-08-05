@@ -14,7 +14,7 @@ import { useDismissable } from '@/hooks/useDismissable'
 import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
 import type { SessionListItem } from '../../types/session'
-import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
+import { useTabStore, CAMPUS_MONITOR_TAB_ID, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
@@ -752,6 +752,21 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
         >
           {t('sidebar.newSession')}
         </NavItem>
+        {!isMobile && (
+          <NavItem
+            active={activeTabId === CAMPUS_MONITOR_TAB_ID}
+            collapsed={!expanded}
+            label={t('sidebar.campusMonitor')}
+            touchFriendly={isMobile}
+            onClick={() => {
+              useTabStore.getState().openTab(CAMPUS_MONITOR_TAB_ID, t('sidebar.campusMonitor'), 'campus-monitor')
+              closeMobileDrawer()
+            }}
+            icon={<span className="material-symbols-outlined text-[18px]">monitoring</span>}
+          >
+            {t('sidebar.campusMonitor')}
+          </NavItem>
+        )}
         {!isMobile && (
           <NavItem
             active={activeTabId === SCHEDULED_TAB_ID}

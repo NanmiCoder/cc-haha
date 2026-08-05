@@ -61,6 +61,8 @@ External tools and data sources. STDIO, Streamable HTTP, and SSE transports are 
 
 The three numbers at the top are total servers, currently connected, and needs attention. STDIO commands run directly on your machine, so runtimes like Node, Python, and Bun must be installed and on your `PATH`.
 
+For the local campus-event management surface, use the HTTP MCP configuration in [Campus monitor](./campus-monitor.md).
+
 ## Agents
 
 Browse installed agents and create your own. See [Subagents](./agents.md).

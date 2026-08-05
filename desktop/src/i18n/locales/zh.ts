@@ -44,6 +44,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── Sidebar ──────────────────────────────────────
   'sidebar.newSession': '新建会话',
   'sidebar.scheduled': '定时任务',
+  'sidebar.campusMonitor': '校园舆情',
   'sidebar.skills': '技能',
   'sidebar.terminal': '终端',
   'sidebar.settings': '设置',
