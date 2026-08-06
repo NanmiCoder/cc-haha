@@ -398,7 +398,13 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
 
-          if (forceAuth) {
+          // The SDK URL carries a per-session capability token that was
+          // validated above by conversationService.authorizeSdkConnection.
+          // Do not require the HTTP/API bearer credential a second time: the
+          // spawned CLI only has this one-time SDK token and cannot provide an
+          // Anthropic/API key. This is especially important when the campus
+          // bridge runs the server with --auth-required.
+          if (forceAuth && !h5RequestContext.internalSdkAuthorized) {
             const authError = await requireAuth(req, url.searchParams.get('token'))
             if (authError) {
               return withCors(authError, cors)
