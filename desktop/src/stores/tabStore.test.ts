@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sessionsApi } from '../api/sessions'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
-import { CAMPUS_MONITOR_TAB_ID, SETTINGS_TAB_ID, MARKET_TAB_ID, useTabStore } from './tabStore'
+import { SETTINGS_TAB_ID, MARKET_TAB_ID, useTabStore } from './tabStore'
 
 vi.mock('../api/sessions', () => ({
   sessionsApi: {
@@ -82,23 +82,6 @@ describe('tabStore', () => {
       },
     ])
     expect(useTabStore.getState().activeTabId).toBe('__workbench__session-1')
-    expect(localStorage.getItem('cc-haha-open-tabs')).toBe(JSON.stringify({
-      openTabs: [],
-      activeTabId: null,
-    }))
-  })
-
-  it('keeps the campus monitor tab ephemeral because its browser session is local runtime state', () => {
-    useTabStore.getState().openTab(CAMPUS_MONITOR_TAB_ID, 'Campus monitor', 'campus-monitor')
-
-    expect(useTabStore.getState().tabs).toEqual([
-      {
-        sessionId: CAMPUS_MONITOR_TAB_ID,
-        title: 'Campus monitor',
-        type: 'campus-monitor',
-        status: 'idle',
-      },
-    ])
     expect(localStorage.getItem('cc-haha-open-tabs')).toBe(JSON.stringify({
       openTabs: [],
       activeTabId: null,

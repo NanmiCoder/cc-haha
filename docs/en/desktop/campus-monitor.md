@@ -5,7 +5,7 @@ description: Open the existing campus event list in cc-haha and connect its trus
 order: 10
 ---
 
-# Connect the campus opinion monitor
+# Connect SJTU-agent
 
 The campus opinion monitor keeps using the existing Yujian Agent event list and data sources. cc-haha supplies the entry point and conversational MCP calls; it does not duplicate the dashboard.
 
@@ -22,7 +22,7 @@ npm run dev
 
 The frontend defaults to `http://127.0.0.1:3000/`; the backend health endpoint is `http://127.0.0.1:8010/api/health`.
 
-Back in cc-haha, choose **Campus monitor** in the left sidebar. It opens the existing event list in the native browser surface. The address bar remains available for troubleshooting or navigating to another page on the same service.
+Back in cc-haha, open a conversation and choose **SJTU-agent** in the left sidebar. The entry sends the event list to that conversation's native Workbench browser. If no conversation exists yet, cc-haha creates one through its native session flow first. The address bar, screenshots, element picker, and sending selections back to chat are all provided by CC-HAHA's native BrowserSurface.
 
 ## Connect the management MCP
 

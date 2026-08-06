@@ -27,6 +27,7 @@ vi.mock('../../i18n', () => ({
   useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
       'sidebar.newSession': 'New Session',
+      'sidebar.campusMonitor': 'SJTU-agent',
       'sidebar.scheduled': 'Scheduled',
       'sidebar.market': 'Skills Market',
       'sidebar.settings': 'Settings',
@@ -114,6 +115,8 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useBrowserPanelStore } from '../../stores/browserPanelStore'
+import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import type { SessionListItem } from '../../types/session'
 import type { PerSessionState } from '../../stores/chatStore'
 
@@ -234,6 +237,8 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
 
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useBrowserPanelStore.setState({ bySession: {} })
+    useWorkspacePanelStore.setState({ panelBySession: {}, modeBySession: {} })
     useSessionStore.setState({
       sessions: [],
       activeSessionId: null,
@@ -288,6 +293,70 @@ describe('Sidebar', () => {
     expect(useTabStore.getState().activeTabId).toBe('session-new-1')
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
+  })
+
+  it('opens SJTU-agent in the active conversation native browser workbench', () => {
+    useTabStore.setState({
+      tabs: [{ sessionId: 'session-sjtu', title: 'SJTU', type: 'session', status: 'idle' }],
+      activeTabId: 'session-sjtu',
+    })
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'SJTU-agent' }))
+
+    expect(useTabStore.getState()).toMatchObject({
+      activeTabId: 'session-sjtu',
+      tabs: [{ sessionId: 'session-sjtu', type: 'session' }],
+    })
+    expect(useBrowserPanelStore.getState().bySession['session-sjtu']).toMatchObject({
+      isOpen: true,
+      url: 'http://127.0.0.1:3000/',
+      loading: true,
+    })
+    expect(useWorkspacePanelStore.getState().panelBySession['session-sjtu']).toMatchObject({ isOpen: true })
+    expect(useWorkspacePanelStore.getState().modeBySession['session-sjtu']).toBe('browser')
+  })
+
+  it('creates a native conversation before opening SJTU-agent when no conversation is active', async () => {
+    createSession.mockResolvedValue('session-sjtu-new')
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'SJTU-agent' }))
+
+    await waitFor(() => {
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(connectToSession).toHaveBeenCalledWith('session-sjtu-new')
+      expect(useBrowserPanelStore.getState().bySession['session-sjtu-new']).toMatchObject({
+        url: 'http://127.0.0.1:3000/',
+      })
+    })
+    expect(useTabStore.getState().activeTabId).toBe('session-sjtu-new')
+  })
+
+  it('reuses the source conversation when SJTU-agent is opened from an expanded Workbench tab', () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-source', title: 'Source', type: 'session', status: 'idle' },
+        {
+          sessionId: '__workbench__session-source',
+          title: 'Workbench',
+          type: 'workbench',
+          status: 'idle',
+          workbenchSessionId: 'session-source',
+          sourceSessionId: 'session-source',
+        },
+      ],
+      activeTabId: '__workbench__session-source',
+    })
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'SJTU-agent' }))
+
+    expect(createSession).not.toHaveBeenCalled()
+    expect(useTabStore.getState().activeTabId).toBe('__workbench__session-source')
+    expect(useBrowserPanelStore.getState().bySession['session-source']).toMatchObject({
+      url: 'http://127.0.0.1:3000/',
+    })
   })
 
   // The header used to render both "Claude Code Haha" and "cc-haha" and hide

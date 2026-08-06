@@ -9,14 +9,13 @@ const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
 export const SETTINGS_TAB_ID = '__settings__'
 export const SCHEDULED_TAB_ID = '__scheduled__'
 export const MARKET_TAB_ID = '__market__'
-export const CAMPUS_MONITOR_TAB_ID = '__campus_monitor__'
 export const TRACE_LIST_TAB_ID = '__traces__'
 export const TERMINAL_TAB_PREFIX = '__terminal__'
 export const TRACE_TAB_PREFIX = '__trace__'
 export const WORKBENCH_TAB_PREFIX = '__workbench__'
 export const SUBAGENT_TAB_PREFIX = '__subagent__'
 
-export type TabType = 'session' | 'settings' | 'scheduled' | 'market' | 'campus-monitor' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent'
+export type TabType = 'session' | 'settings' | 'scheduled' | 'market' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent'
 type PersistentSpecialTabType = 'settings' | 'scheduled' | 'market' | 'traces'
 
 export type Tab = {
@@ -324,7 +323,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
 
   saveTabs: () => {
     const { tabs, activeTabId } = get()
-    const persistableTabs = tabs.filter((tab) => tab.type !== 'terminal' && tab.type !== 'workbench' && tab.type !== 'subagent' && tab.type !== 'campus-monitor')
+    const persistableTabs = tabs.filter((tab) => tab.type !== 'terminal' && tab.type !== 'workbench' && tab.type !== 'subagent')
     const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
     const persistedActiveTabId = activeTabId && persistableTabs.some((tab) => tab.sessionId === activeTabId)
       ? activeTabId

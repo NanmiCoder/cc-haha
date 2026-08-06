@@ -9,7 +9,6 @@ import { TerminalSettings } from '../../pages/TerminalSettings'
 import { TraceList } from '../../pages/TraceList'
 import { TraceSession } from '../../pages/TraceSession'
 import { SubagentRunPage } from '../../pages/SubagentRunPage'
-import { CampusMonitor } from '../../pages/CampusMonitor'
 import { WorkbenchTab } from '../workbench/WorkbenchTab'
 import { previewBridge } from '../../lib/previewBridge'
 import { returnToTraceList } from '../../lib/traceNavigation'
@@ -21,7 +20,7 @@ export function ContentRouter() {
   const terminalTabs = tabs.filter((tab) => tab.type === 'terminal')
 
   useEffect(() => {
-    if (activeTabType === 'session' || activeTabType === 'workbench' || activeTabType === 'campus-monitor') return
+    if (activeTabType === 'session' || activeTabType === 'workbench') return
     void previewBridge.close()
   }, [activeTabType])
 
@@ -34,8 +33,6 @@ export function ContentRouter() {
     page = <ScheduledTasks />
   } else if (activeTabType === 'market') {
     page = <Market />
-  } else if (activeTabType === 'campus-monitor') {
-    page = <CampusMonitor />
   } else if (activeTabType === 'trace') {
     const traceTabId = activeTabId
     const traceSessionId = tabs.find((t) => t.sessionId === traceTabId)?.traceSessionId

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
+import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, Monitor, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -14,7 +14,8 @@ import { useDismissable } from '@/hooks/useDismissable'
 import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
 import type { SessionListItem } from '../../types/session'
-import { useTabStore, CAMPUS_MONITOR_TAB_ID, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
+import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
+import { useBrowserPanelStore } from '../../stores/browserPanelStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
@@ -35,6 +36,7 @@ const PROJECT_ORGANIZATION_STORAGE_KEY = 'cc-haha-sidebar-project-organization'
 const PROJECT_SORT_STORAGE_KEY = 'cc-haha-sidebar-project-sort'
 const PROJECT_GROUP_VISIBLE_COUNT = 6
 const PROJECT_GROUP_SCROLL_COUNT = 12
+const CAMPUS_MONITOR_URL = 'http://127.0.0.1:3000/'
 
 type SidebarProjectOrganization = 'project' | 'recentProject' | 'time'
 type SidebarProjectSortBy = 'createdAt' | 'updatedAt'
@@ -351,13 +353,33 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
       useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
       useChatStore.getState().connectToSession(sessionId)
       closeMobileDrawer()
+      return sessionId
     } catch (error) {
       addToast({
         type: 'error',
         message: error instanceof Error ? error.message : t('sidebar.sessionListFailed'),
       })
+      return null
     }
   }, [addToast, closeMobileDrawer, restoreHiddenProjectForWorkDir, t])
+
+  const openCampusMonitor = useCallback(async () => {
+    const tabStore = useTabStore.getState()
+    const activeTab = tabStore.tabs.find((tab) => tab.sessionId === tabStore.activeTabId)
+    let sessionId = activeTab?.type === 'session'
+      ? activeTab.sessionId
+      : activeTab?.type === 'workbench'
+        ? activeTab.workbenchSessionId ?? null
+        : null
+
+    if (!sessionId) {
+      sessionId = await createSessionForWorkDir()
+    }
+    if (!sessionId) return
+
+    useBrowserPanelStore.getState().open(sessionId, CAMPUS_MONITOR_URL)
+    closeMobileDrawer()
+  }, [closeMobileDrawer, createSessionForWorkDir])
 
   const openProjectHeaderMenu = useCallback((event: React.MouseEvent, type: SidebarHeaderMenuType) => {
     event.stopPropagation()
@@ -754,15 +776,12 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
         </NavItem>
         {!isMobile && (
           <NavItem
-            active={activeTabId === CAMPUS_MONITOR_TAB_ID}
+            active={false}
             collapsed={!expanded}
             label={t('sidebar.campusMonitor')}
             touchFriendly={isMobile}
-            onClick={() => {
-              useTabStore.getState().openTab(CAMPUS_MONITOR_TAB_ID, t('sidebar.campusMonitor'), 'campus-monitor')
-              closeMobileDrawer()
-            }}
-            icon={<span className="material-symbols-outlined text-[18px]">monitoring</span>}
+            onClick={() => void openCampusMonitor()}
+            icon={<Monitor size={18} strokeWidth={1.9} aria-hidden="true" />}
           >
             {t('sidebar.campusMonitor')}
           </NavItem>

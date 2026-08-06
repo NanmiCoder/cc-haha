@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -10,6 +10,7 @@ import {
 import { H5AccessService } from '../services/h5AccessService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
+import { conversationService } from '../services/conversationService.js'
 
 let server: ReturnType<typeof Bun.serve> | undefined
 let baseUrl = ''
@@ -1327,6 +1328,25 @@ describe('remote H5 auth and CORS integration', () => {
     })
 
     expect(response.status).toBe(403)
+  })
+
+  test('accepts a valid internal SDK capability token under explicit server auth', async () => {
+    await restartRemoteServer({ authRequired: true })
+    process.env.ANTHROPIC_API_KEY = 'test-server-key'
+    const authorizeSdkConnection = spyOn(conversationService, 'authorizeSdkConnection')
+      .mockReturnValue(true)
+
+    try {
+      const response = await fetch(`${baseUrl}/sdk/internal-session?token=sdk-capability`, {
+        headers: makeUpgradeHeaders(),
+      })
+
+      expect(authorizeSdkConnection).toHaveBeenCalledWith('internal-session', 'sdk-capability')
+      expect(response.status).toBe(400)
+      await expect(response.text()).resolves.toBe('WebSocket upgrade failed')
+    } finally {
+      authorizeSdkConnection.mockRestore()
+    }
   })
 
   test('honors explicit auth opt-in for REST and websocket requests', async () => {

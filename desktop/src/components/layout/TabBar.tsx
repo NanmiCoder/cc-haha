@@ -4,7 +4,6 @@ import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
   MARKET_TAB_ID,
-  CAMPUS_MONITOR_TAB_ID,
   SUBAGENT_TAB_PREFIX,
   TERMINAL_TAB_PREFIX,
   TRACE_LIST_TAB_ID,
@@ -62,7 +61,6 @@ const TAB_TYPE_ICON: Partial<Record<TabType, string>> = {
   settings: 'settings',
   scheduled: 'schedule',
   market: 'storefront',
-  'campus-monitor': 'monitoring',
   terminal: 'terminal',
   trace: 'account_tree',
   traces: 'account_tree',
@@ -92,7 +90,6 @@ function isSessionTabId(tabId: string | null) {
   return tabId !== SETTINGS_TAB_ID &&
     tabId !== SCHEDULED_TAB_ID &&
     tabId !== MARKET_TAB_ID &&
-    tabId !== CAMPUS_MONITOR_TAB_ID &&
     tabId !== TRACE_LIST_TAB_ID &&
     !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
     !tabId.startsWith(TRACE_TAB_PREFIX) &&

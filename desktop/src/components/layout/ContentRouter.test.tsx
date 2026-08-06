@@ -30,10 +30,6 @@ vi.mock('../../pages/Market', () => ({
   Market: () => <div data-testid="market-page" />,
 }))
 
-vi.mock('../../pages/CampusMonitor', () => ({
-  CampusMonitor: () => <div data-testid="campus-monitor-page" />,
-}))
-
 vi.mock('../../pages/TerminalSettings', () => ({
   TerminalSettings: ({ active, cwd, onNewTerminal, runtimeId, testId }: { active: boolean; cwd?: string; onNewTerminal: () => void; runtimeId?: string; testId: string }) => (
     <div data-active={active ? 'true' : 'false'} data-cwd={cwd ?? ''} data-runtime-id={runtimeId ?? ''} data-testid={testId}>
@@ -68,7 +64,7 @@ vi.mock('../workbench/WorkbenchTab', () => ({
 }))
 
 import { ContentRouter } from './ContentRouter'
-import { CAMPUS_MONITOR_TAB_ID, MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+import { MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 
 describe('ContentRouter tab surfaces', () => {
@@ -251,24 +247,6 @@ describe('ContentRouter tab surfaces', () => {
 
     expect(screen.getByTestId('market-page')).toBeInTheDocument()
     expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
-  })
-
-  it('renders the campus monitor as a standalone browser surface', () => {
-    useTabStore.setState({
-      tabs: [{
-        sessionId: CAMPUS_MONITOR_TAB_ID,
-        title: 'Campus monitor',
-        type: 'campus-monitor',
-        status: 'idle',
-      }],
-      activeTabId: CAMPUS_MONITOR_TAB_ID,
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('campus-monitor-page')).toBeInTheDocument()
-    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
-    expect(previewBridgeMock.close).not.toHaveBeenCalled()
   })
 
   it('renders workbench tabs as main content instead of mounting the chat session surface', () => {
