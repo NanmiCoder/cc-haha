@@ -25,6 +25,18 @@ describe('quality gate modes', () => {
     expect(lanes.some((lane) => lane.startsWith('baseline:'))).toBe(false)
   })
 
+  test('runs the deterministic agent flow in every mode without requiring a live provider', () => {
+    for (const mode of ['pr', 'baseline', 'release'] as const) {
+      const lane = lanesForMode(mode).find((candidate) => candidate.id === 'agent-flow-checks')
+      expect(lane, `agent-flow-checks missing from ${mode} mode`).toBeDefined()
+      // `live` gates a lane behind --allow-live. The agent flow must never be gated:
+      // it is the only end-to-end proof a contributor without credentials can run.
+      expect(lane?.live).toBeUndefined()
+      expect(lane?.command).toEqual(['bun', 'run', 'check:agent-flow'])
+      expect(lane?.impactRequiredCheck).toBe('bun run check:agent-flow')
+    }
+  })
+
   test('baseline mode includes live baseline cases but not native checks', () => {
     const lanes = lanesForMode('baseline').map((lane) => lane.id)
     expect(lanes).toContain('baseline-catalog')

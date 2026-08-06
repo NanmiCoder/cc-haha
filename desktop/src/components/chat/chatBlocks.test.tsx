@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
+import { ToolCallGroup } from './ToolCallGroup'
 import { PermissionDialog } from './PermissionDialog'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
+import type { UIMessage } from '../../types/chat'
 
 describe('chat blocks', () => {
   beforeEach(() => {
@@ -29,6 +31,232 @@ describe('chat blocks', () => {
 
     expect(container.textContent).toContain('old reasoning')
     expect(container.querySelector('.thinking-cursor')).toBeNull()
+  })
+
+  it('allocates one live image placeholder per requested output', () => {
+    render(
+      <ToolCallBlock
+        toolName="ImageGen"
+        input={{ prompt: 'Two fox poster variations', count: 2, aspect_ratio: '16:9' }}
+        isPending
+      />,
+    )
+
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(2)
+    expect(screen.getByRole('status').getAttribute('aria-busy')).toBe('true')
+    expect(screen.getAllByText('Generating 2 images')).toHaveLength(2)
+  })
+
+  it('labels a referenced-image turn as editing while keeping output placeholders', () => {
+    render(
+      <ToolCallBlock
+        toolName="ImageEdit"
+        input={{
+          prompt: 'Change only the scarf color',
+          count: 2,
+          referenced_image_paths: ['/staged/fox.png'],
+        }}
+        isPending
+      />,
+    )
+
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(2)
+    expect(screen.getAllByText('Editing 2 image variations')).toHaveLength(2)
+  })
+
+  it('keeps image placeholders visible when deferred tool search shares the group', () => {
+    const toolCalls: Array<Extract<UIMessage, { type: 'tool_use' }>> = [
+      {
+        id: 'search-use',
+        type: 'tool_use',
+        toolName: 'ToolSearch',
+        toolUseId: 'search-1',
+        input: { query: 'image generation' },
+        timestamp: 1,
+      },
+      {
+        id: 'image-use',
+        type: 'tool_use',
+        toolName: 'ImageGen',
+        toolUseId: 'image-1',
+        input: { prompt: 'Two fox posters', count: 2 },
+        timestamp: 2,
+        isPending: true,
+      },
+    ]
+
+    render(
+      <ToolCallGroup
+        toolCalls={toolCalls}
+        resultMap={new Map()}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+        isStreaming
+      />,
+    )
+
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /ToolSearch \(1\), ImageGen \(1\)/ })).toBeNull()
+  })
+
+  it('keeps image editing outside a mixed deferred-tool summary', () => {
+    const toolCalls: Array<Extract<UIMessage, { type: 'tool_use' }>> = [
+      {
+        id: 'search-use',
+        type: 'tool_use',
+        toolName: 'ToolSearch',
+        toolUseId: 'search-1',
+        input: { query: 'image editing' },
+        timestamp: 1,
+      },
+      {
+        id: 'edit-use',
+        type: 'tool_use',
+        toolName: 'ImageEdit',
+        toolUseId: 'edit-1',
+        input: {
+          prompt: 'Change only the scarf color',
+          count: 1,
+          referenced_image_paths: ['/staged/fox.png'],
+        },
+        timestamp: 2,
+        isPending: true,
+      },
+    ]
+
+    render(
+      <ToolCallGroup
+        toolCalls={toolCalls}
+        resultMap={new Map()}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+        isStreaming
+      />,
+    )
+
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /ToolSearch \(1\), ImageEdit \(1\)/ })).toBeNull()
+  })
+
+  it('replaces every image placeholder with the saved tool result', () => {
+    const content = JSON.stringify({
+      type: 'image_generation_result',
+      providerId: 'grok-official',
+      providerKind: 'grok_oauth',
+      model: 'grok-imagine-image-quality',
+      prompt: 'Two fox poster variations',
+      durationMs: 1200,
+      images: [
+        { path: '/tmp/generated-one.jpg', mimeType: 'image/jpeg' },
+        { path: '/tmp/generated-two.jpg', mimeType: 'image/jpeg' },
+      ],
+    })
+
+    render(
+      <ToolCallBlock
+        toolName="ImageGen"
+        input={{ prompt: 'Two fox poster variations', count: 2 }}
+        result={{ content, isError: false }}
+      />,
+    )
+
+    const images = screen.getAllByRole('img')
+    expect(images).toHaveLength(2)
+    expect(images[0]?.getAttribute('src')).toContain(encodeURIComponent('/tmp/generated-one.jpg'))
+    expect(images[1]?.getAttribute('src')).toContain(encodeURIComponent('/tmp/generated-two.jpg'))
+    expect(screen.queryByRole('status')).toBeNull()
+
+    const block = screen.getByTestId('image-generation-block')
+    expect(block.getAttribute('data-layout')).toBe('thumbnail-rail')
+    expect(block.className).not.toContain('border')
+    expect(screen.queryByText('ImageGen')).toBeNull()
+    expect(screen.queryByText('grok-imagine-image-quality')).toBeNull()
+    expect(screen.queryByText('grok-official')).toBeNull()
+  })
+
+  it('keeps concurrent image calls in one thumbnail rail and opens the completed set as one gallery', () => {
+    const toolCalls: Array<Extract<UIMessage, { type: 'tool_use' }>> = Array.from(
+      { length: 4 },
+      (_, index) => ({
+        id: `image-use-${index + 1}`,
+        type: 'tool_use' as const,
+        toolName: 'ImageGen',
+        toolUseId: `image-${index + 1}`,
+        input: { prompt: `Fox poster ${index + 1}`, count: 1 },
+        timestamp: index + 1,
+        isPending: true,
+      }),
+    )
+    const childToolCallsByParent = new Map<
+      string,
+      Extract<UIMessage, { type: 'tool_use' }>[]
+    >()
+    const { rerender } = render(
+      <ToolCallGroup
+        toolCalls={toolCalls}
+        resultMap={new Map()}
+        childToolCallsByParent={childToolCallsByParent}
+        agentTaskNotifications={{}}
+        isStreaming
+      />,
+    )
+
+    const rail = screen.getByTestId('image-generation-rail')
+    expect(rail.firstElementChild?.className).toContain('grid-flow-col')
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(4)
+    expect(screen.getAllByText('Generating 4 images')).toHaveLength(2)
+
+    const resultMap = new Map<string, Extract<UIMessage, { type: 'tool_result' }>>(
+      toolCalls.map((toolCall, index) => [
+        toolCall.toolUseId,
+        {
+          id: `image-result-${index + 1}`,
+          type: 'tool_result' as const,
+          toolUseId: toolCall.toolUseId,
+          content: JSON.stringify({
+            type: 'image_generation_result',
+            providerId: 'openai-official',
+            providerKind: 'openai_oauth',
+            model: 'gpt-image-2',
+            prompt: `Fox poster ${index + 1}`,
+            durationMs: 1200 + index,
+            images: [{ path: `/tmp/generated-${index + 1}.png`, mimeType: 'image/png' }],
+          }),
+          isError: false,
+          timestamp: 20 + index,
+        },
+      ]),
+    )
+
+    rerender(
+      <ToolCallGroup
+        toolCalls={toolCalls.map((toolCall) => ({ ...toolCall, isPending: false }))}
+        resultMap={resultMap}
+        childToolCallsByParent={childToolCallsByParent}
+        agentTaskNotifications={{}}
+      />,
+    )
+
+    const completedImages = screen.getAllByRole('img')
+    expect(completedImages).toHaveLength(4)
+    expect(screen.getAllByTestId('image-generation-slot')).toHaveLength(4)
+    fireEvent.click(completedImages[2]!)
+    expect(screen.getByText('3 / 4')).toBeTruthy()
+  })
+
+  it('keeps every requested slot visible when image generation fails', () => {
+    render(
+      <ToolCallBlock
+        toolName="ImageGen"
+        input={{ prompt: 'Two fox poster variations', count: 2 }}
+        result={{ content: 'Provider quota exhausted', isError: true }}
+      />,
+    )
+
+    const slots = screen.getAllByTestId('image-generation-slot')
+    expect(slots).toHaveLength(2)
+    expect(slots.every((slot) => slot.getAttribute('data-error') === 'true')).toBe(true)
+    expect(screen.getAllByText('Provider quota exhausted')).toHaveLength(2)
   })
 
   it('renders thinking content as markdown only after expanding', () => {

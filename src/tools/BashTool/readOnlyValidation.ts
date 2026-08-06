@@ -22,7 +22,7 @@ import {
   validateFlags,
 } from '../../utils/shell/readOnlyCommandValidation.js'
 import type { BashTool } from './BashTool.js'
-import { isNormalizedGitCommand } from './bashPermissions.js'
+import { commandHasAnyCd, isNormalizedGitCommand } from './bashPermissions.js'
 import { bashCommandIsSafe_DEPRECATED } from './bashSecurity.js'
 import {
   COMMAND_OPERATION_TYPE,
@@ -1861,6 +1861,40 @@ function commandWritesToGitInternalPaths(command: string): boolean {
   }
 
   return false
+}
+
+/**
+ * Decides whether an already-executed command could have written to the
+ * filesystem, for callers that replay a transcript instead of gating a run.
+ *
+ * checkReadOnlyConstraints answers "may this run without asking?", so it also
+ * consults live process state (sandbox mode, current directory, whether the cwd
+ * looks like a bare repo). None of that describes the session being replayed,
+ * which may have run in another directory or another process entirely, so this
+ * variant keeps only the checks that depend on the command text. It stays
+ * strictly narrower than checkReadOnlyConstraints in what it accepts: every
+ * command it calls read-only is one the allowlist already proved cannot write.
+ *
+ * Returns false whenever the command cannot be proven read-only — an unparseable
+ * or unrecognized command is treated as a potential writer.
+ */
+export function recordedCommandIsReadOnly(command: string): boolean {
+  if (typeof command !== 'string' || !command.trim()) return false
+  if (!tryParseShellCommand(command, env => `$${env}`).success) return false
+  if (bashCommandIsSafe_DEPRECATED(command).behavior !== 'passthrough') return false
+  if (containsVulnerableUncPath(command)) return false
+
+  // `cd elsewhere && git ...` and commands that seed git-internal files can run
+  // arbitrary hooks, so their file effects are not bounded by the allowlist.
+  const hasGitCommand = commandHasAnyGit(command)
+  if (hasGitCommand && commandHasAnyCd(command)) return false
+  if (hasGitCommand && commandWritesToGitInternalPaths(command)) return false
+
+  return splitCommand_DEPRECATED(command).every(
+    subcmd =>
+      bashCommandIsSafe_DEPRECATED(subcmd).behavior === 'passthrough' &&
+      isCommandReadOnly(subcmd),
+  )
 }
 
 /**

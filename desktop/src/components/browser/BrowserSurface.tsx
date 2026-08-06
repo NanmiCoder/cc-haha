@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { useTranslation } from '../../i18n'
 import { BrowserAddressBar } from './BrowserAddressBar'
 import { computeWebviewBounds } from './computeWebviewBounds'
+import { getDesktopHost } from '../../lib/desktopHost'
 import { getServerBaseUrl, isLoopbackHostname } from '../../lib/desktopRuntime'
 import { classifyPreviewLink } from '../../lib/previewLinkRouter'
 import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
@@ -400,6 +401,10 @@ export function BrowserSurface({ sessionId }: { sessionId: string }) {
             store.setLoading(sessionId, true)
             requestNativePreview(session.url, { force: true })
           })
+        }}
+        onOpenExternal={() => {
+          if (!session.url) return
+          void getDesktopHost().shell.open(session.url)
         }}
         rightActions={previewActions}
       />

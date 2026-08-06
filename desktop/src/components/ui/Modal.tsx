@@ -17,9 +17,18 @@ type ModalProps = {
   children: ReactNode
   width?: number
   footer?: ReactNode
+  variant?: 'dialog' | 'media'
 }
 
-export function Modal({ open, onClose, title, children, width = 560, footer }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  width = 560,
+  footer,
+  variant = 'dialog',
+}: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -85,14 +94,18 @@ export function Modal({ open, onClose, title, children, width = 560, footer }: M
         // 24px — the top of the handoff's corner scale, reserved for modals.
         // `dialog-panel`, not `glass-panel`: the fill has to be opaque on its
         // own rather than leaning on a blur that may never run.
-        className="dialog-panel relative rounded-[var(--radius-3xl)] max-h-[85vh] flex flex-col"
-        style={{ width, maxWidth: 'calc(100vw - 48px)' }}
+        className={variant === 'media'
+          ? 'relative flex h-[calc(100dvh-24px)] w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[var(--radius-2xl)] bg-[var(--color-terminal-bg)] text-[var(--color-terminal-fg)]'
+          : 'dialog-panel relative flex max-h-[85vh] flex-col rounded-[var(--radius-3xl)]'}
+        style={variant === 'media'
+          ? { maxHeight: 'calc(100dvh - 24px)', maxWidth: 'calc(100vw - 24px)' }
+          : { width, maxWidth: 'calc(100vw - 48px)' }}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
       >
-        {title && (
+        {title && variant === 'dialog' && (
           <div className="flex items-start justify-between gap-4 px-6 pt-6 pb-0">
             <h2
               // 22px serif — dialog titles are headings, and headings carry the
@@ -113,7 +126,9 @@ export function Modal({ open, onClose, title, children, width = 560, footer }: M
           </div>
         )}
 
-        <div className="px-6 py-4 overflow-y-auto flex-1">
+        <div className={variant === 'media'
+          ? 'min-h-0 flex-1 overflow-hidden'
+          : 'flex-1 overflow-y-auto px-6 py-4'}>
           {children}
         </div>
 

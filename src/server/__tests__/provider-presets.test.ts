@@ -69,7 +69,10 @@ describe('provider presets API', () => {
     const minimax = PROVIDER_PRESETS.find((preset) => preset.id === 'minimax')
     const shengsuanyun = PROVIDER_PRESETS.find((preset) => preset.id === 'shengsuanyun')
     const teamorouter = PROVIDER_PRESETS.find((preset) => preset.id === 'teamorouter')
+    const atlascloud = PROVIDER_PRESETS.find((preset) => preset.id === 'atlascloud')
     const xuanshuapi = PROVIDER_PRESETS.find((preset) => preset.id === 'xuanshuapi')
+    const fennoai = PROVIDER_PRESETS.find((preset) => preset.id === 'fennoai')
+    const qiniuai = PROVIDER_PRESETS.find((preset) => preset.id === 'qiniuai')
 
     expect(lmstudio?.baseUrl).toBe('http://localhost:1234')
     expect(lmstudio?.apiFormat).toBe('anthropic')
@@ -130,6 +133,15 @@ describe('provider presets API', () => {
     expect(teamorouter?.defaultModels.sonnet).toBe('claude-sonnet-5')
     expect(teamorouter?.defaultModels.opus).toBe('claude-opus-4-8')
     expect(teamorouter?.modelContextWindows?.['claude-opus-4-8']).toBe(1000000)
+    expect(atlascloud?.baseUrl).toBe('https://api.atlascloud.ai')
+    expect(atlascloud?.apiFormat).toBe('openai_chat')
+    expect(atlascloud?.authStrategy).toBe('api_key')
+    expect(atlascloud?.defaultModels).toEqual({
+      main: 'deepseek-ai/deepseek-v4-pro',
+      haiku: 'deepseek-ai/deepseek-v4-pro',
+      sonnet: 'deepseek-ai/deepseek-v4-pro',
+      opus: 'deepseek-ai/deepseek-v4-pro',
+    })
     expect(xuanshuapi?.baseUrl).toBe('https://www.xuanshuapi.com')
     expect(xuanshuapi?.apiFormat).toBe('anthropic')
     expect(xuanshuapi?.authStrategy).toBe('auth_token')
@@ -138,6 +150,27 @@ describe('provider presets API', () => {
     expect(xuanshuapi?.defaultModels.sonnet).toBe('claude-sonnet-5')
     expect(xuanshuapi?.defaultModels.opus).toBe('claude-opus-5')
     expect(xuanshuapi?.modelContextWindows?.['claude-opus-5']).toBe(1000000)
+    // Both endpoints below are the Anthropic-compatible root: Claude Code appends
+    // /v1/messages itself, so a /v1 or /anthropic suffix here would 404.
+    expect(fennoai?.baseUrl).toBe('https://api.fenno.ai')
+    expect(fennoai?.apiFormat).toBe('anthropic')
+    expect(fennoai?.authStrategy).toBe('auth_token')
+    expect(qiniuai?.baseUrl).toBe('https://api.qnaigc.com')
+    expect(qiniuai?.apiFormat).toBe('anthropic')
+    expect(qiniuai?.authStrategy).toBe('auth_token')
+    // Both gateways front a catalog that shifts on their side, so the preset ships
+    // no model ids: the user fetches the live list and picks. Pinning a default
+    // here would hand out a model their plan may not even carry.
+    for (const preset of [fennoai, qiniuai]) {
+      expect(preset?.defaultModels).toEqual({ main: '', haiku: '', sonnet: '', opus: '' })
+      // A pinned subagent model would reintroduce exactly that guess.
+      expect(preset?.defaultEnv).toEqual({})
+    }
+    // The window table stays: it is keyed by model id, so it keeps paying off
+    // once the user picks one — including ids the built-in table cannot resolve
+    // (claude-opus-5, and every namespaced 七牛云 id).
+    expect(fennoai?.modelContextWindows?.['claude-opus-5']).toBe(1000000)
+    expect(qiniuai?.modelContextWindows?.['deepseek/deepseek-v4-pro']).toBe(1000000)
   })
 
   test('configured presets can expose optional API key and promo metadata', () => {
@@ -150,6 +183,8 @@ describe('provider presets API', () => {
     const shengsuanyun = PROVIDER_PRESETS.find((preset) => preset.id === 'shengsuanyun')
     const teamorouter = PROVIDER_PRESETS.find((preset) => preset.id === 'teamorouter')
     const xuanshuapi = PROVIDER_PRESETS.find((preset) => preset.id === 'xuanshuapi')
+    const fennoai = PROVIDER_PRESETS.find((preset) => preset.id === 'fennoai')
+    const qiniuai = PROVIDER_PRESETS.find((preset) => preset.id === 'qiniuai')
     const custom = PROVIDER_PRESETS.find((preset) => preset.id === 'custom')
 
     expect(lmstudio?.needsApiKey).toBe(false)
@@ -204,6 +239,17 @@ describe('provider presets API', () => {
       CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5',
     })
     expect(xuanshuapi?.modelContextWindows?.['claude-sonnet-5']).toBe(1000000)
+    expect(fennoai?.apiKeyUrl).toBe('https://api.fenno.ai/s/WD8c')
+    expect(fennoai?.promoText).toContain('1.99 美元')
+    expect(fennoai?.featured).toBe(true)
+    expect(fennoai?.modelContextWindows?.['claude-sonnet-5']).toBe(1000000)
+    expect(fennoai?.modelContextWindows?.['claude-haiku-4-5']).toBe(200000)
+    expect(qiniuai?.apiKeyUrl).toBe('https://s.qiniu.com/IZbyya')
+    expect(qiniuai?.promoText).toContain('Token')
+    expect(qiniuai?.featured).toBe(true)
+    expect(qiniuai?.modelContextWindows?.['deepseek/deepseek-v4-flash']).toBe(1000000)
+    expect(qiniuai?.modelContextWindows?.['z-ai/glm-5.2']).toBe(1000000)
+    expect(qiniuai?.modelContextWindows?.['moonshotai/kimi-k3']).toBe(262144)
     expect(custom?.promoText).toBeUndefined()
     expect(custom?.authStrategy).toBe('auth_token')
     expect(custom?.defaultEnv).toBeUndefined()

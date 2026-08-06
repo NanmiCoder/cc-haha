@@ -67,7 +67,37 @@ export type TerminalWebContentsLike = {
   isDestroyed(): boolean
   once(event: 'destroyed', listener: () => void): unknown
   removeListener(event: 'destroyed', listener: () => void): unknown
+  /**
+   * A reload does not emit `destroyed`, so `destroyed` alone leaks every PTY on the
+   * paths that reload the renderer deliberately: render-process-gone and sustained
+   * unresponsive recovery in rendererLifecycle.ts, plus the reload buttons in
+   * ErrorBoundary and StartupErrorView. Session bookkeeping lives in renderer module
+   * state and is wiped by the reload, so kill() can never be called for those shells
+   * again — they and their children survive until before-quit.
+   *
+   * `did-navigate`, not `did-start-navigation`: killing a shell is destructive and
+   * must be gated on the navigation actually committing. installMainWindowNavigationGuards
+   * cancels external http(s) navigation in `will-navigate` and hands it to the system
+   * browser — but Chromium dispatches DidStartNavigation before the throttle that
+   * cancellation runs in, so a *blocked* navigation still emits the start event. Dropping
+   * a URL onto the window would then have killed every running shell while the renderer
+   * stayed exactly where it was. A cancelled navigation never commits, so it never
+   * reaches this one. Electron also does not emit it for in-page navigation, which is
+   * why no same-document predicate is needed.
+   */
+  on(event: 'did-navigate', listener: TerminalNavigationListener): unknown
+  /**
+   * `off`, not a second `removeListener` overload: a target type with two call
+   * signatures is not structurally assignable from Electron's overloaded
+   * `removeListener`, so adding one there rejects the real `WebContents`.
+   */
+  off(event: 'did-navigate', listener: TerminalNavigationListener): unknown
 }
+
+// Zero-arg on purpose: the handler ignores every argument, and a narrower parameter
+// list is what keeps this structurally assignable from both Electron's overloaded
+// `on` and a plain EventEmitter in the tests.
+type TerminalNavigationListener = () => void
 
 export type ElectronTerminalServiceOptions = {
   app?: TerminalAppLike
@@ -94,6 +124,7 @@ type TerminalSession = {
   pty: TerminalPtyProcess
   owner: TerminalWebContentsLike
   onOwnerDestroyed: () => void
+  onOwnerNavigated: TerminalNavigationListener
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -616,7 +647,13 @@ export class ElectronTerminalService {
       this.detachOwnerListener(active)
       disposePty()
     }
+    // Same teardown, second trigger: the renderer having replaced its document discards
+    // the session ids this PTY can only be reached through, so it is as final as destroy.
+    const onOwnerNavigated: TerminalNavigationListener = () => {
+      onOwnerDestroyed()
+    }
     webContents.once('destroyed', onOwnerDestroyed)
+    webContents.on('did-navigate', onOwnerNavigated)
 
     try {
       const ptyFactory = await resolvePtyFactory(this.ptyFactory, this.nodePtySourceDir, this.nodePtyCacheDir)
@@ -648,6 +685,7 @@ export class ElectronTerminalService {
         pty: activePty,
         owner: webContents,
         onOwnerDestroyed,
+        onOwnerNavigated,
       })
 
       activePty.onData(data => {
@@ -685,6 +723,7 @@ export class ElectronTerminalService {
         if (active) disposePty()
       }
       webContents.removeListener('destroyed', onOwnerDestroyed)
+      webContents.off('did-navigate', onOwnerNavigated)
       throw error
     }
   }
@@ -728,6 +767,7 @@ export class ElectronTerminalService {
 
   private detachOwnerListener(session: TerminalSession): void {
     session.owner.removeListener('destroyed', session.onOwnerDestroyed)
+    session.owner.off('did-navigate', session.onOwnerNavigated)
   }
 
   private removeSession(sessionId: number, expectedPty: TerminalPtyProcess): TerminalSession | null {

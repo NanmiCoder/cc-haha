@@ -214,6 +214,40 @@ describe('Adapters API', () => {
     await expect(fs.stat(path.join(tmpDir, 'adapters.json'))).rejects.toThrow()
   })
 
+  // #1191: the IM path boundary is configured separately from the default project,
+  // globally and per platform.
+  it('persists allowed project roots globally and per platform', async () => {
+    const request = makeRequest('PUT', '/api/adapters', {
+      allowedProjectRoots: ['~/work', '/srv/projects'],
+      feishu: { allowedProjectRoots: ['~/work/only-this'] },
+    })
+    const response = await handleAdaptersApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(200)
+
+    const saved = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(saved.allowedProjectRoots).toEqual(['~/work', '/srv/projects'])
+    expect(saved.feishu.allowedProjectRoots).toEqual(['~/work/only-this'])
+
+    // The settings UI reads these back from GET; masking must not drop them.
+    const read = makeRequest('GET', '/api/adapters')
+    const config = await (await handleAdaptersApi(read.req, read.url, read.segments)).json() as Record<string, any>
+    expect(config.allowedProjectRoots).toEqual(['~/work', '/srv/projects'])
+    expect(config.feishu.allowedProjectRoots).toEqual(['~/work/only-this'])
+  })
+
+  it('rejects malformed allowed project roots', async () => {
+    for (const request of [
+      makeRequest('PUT', '/api/adapters', { allowedProjectRoots: '/not-an-array' }),
+      makeRequest('PUT', '/api/adapters', { allowedProjectRoots: [''] }),
+      makeRequest('PUT', '/api/adapters', { allowedProjectRoots: [123] }),
+      makeRequest('PUT', '/api/adapters', { telegram: { allowedProjectRoots: [null] } }),
+    ]) {
+      const response = await handleAdaptersApi(request.req, request.url, request.segments)
+      expect(response.status).toBe(400)
+    }
+    await expect(fs.stat(path.join(tmpDir, 'adapters.json'))).rejects.toThrow()
+  })
+
   it('rejects malformed QR polling payloads before invoking platform protocols', async () => {
     for (const request of [
       makeRawRequest('POST', '/api/adapters/wechat/login/poll', 'null'),

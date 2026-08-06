@@ -351,6 +351,20 @@ describe('file history rewind link safety', () => {
 
     expect(await readFile(trackedPath, 'utf8')).toBe('snapshot content')
   })
+
+  test('keeps a same-prefix sibling path absolute', async () => {
+    const targetMessageId = randomUUID() as UUID
+    const trackedPath = join(`${getOriginalCwd()}-sibling`, 'tracked.txt')
+    await mkdir(join(`${getOriginalCwd()}-sibling`), { recursive: true })
+    await writeFile(trackedPath, 'snapshot content')
+    const { getState, updateState } = createHistoryState(targetMessageId)
+
+    await fileHistoryTrackEdit(updateState, trackedPath, targetMessageId)
+
+    expect(getState().snapshots[0]?.trackedFileBackups[trackedPath]).toBeDefined()
+    expect(getState().snapshots[0]?.trackedFileBackups['../project-sibling/tracked.txt'])
+      .toBeUndefined()
+  })
 })
 
 function createHistoryState(targetMessageId: UUID): {

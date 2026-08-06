@@ -114,6 +114,10 @@ If the download stalls, you probably can't reach GitHub. The same panel has an "
 The installer's data protection is not a backup. Keep your own copy of anything you can't afford to lose.
 :::
 
+## Code signing policy
+
+See the [Code signing policy](./code-signing.md) for the Windows signing scope, manual approval, responsible roles, and verification steps. Until SignPath Foundation onboarding is complete, Windows releases remain explicitly identified as unsigned. See [Privacy and network access](./privacy.md) for network and local-data behavior.
+
 ## Next
 
 Go to [Connect a model](./models.md). Until a model is connected, the app opens but can't send a single message.

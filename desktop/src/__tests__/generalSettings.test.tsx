@@ -1834,7 +1834,7 @@ describe('Settings > Providers tab', () => {
     expect(MOCK_DELETE_PROVIDER).toHaveBeenCalledWith('provider-1')
   })
 
-  it('keeps custom provider creation available when presets are unavailable', () => {
+  it('keeps custom provider creation available when presets are unavailable', async () => {
     providerStoreState.presets = []
 
     render(<Settings />)
@@ -1846,7 +1846,11 @@ describe('Settings > Providers tab', () => {
 
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByLabelText(/Name/i)).toHaveValue('Custom')
-    expect(within(dialog).getByLabelText(/Base URL/i)).toBeEnabled()
+    expect(within(dialog).getByRole('textbox', { name: /Base URL/i })).toBeEnabled()
+
+    const baseUrlInfo = within(dialog).getByRole('button', { name: 'Base URL help' })
+    fireEvent.mouseEnter(baseUrlInfo)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Enter the endpoint before /v1. The remaining path is added automatically.')
   })
 
   it.each(['resolves', 'rejects'] as const)(
@@ -1867,7 +1871,7 @@ describe('Settings > Providers tab', () => {
       await waitFor(() => expect(settleSettings).toBeTypeOf('function'))
       expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
       const regionTrigger = within(dialog).getByRole('button', { name: /China mainland/ })
-      const baseUrlInput = within(dialog).getByLabelText(/Base URL/i)
+      const baseUrlInput = within(dialog).getByRole('textbox', { name: /Base URL/i })
       expect(baseUrlInput).toHaveValue('https://open.bigmodel.cn/api/anthropic')
       expect(within(dialog).getByRole('button', { name: /Get API Key/i })).toBeInTheDocument()
       expect(within(dialog).getByText('Mainland China promotion')).toBeInTheDocument()
@@ -1913,7 +1917,7 @@ describe('Settings > Providers tab', () => {
     })
 
     expect(within(dialog).getByRole('button', { name: /Global/ })).toBeInTheDocument()
-    expect(within(dialog).getByLabelText(/Base URL/i)).toHaveValue('https://api.z.ai/api/anthropic')
+    expect(within(dialog).getByRole('textbox', { name: /Base URL/i })).toHaveValue('https://api.z.ai/api/anthropic')
     await act(async () => resolveSettings?.())
     await waitFor(() => {
       expect(JSON.parse(settingsTextarea.value)).toMatchObject({
@@ -2589,6 +2593,41 @@ describe('Settings > Providers tab', () => {
     expect(noMatches).toHaveAttribute('aria-disabled', 'true')
   })
 
+  it('toasts that the fetched list is now pickable from the dropdown', async () => {
+    const dialog = await openProviderFormWithModels({
+      ok: true,
+      endpoint: 'https://api.example.com/v1/models',
+      models: [
+        { id: 'gpt-5-mini', ownedBy: 'openai' },
+        { id: 'claude-sonnet-4-6', ownedBy: 'anthropic' },
+      ],
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+
+    await waitFor(() => {
+      expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
+        type: 'success',
+        message: 'Model list loaded. Pick a model from the dropdown now.',
+      })
+    })
+  })
+
+  it('does not toast when the fetched model list is empty', async () => {
+    const dialog = await openProviderFormWithModels({
+      ok: true,
+      endpoint: 'https://api.example.com/v1/models',
+      models: [],
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+
+    await waitFor(() => {
+      expect(providerStoreState.fetchModels).toHaveBeenCalled()
+    })
+    expect(useUIStore.getState().toasts).toHaveLength(0)
+  })
+
   it('routes a picked model through the shared model change handler', async () => {
     const dialog = await openProviderFormWithModels({
       ok: true,
@@ -2758,7 +2797,7 @@ describe('Settings > Providers tab', () => {
       expect(providerStoreState.fetchModels).toHaveBeenCalledTimes(1)
     })
 
-    fireEvent.change(within(dialog).getByLabelText(/Base URL|接口地址/i), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 
@@ -2793,7 +2832,7 @@ describe('Settings > Providers tab', () => {
       expect(providerStoreState.fetchModels).toHaveBeenCalledTimes(1)
     })
 
-    fireEvent.change(within(dialog).getByLabelText(/Base URL|接口地址/i), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 
@@ -2835,7 +2874,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
     expect(await within(dialog).findByText(/Model list loaded \(1\)/i)).toBeInTheDocument()
 
-    fireEvent.change(within(dialog).getByLabelText(/Base URL|接口地址/i), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 

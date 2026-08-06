@@ -59,6 +59,12 @@ export function CurrentTurnChangeCard({
   const visibleFiles = canCollapse && !showAllFiles
     ? files.slice(0, COLLAPSED_COUNT)
     : files
+  const restoreAvailable = checkpoint.restoreAvailable !== false
+  // Undo restores every file listed above, but a turn that also ran a writing
+  // shell command may have touched files no checkpoint captured. Say so instead
+  // of withholding the undo — the listed files are still exactly reversible.
+  const unverifiedChangeSources = checkpoint.unverifiedChangeSources ?? []
+  const hasUnverifiedChanges = restoreAvailable && unverifiedChangeSources.length > 0
 
   const openChangedFile = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     const renderItem = event.currentTarget.closest<HTMLElement>('[data-chat-render-item-key]')
@@ -117,9 +123,15 @@ export function CurrentTurnChangeCard({
   const cardLabel = isLatest
     ? t('chat.turnChangesLatestCardLabel')
     : t('chat.turnChangesHistoricalCardLabel')
-  const subtitle = isLatest
-    ? t('chat.turnChangesLatestSubtitle')
-    : t('chat.turnChangesCurrentWorkspaceDiff')
+  const subtitle = !restoreAvailable
+    ? t('chat.turnChangesConversationOnlySubtitle')
+    : hasUnverifiedChanges
+      ? t('chat.turnChangesPartialCoverageSubtitle', {
+          sources: unverifiedChangeSources.join(', '),
+        })
+      : isLatest
+        ? t('chat.turnChangesLatestSubtitle')
+        : t('chat.turnChangesCurrentWorkspaceDiff')
   const undoLabel = isLatest
     ? t('chat.turnChangesLatestUndo')
     : t('chat.turnChangesHistoricalUndo')
@@ -145,11 +157,19 @@ export function CurrentTurnChangeCard({
               -{checkpoint.code.deletions}
             </span>
           </div>
-          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+          <div
+            className={`mt-0.5 text-xs ${
+              hasUnverifiedChanges
+                ? 'text-[var(--color-warning)]'
+                : 'text-[var(--color-text-tertiary)]'
+            }`}
+          >
             {subtitle}
           </div>
         </div>
 
+        {/* Never disabled: rolling the conversation back is always possible, even
+            when the files are not restorable. The dialog picks what to touch. */}
         <Button
           variant="secondary"
           size="base"

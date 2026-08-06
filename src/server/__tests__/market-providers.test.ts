@@ -15,6 +15,7 @@ async function fixture(name: string): Promise<string> {
 type FetchStub = (url: string) => { status?: number; body: string; contentType?: string } | undefined
 
 let requestedUrls: string[] = []
+let originalDisableProvidersEnv: string | undefined
 const originalFetch = globalThis.fetch
 
 function stubFetch(handler: FetchStub) {
@@ -34,12 +35,18 @@ beforeEach(() => {
   requestedUrls = []
   resetMarketCacheForTests()
   resetClawhubOwnerCacheForTests()
+  originalDisableProvidersEnv = process.env.HAHA_MARKET_DISABLE_PROVIDERS
   delete process.env.HAHA_MARKET_DISABLE_PROVIDERS
 })
 
 afterEach(() => {
   globalThis.fetch = originalFetch
-  delete process.env.HAHA_MARKET_DISABLE_PROVIDERS
+  // Restore rather than delete: these are the developer's variables, not ours.
+  if (originalDisableProvidersEnv === undefined) {
+    delete process.env.HAHA_MARKET_DISABLE_PROVIDERS
+  } else {
+    process.env.HAHA_MARKET_DISABLE_PROVIDERS = originalDisableProvidersEnv
+  }
 })
 
 describe('clawhubProvider', () => {

@@ -44,6 +44,17 @@ import {
 } from '../lib/backgroundTasks'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { getSessionBrowsablePath, getSessionWorkspaceState } from '../lib/sessionWorkspace'
+import type { AgentTaskNotification, UIMessage } from '../types/chat'
+
+/**
+ * Stable fallbacks for optional session state. A `?? []` / `?? {}` literal allocates a
+ * fresh value on every render, and both of these feed the `activityModel` dependency
+ * array below — so an idle session with no messages or no agent notifications rebuilt
+ * the whole activity model on every render. 29586ce38 fixed exactly this in
+ * MessageList.tsx; the same pattern was still here.
+ */
+const EMPTY_MESSAGES: UIMessage[] = []
+const EMPTY_AGENT_TASK_NOTIFICATIONS: Record<string, AgentTaskNotification> = {}
 
 const TASK_POLL_INTERVAL_MS = 1000
 const ACTIVITY_AUTOCLOSE_GRACE_MS = 2000
@@ -374,7 +385,7 @@ export function ActiveSession() {
   ])
 
   const t = useTranslation()
-  const messages = sessionState?.messages ?? []
+  const messages = sessionState?.messages ?? EMPTY_MESSAGES
   const streamingText = sessionState?.streamingText ?? ''
   const backgroundTasks = useMemo(
     () => Object.values(sessionState?.backgroundAgentTasks ?? {}),
@@ -384,7 +395,7 @@ export function ActiveSession() {
     () => new Set(dismissedBackgroundTaskKeyList),
     [dismissedBackgroundTaskKeyList],
   )
-  const agentTaskNotifications = sessionState?.agentTaskNotifications ?? {}
+  const agentTaskNotifications = sessionState?.agentTaskNotifications ?? EMPTY_AGENT_TASK_NOTIFICATIONS
   const activeGoal = sessionState?.activeGoal ?? null
   const isEmpty = messages.length === 0 && !streamingText && (session?.messageCount ?? 0) === 0
   const compactEmptyHero = isEmpty && showTerminalPanel

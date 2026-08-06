@@ -285,6 +285,20 @@ describe('desktop theme tokens', () => {
     expect(toggleCss).toContain('bottom: auto;')
   })
 
+  it('moves the mascot to the outside of the fixed pet window at side edges', () => {
+    const leftCss = getCssBetween(
+      ".pet-window-stack[data-panel-horizontal='left'] .pet-mascot-wrap {",
+      '}',
+    )
+    const rightCss = getCssBetween(
+      ".pet-window-stack[data-panel-horizontal='right'] .pet-mascot-wrap {",
+      '}',
+    )
+
+    expect(leftCss).toContain('align-self: flex-end;')
+    expect(rightCss).toContain('align-self: flex-start;')
+  })
+
   it('binds the dark variant to the app theme attribute, not the operating system', () => {
     // The app ships six themes toggled via `<html data-theme>`. Tailwind's
     // stock `dark:` compiles to `prefers-color-scheme`, which fires on the OS

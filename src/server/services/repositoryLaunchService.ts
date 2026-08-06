@@ -32,6 +32,10 @@ const REPOSITORY_ERROR = {
   branchCheckedOut: 'REPOSITORY_BRANCH_CHECKED_OUT',
   worktreeCreateFailed: 'REPOSITORY_WORKTREE_CREATE_FAILED',
   switchFailed: 'REPOSITORY_SWITCH_FAILED',
+  branchNameInvalid: 'REPOSITORY_BRANCH_NAME_INVALID',
+  branchExists: 'REPOSITORY_BRANCH_EXISTS',
+  branchCreateFailed: 'REPOSITORY_BRANCH_CREATE_FAILED',
+  noCommits: 'REPOSITORY_NO_COMMITS',
 } as const
 
 type RepositoryErrorCode = typeof REPOSITORY_ERROR[keyof typeof REPOSITORY_ERROR]
@@ -44,6 +48,12 @@ export type RepositoryBranchInfo = {
   remoteRef?: string
   checkedOut: boolean
   worktreePath?: string
+  /**
+   * Commit the branch points at. Lets a caller tell a switch that would rewrite
+   * files from one that only moves the ref — the two are indistinguishable by
+   * name, and only the former can be blocked by uncommitted changes.
+   */
+  commit?: string
 }
 
 export type RepositoryWorktreeInfo = {
@@ -59,10 +69,27 @@ export type RepositoryContextResult = {
   repoName: string | null
   currentBranch: string | null
   defaultBranch: string | null
+  /** Commit `HEAD` resolves to, or null on an unborn branch. */
+  headCommit: string | null
   dirty: boolean
   branches: RepositoryBranchInfo[]
   worktrees: RepositoryWorktreeInfo[]
   error?: string
+}
+
+export type CreateRepositoryBranchOptions = {
+  name: string
+  /**
+   * Branch the new one starts from, named as it appears in `branches`. Remote
+   * names resolve to their tracking ref. Omitted means `HEAD`.
+   */
+  from?: string | null
+}
+
+export type CreateRepositoryBranchResult = {
+  branch: string
+  baseRef: string
+  context: RepositoryContextResult
 }
 
 export type CreateSessionRepositoryOptions = {
@@ -247,6 +274,24 @@ function isDesktopWorktreeBranch(name: string): boolean {
   return name.startsWith('worktree-desktop-')
 }
 
+/**
+ * `for-each-ref` rows as `<short name>\t<commit>`. Git ref names cannot contain
+ * control characters, so a tab is a separator no branch name can forge.
+ */
+function parseRefRows(stdout: string): Array<{ ref: string; commit: string }> {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const tab = line.indexOf('\t')
+      return tab < 0
+        ? { ref: line, commit: '' }
+        : { ref: line.slice(0, tab), commit: line.slice(tab + 1) }
+    })
+    .filter((row) => row.ref.length > 0)
+}
+
 async function listBranches(repoRoot: string, currentBranch: string | null, worktrees: GitWorktreeRecord[]): Promise<RepositoryBranchInfo[]> {
   const branches = new Map<string, RepositoryBranchInfo>()
   const checkedOutByBranch = new Map<string, string>()
@@ -254,9 +299,9 @@ async function listBranches(repoRoot: string, currentBranch: string | null, work
     if (worktree.branch) checkedOutByBranch.set(worktree.branch, worktree.path)
   }
 
-  const localResult = await runGit(repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
+  const localResult = await runGit(repoRoot, ['for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/heads'])
   if (localResult.code === 0) {
-    for (const name of localResult.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+    for (const { ref: name, commit } of parseRefRows(localResult.stdout)) {
       const worktreePath = checkedOutByBranch.get(name)
       branches.set(name, {
         name,
@@ -265,13 +310,14 @@ async function listBranches(repoRoot: string, currentBranch: string | null, work
         remote: false,
         checkedOut: !!worktreePath,
         worktreePath,
+        commit: commit || undefined,
       })
     }
   }
 
-  const remoteResult = await runGit(repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes'])
+  const remoteResult = await runGit(repoRoot, ['for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/remotes'])
   if (remoteResult.code === 0) {
-    for (const ref of remoteResult.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+    for (const { ref, commit } of parseRefRows(remoteResult.stdout)) {
       const parsed = normalizeRemoteBranch(ref)
       if (!parsed) continue
       const existing = branches.get(parsed.name)
@@ -289,6 +335,7 @@ async function listBranches(repoRoot: string, currentBranch: string | null, work
           remote: true,
           remoteRef: parsed.remoteRef,
           checkedOut: false,
+          commit: commit || undefined,
         })
       }
     }
@@ -338,6 +385,7 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
       repoName: null,
       currentBranch: null,
       defaultBranch: null,
+      headCommit: null,
       dirty: false,
       branches: [],
       worktrees: [],
@@ -354,6 +402,7 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
       repoName: null,
       currentBranch: null,
       defaultBranch: null,
+      headCommit: null,
       dirty: false,
       branches: [],
       worktrees: [],
@@ -363,11 +412,12 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
   try {
     const repoRoot = findCanonicalGitRoot(gitRoot) ?? gitRoot
     registerFilesystemAccessRoot(repoRoot)
-    const [branchResult, defaultBranch, statusResult, worktreeResult] = await Promise.all([
+    const [branchResult, defaultBranch, statusResult, worktreeResult, headResult] = await Promise.all([
       runGit(gitRoot, ['branch', '--show-current']),
       getDefaultBranch(gitRoot),
       runGit(gitRoot, ['--no-optional-locks', 'status', '--porcelain']),
       runGit(repoRoot, ['worktree', 'list', '--porcelain']),
+      runGit(gitRoot, ['rev-parse', 'HEAD']),
     ])
 
     const currentBranch = branchResult.stdout.trim() || null
@@ -391,6 +441,7 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
       repoName: path.basename(repoRoot),
       currentBranch,
       defaultBranch,
+      headCommit: headResult.code === 0 ? headResult.stdout.trim() || null : null,
       dirty: statusResult.code === 0 && statusResult.stdout.trim().length > 0,
       branches: await listBranches(repoRoot, currentBranch, worktreeRecords),
       worktrees,
@@ -403,6 +454,7 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
       repoName: path.basename(gitRoot),
       currentBranch: null,
       defaultBranch: null,
+      headCommit: null,
       dirty: false,
       branches: [],
       worktrees: [],
@@ -424,6 +476,159 @@ function resolveBranch(context: RepositoryContextResult, requestedBranch?: strin
   return {
     ...branch,
     baseRef: branch.local ? branch.name : branch.remoteRef ?? branch.name,
+  }
+}
+
+/**
+ * Turns a non-`ok` context into the same error the launch paths raise, so a
+ * caller sees one vocabulary for "this directory cannot host a Git operation".
+ */
+function assertUsableContext(
+  context: RepositoryContextResult,
+): asserts context is RepositoryContextResult & { repoRoot: string } {
+  if (context.state === 'ok' && context.repoRoot) return
+  if (context.state === 'not_git_repo') {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.notGit,
+      'Selected directory is not a Git repository',
+    )
+  }
+  if (context.state === 'missing_workdir') {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.workdirMissing,
+      context.error || 'Working directory does not exist',
+    )
+  }
+  throw repositoryBadRequest(
+    REPOSITORY_ERROR.contextFailed,
+    context.error || 'Failed to inspect Git repository',
+  )
+}
+
+const MAX_BRANCH_NAME_LENGTH = 200
+
+/**
+ * `git check-ref-format` is the authoritative rule set — reimplementing it here
+ * would drift. It is asked about `refs/heads/<name>` rather than given
+ * `--branch`, which additionally expands `@{-1}` into whatever branch was
+ * checked out last and would let that through as a "valid" name.
+ *
+ * The leading-dash and length checks come first because they are the two things
+ * the ref-format check cannot see: prefixing `refs/heads/` hides a leading dash
+ * from it, while `git branch` further down would read the bare name as a flag.
+ */
+async function assertValidBranchName(cwd: string, name: string): Promise<void> {
+  if (!name) {
+    throw repositoryBadRequest(REPOSITORY_ERROR.branchNameInvalid, 'Branch name is required')
+  }
+  if (name.startsWith('-')) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.branchNameInvalid,
+      `Invalid branch name: "${name}" must not start with "-"`,
+    )
+  }
+  if (name.length > MAX_BRANCH_NAME_LENGTH) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.branchNameInvalid,
+      `Invalid branch name: must be ${MAX_BRANCH_NAME_LENGTH} characters or fewer (got ${name.length})`,
+    )
+  }
+  // `listBranches` hides this prefix, so such a branch would be created for real
+  // and then be invisible in every context that comes back — no row to select,
+  // no error, and nothing in the app that can delete it again.
+  if (isDesktopWorktreeBranch(name)) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.branchNameInvalid,
+      `Invalid branch name: "${name}" uses a prefix reserved for isolated worktrees`,
+    )
+  }
+
+  const check = await runGit(cwd, ['check-ref-format', `refs/heads/${name}`])
+  if (check.code !== 0) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.branchNameInvalid,
+      `Invalid branch name: "${name}" is not a valid Git branch name`,
+    )
+  }
+}
+
+/**
+ * Creates a local branch and returns the refreshed context.
+ *
+ * It deliberately does not move `HEAD`. Picking a branch in the launch controls
+ * has never checked it out on the spot — the switch (or the isolated worktree)
+ * happens when the session starts, which is also where the dirty-tree and
+ * already-checked-out guards live. Creating the ref is the one part that has to
+ * happen eagerly, because a branch cannot be selected before it exists.
+ */
+export async function createRepositoryBranch(
+  workDir: string,
+  options: CreateRepositoryBranchOptions,
+): Promise<CreateRepositoryBranchResult> {
+  const absWorkDir = await resolveDirectory(workDir)
+  const context = await getRepositoryContext(absWorkDir)
+  assertUsableContext(context)
+
+  // Everything below runs in the directory the user picked, not `repoRoot`.
+  // `findCanonicalGitRoot` resolves a linked worktree to the *main* checkout,
+  // where `HEAD` is a different commit entirely — `headCommit` is read from the
+  // worktree, so branching off `repoRoot`'s HEAD would contradict what the
+  // caller was just told the current commit is.
+  const name = options.name.trim()
+  await assertValidBranchName(absWorkDir, name)
+
+  if (context.headCommit === null) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.noCommits,
+      'This repository has no commits yet, so there is nothing to branch from.',
+    )
+  }
+
+  // Any name already in the list, local or remote-only. A remote-only match is
+  // the dangerous one: the picker shows `hotfix` (tracking `origin/hotfix`), and
+  // creating a second local `hotfix` off the selected branch silently wins the
+  // name — `switchExistingCheckout` then runs a plain `git switch hotfix`
+  // instead of tracking the remote, launching on the wrong content. Selecting
+  // the existing row already does the right thing.
+  if (context.branches.some((candidate) => candidate.name === name)) {
+    throw repositoryBadRequest(
+      REPOSITORY_ERROR.branchExists,
+      `Branch already exists: ${name}`,
+    )
+  }
+
+  let baseRef = 'HEAD'
+  const from = options.from?.trim()
+  if (from) {
+    const base = context.branches.find((candidate) => candidate.name === from)
+    if (!base) {
+      throw repositoryBadRequest(
+        REPOSITORY_ERROR.branchNotFound,
+        `Branch not found: ${from}`,
+      )
+    }
+    baseRef = base.local ? base.name : base.remoteRef ?? base.name
+  }
+
+  // `--` keeps a start point that looks like a flag from being parsed as one.
+  // Reachable: a pre-existing `-x` branch is listed like any other and can be
+  // chosen as the base. The name itself is already guarded above.
+  const result = await runGit(absWorkDir, ['branch', '--', name, baseRef])
+  if (result.code !== 0) {
+    const stderr = result.stderr.trim()
+    // Collisions git catches but the list cannot: a case-fold clash on macOS and
+    // Windows (`Main` where `main` exists) is the common one, and it deserves
+    // the translated "already exists" rather than raw English `fatal:` text.
+    throw repositoryBadRequest(
+      /already exists/i.test(stderr) ? REPOSITORY_ERROR.branchExists : REPOSITORY_ERROR.branchCreateFailed,
+      `Failed to create branch: ${stderr || result.stdout.trim() || 'git branch failed'}`,
+    )
+  }
+
+  return {
+    branch: name,
+    baseRef,
+    context: await getRepositoryContext(absWorkDir),
   }
 }
 
@@ -581,24 +786,7 @@ export async function prepareSessionWorkspace(
   }
 
   const context = await getRepositoryContext(absWorkDir)
-  if (context.state !== 'ok') {
-    if (context.state === 'not_git_repo') {
-      throw repositoryBadRequest(
-        REPOSITORY_ERROR.notGit,
-        'Selected directory is not a Git repository',
-      )
-    }
-    if (context.state === 'missing_workdir') {
-      throw repositoryBadRequest(
-        REPOSITORY_ERROR.workdirMissing,
-        context.error || 'Working directory does not exist',
-      )
-    }
-    throw repositoryBadRequest(
-      REPOSITORY_ERROR.contextFailed,
-      context.error || 'Failed to inspect Git repository',
-    )
-  }
+  assertUsableContext(context)
 
   const branch = resolveBranch(context, options.branch)
   if (!branch) {
@@ -625,24 +813,7 @@ export async function resolveSessionWorkspaceLaunch(
   }
 
   const context = await getRepositoryContext(absWorkDir)
-  if (context.state !== 'ok') {
-    if (context.state === 'not_git_repo') {
-      throw repositoryBadRequest(
-        REPOSITORY_ERROR.notGit,
-        'Selected directory is not a Git repository',
-      )
-    }
-    if (context.state === 'missing_workdir') {
-      throw repositoryBadRequest(
-        REPOSITORY_ERROR.workdirMissing,
-        context.error || 'Working directory does not exist',
-      )
-    }
-    throw repositoryBadRequest(
-      REPOSITORY_ERROR.contextFailed,
-      context.error || 'Failed to inspect Git repository',
-    )
-  }
+  assertUsableContext(context)
 
   const branch = resolveBranch(context, options.branch)
   if (!branch) {

@@ -14,10 +14,12 @@
     "perf:local-index:10k": "bun run scripts/perf/local-index-benchmark.ts --sessions 10000 --runs 20",
     "check:pr": "bun run scripts/pr/check-pr.ts",
     "check:impact": "bun run scripts/pr/impact-report.ts",
-    "check:policy": "bun test ./scripts/pr/bun-test-filter.test.ts ./scripts/pr/change-policy.test.ts ./scripts/pr/changed-files.test.ts ./scripts/pr/pr-triage-workflow.test.ts ./scripts/pr/pr-quality-workflow.test.ts ./scripts/pr/release-workflow.test.ts ./scripts/pr/quality-contract.test.ts ./scripts/pr/test-environment.test.ts ./scripts/release-update-metadata.test.ts ./scripts/git-hooks/install.test.ts ./scripts/quality-gate/quarantine.test.ts ./scripts/quality-gate/coverage.test.ts ./scripts/quality-gate/provider-smoke/execute.test.ts ./scripts/quality-gate/desktop-smoke/execute.test.ts ./scripts/quality-gate/providerTargets.test.ts ./scripts/quality-gate/runner.test.ts",
+    "check:policy": "bun test ./scripts/pr/bun-test-filter.test.ts ./scripts/pr/change-policy.test.ts ./scripts/pr/changed-files.test.ts ./scripts/pr/dead-imports.test.ts ./scripts/pr/module-graph.test.ts ./scripts/pr/pr-triage-workflow.test.ts ./scripts/pr/pr-quality-workflow.test.ts ./scripts/pr/release-workflow.test.ts ./scripts/pr/quality-contract.test.ts ./scripts/pr/test-environment.test.ts ./scripts/release-update-metadata.test.ts ./scripts/git-hooks/install.test.ts ./scripts/quality-gate/quarantine.test.ts ./scripts/quality-gate/coverage.test.ts ./scripts/quality-gate/provider-smoke/execute.test.ts ./scripts/quality-gate/desktop-smoke/execute.test.ts ./scripts/quality-gate/providerTargets.test.ts ./scripts/quality-gate/runner.test.ts ./scripts/quality-gate/sandbox.test.ts ./scripts/quality-gate/agent-flow/scenarios.test.ts ./scripts/quality-gate/agent-flow/live.test.ts ./scripts/quality-gate/desktop-smoke/deterministic.test.ts",
     "check:server": "bun run scripts/pr/run-server-tests.ts",
     "check:provider-contract": "bun run scripts/pr/run-provider-contract-tests.ts",
     "check:chat-contract": "bun run scripts/pr/run-chat-contract-tests.ts",
+    "check:agent-flow": "bun run scripts/quality-gate/agent-flow/index.ts",
+    "check:desktop-ui-smoke": "bun run scripts/quality-gate/desktop-smoke/deterministic-cli.ts",
     "check:desktop": "cd desktop && bun run lint && bun run test -- --run && bun run build",
     "check:electron": "cd desktop && bun run check:electron",
     "check:adapters": "cd adapters && bun test",
@@ -40,7 +42,8 @@
     "test:package-smoke:current": "bun run scripts/quality-gate/package-smoke/current.ts",
     "docs:dev": "npm --prefix site run dev",
     "docs:build": "npm --prefix site run build",
-    "docs:preview": "npm --prefix site run preview"
+    "docs:preview": "npm --prefix site run preview",
+    "check:agent-flow:live": "bun run scripts/quality-gate/agent-flow/live-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.44",

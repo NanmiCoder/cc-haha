@@ -66,6 +66,12 @@ export const ModelContextWindowsSchema = z.record(
 export const ToolSearchEnabledSchema = z.boolean()
 export const DisableExperimentalBetasSchema = z.boolean()
 
+export const ImageGenerationConfigSchema = z.object({
+  model: z.string().trim().min(1),
+  baseUrl: z.string().trim().optional(),
+  apiKey: z.string().trim().optional(),
+})
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -81,6 +87,7 @@ export const SavedProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -105,6 +112,7 @@ export const CreateProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -121,6 +129,7 @@ export const UpdateProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.nullable().optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
   notes: z.string().optional(),
 })
 
@@ -141,6 +150,7 @@ export const ReorderProvidersSchema = z.object({
 // TypeScript types
 export type ModelMapping = z.infer<typeof ModelMappingSchema>
 export type Model1mSupport = z.infer<typeof Model1mSupportSchema>
+export type ImageGenerationConfig = z.infer<typeof ImageGenerationConfigSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>
 export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>

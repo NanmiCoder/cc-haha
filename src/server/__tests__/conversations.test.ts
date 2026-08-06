@@ -30,6 +30,7 @@ import {
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
+import * as openAIModelCatalog from '../../services/openaiAuth/modelCatalog.js'
 
 async function rmWithRetry(targetPath: string): Promise<void> {
   const attempts = process.platform === 'win32' ? 5 : 1
@@ -3641,6 +3642,196 @@ describe('WebSocket Chat Integration', () => {
       conversationService.startSession = originalStartSession
       conversationService.sendMessage = originalSendMessage
       conversationService.stopSession(sessionId)
+    }
+  }, 20_000)
+
+  it('should not send a turn to the custom runtime while OpenAI runtime validation is pending', async () => {
+    const providerService = new ProviderService()
+    const customProvider = await providerService.addProvider({
+      presetId: 'custom',
+      name: 'Custom Images Before OpenAI',
+      apiKey: 'custom-chat-key',
+      baseUrl: 'https://custom-chat.example.test',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'custom-main',
+        haiku: 'custom-main',
+        sonnet: 'custom-main',
+        opus: 'custom-main',
+      },
+      imageGeneration: {
+        model: 'custom-image-model',
+        baseUrl: 'https://custom-images.example.test/v1',
+        apiKey: 'custom-image-key',
+      },
+    })
+    await providerService.activateProvider(customProvider.id)
+
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd() }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+
+    const originalStartSession = conversationService.startSession.bind(conversationService)
+    const originalSendMessage = conversationService.sendMessage.bind(conversationService)
+    const startCalls: Array<{
+      providerId: string | null | undefined
+      model: string | undefined
+      imageProviderKind: string | undefined
+    }> = []
+    const sendCalls: Array<{
+      content: string
+      activeProviderId: string | null | undefined
+    }> = []
+
+    conversationService.startSession = (async function patchedStartSession(
+      sid: string,
+      workDir: string,
+      sdkUrl: string,
+      options?: { permissionMode?: string; model?: string; effort?: string; thinking?: 'enabled' | 'adaptive' | 'disabled'; providerId?: string | null },
+    ) {
+      const env = await (conversationService as any).buildChildEnv(
+        workDir,
+        sdkUrl,
+        options,
+      ) as Record<string, string>
+      startCalls.push({
+        providerId: options?.providerId,
+        model: options?.model,
+        imageProviderKind: env.CC_HAHA_IMAGE_PROVIDER_KIND,
+      })
+      return originalStartSession(sid, workDir, sdkUrl, options)
+    }) as typeof conversationService.startSession
+
+    conversationService.sendMessage = (function patchedSendMessage(
+      sid: string,
+      content: string,
+      attachments?: any,
+    ) {
+      sendCalls.push({
+        content,
+        activeProviderId: startCalls.at(-1)?.providerId,
+      })
+      return originalSendMessage(sid, content, attachments)
+    }) as typeof conversationService.sendMessage
+
+    let markValidationStarted!: () => void
+    const validationStarted = new Promise<void>((resolve) => {
+      markValidationStarted = resolve
+    })
+    let releaseValidation!: () => void
+    const validationGate = new Promise<Awaited<ReturnType<typeof openAIModelCatalog.getOpenAICodexModelCatalog>>>((resolve) => {
+      releaseValidation = () => resolve([{
+        value: 'gpt-5.6-sol',
+        label: 'GPT-5.6 Sol',
+        description: 'Test model',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high'],
+      }])
+    })
+    const modelCatalogSpy = spyOn(
+      openAIModelCatalog,
+      'getOpenAICodexModelCatalog',
+    ).mockImplementation(() => {
+      markValidationStarted()
+      return validationGate
+    })
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`Timed out connecting runtime validation session ${sessionId}`))
+        }, 5_000)
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          if (msg.type === 'connected') {
+            clearTimeout(timeout)
+            ws.send(JSON.stringify({ type: 'prewarm_session' }))
+            resolve()
+          }
+        }
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          reject(new Error(`WebSocket error for runtime validation session ${sessionId}`))
+        }
+      })
+
+      await waitUntil(
+        () => startCalls.length === 1 && conversationService.hasSession(sessionId),
+        `prewarmed custom runtime for ${sessionId}`,
+      )
+      expect(startCalls[0]).toEqual({
+        providerId: customProvider.id,
+        model: undefined,
+        imageProviderKind: 'openai_images',
+      })
+
+      const completion = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`Timed out waiting for OpenAI runtime turn ${sessionId}`))
+        }, 15_000)
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          if (msg.type === 'error') {
+            clearTimeout(timeout)
+            reject(new Error(msg.message))
+            return
+          }
+          if (msg.type === 'message_complete') {
+            clearTimeout(timeout)
+            resolve()
+          }
+        }
+      })
+
+      ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: 'openai-official',
+        modelId: 'gpt-5.6-sol',
+        effortLevel: 'low',
+      }))
+      ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: 'openai-official',
+        modelId: 'gpt-5.6-sol',
+        effortLevel: 'low',
+      }))
+      ws.send(JSON.stringify({
+        type: 'user_message',
+        content: 'generate only after OpenAI runtime validation',
+      }))
+
+      await validationStarted
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(startCalls).toHaveLength(1)
+      expect(sendCalls).toHaveLength(0)
+
+      releaseValidation()
+      await completion
+
+      expect(startCalls).toHaveLength(2)
+      expect(startCalls[1]).toEqual({
+        providerId: 'openai-official',
+        model: 'gpt-5.6-sol',
+        imageProviderKind: 'openai_oauth',
+      })
+      expect(sendCalls).toEqual([{
+        content: 'generate only after OpenAI runtime validation',
+        activeProviderId: 'openai-official',
+      }])
+    } finally {
+      releaseValidation()
+      modelCatalogSpy.mockRestore()
+      ws.close()
+      conversationService.startSession = originalStartSession
+      conversationService.sendMessage = originalSendMessage
+      conversationService.stopSession(sessionId)
+      await providerService.activateOfficial()
+      await providerService.deleteProvider(customProvider.id)
     }
   }, 20_000)
 

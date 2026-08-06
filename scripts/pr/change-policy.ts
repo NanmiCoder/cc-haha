@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync, appendFileSync } from 'node:fs'
+import { dependentFilesForChangeSet } from './module-graph'
 
 export type ChangeArea =
   | 'desktop'
@@ -28,6 +29,7 @@ export type ChangePolicyResult = {
     desktopNative: boolean
     providerContract: boolean
     chatContract: boolean
+    agentFlow: boolean
     persistence: boolean
     policy: boolean
     docs: boolean
@@ -115,6 +117,32 @@ const chatContractPrefixes = [
   'desktop/src/types/chat',
 ]
 
+/**
+ * Paths whose behavior the deterministic agent-flow lane proves end to end:
+ * session lifecycle, WebSocket framing, tool permission round-trips, reconnect
+ * replay, and the mock runtime that stands in for a provider.
+ */
+const agentFlowPrefixes = [
+  'src/server/api/sessions',
+  'src/server/services/conversationService',
+  'src/server/services/sessionService',
+  'src/server/ws/',
+  'src/server/__tests__/fixtures/mock-sdk-cli',
+  'scripts/quality-gate/agent-flow/',
+  'desktop/src/api/websocket',
+  'desktop/src/api/sessions',
+  'desktop/src/stores/chatStore',
+  'desktop/src/types/chat',
+  // Protocol clients, not import consumers. These talk to POST /api/sessions and
+  // /ws/:sessionId over the wire, so no module graph can link them to the server —
+  // `adapters/common/ws-bridge.ts` even hand-copies `src/server/ws/events.ts` types.
+  // d14154379 shipped 4 test files and still hardcoded permissionMode:'default' in
+  // adapters/common/http-client.ts, short-circuiting the server's global fallback
+  // until 4626dbef4 restored it a release later.
+  'adapters/common/http-client',
+  'adapters/common/ws-bridge',
+]
+
 const persistencePrefixes = [
   'src/server/services/persistentStorageMigrations',
   'src/server/__tests__/persistence-upgrade',
@@ -126,9 +154,14 @@ const persistencePrefixes = [
 
 const policyPrefixes = [
   '.github/workflows/',
-  'scripts/git-hooks/',
-  'scripts/pr/',
-  'scripts/quality-gate/',
+  // `scripts/pr/dead-imports.ts` owns these three source roots — every root no
+  // compiler checks for unreferenced imports. The lane is selected by prefix, and
+  // that check reads its files rather than importing them, so the import graph
+  // cannot route a diff here on its own. `scripts/` also covers the git hooks, the
+  // PR tooling and the quality gate, which selected this lane before.
+  'adapters/',
+  'scripts/',
+  'src/',
 ]
 
 const policyExactPaths = new Set([
@@ -276,12 +309,24 @@ function missingTestSignals(files: string[]) {
   return signals
 }
 
+/**
+ * @param inputDependentFiles Files that transitively import a changed file, from
+ *   `scripts/pr/module-graph.ts`. They widen *check selection* only. Areas, labels,
+ *   and every blocking rule stay scoped to what the author actually changed, so a
+ *   hub edit never demands tests for files the PR did not touch.
+ */
 export function evaluateChangePolicy(
   inputFiles: string[],
   inputLabels: string[] = [],
+  inputDependentFiles: string[] = [],
 ): ChangePolicyResult {
   const files = [...new Set(inputFiles.map(normalizePath).filter(Boolean))].sort()
   const labels = [...new Set(inputLabels.map((label) => label.trim()).filter(Boolean))].sort()
+  const changedSet = new Set(files)
+  const dependentFiles = [...new Set(
+    inputDependentFiles.map(normalizePath).filter((file) => file && !changedSet.has(file)),
+  )].sort()
+  const selectionFiles = [...files, ...dependentFiles]
   const areas = new Set<ChangeArea>()
 
   for (const file of files) {
@@ -310,18 +355,24 @@ export function evaluateChangePolicy(
   }
   const blocked = blockingReasons.length > 0
 
-  const touchesDesktopWeb = files.some((file) => (
+  // Surface checks run when the diff touches a surface *or* when a changed file is
+  // imported by it. Prefix-only routing let cross-package edits ship green:
+  // desktop/src/config/providerPresets.ts bundles src/server/config/providerPresets.json,
+  // desktop/src/lib/runtimeSelection.ts imports src/shared/modelReasoning, and
+  // desktop/electron/** compiles against desktop/src/** outside desktop/tsconfig.json.
+  const touchesDesktopWeb = selectionFiles.some((file) => (
     file.startsWith('desktop/src/') || desktopWebExactPaths.has(file)
   ))
-  const touchesDesktopNative = files.some((file) => (
+  const touchesDesktopNative = selectionFiles.some((file) => (
     file.startsWith('desktop/electron/') ||
     file.startsWith('desktop/scripts/') ||
     file.startsWith('desktop/src-tauri/') ||
     desktopNativeExactPaths.has(file)
   ))
-  const touchesProviderContract = files.some((file) => startsWithAny(file, providerContractPrefixes))
-  const touchesChatContract = files.some((file) => startsWithAny(file, chatContractPrefixes))
-  const touchesPersistence = files.some((file) => startsWithAny(file, persistencePrefixes))
+  const touchesProviderContract = selectionFiles.some((file) => startsWithAny(file, providerContractPrefixes))
+  const touchesChatContract = selectionFiles.some((file) => startsWithAny(file, chatContractPrefixes))
+  const touchesAgentFlow = selectionFiles.some((file) => startsWithAny(file, agentFlowPrefixes))
+  const touchesPersistence = selectionFiles.some((file) => startsWithAny(file, persistencePrefixes))
   const touchesPolicy = files.some((file) => (
     startsWithAny(file, policyPrefixes) ||
     policyExactPaths.has(file) ||
@@ -363,11 +414,12 @@ export function evaluateChangePolicy(
     missingTestSignals: missingTests,
     checks: {
       desktop: touchesDesktopWeb,
-      server: files.some((file) => file.startsWith('src/') && !isAgentInstructionPath(file)),
-      adapters: areas.has('adapters'),
+      server: selectionFiles.some((file) => file.startsWith('src/') && !isAgentInstructionPath(file)),
+      adapters: selectionFiles.some((file) => file.startsWith('adapters/') && !isAgentInstructionPath(file)),
       desktopNative: touchesDesktopNative,
       providerContract: touchesProviderContract,
       chatContract: touchesChatContract,
+      agentFlow: touchesAgentFlow,
       persistence: touchesPersistence,
       policy: touchesPolicy,
       docs: touchesDocs,
@@ -413,7 +465,7 @@ function formatSummary(result: ChangePolicyResult) {
     'PR change policy',
     `  Areas: ${result.areas.length ? result.areas.join(', ') : 'none'}`,
     `  Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}`,
-    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
+    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
   ]
 
   if (result.cliCoreFiles.length > 0) {
@@ -464,6 +516,7 @@ function writeGithubOutputs(result: ChangePolicyResult) {
     desktop_native_checks: String(result.checks.desktopNative),
     provider_contract_checks: String(result.checks.providerContract),
     chat_contract_checks: String(result.checks.chatContract),
+    agent_flow_checks: String(result.checks.agentFlow),
     persistence_checks: String(result.checks.persistence),
     policy_checks: String(result.checks.policy),
     docs_checks: String(result.checks.docs),
@@ -494,8 +547,16 @@ if (import.meta.main) {
     ? readListFile(labelsPath)
     : labelsArg?.split(',').map((label) => label.trim()).filter(Boolean) ?? []
 
-  const result = evaluateChangePolicy(files, labels)
+  const resolution = dependentFilesForChangeSet(process.cwd(), files, {
+    enabled: !args.has('--no-dependency-graph'),
+  })
+  if (resolution.degraded) {
+    console.warn(`[change-policy] dependency graph unavailable (${resolution.reason}); selecting every surface check.`)
+  }
+
+  const result = evaluateChangePolicy(files, labels, resolution.dependents)
   console.log(formatSummary(result))
+  console.log(`  Dependent files: ${resolution.dependents.length}${resolution.degraded ? ' (degraded fallback)' : ''}`)
   writeGithubOutputs(result)
 
   if (result.blocked && !args.has('--plan-only')) {

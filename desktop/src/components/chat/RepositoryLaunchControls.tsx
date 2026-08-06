@@ -9,6 +9,7 @@ import {
   GitBranch,
   GitFork,
   Loader2,
+  Plus,
   Search,
 } from 'lucide-react'
 import {
@@ -21,6 +22,8 @@ import { RecentProjectsPanel } from '@/components/composite/DirectoryPicker'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 
 type Props = {
@@ -46,16 +49,29 @@ const VIEWPORT_GUTTER = 12
 /**
  * `root` lists directory, branch and the worktree modes; `directory` and
  * `branch` are its two drill-downs. The menu opens on `root` only when there
- * is a repo to describe — see `viewOnOpen`.
+ * is a repo to describe — see `viewOnOpen`. `newBranch` is reached from the
+ * branch list and returns to it.
  */
-type MenuView = 'directory' | 'root' | 'branch'
+type MenuView = 'directory' | 'root' | 'branch' | 'newBranch'
 
 /** Approximate heights, used only to decide whether the menu flips upward. */
 const VIEW_HEIGHTS: Record<MenuView, number> = {
   directory: 380,
   root: 340,
   branch: 400,
+  newBranch: 240,
 }
+
+/**
+ * Server codes the create-branch form can explain in the user's own language.
+ * Anything else falls through to the generic failure plus the raw git message,
+ * which is more use than a translated shrug.
+ */
+const BRANCH_CREATE_ERROR_KEYS = {
+  REPOSITORY_BRANCH_NAME_INVALID: 'repoLaunch.newBranchErrorInvalid',
+  REPOSITORY_BRANCH_EXISTS: 'repoLaunch.newBranchErrorExists',
+  REPOSITORY_NO_COMMITS: 'repoLaunch.newBranchErrorNoCommits',
+} as const
 
 const GIT_MARK_PATH = 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'
 
@@ -138,12 +154,18 @@ export function RepositoryLaunchControls({
   const [revealAfterPick, setRevealAfterPick] = useState<string | null>(null)
   const [branchFilter, setBranchFilter] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [newBranchName, setNewBranchName] = useState('')
+  const [creatingBranch, setCreatingBranch] = useState(false)
+  const [createBranchError, setCreateBranchError] = useState<string | null>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; direction: 'up' | 'down' } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  /** Read after an await to tell whether the directory moved on under us. */
+  const latestWorkDirRef = useRef(workDir)
+  latestWorkDirRef.current = workDir
   const searchInputId = useId()
   const listboxId = useId()
   const menuId = useId()
@@ -222,6 +244,8 @@ export function RepositoryLaunchControls({
     setView('root')
     setBranchFilter('')
     setRevealAfterPick(null)
+    setNewBranchName('')
+    setCreateBranchError(null)
   }, [])
 
   // The directory list is one of this menu's own views now, so there is no
@@ -276,7 +300,13 @@ export function RepositoryLaunchControls({
 
   const warning = useMemo(() => {
     if (context?.state !== 'ok' || !selectedBranch || useWorktree) return null
-    if (selectedBranch.name !== context.currentBranch && context.dirty) {
+    // A branch that points where HEAD already points cannot be blocked by
+    // uncommitted changes — git only moves the ref, it rewrites nothing. That
+    // is exactly the branch you just created off the one you are standing on,
+    // so warning about it there is a false alarm. Missing commit info (an older
+    // server) keeps the warning rather than dropping it.
+    const movesFiles = !(selectedBranch.commit && selectedBranch.commit === context.headCommit)
+    if (selectedBranch.name !== context.currentBranch && context.dirty && movesFiles) {
       return {
         message: t('repoLaunch.dirtyWarning'),
         compactLabel: t('repoLaunch.dirtyWarningCompact'),
@@ -295,6 +325,65 @@ export function RepositoryLaunchControls({
     onBranchChange(candidate.name)
     setView('root')
     setBranchFilter('')
+  }
+
+  const openNewBranchView = () => {
+    // Whatever was typed into the filter is almost always the name being looked
+    // for, so it seeds the field instead of being thrown away.
+    setNewBranchName(branchFilter.trim())
+    setCreateBranchError(null)
+    setView('newBranch')
+  }
+
+  const leaveNewBranchView = () => {
+    setNewBranchName('')
+    setCreateBranchError(null)
+    setView('branch')
+  }
+
+  const createBranch = async () => {
+    const name = newBranchName.trim()
+    if (!name || creatingBranch || context?.state !== 'ok') return
+
+    const requestWorkDir = workDir
+    setCreatingBranch(true)
+    setCreateBranchError(null)
+    try {
+      const result = await sessionsApi.createRepositoryBranch({
+        workDir: requestWorkDir,
+        name,
+        from: selectedBranch?.name ?? null,
+      })
+      // Adopting a result for a directory the user has since left would put one
+      // repo's branch list and selection under another repo's path — the same
+      // reason the `workDir` effect carries a `cancelled` flag.
+      if (latestWorkDirRef.current !== requestWorkDir) return
+      // The response carries the context the branch was created against, so the
+      // list is correct without a second round trip.
+      setContext(result.context)
+      setError(null)
+      onBranchChange(result.branch)
+      setNewBranchName('')
+      setBranchFilter('')
+      setView('root')
+    } catch (err) {
+      if (latestWorkDirRef.current !== requestWorkDir) return
+      const code = err instanceof Error && 'body' in err
+        ? (err as { body?: { error?: string } }).body?.error
+        : undefined
+      const known = code && code in BRANCH_CREATE_ERROR_KEYS
+        ? BRANCH_CREATE_ERROR_KEYS[code as keyof typeof BRANCH_CREATE_ERROR_KEYS]
+        : null
+      // The server's own message already reads "Failed to create branch: …", so
+      // prefixing the generic line onto it says the same thing twice. The
+      // generic line is for failures that arrive without one, e.g. a timeout.
+      const raw = err instanceof Error ? err.message.trim() : String(err).trim()
+      setCreateBranchError(known ? t(known) : raw || t('repoLaunch.newBranchErrorFailed'))
+    } finally {
+      // Unconditional: a stale response must still clear the spinner, or the
+      // form stays disabled for the directory the user moved to.
+      setCreatingBranch(false)
+    }
   }
 
   const selectWorktreeMode = (enabled: boolean) => {
@@ -481,6 +570,71 @@ export function RepositoryLaunchControls({
         )
       })}
     </div>
+  )
+
+  /**
+   * Sits under the list, never inside it: the list is a `role="listbox"`, and an
+   * action button among its `option`s would be read as a branch you could pick
+   * (components/AGENTS.md §6).
+   *
+   * The separator is the host's job, because the two hosts pin this differently
+   * — the dropdown puts it after `branchList`'s own `overflow-y-auto` box, the
+   * sheet hands it to `MobileBottomSheet`'s `footer` slot, which is `shrink-0`
+   * outside the scrolling body and brings its own top border. Rendering it as a
+   * sibling in the sheet's `children` instead would let it scroll away with the
+   * list, which is the one thing it must not do.
+   */
+  const branchCreateRow = (
+    <button
+      type="button"
+      onClick={openNewBranchView}
+      className={rowClassName}
+    >
+      <Plus size={17} className="shrink-0 text-[var(--color-text-tertiary)]" />
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-[var(--color-text-primary)]">
+        {t('repoLaunch.newBranch')}
+      </span>
+    </button>
+  )
+
+  const newBranchForm = (
+    <form
+      className="flex flex-col gap-3 p-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void createBranch()
+      }}
+    >
+      <Input
+        label={t('repoLaunch.newBranchNameLabel')}
+        placeholder={t('repoLaunch.newBranchPlaceholder')}
+        value={newBranchName}
+        onChange={(event) => {
+          setNewBranchName(event.target.value)
+          setCreateBranchError(null)
+        }}
+        error={createBranchError ?? undefined}
+        hint={t('repoLaunch.newBranchFrom', { branch: branchLabel })}
+        autoFocus
+        autoComplete="off"
+        spellCheck={false}
+        disabled={creatingBranch}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <Button type="button" variant="ghost" size="base" onClick={leaveNewBranchView}>
+          {t('common.cancel')}
+        </Button>
+        <Button
+          type="submit"
+          variant="primary"
+          size="base"
+          loading={creatingBranch}
+          disabled={!newBranchName.trim()}
+        >
+          {t('repoLaunch.newBranchSubmit')}
+        </Button>
+      </div>
+    </form>
   )
 
   const branchSearch = (
@@ -733,13 +887,16 @@ export function RepositoryLaunchControls({
             title={
               view === 'branch'
                 ? t('repoLaunch.selectBranch')
-                : view === 'directory'
-                  ? t('dirPicker.directory')
-                  : t('repoLaunch.launchLocation')
+                : view === 'newBranch'
+                  ? t('repoLaunch.newBranchTitle')
+                  : view === 'directory'
+                    ? t('dirPicker.directory')
+                    : t('repoLaunch.launchLocation')
             }
             closeLabel={t('tabs.close')}
             panelRef={menuRef}
             id={menuId}
+            footer={view === 'branch' ? <div className="p-1.5">{branchCreateRow}</div> : undefined}
             headerExtra={view === 'branch' ? (
               <div className="flex flex-col gap-2">
                 <button
@@ -752,6 +909,15 @@ export function RepositoryLaunchControls({
                 </button>
                 {branchSearch}
               </div>
+            ) : view === 'newBranch' ? (
+              <button
+                type="button"
+                onClick={leaveNewBranchView}
+                className={sheetBackClassName}
+              >
+                <ChevronLeft size={14} />
+                {t('repoLaunch.selectBranch')}
+              </button>
             ) : view === 'directory' && directoryBackLabel ? (
               <button
                 type="button"
@@ -763,7 +929,11 @@ export function RepositoryLaunchControls({
               </button>
             ) : undefined}
           >
-            {view === 'branch' ? branchList : view === 'directory' ? directoryList : rootView}
+            {view === 'branch'
+              ? branchList
+              : view === 'newBranch'
+                ? newBranchForm
+                : view === 'directory' ? directoryList : rootView}
           </MobileBottomSheet>
         ) : menuPos && createPortal(
           <div ref={menuRef} id={menuId} className={menuClassName} style={menuStyle}>
@@ -781,6 +951,23 @@ export function RepositoryLaunchControls({
                   {branchSearch}
                 </div>
                 {branchList}
+                <div className="border-t border-[var(--color-border-separator)] p-1.5">
+                  {branchCreateRow}
+                </div>
+              </>
+            ) : view === 'newBranch' ? (
+              <>
+                <div className="border-b border-[var(--color-border)] px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={leaveNewBranchView}
+                    className={dropdownBackClassName}
+                  >
+                    <ChevronLeft size={13} />
+                    {t('repoLaunch.newBranchTitle')}
+                  </button>
+                </div>
+                {newBranchForm}
               </>
             ) : view === 'directory' ? (
               <>

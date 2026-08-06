@@ -72,6 +72,8 @@ export type RepositoryBranchInfo = {
   remoteRef?: string
   checkedOut: boolean
   worktreePath?: string
+  /** Commit the branch points at; absent on servers predating the field. */
+  commit?: string
 }
 export type RepositoryWorktreeInfo = {
   path: string
@@ -85,10 +87,23 @@ export type RepositoryContextResult = {
   repoName: string | null
   currentBranch: string | null
   defaultBranch: string | null
+  /** Commit `HEAD` resolves to; absent on servers predating the field. */
+  headCommit?: string | null
   dirty: boolean
   branches: RepositoryBranchInfo[]
   worktrees: RepositoryWorktreeInfo[]
   error?: string
+}
+export type CreateRepositoryBranchRequest = {
+  workDir: string
+  name: string
+  /** Branch the new one starts from, as named in `branches`. Defaults to HEAD. */
+  from?: string | null
+}
+export type CreateRepositoryBranchResult = {
+  branch: string
+  baseRef: string
+  context: RepositoryContextResult
 }
 export type SessionRewindResponse = {
   target: {
@@ -107,7 +122,22 @@ export type SessionRewindResponse = {
     insertions: number
     deletions: number
   }
+  restoreAvailable?: boolean
+  /**
+   * Tool names whose file effects the checkpoint could not capture (a writing
+   * shell command, a tool with no change extractor). Undo still works and still
+   * restores every file it lists — these are the changes it will leave behind.
+   */
+  unverifiedChangeSources?: string[]
+  /** What the executed rewind touched. Absent on dry-run previews. */
+  mode?: SessionRewindMode
 }
+
+/**
+ * `both` restores files and trims the transcript; `conversation` only trims,
+ * which stays possible even when the files cannot be restored.
+ */
+export type SessionRewindMode = 'both' | 'conversation'
 
 export type RecentProject = {
   projectPath: string
@@ -299,6 +329,8 @@ export type SessionTurnCheckpoint = {
   conversation?: SessionRewindResponse['conversation']
   code: SessionRewindResponse['code']
   workDir?: string
+  restoreAvailable?: boolean
+  unverifiedChangeSources?: string[]
 }
 
 export type SessionTurnCheckpointsResponse = {
@@ -383,6 +415,10 @@ export const sessionsApi = {
     return api.get<RepositoryContextResult>(`/api/sessions/repository-context?${query.toString()}`)
   },
 
+  createRepositoryBranch(body: CreateRepositoryBranchRequest) {
+    return api.post<CreateRepositoryBranchResult>('/api/sessions/repository-branch', body)
+  },
+
   getGitInfo(sessionId: string) {
     return api.get<SessionGitInfo>(`/api/sessions/${sessionId}/git-info`)
   },
@@ -452,6 +488,7 @@ export const sessionsApi = {
     userMessageIndex?: number
     expectedContent?: string
     dryRun?: boolean
+    mode?: SessionRewindMode
   }) {
     return api.post<SessionRewindResponse>(`/api/sessions/${sessionId}/rewind`, body, {
       timeout: 60_000,

@@ -596,6 +596,32 @@ describe('TabBar', () => {
     expect(screen.queryByText('设置')).not.toBeInTheDocument()
   })
 
+  it('matches only the settings tab to the settings rail width', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { SETTINGS_TAB_ID, useTabStore } = await import('../../stores/tabStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+      ],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    const settingsTab = screen.getByText('Localized Settings').closest('.tab-strip-item')
+    const chatTab = screen.getByText('Chat').closest('.tab-strip-item')
+
+    expect(settingsTab?.className).toContain('min-w-[195px]')
+    expect(settingsTab?.className).toContain('max-w-[195px]')
+    expect(chatTab?.className).toContain('min-w-[140px]')
+    expect(chatTab?.className).toContain('max-w-[200px]')
+    expect(chatTab?.className).not.toContain('min-w-[195px]')
+  })
+
   it('shows current-session CLI tasks without a numeric activity badge', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
@@ -1685,6 +1711,107 @@ describe('TabBar', () => {
     fireEvent.mouseUp(window)
 
     expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['tab-2', 'tab-1'])
+  })
+
+  it('reorders the settings tab when its transformed drag preview follows the pointer', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { SETTINGS_TAB_ID, useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'First Session', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+        { sessionId: 'tab-2', title: 'Second Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    const firstTab = screen.getByText('First Session').closest('.tab-bar-interactive') as HTMLElement
+    const settingsTab = screen.getByText('Localized Settings').closest('.tab-bar-interactive') as HTMLElement
+    const secondTab = screen.getByText('Second Session').closest('.tab-bar-interactive') as HTMLElement
+
+    stubRect(firstTab, 0, 140)
+    stubRect(secondTab, 339, 479)
+    Object.defineProperty(settingsTab, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => {
+        const translateX = Number(/translateX\(([-\d.]+)px\)/.exec(settingsTab.style.transform)?.[1] ?? 0)
+        const left = 142 + translateX
+        return { left, right: left + 195, width: 195 }
+      },
+    })
+
+    // Grab the left half. Once the preview is transformed, reading its live rect
+    // makes its midpoint chase the pointer and the tab incorrectly targets itself.
+    fireEvent.mouseDown(settingsTab, { button: 0, clientX: 160, clientY: 10 })
+    fireEvent.mouseMove(window, { clientX: 170, clientY: 10 })
+    fireEvent.mouseMove(window, { clientX: 430, clientY: 10 })
+    fireEvent.mouseUp(window)
+
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual([
+      'tab-1',
+      'tab-2',
+      SETTINGS_TAB_ID,
+    ])
+  })
+
+  // Regression: the click-suppression flag set at drag start was only ever cleared
+  // inside handleTabClick, which is reachable only from a tab's own onClick. Release
+  // the drag away from any tab — below the strip, or outside the window — and nothing
+  // consumes it, so the flag survives and eats the user's next tab click. finalizeDrag
+  // clears every other drag ref but not this one.
+  it('still activates a tab clicked after a drag that ended off the strip', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+
+    const setActiveTab = vi.fn()
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'First Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-2', title: 'Second Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+      setActiveTab,
+    } as Partial<ReturnType<typeof useTabStore.getState>>)
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    const firstTab = screen.getByText('First Session').closest('.tab-bar-interactive')
+    const secondTab = screen.getByText('Second Session').closest('.tab-bar-interactive')
+    for (const [element, left] of [[firstTab, 0], [secondTab, 180]] as const) {
+      Object.defineProperty(element!, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ left, width: 180 }),
+      })
+    }
+
+    // Drag the first tab and let go well below the strip, so the browser dispatches
+    // no click on any tab — exactly the case that used to strand the flag.
+    fireEvent.mouseDown(firstTab!, { button: 0, clientX: 20, clientY: 10 })
+    fireEvent.mouseMove(window, { clientX: 40, clientY: 400 })
+    fireEvent.mouseUp(window)
+
+    setActiveTab.mockClear()
+    fireEvent.mouseDown(secondTab!, { button: 0, clientX: 200, clientY: 10 })
+    fireEvent.click(secondTab!)
+
+    expect(setActiveTab).toHaveBeenCalledWith('tab-2')
   })
 
   it('does not reorder on a simple click without dragging', async () => {

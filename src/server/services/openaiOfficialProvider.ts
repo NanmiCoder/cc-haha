@@ -7,6 +7,12 @@ import {
   getOpenAICodexContextWindowForModel,
 } from '../../services/openaiAuth/models.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+  OPENAI_IMAGE_DEFAULT_MODEL,
+} from '../../services/imageGeneration/config.js'
 import { getHahaOpenAIOAuthFilePath } from './hahaOpenAIOAuthService.js'
 import {
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -59,6 +65,9 @@ export function buildOpenAIOfficialRuntimeEnv(): Record<string, string> {
   return {
     [OPENAI_OAUTH_PROVIDER_ENV_KEY]: '1',
     [OPENAI_CODEX_OAUTH_FILE_ENV_KEY]: getHahaOpenAIOAuthFilePath(),
+    [IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY]: 'openai_oauth',
+    [IMAGE_GENERATION_PROVIDER_ID_ENV_KEY]: OPENAI_OFFICIAL_PROVIDER_ID,
+    [IMAGE_GENERATION_MODEL_ENV_KEY]: OPENAI_IMAGE_DEFAULT_MODEL,
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     }),

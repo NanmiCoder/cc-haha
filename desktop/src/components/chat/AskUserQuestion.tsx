@@ -82,10 +82,6 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
   const [hasRequestedChat, setHasRequestedChat] = useState(false)
   const composingRef = useRef(false)
 
-  if (questions.length === 0) return null
-  const safeActiveTab = Math.min(activeTab, questions.length - 1)
-  const activeQuestion = questions[safeActiveTab]
-
   const resultAnswers = useMemo(() => {
     if (!result || typeof result !== 'object') return {}
     const answers = (result as { answers?: unknown }).answers
@@ -110,6 +106,17 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
       .filter(Boolean)
       .join('; ')
   }, [freeTexts, hasStructuredAnswers, questions, resultAnswers, resultText, selections])
+
+  // Every hook above this line runs unconditionally, and it has to stay that way.
+  // `input` is not fixed for the lifetime of the instance: chatStore rebuilds tool_use
+  // messages from the transcript under a stable id (`${messageId}-block-${index}`), so
+  // the same mounted component can see its question count cross zero in either
+  // direction. With the early return above the useMemo calls, that transition threw
+  // "Rendered fewer/more hooks than expected" and took the whole message list down.
+  if (questions.length === 0) return null
+  const safeActiveTab = Math.min(activeTab, questions.length - 1)
+  const activeQuestion = questions[safeActiveTab]
+
   const submitted = hasTerminalResult || hasSubmitted || hasRequestedChat
   const terminalWithoutAnswers = submitted && !hasStructuredAnswers && resultText.length > 0
 

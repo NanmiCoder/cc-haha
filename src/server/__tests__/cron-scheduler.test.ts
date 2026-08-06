@@ -2,7 +2,7 @@
  * Tests for CronScheduler — cron matching, task execution, log storage, and API endpoints
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import * as fs from 'fs/promises'
 import * as path from 'path'
@@ -14,7 +14,7 @@ import {
   CronScheduler,
   type TaskRun,
 } from '../services/cronScheduler.js'
-import { CronService, type CronTask } from '../services/cronService.js'
+import { CronService } from '../services/cronService.js'
 import { resetScheduledRunReadModelForTests } from '../services/localIndex/scheduledRunReadModel.js'
 
 // ─── Test helpers ───────────────────────────────────────────────────────────

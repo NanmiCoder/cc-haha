@@ -414,6 +414,26 @@ describe('ProviderService', () => {
         'model-haiku': 128000,
       })
     })
+
+    test('should persist an optional image provider without placing it in the skill', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        imageGeneration: {
+          model: 'image-model',
+          baseUrl: 'https://images.example.test/v1',
+          apiKey: 'image-secret',
+        },
+      }))
+
+      expect(provider.imageGeneration).toEqual({
+        model: 'image-model',
+        baseUrl: 'https://images.example.test/v1',
+        apiKey: 'image-secret',
+      })
+      const config = await readProvidersConfig()
+      expect((config.providers as Array<{ imageGeneration?: unknown }>)[0]?.imageGeneration)
+        .toEqual(provider.imageGeneration)
+    })
   })
 
   // ─── getProvider ─────────────────────────────────────────────────────────
@@ -827,6 +847,36 @@ describe('ProviderService', () => {
       settings = await readSettings()
       env = settings.env as Record<string, string>
       expect(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBeUndefined()
+    })
+
+    test('updating an active provider drives image routing in both directions', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+      await svc.activateProvider(added.id)
+
+      await svc.updateProvider(added.id, {
+        imageGeneration: {
+          model: 'image-model',
+          baseUrl: 'https://images.example.test/v1',
+          apiKey: 'image-secret',
+        },
+      })
+      let settings = await readSettings()
+      let env = settings.env as Record<string, string>
+      expect(env).toMatchObject({
+        CC_HAHA_IMAGE_PROVIDER_KIND: 'openai_images',
+        CC_HAHA_IMAGE_PROVIDER_ID: added.id,
+        CC_HAHA_IMAGE_BASE_URL: 'https://images.example.test/v1',
+        CC_HAHA_IMAGE_API_KEY: 'image-secret',
+        CC_HAHA_IMAGE_MODEL: 'image-model',
+      })
+
+      const updated = await svc.updateProvider(added.id, { imageGeneration: null })
+      expect(updated.imageGeneration).toBeUndefined()
+      settings = await readSettings()
+      env = settings.env as Record<string, string>
+      expect(env.CC_HAHA_IMAGE_PROVIDER_KIND).toBeUndefined()
+      expect(env.CC_HAHA_IMAGE_API_KEY).toBeUndefined()
     })
   })
 

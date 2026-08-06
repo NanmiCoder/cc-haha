@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
+import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { BaselineCase, BaselineTarget, LaneResult } from '../types'
 
 type ServerMessage = {
@@ -247,17 +248,22 @@ export async function executeBaselineCase(
   const transcriptPath = join(artifactDir, 'transcript.jsonl')
   const verificationPath = join(artifactDir, 'verification.log')
   const diffPath = join(artifactDir, 'diff.patch')
+  // Baseline cases boot the real product server, which resolves transcripts,
+  // session index, and settings from CLAUDE_CONFIG_DIR. Without a sandbox the run
+  // writes into the developer's real ~/.claude.
+  const sandbox = createQualityGateSandbox({ label: `baseline-${testCase.id}`, seedProviders: true })
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
-      ...process.env,
+      ...sandbox.env,
       SERVER_PORT: String(port),
     },
   })
   const stdoutPump = pipeToFile(server.stdout, serverLogPath)
   const stderrPump = pipeToFile(server.stderr, serverLogPath)
+  const finish = (result: LaneResult) => applyUserStateGuard(result, sandbox, artifactDir)
 
   try {
     await waitForHttp(`${baseUrl}/health`, 60_000)
@@ -289,7 +295,7 @@ export async function executeBaselineCase(
       verificationLog += `$ ${command.join(' ')}\n${result.stdout}${result.stderr}\n`
       if (result.exitCode !== 0) {
         writeFileSync(verificationPath, verificationLog)
-        return {
+        return finish({
           id: resultId,
           title: resultTitle,
           status: 'failed',
@@ -297,31 +303,32 @@ export async function executeBaselineCase(
           exitCode: result.exitCode,
           error: `verification command failed: ${command.join(' ')}`,
           artifactDir,
-        }
+        })
       }
     }
     writeFileSync(verificationPath, verificationLog)
 
-    return {
+    return finish({
       id: resultId,
       title: resultTitle,
       status: 'passed',
       durationMs: Date.now() - started,
       artifactDir,
-    }
+    })
   } catch (error) {
-    return {
+    return finish({
       id: resultId,
       title: resultTitle,
       status: 'failed',
       durationMs: Date.now() - started,
       error: error instanceof Error ? error.message : String(error),
       artifactDir,
-    }
+    })
   } finally {
     server.kill()
     await server.exited.catch(() => undefined)
     await Promise.all([stdoutPump, stderrPump]).catch(() => undefined)
     rmSync(workRoot, { recursive: true, force: true })
+    sandbox.cleanup()
   }
 }

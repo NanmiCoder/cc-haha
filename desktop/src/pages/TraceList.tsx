@@ -10,6 +10,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SearchField } from '@/components/ui/SearchField'
+import { formatDurationMs, formatTokenCount } from '../lib/trace/formatters'
 import { getDesktopHost } from '../lib/desktopHost'
 import { buildTraceWindowUrl } from '../lib/traceLaunch'
 import { openTraceCaptureSettings, openTraceDetail } from '../lib/traceNavigation'
@@ -380,8 +381,8 @@ function TraceRow({
         </div>
         <div className="grid shrink-0 grid-cols-[4.5rem_5rem_4.5rem] items-center gap-4">
           <MetricCell label={t('trace.apiCalls')} value={String(trace.summary.apiCalls)} />
-          <MetricCell label={t('trace.modelTime')} value={formatDuration(trace.summary.totalDurationMs)} />
-          <MetricCell label={t('trace.tokens')} value={formatCompact(totalTokens)} />
+          <MetricCell label={t('trace.modelTime')} value={formatDurationMs(trace.summary.totalDurationMs)} />
+          <MetricCell label={t('trace.tokens')} value={formatTokenCount(totalTokens)} />
         </div>
       </button>
       {/* Opening the trace is what the row itself does — the row actions are
@@ -462,22 +463,6 @@ function getTraceTitle(trace: TraceSessionListItem, t: ReturnType<typeof useTran
 function shortModelName(model: string): string {
   const short = model.replace(/^claude-/i, '').replace(/-\d{8}$/, '')
   return short || model
-}
-
-/** Compact count: 847 -> "847", 1234 -> "1.2k", 2345678 -> "2.3m". */
-function formatCompact(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '0'
-  if (value < 1000) return String(value)
-  const scaled = value < 1_000_000 ? value / 1000 : value / 1_000_000
-  const unit = value < 1_000_000 ? 'k' : 'm'
-  const text = scaled >= 100 ? String(Math.round(scaled)) : scaled.toFixed(1).replace(/\.0$/, '')
-  return `${text}${unit}`
-}
-
-function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '-'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function formatUpdatedAt(value: string | null): string {

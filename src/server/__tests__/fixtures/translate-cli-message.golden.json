@@ -1,0 +1,593 @@
+{
+  "text-stream": [
+    {
+      "in": "stream_event/message_start",
+      "out": [
+        {
+          "type": "status",
+          "state": "thinking",
+          "attemptStart": true
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "text"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "text": "Hello"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "text": " world"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": []
+    },
+    {
+      "in": "stream_event/message_stop",
+      "out": []
+    },
+    {
+      "in": "result/success",
+      "out": [
+        {
+          "type": "message_complete",
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 4
+          }
+        }
+      ]
+    }
+  ],
+  "thinking-then-text": [
+    {
+      "in": "stream_event/message_start",
+      "out": [
+        {
+          "type": "status",
+          "state": "thinking",
+          "attemptStart": true
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "status",
+          "state": "thinking",
+          "verb": "Thinking"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "thinking",
+          "text": "Considering options"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": []
+    },
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "text"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "text": "Done thinking."
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": []
+    }
+  ],
+  "whole-thinking-blocks": [
+    {
+      "in": "assistant",
+      "out": [
+        {
+          "type": "thinking",
+          "text": "plan the fix carefully",
+          "complete": true
+        },
+        {
+          "type": "thinking",
+          "text": "then run tests",
+          "complete": true
+        },
+        {
+          "type": "content_start",
+          "blockType": "text"
+        },
+        {
+          "type": "content_delta",
+          "text": "Starting now."
+        }
+      ]
+    }
+  ],
+  "tool-use-lifecycle": [
+    {
+      "in": "stream_event/message_start",
+      "out": [
+        {
+          "type": "status",
+          "state": "thinking",
+          "attemptStart": true
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "tool_use",
+          "toolName": "Write",
+          "toolUseId": "toolu_golden_1"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "toolInput": "{\"file_path\":"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "toolInput": "\"/tmp/a.txt\"}"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": [
+        {
+          "type": "tool_use_complete",
+          "toolName": "Write",
+          "toolUseId": "toolu_golden_1",
+          "input": {
+            "file_path": "/tmp/a.txt"
+          }
+        }
+      ]
+    },
+    {
+      "in": "user",
+      "out": [
+        {
+          "type": "tool_result",
+          "toolUseId": "toolu_golden_1",
+          "content": "wrote 1 line",
+          "isError": false
+        }
+      ]
+    },
+    {
+      "in": "result/success",
+      "out": [
+        {
+          "type": "message_complete",
+          "usage": {
+            "input_tokens": 5,
+            "output_tokens": 2
+          }
+        }
+      ]
+    }
+  ],
+  "tool-use-error-result": [
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "tool_use",
+          "toolName": "Bash",
+          "toolUseId": "toolu_golden_err"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "toolInput": "{\"command\":\"exit 1\"}"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": [
+        {
+          "type": "tool_use_complete",
+          "toolName": "Bash",
+          "toolUseId": "toolu_golden_err",
+          "input": {
+            "command": "exit 1"
+          }
+        }
+      ]
+    },
+    {
+      "in": "user",
+      "out": [
+        {
+          "type": "tool_result",
+          "toolUseId": "toolu_golden_err",
+          "content": "exit code 1",
+          "isError": true
+        }
+      ]
+    }
+  ],
+  "subagent-scoped-tool": [
+    {
+      "in": "stream_event/content_block_start",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "tool_use",
+          "toolName": "Read",
+          "toolUseId": "toolu_parent_agent/toolu_child",
+          "originalToolUseId": "toolu_child",
+          "parentToolUseId": "toolu_parent_agent"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_delta",
+      "out": [
+        {
+          "type": "content_delta",
+          "toolInput": "{\"file_path\":\"/tmp/b.txt\"}"
+        }
+      ]
+    },
+    {
+      "in": "stream_event/content_block_stop",
+      "out": [
+        {
+          "type": "tool_use_complete",
+          "toolName": "Read",
+          "toolUseId": "toolu_parent_agent/toolu_child",
+          "originalToolUseId": "toolu_child",
+          "input": {
+            "file_path": "/tmp/b.txt"
+          },
+          "parentToolUseId": "toolu_parent_agent"
+        }
+      ]
+    },
+    {
+      "in": "user",
+      "out": [
+        {
+          "type": "tool_result",
+          "toolUseId": "toolu_parent_agent/toolu_child",
+          "originalToolUseId": "toolu_child",
+          "content": "file body",
+          "isError": false,
+          "parentToolUseId": "toolu_parent_agent"
+        }
+      ]
+    }
+  ],
+  "buffered-assistant": [
+    {
+      "in": "assistant",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "text"
+        },
+        {
+          "type": "content_delta",
+          "text": "Running a tool."
+        },
+        {
+          "type": "tool_use_complete",
+          "toolName": "Glob",
+          "toolUseId": "toolu_buffered",
+          "input": {
+            "pattern": "*.ts"
+          }
+        }
+      ]
+    }
+  ],
+  "api-error": [
+    {
+      "in": "assistant",
+      "out": [
+        {
+          "type": "error",
+          "message": "Prompt is too long",
+          "code": "invalid_request"
+        }
+      ]
+    },
+    {
+      "in": "result/success",
+      "out": [
+        {
+          "type": "message_complete",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ]
+    }
+  ],
+  "permission-request": [
+    {
+      "in": "control_request/can_use_tool",
+      "out": [
+        {
+          "type": "permission_request",
+          "requestId": "req_golden_1",
+          "toolName": "Write",
+          "toolUseId": "toolu_golden_perm",
+          "input": {
+            "file_path": "/tmp/c.txt"
+          },
+          "description": "write a file"
+        }
+      ]
+    },
+    {
+      "in": "control_cancel_request",
+      "out": [
+        {
+          "type": "permission_resolved",
+          "requestId": "req_golden_1",
+          "permissionType": "tool"
+        }
+      ]
+    }
+  ],
+  "system-init-and-slash": [
+    {
+      "in": "system/init",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "init",
+          "message": "Model: golden-model",
+          "data": {
+            "model": "golden-model"
+          }
+        },
+        {
+          "type": "system_notification",
+          "subtype": "slash_commands",
+          "data": [
+            {
+              "name": "help",
+              "description": "Show help"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "in": "system/local_command",
+      "out": []
+    },
+    {
+      "in": "system/local_command_output",
+      "out": [
+        {
+          "type": "content_start",
+          "blockType": "text"
+        },
+        {
+          "type": "content_delta",
+          "text": "Total cost: $0.0000"
+        }
+      ]
+    }
+  ],
+  "system-status-and-fallback": [
+    {
+      "in": "system/status",
+      "out": [
+        {
+          "type": "permission_mode_changed",
+          "mode": "acceptEdits"
+        }
+      ]
+    },
+    {
+      "in": "system/streaming_fallback",
+      "out": [
+        {
+          "type": "streaming_fallback",
+          "cause": "watchdog"
+        }
+      ]
+    },
+    {
+      "in": "system/api_retry",
+      "out": [
+        {
+          "type": "api_retry",
+          "attempt": 2,
+          "maxRetries": 5,
+          "retryDelayMs": 1000,
+          "errorStatus": 529,
+          "errorType": "overloaded_error"
+        }
+      ]
+    }
+  ],
+  "compact-boundary": [
+    {
+      "in": "system/compact_boundary",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "compact_boundary",
+          "message": "Context compacted",
+          "data": {
+            "trigger": "auto",
+            "pre_tokens": 120000
+          }
+        }
+      ]
+    },
+    {
+      "in": "result/success",
+      "out": [
+        {
+          "type": "message_complete",
+          "usage": {
+            "input_tokens": 1,
+            "output_tokens": 1
+          }
+        }
+      ]
+    }
+  ],
+  "agent-tool-activity": [
+    {
+      "in": "system/agent_tool_activity",
+      "out": [
+        {
+          "type": "tool_use_complete",
+          "toolName": "Grep",
+          "toolUseId": "toolu_activity",
+          "originalToolUseId": "toolu_activity",
+          "input": {
+            "pattern": "foo"
+          }
+        }
+      ]
+    },
+    {
+      "in": "system/agent_tool_activity",
+      "out": [
+        {
+          "type": "tool_result",
+          "toolUseId": "toolu_activity",
+          "originalToolUseId": "toolu_activity",
+          "content": "3 matches",
+          "isError": false
+        }
+      ]
+    }
+  ],
+  "task-lifecycle": [
+    {
+      "in": "system/task_started",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "task_started",
+          "message": "build the thing",
+          "data": {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "task_golden",
+            "description": "build the thing"
+          }
+        },
+        {
+          "type": "status",
+          "state": "tool_executing",
+          "verb": "build the thing"
+        }
+      ]
+    },
+    {
+      "in": "system/task_progress",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "task_progress",
+          "message": "Task in progress",
+          "data": {
+            "type": "system",
+            "subtype": "task_progress",
+            "task_id": "task_golden",
+            "progress": "halfway"
+          }
+        },
+        {
+          "type": "status",
+          "state": "tool_executing",
+          "verb": "Task in progress"
+        }
+      ]
+    },
+    {
+      "in": "system/task_notification",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "task_notification",
+          "message": "done",
+          "data": {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "task_golden",
+            "message": "done"
+          }
+        }
+      ]
+    }
+  ],
+  "hook-frames": [
+    {
+      "in": "system/hook_started",
+      "out": []
+    },
+    {
+      "in": "system/hook_response",
+      "out": []
+    }
+  ]
+}

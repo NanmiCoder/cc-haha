@@ -658,7 +658,10 @@ describe('Electron pet window service', () => {
     },
   }
 
-  function panelController(petWindow: ReturnType<typeof createFakeWindow>) {
+  function panelController(
+    petWindow: ReturnType<typeof createFakeWindow>,
+    platform: NodeJS.Platform = 'darwin',
+  ) {
     const onPanelPlacementChanged = vi.fn()
     // No cursor sampler, so the drag follows the payload coordinates the way
     // the other edge tests drive it.
@@ -668,7 +671,7 @@ describe('Electron pet window service', () => {
       getWorkAreaForPoint: () => panelDrag.workArea,
       load: vi.fn().mockResolvedValue(undefined),
       onPanelPlacementChanged,
-      platform: 'darwin',
+      platform,
       preloadPath: '/app/electron-dist/preload.cjs',
     })
     return { controller, onPanelPlacementChanged }
@@ -689,7 +692,7 @@ describe('Electron pet window service', () => {
       above.mascot,
       above.card,
       above.toggle,
-    ])).toEqual({ vertical: 'above' })
+    ])).toEqual({ vertical: 'above', horizontal: 'center' })
 
     controller.dragWindow(petWindow as never, { phase: 'start', x: 150, y: 180 })
     const dragged = controller.dragWindow(petWindow as never, { phase: 'end', x: 150, y: -400 })
@@ -699,15 +702,18 @@ describe('Electron pet window service', () => {
     expect(petWindow.getBounds().y).toBe(workArea.y - above.mascot.y)
     // The panel would be behind the menu bar there, so it has to change sides.
     expect(petWindow.getBounds().y + above.card.y).toBeLessThan(workArea.y)
-    expect(dragged).toEqual({ vertical: 'below' })
-    expect(onPanelPlacementChanged).toHaveBeenCalledWith(petWindow, { vertical: 'below' })
+    expect(dragged).toEqual({ vertical: 'below', horizontal: 'center' })
+    expect(onPanelPlacementChanged).toHaveBeenCalledWith(petWindow, {
+      vertical: 'below',
+      horizontal: 'center',
+    })
 
     // The renderer re-lays out and reports the flipped boxes.
     expect(controller.setInteractiveRegions(petWindow as never, [
       below.mascot,
       below.card,
       below.toggle,
-    ])).toEqual({ vertical: 'below' })
+    ])).toEqual({ vertical: 'below', horizontal: 'center' })
 
     // Flipping moved the mascot up inside the window, so the window has to drop
     // by the same amount: the mascot stays on the menu bar rather than jumping
@@ -715,6 +721,78 @@ describe('Electron pet window service', () => {
     expect(petWindow.getBounds().y + below.mascot.y).toBe(workArea.y)
     // And the whole panel is now inside the work area.
     expect(petWindow.getBounds().y + below.toggle.y).toBeGreaterThanOrEqual(workArea.y)
+  })
+
+  it.each([
+    {
+      edge: 'right',
+      pointerEndX: 2_000,
+      horizontal: 'left' as const,
+      shiftedMascotX: 260,
+    },
+    {
+      edge: 'left',
+      pointerEndX: -2_000,
+      horizontal: 'right' as const,
+      shiftedMascotX: 12,
+    },
+  ])('keeps the Windows task panel visible at the $edge edge without moving the mascot', async ({
+    pointerEndX,
+    horizontal,
+    shiftedMascotX,
+  }) => {
+    const petWindow = createFakeWindow({
+      x: 100,
+      y: 120,
+      width: PET_WINDOW_WIDTH,
+      height: PET_WINDOW_HEIGHT,
+    })
+    const { controller, onPanelPlacementChanged } = panelController(petWindow, 'win32')
+    await controller.show()
+
+    const { above, workArea } = panelDrag
+    controller.setInteractiveRegions(petWindow as never, [
+      above.mascot,
+      above.card,
+      above.toggle,
+    ])
+    controller.dragWindow(petWindow as never, { phase: 'start', x: 150, y: 180 })
+    const dragged = controller.dragWindow(petWindow as never, {
+      phase: 'end',
+      x: pointerEndX,
+      y: 180,
+    })
+    const mascotScreenX = petWindow.getBounds().x + above.mascot.x
+
+    expect(dragged).toEqual({ vertical: 'above', horizontal })
+    expect(onPanelPlacementChanged).toHaveBeenCalledWith(petWindow, {
+      vertical: 'above',
+      horizontal,
+    })
+
+    // The renderer keeps the card centred in the fixed window and moves the
+    // mascot to the outside. The host absorbs that internal shift by moving
+    // the whole window in the opposite direction.
+    const shiftedMascot = { ...above.mascot, x: shiftedMascotX }
+    expect(controller.setInteractiveRegions(petWindow as never, [
+      shiftedMascot,
+      above.card,
+      above.toggle,
+    ])).toEqual({ vertical: 'above', horizontal })
+
+    const shiftedBounds = petWindow.getBounds()
+    expect(shiftedBounds.x + shiftedMascot.x).toBe(mascotScreenX)
+    expect(shiftedBounds.x + above.card.x).toBeGreaterThanOrEqual(workArea.x)
+    expect(shiftedBounds.x + above.card.x + above.card.width)
+      .toBeLessThanOrEqual(workArea.x + workArea.width)
+
+    onPanelPlacementChanged.mockClear()
+    controller.setInteractiveRegions(petWindow as never, [
+      shiftedMascot,
+      above.card,
+      above.toggle,
+    ])
+    expect(onPanelPlacementChanged).not.toHaveBeenCalled()
   })
 
   it('holds the mascot still through a flip that happens short of the menu bar', async () => {
@@ -739,7 +817,7 @@ describe('Electron pet window service', () => {
     const dragged = controller.dragWindow(petWindow as never, { phase: 'end', x: 150, y: -55 })
     const mascotScreenY = petWindow.getBounds().y + above.mascot.y
     expect(mascotScreenY).toBe(workArea.y + 100)
-    expect(dragged).toEqual({ vertical: 'below' })
+    expect(dragged).toEqual({ vertical: 'below', horizontal: 'center' })
 
     controller.setInteractiveRegions(petWindow as never, [below.mascot, below.card, below.toggle])
 
@@ -778,7 +856,10 @@ describe('Electron pet window service', () => {
       // an event instead.
       cursor = { x: 150, y: -55 }
       vi.advanceTimersByTime(16)
-      expect(onPanelPlacementChanged).toHaveBeenCalledWith(petWindow, { vertical: 'below' })
+      expect(onPanelPlacementChanged).toHaveBeenCalledWith(petWindow, {
+        vertical: 'below',
+        horizontal: 'center',
+      })
 
       controller.setInteractiveRegions(petWindow as never, [below.mascot, below.card, below.toggle])
       expect(petWindow.getBounds().y + below.mascot.y).toBe(workArea.y + 100)
@@ -816,7 +897,7 @@ describe('Electron pet window service', () => {
       below.mascot,
       below.card,
       below.toggle,
-    ])).toEqual({ vertical: 'below' })
+    ])).toEqual({ vertical: 'below', horizontal: 'center' })
     expect(petWindow.getBounds().y + below.mascot.y).toBe(panelDrag.workArea.y)
   })
 
@@ -856,7 +937,44 @@ describe('Electron pet window service', () => {
     expect(petWindow?.getBounds().y).toBe(workArea.y - above.mascot.y)
     expect((petWindow?.getBounds().y ?? 0) + above.mascot.y).toBe(workArea.y)
     // And it is still out of room up there, so it flips straight back.
-    expect(placement).toEqual({ vertical: 'below' })
+    expect(placement).toEqual({ vertical: 'below', horizontal: 'center' })
+  })
+
+  it('reopens a side-shifted pet where the mascot was, not where the window was', async () => {
+    const { above, workArea } = panelDrag
+    const shiftedMascot = { ...above.mascot, x: 260 }
+    const saved = {
+      x: workArea.x + workArea.width - shiftedMascot.x - shiftedMascot.width,
+      y: 120,
+      region: shiftedMascot,
+    }
+    let petWindow: ReturnType<typeof createFakeWindow> | undefined
+    const controller = new PetWindowController({
+      createWindow: vi.fn((bounds) => {
+        petWindow = createFakeWindow(
+          bounds as { x: number, y: number, width: number, height: number },
+        )
+        return petWindow
+      }) as never,
+      getCurrentWorkArea: () => workArea,
+      getWorkAreaForPoint: () => workArea,
+      load: vi.fn().mockResolvedValue(undefined),
+      platform: 'win32',
+      preloadPath: '/app/electron-dist/preload.cjs',
+      readPosition: () => saved,
+    })
+
+    await controller.show()
+    const placement = controller.setInteractiveRegions(petWindow as never, [
+      above.mascot,
+      above.card,
+      above.toggle,
+    ])
+
+    const bounds = petWindow?.getBounds()
+    expect((bounds?.x ?? 0) + above.mascot.x)
+      .toBe(saved.x + shiftedMascot.x)
+    expect(placement).toEqual({ vertical: 'above', horizontal: 'left' })
   })
 
   it('leaves the panel above the mascot when only the mascot is reported', async () => {
@@ -874,7 +992,7 @@ describe('Electron pet window service', () => {
     controller.dragWindow(petWindow as never, { phase: 'start', x: 150, y: 180 })
     const dragged = controller.dragWindow(petWindow as never, { phase: 'end', x: 150, y: -400 })
 
-    expect(dragged).toEqual({ vertical: 'above' })
+    expect(dragged).toEqual({ vertical: 'above', horizontal: 'center' })
     expect(onPanelPlacementChanged).not.toHaveBeenCalled()
     expect(petWindow.getBounds().y).toBe(panelDrag.workArea.y - panelDrag.above.mascot.y)
   })
@@ -883,7 +1001,7 @@ describe('Electron pet window service', () => {
     const mascot = { x: 136, y: 240, width: 112, height: 128 }
     const panel = { x: 16, y: 88, width: 352, height: 171 }
     const workArea = { x: 0, y: 25, width: 800, height: 575 }
-    const above = { vertical: 'above' } as const
+    const above = { vertical: 'above', horizontal: 'center' } as const
 
     // 335px of room, 183px needed.
     expect(resolvePetPanelPlacement({
@@ -892,7 +1010,7 @@ describe('Electron pet window service', () => {
       mascot,
       panel,
       previous: above,
-    })).toEqual({ vertical: 'above' })
+    })).toEqual({ vertical: 'above', horizontal: 'center' })
 
     // Mascot on the menu bar: no room at all.
     expect(resolvePetPanelPlacement({
@@ -901,7 +1019,7 @@ describe('Electron pet window service', () => {
       mascot,
       panel,
       previous: above,
-    })).toEqual({ vertical: 'below' })
+    })).toEqual({ vertical: 'below', horizontal: 'center' })
 
     // One pixel short still flips; exactly enough does not.
     expect(resolvePetPanelPlacement({
@@ -910,14 +1028,14 @@ describe('Electron pet window service', () => {
       mascot,
       panel,
       previous: above,
-    })).toEqual({ vertical: 'below' })
+    })).toEqual({ vertical: 'below', horizontal: 'center' })
     expect(resolvePetPanelPlacement({
       windowPosition: { x: 100, y: workArea.y - mascot.y + panel.height + 12 },
       workArea,
       mascot,
       panel,
       previous: above,
-    })).toEqual({ vertical: 'above' })
+    })).toEqual({ vertical: 'above', horizontal: 'center' })
 
     // Coming back the other way costs extra, so a mascot parked on the boundary
     // does not flutter.
@@ -926,15 +1044,15 @@ describe('Electron pet window service', () => {
       workArea,
       mascot,
       panel,
-      previous: { vertical: 'below' },
-    })).toEqual({ vertical: 'below' })
+      previous: { vertical: 'below', horizontal: 'center' },
+    })).toEqual({ vertical: 'below', horizontal: 'center' })
     expect(resolvePetPanelPlacement({
       windowPosition: { x: 100, y: workArea.y - mascot.y + panel.height + 36 },
       workArea,
       mascot,
       panel,
-      previous: { vertical: 'below' },
-    })).toEqual({ vertical: 'above' })
+      previous: { vertical: 'below', horizontal: 'center' },
+    })).toEqual({ vertical: 'above', horizontal: 'center' })
   })
 
   it('bounds the panel by everything hanging off the mascot, not just the card', () => {

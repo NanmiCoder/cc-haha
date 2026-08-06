@@ -115,7 +115,8 @@ export type ServerMessage =
     }
   | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage }
-  | { type: 'thinking'; text: string }
+  /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
+  | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | {
       type: 'runtime_config_applied'

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, RotateCw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUpRight, RotateCw } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
 import { useTranslation } from '../../i18n'
@@ -15,10 +15,11 @@ type Props = {
   onBack: () => void
   onForward: () => void
   onReload: () => void
+  onOpenExternal: () => void
   rightActions?: ReactNode
 }
 
-export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = false, onNavigate, onBack, onForward, onReload, rightActions }: Props) {
+export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = false, onNavigate, onBack, onForward, onReload, onOpenExternal, rightActions }: Props) {
   const t = useTranslation()
   const [draft, setDraft] = useState(url)
   useEffect(() => { setDraft(url) }, [url])
@@ -39,13 +40,22 @@ export function BrowserAddressBar({ url, canGoBack, canGoForward, loading = fals
         aria-busy={loading}
         onClick={onReload}
       />
-      <form className="min-w-0 flex-1" onSubmit={(e) => { e.preventDefault(); onNavigate(normalizeBrowserAddress(draft)) }}>
+      <form className="relative min-w-0 flex-1" onSubmit={(e) => { e.preventDefault(); onNavigate(normalizeBrowserAddress(draft)) }}>
         <input
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 font-mono text-xs text-[var(--color-text-primary)] outline-none transition-[border-color,box-shadow] duration-150 ease-out placeholder:font-[var(--font-body)] placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-outline)] focus-visible:border-[var(--color-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] py-1 pl-2.5 pr-8 font-mono text-xs text-[var(--color-text-primary)] outline-none transition-[border-color,box-shadow] duration-150 ease-out placeholder:font-[var(--font-body)] placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-outline)] focus-visible:border-[var(--color-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={t('browser.addressPlaceholder')}
           spellCheck={false}
+        />
+        <IconButton
+          icon={<ArrowUpRight size={15} strokeWidth={1.9} aria-hidden="true" />}
+          label={t('openWith.systemBrowser')}
+          size="xs"
+          tone="muted"
+          disabled={!url}
+          onClick={onOpenExternal}
+          className="absolute right-0.5 top-1/2 -translate-y-1/2"
         />
       </form>
       {rightActions && (

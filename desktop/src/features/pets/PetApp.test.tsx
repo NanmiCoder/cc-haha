@@ -315,7 +315,10 @@ describe('PetApp', () => {
     // The host clamps the mascot to the display edge through the window's
     // transparent padding, which puts the card behind the macOS menu bar. It
     // answers the region report with the side the card has to move to (#1140).
-    mocks.setInteractiveRegions.mockResolvedValue({ vertical: 'below' })
+    mocks.setInteractiveRegions.mockResolvedValue({
+      vertical: 'below',
+      horizontal: 'left',
+    })
     const { container } = render(<PetApp />)
     await screen.findByRole('button', {
       name: 'Build pet window, pet.window.status.running',
@@ -324,6 +327,8 @@ describe('PetApp', () => {
     await waitFor(() => {
       expect(container.querySelector('.pet-window-stack'))
         .toHaveAttribute('data-panel-placement', 'below')
+      expect(container.querySelector('.pet-window-stack'))
+        .toHaveAttribute('data-panel-horizontal', 'left')
     })
     // The re-laid-out boxes have to go back, or the host holds the mascot
     // against the pre-flip layout.
@@ -335,7 +340,10 @@ describe('PetApp', () => {
   it('follows a placement the host pushes mid-drag, when no call is in flight', async () => {
     // Dragging is driven by a cursor sampler in the host, not by renderer
     // calls, so a flip decided mid-drag arrives as an event.
-    let push: ((placement: { vertical: 'above' | 'below' }) => void) | undefined
+    let push: ((placement: {
+      vertical: 'above' | 'below'
+      horizontal: 'center' | 'left' | 'right'
+    }) => void) | undefined
     mocks.onPanelPlacementChanged.mockImplementation(async (handler: typeof push) => {
       push = handler
       return () => undefined
@@ -346,11 +354,15 @@ describe('PetApp', () => {
 
     expect(container.querySelector('.pet-window-stack'))
       .toHaveAttribute('data-panel-placement', 'above')
+    expect(container.querySelector('.pet-window-stack'))
+      .toHaveAttribute('data-panel-horizontal', 'center')
 
     await waitFor(() => {
-      push?.({ vertical: 'below' })
+      push?.({ vertical: 'below', horizontal: 'right' })
       expect(container.querySelector('.pet-window-stack'))
         .toHaveAttribute('data-panel-placement', 'below')
+      expect(container.querySelector('.pet-window-stack'))
+        .toHaveAttribute('data-panel-horizontal', 'right')
     })
   })
 

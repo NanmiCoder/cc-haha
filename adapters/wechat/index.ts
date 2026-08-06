@@ -3,7 +3,7 @@ import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-b
 import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
 import { enqueue } from '../common/chat-queue.js'
-import { getConfiguredWorkDir, loadConfig } from '../common/config.js'
+import { loadConfig } from '../common/config.js'
 import {
   formatImHelp,
   formatImStatus,
@@ -16,7 +16,7 @@ import {
   parsePermissionCommand,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { AdapterHttpClient } from '../common/http-client.js'
+import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -48,8 +48,7 @@ const botToken = config.wechat.botToken
 const bridge = new WsBridge(config.serverUrl, 'wechat')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const defaultWorkDir = getConfiguredWorkDir(config, config.wechat)
-const httpClient = new AdapterHttpClient(config.serverUrl, { allowedProjectRoots: [defaultWorkDir] })
+const { httpClient, defaultWorkDir } = createAdapterClient(config, config.wechat)
 const attachmentStore = new AttachmentStore()
 const media = new WechatMediaService(attachmentStore)
 const pendingProjectSelection = new Map<string, boolean>()

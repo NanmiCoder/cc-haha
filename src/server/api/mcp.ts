@@ -12,7 +12,6 @@ import {
   addMcpConfig,
   findProjectMcpConfigPath,
   getAllMcpConfigs,
-  getClaudeCodeMcpConfigs,
   getMcpConfigByName,
   isMcpServerDisabled,
   projectDirDeclaresMcpServers,

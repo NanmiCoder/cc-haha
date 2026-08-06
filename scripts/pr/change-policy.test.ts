@@ -126,6 +126,21 @@ describe('evaluateChangePolicy', () => {
     expect(result.checks.persistence).toBe(true)
   })
 
+  test('routes every source root the dead-import check owns to the policy lane', () => {
+    // scripts/pr/dead-imports.test.ts reads these roots rather than importing them,
+    // so the import graph cannot pull the policy lane in. Without the prefixes the
+    // check exists and never runs on the diffs it was written for.
+    expect(evaluateChangePolicy(['src/server/ws/handler.ts']).checks.policy).toBe(true)
+    expect(evaluateChangePolicy(['src/utils/attachments.ts']).checks.policy).toBe(true)
+    expect(evaluateChangePolicy(['adapters/feishu/index.ts']).checks.policy).toBe(true)
+    expect(evaluateChangePolicy(['scripts/perf/local-index-benchmark.ts']).checks.policy).toBe(true)
+    // Surfaces still route to their own lanes; policy is additive, not a takeover.
+    expect(evaluateChangePolicy(['src/server/ws/handler.ts']).checks.server).toBe(true)
+    expect(evaluateChangePolicy(['adapters/feishu/index.ts']).checks.adapters).toBe(true)
+    // desktop/ is checked by its own tsconfig, so it must not select this lane.
+    expect(evaluateChangePolicy(['desktop/src/pages/Settings.tsx']).checks.policy).toBe(false)
+  })
+
   test('keeps quality ownership and contributor contracts on the policy lane', () => {
     const result = evaluateChangePolicy([
       '.github/CODEOWNERS',
@@ -266,5 +281,128 @@ describe('evaluateChangePolicy', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('evaluateChangePolicy dependent-file widening', () => {
+  test('selects the desktop lane when a root change is imported by desktop code', () => {
+    const pathOnly = evaluateChangePolicy(['src/shared/modelReasoning.ts'])
+    const withDependents = evaluateChangePolicy(
+      ['src/shared/modelReasoning.ts'],
+      [],
+      ['desktop/src/lib/runtimeSelection.ts'],
+    )
+
+    expect(pathOnly.checks.desktop).toBe(false)
+    expect(withDependents.checks.desktop).toBe(true)
+  })
+
+  test('selects the native lane when a desktop change is imported by the Electron host', () => {
+    const pathOnly = evaluateChangePolicy(['desktop/src/lib/browserSafePort.ts'])
+    const withDependents = evaluateChangePolicy(
+      ['desktop/src/lib/browserSafePort.ts'],
+      [],
+      ['desktop/electron/services/sidecarManager.ts'],
+    )
+
+    expect(pathOnly.checks.desktopNative).toBe(false)
+    expect(withDependents.checks.desktopNative).toBe(true)
+  })
+
+  test('selects the adapter lane when a root change is imported by an adapter', () => {
+    const withDependents = evaluateChangePolicy(
+      ['src/utils/shared.ts'],
+      [],
+      ['adapters/telegram/bot.ts'],
+    )
+
+    expect(evaluateChangePolicy(['src/utils/shared.ts']).checks.adapters).toBe(false)
+    expect(withDependents.checks.adapters).toBe(true)
+  })
+
+  test('keeps areas, labels, and the missing-test block scoped to the actual diff', () => {
+    const result = evaluateChangePolicy(
+      ['src/shared/modelReasoning.ts', 'src/shared/modelReasoning.test.ts'],
+      [],
+      ['desktop/src/lib/runtimeSelection.ts', 'desktop/src/stores/chatStore.ts'],
+    )
+
+    // A hub edit must not demand desktop tests for files the author never touched.
+    expect(result.areas).toEqual([])
+    expect(result.missingTestSignals).toEqual([])
+    expect(result.blocked).toBe(false)
+    expect(result.files).toEqual(['src/shared/modelReasoning.test.ts', 'src/shared/modelReasoning.ts'])
+    expect(result.checks.desktop).toBe(true)
+  })
+
+  test('does not let a dependent file trigger the CLI core block', () => {
+    const result = evaluateChangePolicy(
+      ['src/server/services/providerService.ts', 'src/server/__tests__/provider.test.ts'],
+      [],
+      ['src/commands/help.ts', 'src/tools/BashTool/index.ts'],
+    )
+
+    expect(result.cliCoreFiles).toEqual([])
+    expect(result.blocked).toBe(false)
+  })
+
+  test('does not widen docs or coverage lanes', () => {
+    const result = evaluateChangePolicy(
+      ['src/server/services/providerService.ts', 'src/server/__tests__/provider.test.ts'],
+      [],
+      ['docs/internals/contributing.md', 'scripts/pr/check-pr.ts', 'desktop/src/pages/Settings.tsx'],
+    )
+
+    expect(result.checks.docs).toBe(false)
+    // Coverage still reflects the diff, which already contains executable sources.
+    expect(result.checks.coverage).toBe(true)
+  })
+
+  test('does not widen the policy lane', () => {
+    // Split out of the case above once `src/` became a policy prefix: that fixture
+    // selects the lane through its own changed files now, so it can no longer show
+    // what this asserts — a dependent the import graph added must never select it.
+    const result = evaluateChangePolicy(
+      ['desktop/src/pages/Settings.tsx'],
+      [],
+      ['scripts/pr/check-pr.ts', 'src/utils/attachments.ts', 'adapters/feishu/index.ts'],
+    )
+
+    expect(result.checks.policy).toBe(false)
+  })
+
+  test('selects the agent flow for protocol clients the import graph cannot reach', () => {
+    // Regression for d14154379 -> 4626dbef4: adapters/common/http-client.ts hardcoded
+    // permissionMode:'default' on POST /api/sessions, short-circuiting the server's
+    // global fallback for every IM-created session. Adapters reach the server over
+    // the wire, so no dependency graph links them; the coupling has to be declared.
+    const adapterHttp = evaluateChangePolicy([
+      'adapters/common/http-client.ts',
+      'adapters/common/__tests__/http-client.test.ts',
+    ])
+    expect(adapterHttp.checks.agentFlow).toBe(true)
+
+    const adapterWs = evaluateChangePolicy([
+      'adapters/common/ws-bridge.ts',
+      'adapters/common/__tests__/ws-bridge.test.ts',
+    ])
+    expect(adapterWs.checks.agentFlow).toBe(true)
+
+    // An unrelated adapter still stays out of the agent flow lane.
+    expect(evaluateChangePolicy([
+      'adapters/telegram/formatting.ts',
+      'adapters/telegram/__tests__/formatting.test.ts',
+    ]).checks.agentFlow).toBe(false)
+  })
+
+  test('ignores dependents that are already part of the diff', () => {
+    const result = evaluateChangePolicy(
+      ['desktop/src/lib/a.ts', 'desktop/src/lib/a.test.ts'],
+      [],
+      ['desktop/src/lib/a.ts', './desktop/src/lib/a.ts', ''],
+    )
+
+    expect(result.checks.desktop).toBe(true)
+    expect(result.checks.desktopNative).toBe(false)
   })
 })

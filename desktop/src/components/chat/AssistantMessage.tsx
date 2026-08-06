@@ -119,6 +119,7 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
               sessionId={sessionId}
               workDir={workDir}
               changedFiles={turnChangedFiles}
+              suppressManagedGeneratedImages
             />
           )}
           {!isStreaming && (

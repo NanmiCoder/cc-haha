@@ -5,7 +5,6 @@
  * then run: bun run whatsapp
  */
 
-import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import {
   normalizeMessageContent,
@@ -14,7 +13,7 @@ import {
 import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { enqueue } from '../common/chat-queue.js'
-import { getConfiguredWorkDir, loadConfig } from '../common/config.js'
+import { loadConfig } from '../common/config.js'
 import {
   formatImHelp,
   formatImStatus,
@@ -27,7 +26,7 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { AdapterHttpClient } from '../common/http-client.js'
+import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -63,8 +62,7 @@ if (!hasWhatsAppAuth(authDir)) {
 const bridge = new WsBridge(config.serverUrl, 'whatsapp')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const defaultWorkDir = getConfiguredWorkDir(config, config.whatsapp)
-const httpClient = new AdapterHttpClient(config.serverUrl, { allowedProjectRoots: [defaultWorkDir] })
+const { httpClient, defaultWorkDir } = createAdapterClient(config, config.whatsapp)
 const attachmentStore = new AttachmentStore()
 attachmentStore.gc().catch((err) => {
   console.warn('[WhatsApp] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)

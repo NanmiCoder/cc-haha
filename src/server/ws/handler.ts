@@ -11,7 +11,6 @@ import type {
   ClientMessage,
   PermissionMode,
   ServerMessage,
-  StreamingFallbackCause,
   TokenUsage,
 } from './events.js'
 import { RUNTIME_CONFIG_APPLIED_EVENT } from './events.js'
@@ -23,7 +22,6 @@ import {
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
-  type SessionTaskNotification,
 } from '../services/sessionService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
@@ -55,21 +53,68 @@ import {
 } from '../services/titleService.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
 import { archiveRemoteSession } from '../../utils/teleport/api.js'
-import {
-  COMMAND_NAME_TAG,
-  LOCAL_COMMAND_STDERR_TAG,
-  LOCAL_COMMAND_STDOUT_TAG,
-} from '../../constants/xml.js'
-import {
-  getCommandMetadataDisplayText,
-  shouldHideCommandMetadataContent,
-} from '../../utils/commandMetadata.js'
 import { shouldCreateWorktreeForSessionLaunch } from '../services/repositoryLaunchService.js'
 import { getDisconnectGraceMs } from './disconnectGraceConfig.js'
 import {
   isPetClientMessageAllowed,
   toPetServerMessage,
 } from '../petAccessPolicy.js'
+import {
+  activeBackgroundTaskIds,
+  activeAgentTasks,
+  activeNonAgentTasks,
+  authoritativeStoppedTaskIds,
+  agentStopRequestedSessions,
+  runtimeExitStoppedSessions,
+  getCliBackgroundTaskLifecycle,
+  isAgentTaskType,
+  untrackCliBackgroundTask,
+  clearAgentRuntimeState,
+  markTaskAuthoritativelyStopped,
+  hasActiveBackgroundTasks,
+  clearAgentStopFinalizationRetry,
+  markActiveAgentsStopping,
+} from './agentTaskState.js'
+import type {
+  ActiveAgentTaskState,
+  CliBackgroundTaskLifecycle,
+} from './agentTaskState.js'
+import {
+  ROOT_STREAM_SCOPE,
+  extractAssistantStreamTextForTitle,
+  extractAssistantMessageTextForTitle,
+  cliParentToolUseId,
+  cliStreamScope,
+  scopedToolUseId,
+  extractAssistantText,
+  normalizeAskUserQuestionToolResult,
+  classifyRuntimeErrorCode,
+  toApiRetryServerMessage,
+  toStreamingFallbackServerMessage,
+  extractLocalCommandOutput,
+  isCompactLocalCommandOutput,
+  extractLocalCommand,
+  extractGoalEvent,
+  looksLikeGoalCommandOutput,
+  getCompactBoundaryMessage,
+  isCompactSummaryMessageContent,
+  extractReplayUserText,
+  normalizeCliTaskNotification,
+} from './cliMessageParsing.js'
+import {
+  resetCurrentStreamAttempt,
+  streamBlockKey,
+  rememberActiveBlockScope,
+  forgetActiveBlockScope,
+  resolveActiveBlockKey,
+  pendingToolBlockKey,
+  rememberToolParentUseId,
+  forgetToolParentUseId,
+  consumeToolParentUseId,
+} from './streamBlocks.js'
+import type {
+  SessionStreamState,
+} from './streamBlocks.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -145,42 +190,12 @@ type ActiveUserTurnState = {
   cancelled?: boolean
 }
 
-type AgentTaskType = 'local_agent' | 'remote_agent'
 
-type ActiveNonAgentTaskState = {
-  taskId: string
-  taskType?: string
-  toolUseId: string
-  description?: string
-}
 
-type ActiveAgentTaskState = {
-  taskId: string
-  taskType: AgentTaskType
-  toolUseId: string
-  remoteSessionId?: string
-  description?: string
-  stopIntent: boolean
-  stopRequested: boolean
-  localStopConfirmed: boolean
-  bookendPending: boolean
-  finalizationRetryCount: number
-  finalizationRetryTimer?: ReturnType<typeof setTimeout>
-  finalization?: Promise<boolean>
-  remoteArchive?: Promise<boolean>
-  remoteArchiveError?: string
-  stopFailureMessage?: string
-}
 
 const runtimeOverrides = new Map<string, RuntimeOverride>()
 const activeUserTurns = new Map<string, ActiveUserTurnState>()
 const activeCliRuns = new Set<string>()
-const activeBackgroundTaskIds = new Map<string, Set<string>>()
-const activeAgentTasks = new Map<string, Map<string, ActiveAgentTaskState>>()
-const activeNonAgentTasks = new Map<string, Map<string, ActiveNonAgentTaskState>>()
-const authoritativeStoppedTaskIds = new Map<string, Set<string>>()
-const agentStopRequestedSessions = new Set<string>()
-const runtimeExitStoppedSessions = new Set<string>()
 const pendingInterruptedTurnResults = new Map<string, number>()
 const interruptedTurnResultMessages = new WeakMap<object, string>()
 const sessionClearInProgress = new Set<string>()
@@ -233,112 +248,11 @@ function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
   terminalSessionChatStates.delete(sessionId)
 }
 
-type CliBackgroundTaskLifecycle = {
-  taskId: string
-  running: boolean
-  taskType?: string
-  toolUseId?: string
-  remoteSessionId?: string
-  description?: string
-  status?: string
-  suppressForward?: boolean
-}
 
-function getCliBackgroundTaskLifecycle(cliMsg: any): CliBackgroundTaskLifecycle | null {
-  if (cliMsg?.type !== 'system') return null
-  const taskId = typeof cliMsg.task_id === 'string' ? cliMsg.task_id.trim() : ''
-  if (!taskId) return null
-  const optionalString = (value: unknown) =>
-    typeof value === 'string' && value.trim() ? value.trim() : undefined
-  const taskType = typeof cliMsg.task_type === 'string' && cliMsg.task_type.trim()
-    ? cliMsg.task_type.trim()
-    : undefined
-  const toolUseId = optionalString(cliMsg.tool_use_id)
-  const remoteSessionId = optionalString(cliMsg.remote_session_id)
-  const description = optionalString(cliMsg.description) ??
-    optionalString(cliMsg.message) ??
-    optionalString(cliMsg.title)
 
-  if (cliMsg.subtype === 'task_started') {
-    return { taskId, running: true, taskType, toolUseId, remoteSessionId, description }
-  }
 
-  if (cliMsg.subtype === 'task_notification' && cliMsg.status === 'running') {
-    return { taskId, running: true, taskType, toolUseId, remoteSessionId, description }
-  }
 
-  if (
-    cliMsg.subtype === 'task_notification' &&
-    (cliMsg.status === 'completed' ||
-      cliMsg.status === 'failed' ||
-      cliMsg.status === 'stopped' ||
-      cliMsg.status === 'killed')
-  ) {
-    return { taskId, running: false, status: cliMsg.status }
-  }
 
-  return null
-}
-
-function isAgentTaskType(taskType: string | undefined): taskType is AgentTaskType {
-  return taskType === 'local_agent' || taskType === 'remote_agent'
-}
-
-function untrackCliBackgroundTask(sessionId: string, taskId: string): void {
-  const taskIds = activeBackgroundTaskIds.get(sessionId)
-  taskIds?.delete(taskId)
-  if (taskIds?.size === 0) activeBackgroundTaskIds.delete(sessionId)
-
-  const sessionAgentTasks = activeAgentTasks.get(sessionId)
-  const agentTask = sessionAgentTasks?.get(taskId)
-  if (agentTask?.finalizationRetryTimer !== undefined) {
-    clearTimeout(agentTask.finalizationRetryTimer)
-  }
-  sessionAgentTasks?.delete(taskId)
-  if (sessionAgentTasks?.size === 0) activeAgentTasks.delete(sessionId)
-
-  const sessionNonAgentTasks = activeNonAgentTasks.get(sessionId)
-  sessionNonAgentTasks?.delete(taskId)
-  if (sessionNonAgentTasks?.size === 0) activeNonAgentTasks.delete(sessionId)
-}
-
-function clearAgentRuntimeState(
-  sessionId: string,
-  options?: { preserveRetryableStops?: boolean },
-): void {
-  const retryableStops = options?.preserveRetryableStops
-    ? new Map(
-        [...(activeAgentTasks.get(sessionId)?.entries() ?? [])].filter(([, task]) =>
-          task.stopIntent && task.localStopConfirmed && Boolean(task.stopFailureMessage),
-        ),
-      )
-    : new Map<string, ActiveAgentTaskState>()
-
-  for (const task of activeAgentTasks.get(sessionId)?.values() ?? []) {
-    clearAgentStopFinalizationRetry(task)
-  }
-  activeBackgroundTaskIds.delete(sessionId)
-  activeAgentTasks.delete(sessionId)
-  activeNonAgentTasks.delete(sessionId)
-  authoritativeStoppedTaskIds.delete(sessionId)
-  agentStopRequestedSessions.delete(sessionId)
-  runtimeExitStoppedSessions.delete(sessionId)
-
-  if (retryableStops.size > 0) {
-    activeAgentTasks.set(sessionId, retryableStops)
-    activeBackgroundTaskIds.set(sessionId, new Set(retryableStops.keys()))
-    agentStopRequestedSessions.add(sessionId)
-  }
-}
-
-function markTaskAuthoritativelyStopped(sessionId: string, taskId: string): void {
-  let taskIds = authoritativeStoppedTaskIds.get(sessionId)
-  if (!taskIds) {
-    taskIds = new Set()
-    authoritativeStoppedTaskIds.set(sessionId, taskIds)
-  }
-  taskIds.add(taskId)
-}
 
 function trackCliBackgroundTaskLifecycle(
   sessionId: string,
@@ -445,15 +359,6 @@ function trackCliBackgroundTaskLifecycle(
   return lifecycle
 }
 
-function hasActiveBackgroundTasks(sessionId: string): boolean {
-  const taskIds = activeBackgroundTaskIds.get(sessionId)
-  if (!taskIds || taskIds.size === 0) return false
-  const sessionAgentTasks = activeAgentTasks.get(sessionId)
-  return [...taskIds].some((taskId) => {
-    const agentTask = sessionAgentTasks?.get(taskId)
-    return !agentTask || !agentTask.localStopConfirmed || agentTask.bookendPending
-  })
-}
 
 function trackCliRunState(sessionId: string, cliMsg: any): 'running' | 'idle' | null {
   if (
@@ -1521,8 +1426,8 @@ async function handleSetRuntimeConfig(
   message: Extract<ClientMessage, { type: 'set_runtime_config' }>
 ) {
   const { sessionId } = ws.data
-  let modelId = typeof message.modelId === 'string' ? message.modelId.trim() : ''
-  if (!modelId) {
+  const requestedModelId = typeof message.modelId === 'string' ? message.modelId.trim() : ''
+  if (!requestedModelId) {
     sendMessage(ws, {
       type: 'error',
       message: 'Runtime model selection is invalid.',
@@ -1530,70 +1435,73 @@ async function handleSetRuntimeConfig(
     })
     return
   }
-  if (isGrokOfficialProviderId(message.providerId)) {
-    modelId = (await getGrokReasoningEfforts(modelId)).modelId
-  }
-  const effortLevel =
+  const requestedEffort =
     typeof message.effortLevel === 'string' ? message.effortLevel.trim() : undefined
-  const effortResolution = effortLevel === undefined
-    ? { valid: true, effort: undefined }
-    : await resolveRuntimeEffort(message.providerId, modelId, effortLevel)
-  if (!effortResolution.valid) {
-    sendMessage(ws, {
-      type: 'error',
-      message: 'Runtime effort selection is invalid.',
-      code: 'RUNTIME_CONFIG_INVALID',
-    })
-    return
-  }
 
-  const nextOverride = {
-    providerId: message.providerId ?? null,
-    modelId,
-    ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
-  }
-  const prevOverride = runtimeOverrides.get(sessionId)
-  if (
-    prevOverride &&
-    prevOverride.providerId === nextOverride.providerId &&
-    prevOverride.modelId === nextOverride.modelId &&
-    prevOverride.effort === nextOverride.effort
-  ) {
-    return
-  }
-
-  runtimeOverrides.set(sessionId, nextOverride)
-  runtimeOverrideVersions.set(
-    sessionId,
-    (runtimeOverrideVersions.get(sessionId) ?? 0) + 1,
-  )
-
-  if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
-    deferredRuntimeRestarts.set(sessionId, nextOverride)
-    await persistSessionRuntimeConfig(sessionId, nextOverride)
-    return
-  }
-
-  if (conversationService.hasSession(sessionId)) {
-    await enqueueRuntimeTransition(sessionId, async () => {
-      await persistSessionRuntimeConfig(sessionId, nextOverride)
-      await restartSessionWithRuntimeConfig(ws, sessionId)
-    })
-    return
-  }
-
-  const pendingStartup = sessionStartupPromises.get(sessionId)
-  if (pendingStartup) {
-    const startupRuntimeVersion = sessionStartupRuntimeVersions.get(sessionId) ?? 0
-    const currentRuntimeVersion = runtimeOverrideVersions.get(sessionId) ?? 0
-    if (startupRuntimeVersion >= currentRuntimeVersion) {
-      await persistSessionRuntimeConfig(sessionId, nextOverride)
-      await pendingStartup
-      broadcastAppliedRuntimeConfig(sessionId)
+  // Register the transition before remote model-catalog or provider validation.
+  // A user message arriving in that async admission window must wait for the
+  // selected runtime instead of entering the previous provider's CLI process.
+  await enqueueRuntimeTransition(sessionId, async () => {
+    let modelId = requestedModelId
+    if (isGrokOfficialProviderId(message.providerId)) {
+      modelId = (await getGrokReasoningEfforts(modelId)).modelId
+    }
+    const effortResolution = requestedEffort === undefined
+      ? { valid: true, effort: undefined }
+      : await resolveRuntimeEffort(message.providerId, modelId, requestedEffort)
+    if (!effortResolution.valid) {
+      sendMessage(ws, {
+        type: 'error',
+        message: 'Runtime effort selection is invalid.',
+        code: 'RUNTIME_CONFIG_INVALID',
+      })
       return
     }
 
-    await enqueueRuntimeTransition(sessionId, async () => {
+    const nextOverride = {
+      providerId: message.providerId ?? null,
+      modelId,
+      ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
+    }
+    const prevOverride = runtimeOverrides.get(sessionId)
+    if (
+      prevOverride &&
+      prevOverride.providerId === nextOverride.providerId &&
+      prevOverride.modelId === nextOverride.modelId &&
+      prevOverride.effort === nextOverride.effort
+    ) {
+      return
+    }
+
+    runtimeOverrides.set(sessionId, nextOverride)
+    runtimeOverrideVersions.set(
+      sessionId,
+      (runtimeOverrideVersions.get(sessionId) ?? 0) + 1,
+    )
+
+    if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
+      deferredRuntimeRestarts.set(sessionId, nextOverride)
+      await persistSessionRuntimeConfig(sessionId, nextOverride)
+      return
+    }
+
+    if (conversationService.hasSession(sessionId)) {
+      await persistSessionRuntimeConfig(sessionId, nextOverride)
+      await restartSessionWithRuntimeConfig(ws, sessionId)
+      return
+    }
+
+    const pendingStartup = sessionStartupPromises.get(sessionId)
+    if (pendingStartup) {
+      const startupRuntimeVersion = sessionStartupRuntimeVersions.get(sessionId) ?? 0
+      const currentRuntimeVersion = runtimeOverrideVersions.get(sessionId) ?? 0
+      if (startupRuntimeVersion >= currentRuntimeVersion) {
+        await persistSessionRuntimeConfig(sessionId, nextOverride)
+        await pendingStartup
+        broadcastAppliedRuntimeConfig(sessionId)
+        return
+      }
+
       await persistSessionRuntimeConfig(sessionId, nextOverride)
       await pendingStartup.catch(() => undefined)
       const currentOverride = runtimeOverrides.get(sessionId)
@@ -1606,12 +1514,12 @@ async function handleSetRuntimeConfig(
         return
       }
       await restartSessionWithRuntimeConfig(ws, sessionId)
-    })
-    return
-  }
+      return
+    }
 
-  await persistSessionRuntimeConfig(sessionId, nextOverride)
-  broadcastAppliedRuntimeConfig(sessionId)
+    await persistSessionRuntimeConfig(sessionId, nextOverride)
+    broadcastAppliedRuntimeConfig(sessionId)
+  })
 }
 
 async function restartSessionWithPermissionMode(
@@ -2091,11 +1999,6 @@ function replayAgentStopFailures(
   }
 }
 
-function clearAgentStopFinalizationRetry(task: ActiveAgentTaskState): void {
-  if (task.finalizationRetryTimer === undefined) return
-  clearTimeout(task.finalizationRetryTimer)
-  task.finalizationRetryTimer = undefined
-}
 
 function scheduleAgentStopFinalizationRetry(
   sessionId: string,
@@ -2364,12 +2267,6 @@ async function stopAgentsForSessionClear(
   }))
 }
 
-function markActiveAgentsStopping(sessionId: string): void {
-  for (const task of activeAgentTasks.get(sessionId)?.values() ?? []) {
-    task.stopIntent = true
-    task.stopRequested = true
-  }
-}
 
 function closeStoppedAgentsAfterRuntimeExit(sessionId: string, cliMsg: any): void {
   if (
@@ -2561,36 +2458,7 @@ function appendAssistantTextForTitle(sessionId: string, cliMsg: any): void {
   }
 }
 
-function extractAssistantStreamTextForTitle(cliMsg: any): string | null {
-  const event = cliMsg?.event
-  if (
-    cliMsg?.type !== 'stream_event' ||
-    event?.type !== 'content_block_delta' ||
-    event.delta?.type !== 'text_delta' ||
-    typeof event.delta.text !== 'string'
-  ) {
-    return null
-  }
-  return event.delta.text
-}
 
-function extractAssistantMessageTextForTitle(cliMsg: any): string | null {
-  if (cliMsg?.type !== 'assistant') return null
-  const content = cliMsg.message?.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return null
-  const text = content
-    .flatMap((block) => {
-      if (!block || typeof block !== 'object') return []
-      const typedBlock = block as { type?: unknown; text?: unknown }
-      return typedBlock.type === 'text' && typeof typedBlock.text === 'string'
-        ? [typedBlock.text]
-        : []
-    })
-    .join('\n')
-    .trim()
-  return text || null
-}
 
 function completeActiveTitleTurn(sessionId: string): number | null {
   const state = sessionTitleState.get(sessionId)
@@ -2617,26 +2485,8 @@ function discardActiveTitleTurn(sessionId: string, count: number | null): void {
 // CLI message translation
 // ============================================================================
 
-const ROOT_STREAM_SCOPE = '\u0000root'
 
 /** Per-session state for correlating raw stream events with buffered messages. */
-type SessionStreamState = {
-  streamedAssistantMessageIds: Set<string>
-  unidentifiedStreamScopes: Set<string>
-  activeMessageIdsByScope: Map<string, string>
-  activeBlockScopesByIndex: Map<number, Set<string>>
-  activeBlockTypes: Map<string, 'text' | 'tool_use' | 'thinking'>
-  activeToolBlocks: Map<string, { toolName: string; toolUseId: string; inputJson: string; parentToolUseId?: string }>
-  pendingLocalCommand?: { name: string; args: string }
-  /** Tool blocks whose input JSON failed to parse in content_block_stop.
-   *  The assistant message carries the complete input — defer to that. */
-  pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
-  toolParentUseIds: Map<string, Set<string>>
-  lastApiError?: {
-    message: string
-    code: string
-  }
-}
 
 const sessionStreamStates = new Map<string, SessionStreamState>()
 
@@ -2660,122 +2510,17 @@ function getStreamState(sessionId: string): SessionStreamState {
   return state
 }
 
-function resetCurrentStreamAttempt(state: SessionStreamState): void {
-  state.streamedAssistantMessageIds.clear()
-  state.unidentifiedStreamScopes.clear()
-  state.activeMessageIdsByScope.clear()
-  state.activeBlockScopesByIndex.clear()
-  state.activeBlockTypes.clear()
-  state.activeToolBlocks.clear()
-  state.pendingToolBlocks.clear()
-  state.toolParentUseIds.clear()
-}
 
-function cliParentToolUseId(cliMsg: any): string | undefined {
-  return typeof cliMsg.parent_tool_use_id === 'string' && cliMsg.parent_tool_use_id.length > 0
-    ? cliMsg.parent_tool_use_id
-    : undefined
-}
 
-function cliStreamScope(cliMsg: any): string {
-  return cliParentToolUseId(cliMsg) ?? ROOT_STREAM_SCOPE
-}
 
-function streamBlockKey(scope: string, index: number): string {
-  return JSON.stringify([scope, index])
-}
 
-function rememberActiveBlockScope(
-  streamState: SessionStreamState,
-  index: number,
-  scope: string,
-): void {
-  const scopes = streamState.activeBlockScopesByIndex.get(index) ?? new Set()
-  scopes.add(scope)
-  streamState.activeBlockScopesByIndex.set(index, scopes)
-}
 
-function forgetActiveBlockScope(
-  streamState: SessionStreamState,
-  index: number,
-  scope: string,
-): void {
-  const scopes = streamState.activeBlockScopesByIndex.get(index)
-  if (!scopes) return
-  scopes.delete(scope)
-  if (scopes.size === 0) streamState.activeBlockScopesByIndex.delete(index)
-}
 
-function resolveActiveBlockKey(
-  streamState: SessionStreamState,
-  cliMsg: any,
-  index: number,
-): { key: string; scope: string } | null {
-  const parentToolUseId = cliParentToolUseId(cliMsg)
-  if (parentToolUseId) {
-    return {
-      key: streamBlockKey(parentToolUseId, index),
-      scope: parentToolUseId,
-    }
-  }
 
-  const scopes = streamState.activeBlockScopesByIndex.get(index)
-  if (scopes?.size !== 1) return null
-  const scope = scopes.values().next().value
-  if (typeof scope !== 'string') return null
-  return { key: streamBlockKey(scope, index), scope }
-}
 
-function pendingToolBlockKey(
-  parentToolUseId: string | undefined,
-  toolUseId: string,
-): string {
-  return JSON.stringify([parentToolUseId ?? null, toolUseId])
-}
 
-function scopedToolUseId(
-  parentToolUseId: string | undefined,
-  toolUseId: string,
-): string {
-  if (!parentToolUseId || toolUseId.startsWith(`${parentToolUseId}/`)) {
-    return toolUseId
-  }
-  return `${parentToolUseId}/${toolUseId}`
-}
 
-function rememberToolParentUseId(
-  streamState: SessionStreamState,
-  toolUseId: string | undefined,
-  parentToolUseId: string | undefined,
-): void {
-  if (!toolUseId || !parentToolUseId) return
-  const parents = streamState.toolParentUseIds.get(toolUseId) ?? new Set()
-  parents.add(parentToolUseId)
-  streamState.toolParentUseIds.set(toolUseId, parents)
-}
 
-function forgetToolParentUseId(
-  streamState: SessionStreamState,
-  toolUseId: string | undefined,
-  parentToolUseId: string | undefined,
-): void {
-  if (!toolUseId || !parentToolUseId) return
-  const parents = streamState.toolParentUseIds.get(toolUseId)
-  if (!parents) return
-  parents.delete(parentToolUseId)
-  if (parents.size === 0) streamState.toolParentUseIds.delete(toolUseId)
-}
-
-function consumeToolParentUseId(
-  streamState: SessionStreamState,
-  toolUseId: string | undefined,
-): string | undefined {
-  if (!toolUseId) return undefined
-  const parents = streamState.toolParentUseIds.get(toolUseId)
-  streamState.toolParentUseIds.delete(toolUseId)
-  if (parents?.size !== 1) return undefined
-  return parents.values().next().value
-}
 
 /** Clean up stream state when session disconnects */
 function cleanupStreamState(sessionId: string) {
@@ -2874,33 +2619,8 @@ function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
   }
 }
 
-function extractAssistantText(cliMsg: any): string {
-  const content = cliMsg?.message?.content
-  if (!Array.isArray(content)) return ''
-  const textBlock = content.find(
-    (block: unknown): block is { type: string; text: string } =>
-      !!block &&
-      typeof block === 'object' &&
-      (block as { type?: unknown }).type === 'text' &&
-      typeof (block as { text?: unknown }).text === 'string',
-  )
-  return textBlock?.text || ''
-}
 
-function readObject(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, unknown>
-}
 
-function normalizeAskUserQuestionToolResult(content: unknown, toolUseResult: unknown): unknown {
-  const result = readObject(toolUseResult)
-  const answers = readObject(result?.answers)
-  if (!result || !answers || !Array.isArray(result.questions)) return content
-  return {
-    questions: result.questions,
-    answers,
-  }
-}
 
 function isDuplicateOfLastApiError(
   lastApiError: SessionStreamState['lastApiError'],
@@ -2914,18 +2634,6 @@ function isDuplicateOfLastApiError(
   )
 }
 
-function classifyRuntimeErrorCode(message: string, fallbackCode: string): string {
-  if (/Stream max duration exceeded/i.test(message)) {
-    return 'STREAM_MAX_DURATION'
-  }
-  if (
-    /Provider stream stalled after partial response/i.test(message) ||
-    /Stream idle timeout/i.test(message)
-  ) {
-    return 'STREAM_IDLE_TIMEOUT'
-  }
-  return fallbackCode
-}
 
 function bindPrewarmMetadataCapture(sessionId: string) {
   for (const msg of conversationService.getRecentSdkMessages(sessionId)) {
@@ -3079,7 +2787,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               parentToolUseId,
             })
           } else if (!parentToolUseId && block.type === 'thinking' && block.thinking) {
-            messages.push({ type: 'thinking', text: block.thinking })
+            messages.push({ type: 'thinking', text: block.thinking, complete: true })
           } else if (!parentToolUseId && block.type === 'text' && block.text) {
             messages.push({ type: 'content_start', blockType: 'text' })
             messages.push({ type: 'content_delta', text: block.text })
@@ -3621,73 +3329,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 // Helpers
 // ============================================================================
 
-function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
 
-function normalizeRetryCount(value: unknown): number | null {
-  const numeric = finiteNumber(value)
-  if (numeric === null) return null
-  return Math.max(0, Math.trunc(numeric))
-}
 
-function readRetryErrorRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, unknown>
-}
 
-function readRetryErrorString(value: unknown, keys: string[]): string | undefined {
-  const record = readRetryErrorRecord(value)
-  if (!record) return undefined
-  for (const key of keys) {
-    const candidate = record[key]
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
-  }
-  return undefined
-}
 
-function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
-  const attempt = normalizeRetryCount(cliMsg.attempt)
-  const maxRetries = normalizeRetryCount(cliMsg.max_retries)
-  const retryDelayMs = normalizeRetryCount(cliMsg.retry_delay_ms)
-  if (attempt === null || maxRetries === null || retryDelayMs === null) return null
 
-  const embeddedError = readRetryErrorRecord(cliMsg.error)
-  const embeddedStatus = embeddedError ? finiteNumber(embeddedError.status) : null
-  const rawStatus = cliMsg.error_status === null
-    ? null
-    : finiteNumber(cliMsg.error_status) ?? embeddedStatus
-  const errorType = typeof cliMsg.error === 'string' && cliMsg.error.trim()
-    ? cliMsg.error.trim()
-    : readRetryErrorString(cliMsg.error, ['type', 'code', 'name'])
-  const errorMessage = readRetryErrorString(cliMsg.error, ['message', 'error'])
 
-  return {
-    type: 'api_retry',
-    attempt,
-    maxRetries,
-    retryDelayMs,
-    errorStatus: rawStatus === null ? null : Math.trunc(rawStatus),
-    ...(errorType ? { errorType } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
-  }
-}
-
-const STREAMING_FALLBACK_CAUSES: ReadonlySet<StreamingFallbackCause> = new Set([
-  'watchdog',
-  'stream_error',
-  '404_stream_creation',
-  'stream_retry',
-])
-
-function toStreamingFallbackServerMessage(cliMsg: any): ServerMessage {
-  // 未识别的 cause 兜底为 unknown 而不是丢消息：提示本身比成因重要。
-  const cause: StreamingFallbackCause =
-    typeof cliMsg.cause === 'string' && STREAMING_FALLBACK_CAUSES.has(cliMsg.cause as StreamingFallbackCause)
-      ? (cliMsg.cause as StreamingFallbackCause)
-      : 'unknown'
-  return { type: 'streaming_fallback', cause }
-}
 
 function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage) {
   const outgoing = ws.data.clientKind === 'pet'
@@ -3983,183 +3630,16 @@ function isLocalCommandOutputMessage(cliMsg: any): boolean {
   ) !== null
 }
 
-function extractLocalCommandOutput(
-  content: unknown,
-  options: { allowUntagged?: boolean } = {},
-): string | null {
-  const raw = typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content
-        .flatMap((block) => {
-          if (!block || typeof block !== 'object') return []
-          const text = (block as { text?: unknown }).text
-          return typeof text === 'string' ? [text] : []
-        })
-        .join('\n')
-      : ''
 
-  if (!raw) return null
 
-  const stdout = extractTaggedContent(raw, LOCAL_COMMAND_STDOUT_TAG)
-  if (stdout !== null) return stdout
 
-  const stderr = extractTaggedContent(raw, LOCAL_COMMAND_STDERR_TAG)
-  if (stderr !== null) return stderr
 
-  if (options.allowUntagged) {
-    const normalized = raw.trim()
-    return normalized || null
-  }
 
-  return null
-}
 
-function isCompactLocalCommandOutput(output: string): boolean {
-  return output.trim() === 'Compacted'
-}
 
-function extractTaggedContent(raw: string, tag: string): string | null {
-  const match = raw.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
-  return match?.[1]?.trim() ?? null
-}
 
-function extractLocalCommand(content: unknown): { name: string; args: string } | null {
-  const raw = typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content
-        .flatMap((block) => {
-          if (!block || typeof block !== 'object') return []
-          const text = (block as { text?: unknown }).text
-          return typeof text === 'string' ? [text] : []
-        })
-        .join('\n')
-      : ''
 
-  const name = extractTaggedContent(raw, COMMAND_NAME_TAG)
-  if (!name) return null
-  return {
-    name: name.replace(/^\//, ''),
-    args: extractTaggedContent(raw, 'command-args') ?? '',
-  }
-}
 
-type GoalEventData = {
-  action: 'created' | 'replaced' | 'status' | 'paused' | 'resumed' | 'completed' | 'cleared' | 'message'
-  status?: string
-  objective?: string
-  budget?: string
-  elapsed?: string
-  continuations?: string
-  message?: string
-}
-
-function extractGoalEvent(
-  output: string,
-  command?: { name: string; args: string },
-): GoalEventData | null {
-  if (command && command.name !== 'goal') return null
-
-  const trimmed = output.trim()
-  if (!trimmed) return null
-
-  if (trimmed === 'Goal cleared.' || trimmed.startsWith('Goal cleared:')) {
-    return { action: 'cleared', message: trimmed }
-  }
-  if (trimmed === 'Goal marked complete.') {
-    return { action: 'completed', message: trimmed }
-  }
-  if (trimmed === 'No active goal.') {
-    return { action: 'message', message: trimmed }
-  }
-  if (trimmed.startsWith('Goal continuing:')) {
-    return {
-      action: 'status',
-      status: 'continuing',
-      message: trimmed,
-    }
-  }
-
-  if (trimmed.startsWith('Goal set:')) {
-    const objective = trimmed.slice('Goal set:'.length).trim()
-    return {
-      action: 'created',
-      status: 'active',
-      objective: objective || undefined,
-      message: trimmed,
-    }
-  }
-
-  return command?.name === 'goal' ? { action: 'message', message: trimmed } : null
-}
-
-function looksLikeGoalCommandOutput(output: string): boolean {
-  const trimmed = output.trim()
-  return (
-    trimmed.startsWith('Goal set:') ||
-    trimmed.startsWith('Goal continuing:') ||
-    trimmed.startsWith('Goal cleared:') ||
-    trimmed === 'Goal cleared.' ||
-    trimmed === 'Goal marked complete.' ||
-    trimmed === 'No active goal.'
-  )
-}
-
-function getCompactBoundaryMessage(cliMsg: any): string {
-  const message = typeof cliMsg?.message === 'string' ? cliMsg.message.trim() : ''
-  if (message) return message
-
-  const content = typeof cliMsg?.content === 'string' ? cliMsg.content.trim() : ''
-  if (content) return content
-
-  return 'Context compacted'
-}
-
-function isCompactSummaryMessageContent(content: unknown): content is string {
-  return (
-    typeof content === 'string' &&
-    content.trim().startsWith(
-      'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.',
-    )
-  )
-}
-
-function hasToolResultBlock(content: unknown): boolean {
-  return Array.isArray(content) &&
-    content.some((block) =>
-      Boolean(block) &&
-      typeof block === 'object' &&
-      (block as { type?: unknown }).type === 'tool_result')
-}
-
-function extractReplayUserText(cliMsg: any): string | null {
-  if (cliMsg?.isReplay !== true) return null
-  const content = cliMsg.message?.content
-  const commandDisplayText = getCommandMetadataDisplayText(content)
-  if (commandDisplayText) return commandDisplayText
-  if (shouldHideCommandMetadataContent(content)) return null
-  if (isCompactSummaryMessageContent(content)) return null
-  if (hasToolResultBlock(content)) return null
-  if (extractLocalCommandOutput(content)) return null
-
-  const text = typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content
-        .flatMap((block) => {
-          if (!block || typeof block !== 'object') return []
-          const typedBlock = block as { type?: unknown; text?: unknown }
-          return typedBlock.type === 'text' && typeof typedBlock.text === 'string'
-            ? [typedBlock.text]
-            : []
-        })
-        .join('\n')
-      : ''
-
-  const trimmed = text.trim()
-  return trimmed || null
-}
 
 function addActiveClient(
   sessionId: string,
@@ -4197,32 +3677,6 @@ function removeClientOutputCallback(ws: ServerWebSocket<WebSocketData>): void {
   clientOutputCallbacks.delete(ws)
 }
 
-function normalizeCliTaskNotification(cliMsg: any): SessionTaskNotification | null {
-  if (cliMsg?.type !== 'system' || cliMsg.subtype !== 'task_notification') return null
-  const toolUseId = typeof cliMsg.tool_use_id === 'string' && cliMsg.tool_use_id
-    ? cliMsg.tool_use_id
-    : null
-  const rawStatus = cliMsg.status
-  const status = rawStatus === 'killed' ? 'stopped' : rawStatus
-  if (
-    !toolUseId ||
-    (status !== 'completed' && status !== 'failed' && status !== 'stopped')
-  ) {
-    return null
-  }
-
-  const optionalString = (value: unknown) =>
-    typeof value === 'string' && value ? value : undefined
-  return {
-    taskId: optionalString(cliMsg.task_id) ?? toolUseId,
-    toolUseId,
-    status,
-    ...(optionalString(cliMsg.summary) ? { summary: optionalString(cliMsg.summary) } : {}),
-    ...(optionalString(cliMsg.result) ? { result: optionalString(cliMsg.result) } : {}),
-    ...(optionalString(cliMsg.output_file) ? { outputFile: optionalString(cliMsg.output_file) } : {}),
-    timestamp: optionalString(cliMsg.timestamp) ?? new Date().toISOString(),
-  }
-}
 
 function boundTaskNotificationPersistence(
   persistence: Promise<void>,

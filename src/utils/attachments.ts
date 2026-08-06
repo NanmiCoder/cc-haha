@@ -37,9 +37,7 @@ import {
 import { getPlanFilePath, getPlan } from './plans.js'
 import { getConnectedIdeName } from './ide.js'
 import {
-  filterInjectedMemoryFiles,
   getManagedAndUserConditionalRules,
-  getMemoryFiles,
   getMemoryFilesForNestedDirectory,
   getConditionalRulesForCwdLevelDirectory,
   type MemoryFileInfo,
@@ -72,12 +70,6 @@ import type {
 } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { maybeResizeAndDownsampleImageBlock } from './imageResizer.js'
 import type { PastedContent } from './config.js'
-import { getGlobalConfig } from './config.js'
-import {
-  getDefaultSonnetModel,
-  getDefaultHaikuModel,
-  getDefaultOpusModel,
-} from './model/model.js'
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js'
 import { getSkillToolCommands, getMcpSkillCommands } from '../commands.js'
 import type { Command } from '../types/command.js'

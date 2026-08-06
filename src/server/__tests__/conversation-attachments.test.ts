@@ -140,7 +140,7 @@ describe('ConversationService attachment materialization', () => {
     expect(await fs.readFile(uploadPath!)).toEqual(original)
   })
 
-  test('inlines image file paths instead of asking the model to Read them first', async () => {
+  test('inlines image file paths and stages an edit-safe copy for ImageGen', async () => {
     const svc = new ConversationService()
     const sent: unknown[] = []
     const sessionId = 'session-image-path'
@@ -173,7 +173,12 @@ describe('ConversationService attachment materialization', () => {
     const imageBlocks = payload.message.content.filter((block) => block.type === 'image')
     expect(textBlocks[0]?.text).toBe('看这个截图')
     expect(textBlocks.some((block) => block.text?.includes('@"'))).toBe(false)
-    expect(textBlocks.some((block) => block.text?.includes(`source: ${imagePath}`))).toBe(true)
+    const metadataText = textBlocks.find((block) => block.text?.startsWith('[Image:'))?.text
+    const stagedPath = metadataText?.match(/source: ([^,\]]+)/)?.[1]
+    expect(stagedPath).toBeTruthy()
+    expect(stagedPath).not.toBe(imagePath)
+    expect(stagedPath).toContain(path.join('uploads', sessionId))
+    expect(await fs.readFile(stagedPath!)).toEqual(original)
     expect(imageBlocks).toHaveLength(1)
     expect(imageBlocks[0]?.source?.media_type).toBe('image/png')
     expect(imageBlocks[0]?.source?.data).toBe(original.toString('base64'))

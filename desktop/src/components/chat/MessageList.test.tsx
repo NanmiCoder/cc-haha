@@ -3381,6 +3381,7 @@ describe('MessageList nested tool calls', () => {
     await waitFor(() => {
       expect(screen.getByText('streaming next token')).toBeTruthy()
     })
+    await waitForProgrammaticScrollReset()
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(600)
   })
@@ -3455,11 +3456,24 @@ describe('MessageList nested tool calls', () => {
     await waitFor(() => {
       expect(screen.getByText('2 lines · 36 chars')).toBeTruthy()
     })
+    await waitForProgrammaticScrollReset()
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(600)
   })
 
-  it('keeps auto-scrolling without reading scroll geometry synchronously', async () => {
+  it('coalesces real streaming transitions and ignores fractional bottom wobble', async () => {
+    let resizeCallback: ResizeObserverCallback | null = null
+    class TestResizeObserver {
+      observe = vi.fn()
+      unobserve = vi.fn()
+      disconnect = vi.fn()
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback
+      }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+
     useChatStore.setState({
       sessions: {
         [ACTIVE_TAB]: makeSessionState({
@@ -3472,63 +3486,84 @@ describe('MessageList nested tool calls', () => {
               timestamp: 1,
             },
           ],
-          streamingText: 'streaming',
+          streamingText: 'streaming seed',
         }),
       },
     })
 
     const { container } = render(<MessageList />)
     const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
-    const readScrollHeight = vi.fn(() => {
-      throw new Error('scrollHeight should not be read while pinning to bottom')
-    })
-    const readClientHeight = vi.fn(() => {
-      throw new Error('clientHeight should not be read while pinning to bottom')
-    })
-    let scrollTop = 552
+    let scrollTop = 600
+    let scrollHeight = 1004
+    let scrollTopWriteCount = 0
     Object.defineProperty(scroller, 'scrollHeight', {
       configurable: true,
-      get: readScrollHeight,
+      get: () => scrollHeight,
     })
     Object.defineProperty(scroller, 'clientHeight', {
       configurable: true,
-      get: readClientHeight,
+      value: 400,
     })
     Object.defineProperty(scroller, 'scrollTop', {
       configurable: true,
       get: () => scrollTop,
       set: (value) => {
-        scrollTop = value >= 1_000_000_000 ? 600 : value
+        scrollTopWriteCount += 1
+        scrollTop = value
       },
     })
-    Object.defineProperty(scroller, 'scrollTo', {
-      configurable: true,
-      value: vi.fn((options: ScrollToOptions | number, y?: number) => {
-        scroller.scrollTop = typeof options === 'number' ? y ?? 0 : options.top ?? 0
-      }),
-    })
 
+    await waitFor(() => expect(resizeCallback).not.toBeNull())
     await waitForProgrammaticScrollReset()
+    scrollTopWriteCount = 0
+
+    const queuedFrames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      queuedFrames.push(callback)
+      return queuedFrames.length
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const flushFrame = () => {
+      const callbacks = queuedFrames.splice(0)
+      act(() => {
+        for (const callback of callbacks) callback(performance.now())
+      })
+    }
+
     act(() => {
-      useChatStore.setState((state) => ({
-        sessions: {
-          ...state.sessions,
-          [ACTIVE_TAB]: {
-            ...state.sessions[ACTIVE_TAB]!,
-            streamingText: 'streaming next token',
-          },
-        },
-      }))
+      const store = useChatStore.getState()
+      store.handleServerMessage(ACTIVE_TAB, { type: 'content_delta', text: ' next' })
+      store.handleServerMessage(ACTIVE_TAB, { type: 'content_delta', text: ' token' })
+      resizeCallback?.([{
+        contentRect: { height: 404 },
+      } as ResizeObserverEntry], {} as ResizeObserver)
     })
 
     await waitFor(() => {
-      expect(screen.getByText('streaming next token')).toBeTruthy()
+      expect(screen.getByText('streaming seed next token')).toBeTruthy()
     })
-    await waitForProgrammaticScrollReset()
+    expect(queuedFrames.length).toBeGreaterThan(0)
+    flushFrame()
 
+    expect(scrollTopWriteCount).toBe(0)
     expect(scrollTop).toBe(600)
-    expect(readScrollHeight).not.toHaveBeenCalled()
-    expect(readClientHeight).not.toHaveBeenCalled()
+
+    scrollHeight = 1020
+    act(() => {
+      const store = useChatStore.getState()
+      store.handleServerMessage(ACTIVE_TAB, { type: 'content_delta', text: ' with' })
+      store.handleServerMessage(ACTIVE_TAB, { type: 'content_delta', text: ' growth' })
+      resizeCallback?.([{
+        contentRect: { height: 420 },
+      } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    await waitFor(() => {
+      expect(screen.getByText('streaming seed next token with growth')).toBeTruthy()
+    })
+    flushFrame()
+
+    expect(scrollTopWriteCount).toBe(1)
+    expect(scrollTop).toBe(620)
   })
 
   it('keeps mobile H5 streaming output pinned after the transcript height grows', async () => {
@@ -3593,10 +3628,10 @@ describe('MessageList nested tool calls', () => {
     await waitFor(() => {
       expect(screen.getByText('streaming next token after height change')).toBeTruthy()
     })
+    await waitForProgrammaticScrollReset()
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(1000)
 
-    await waitForProgrammaticScrollReset()
     fireEvent.scroll(scroller)
 
     expect(screen.queryByRole('button', { name: 'Latest' })).toBeNull()
@@ -3667,6 +3702,7 @@ describe('MessageList nested tool calls', () => {
     act(() => {
       resizeCallback?.([], {} as ResizeObserver)
     })
+    await waitForProgrammaticScrollReset()
 
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(1200)
@@ -3771,6 +3807,7 @@ describe('MessageList nested tool calls', () => {
         target: scrollContent,
       } as unknown as ResizeObserverEntry], {} as ResizeObserver)
     })
+    await waitForProgrammaticScrollReset()
 
     expect(scrollTop).toBe(15196)
     expect(screen.queryByRole('button', { name: 'Latest' })).toBeNull()
@@ -4052,10 +4089,11 @@ describe('MessageList nested tool calls', () => {
     act(() => {
       resizeCallback?.(makeResizeEntry(400), {} as ResizeObserver)
     })
+    await waitForProgrammaticScrollReset()
     expect(scrollTop).toBe(600)
 
     scrollTopWriteCount = 0
-    // WebView2 can reach the opposite edge of a 2px oscillation through
+    // Chromium can reach the opposite edge of a 2px oscillation through
     // adjacent 1px observations. The sticky follow baseline must not turn
     // either edge into a bottom-scroll correction.
     for (const height of [401, 402, 401, 400, 401, 402, 401, 400]) {
@@ -4071,6 +4109,7 @@ describe('MessageList nested tool calls', () => {
     act(() => {
       resizeCallback?.(makeResizeEntry(420), {} as ResizeObserver)
     })
+    await waitForProgrammaticScrollReset()
 
     expect(scrollTop).toBe(640)
   })
@@ -5366,6 +5405,74 @@ describe('MessageList nested tool calls', () => {
     })
   })
 
+  it('reloads live turn checkpoints when the completed transcript mutation is committed', async () => {
+    const getTurnCheckpoints = vi.spyOn(sessionsApi, 'getTurnCheckpoints')
+      .mockResolvedValueOnce({ checkpoints: [] })
+      .mockResolvedValue({
+        checkpoints: [
+          {
+            target: {
+              targetUserMessageId: 'transcript-user-1',
+              userMessageIndex: 0,
+              userMessageCount: 1,
+            },
+            code: {
+              available: true,
+              filesChanged: ['/private/tmp/generated/src/App.jsx'],
+              insertions: 12,
+              deletions: 3,
+            },
+            workDir: '/private/tmp',
+          },
+        ],
+      })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'idle',
+          historyMutationEpoch: 1,
+          messages: [
+            {
+              id: 'local-user-1',
+              type: 'user_text',
+              content: '在 /tmp 下创建项目',
+              timestamp: 1,
+            },
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: '完成。',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    await waitFor(() => {
+      expect(getTurnCheckpoints).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.queryByText('App.jsx')).toBeNull()
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [ACTIVE_TAB]: {
+            ...state.sessions[ACTIVE_TAB]!,
+            historyMutationEpoch: 2,
+          },
+        },
+      }))
+    })
+
+    expect(await screen.findByText('App.jsx')).toBeTruthy()
+    expect(getTurnCheckpoints).toHaveBeenCalledTimes(2)
+  })
+
   it('rewinds a live turn with the authoritative checkpoint id when the local UI id differs', async () => {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
@@ -5435,6 +5542,7 @@ describe('MessageList nested tool calls', () => {
         targetUserMessageId: 'transcript-user-1',
         userMessageIndex: 0,
         expectedContent: '实时这一轮',
+        mode: 'both',
       })
     })
   })
@@ -5771,6 +5879,7 @@ describe('MessageList nested tool calls', () => {
         targetUserMessageId: 'user-1',
         userMessageIndex: 0,
         expectedContent: '做一个页面',
+        mode: 'both',
       })
     })
     expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
@@ -5778,6 +5887,80 @@ describe('MessageList nested tool calls', () => {
       text: '做一个页面',
       attachments: undefined,
     })
+  })
+
+  it('offers a conversation-only rewind when the checkpoint cannot restore the files', async () => {
+    // Regression for #1192: an unrestorable checkpoint used to disable the undo
+    // outright, which also cost the user the conversation rollback. The files
+    // genuinely cannot be restored here, but backing out of the prompt can.
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+      checkpoints: [
+        {
+          target: {
+            targetUserMessageId: 'user-1',
+            userMessageIndex: 0,
+            userMessageCount: 1,
+          },
+          code: {
+            available: true,
+            filesChanged: ['src/first.ts'],
+            insertions: 1,
+            deletions: 0,
+          },
+          restoreAvailable: false,
+        },
+      ],
+    })
+    const rewind = vi.spyOn(sessionsApi, 'rewind').mockResolvedValue({
+      target: { targetUserMessageId: 'user-1', userMessageIndex: 0, userMessageCount: 1 },
+      conversation: { messagesRemoved: 2, removedMessageIds: ['user-1', 'assistant-1'] },
+      code: { available: true, filesChanged: ['src/first.ts'], insertions: 1, deletions: 0 },
+      restoreAvailable: false,
+      mode: 'conversation',
+    })
+    const reloadHistory = vi.fn().mockResolvedValue(undefined)
+    const queueComposerPrefill = vi.fn()
+
+    useChatStore.setState({
+      reloadHistory,
+      queueComposerPrefill,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            { id: 'user-1', type: 'user_text', content: '做一个页面', timestamp: 1 },
+            { id: 'assistant-1', type: 'assistant_text', content: 'first done', timestamp: 2 },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    await screen.findByText('first.ts')
+    const undoButton = screen.getByRole('button', { name: 'Undo current turn changes' })
+    expect((undoButton as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(undoButton)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Undo current turn?' })
+    expect(
+      within(dialog).getByText(/the files cannot be restored safely/i),
+    ).toBeTruthy()
+    // The code-restoring action must be gone — offering it would fail server-side.
+    expect(within(dialog).queryByRole('button', { name: 'Undo current turn' })).toBeNull()
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Roll back conversation only' }),
+    )
+
+    await waitFor(() => {
+      expect(rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
+        targetUserMessageId: 'user-1',
+        userMessageIndex: 0,
+        expectedContent: '做一个页面',
+        mode: 'conversation',
+      })
+    })
+    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
   })
 
   it('does not render cards for turns without file changes', async () => {

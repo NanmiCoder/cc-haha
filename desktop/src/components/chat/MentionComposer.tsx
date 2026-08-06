@@ -20,7 +20,7 @@ import { EditorState, Plugin, PluginKey, TextSelection } from 'prosemirror-state
 import { EditorView } from 'prosemirror-view'
 import { keymap } from 'prosemirror-keymap'
 import { history, redo, undo } from 'prosemirror-history'
-import { baseKeymap } from 'prosemirror-commands'
+import { baseKeymap, splitBlock } from 'prosemirror-commands'
 import {
   buildComposerDoc,
   composerSchema,
@@ -139,6 +139,10 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
             keymap({
               'Backspace': deleteAdjacentMentionAtom('backward'),
               'Delete': deleteAdjacentMentionAtom('forward'),
+              // Unlike a textarea, ProseMirror does not include Shift+Enter in
+              // its base keymap. Keep the composer's configured newline path
+              // explicit instead of relying on browser contenteditable behavior.
+              'Shift-Enter': splitBlock,
             }),
             keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
             keymap(baseKeymap),

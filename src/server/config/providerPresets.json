@@ -237,6 +237,76 @@
     }
   },
   {
+    "id": "atlascloud",
+    "name": "Atlas Cloud",
+    "baseUrl": "https://api.atlascloud.ai",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-ai/deepseek-v4-pro",
+      "haiku": "deepseek-ai/deepseek-v4-pro",
+      "sonnet": "deepseek-ai/deepseek-v4-pro",
+      "opus": "deepseek-ai/deepseek-v4-pro"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://www.atlascloud.ai",
+    "authStrategy": "api_key"
+  },
+  {
+    "id": "fennoai",
+    "name": "FennoAI",
+    "baseUrl": "https://api.fenno.ai",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://api.fenno.ai",
+    "apiKeyUrl": "https://api.fenno.ai/s/WD8c",
+    "promoText": "FennoAI 为 cc-haha 的用户提供了专属福利，通过此链接购买订阅，仅需 1.99 美元即可获得价值 50 美元的 Coding Plan 额度！",
+    "featured": true,
+    "authStrategy": "auth_token",
+    "defaultEnv": {},
+    "modelContextWindows": {
+      "claude-opus-5": 1000000,
+      "claude-opus-4-8": 1000000,
+      "claude-sonnet-5": 1000000,
+      "claude-sonnet-4-6": 200000,
+      "claude-haiku-4-5": 200000,
+      "claude-haiku-4-5-20251001": 200000
+    }
+  },
+  {
+    "id": "qiniuai",
+    "name": "七牛云 AI",
+    "baseUrl": "https://api.qnaigc.com",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://www.qiniu.com/ai/models",
+    "apiKeyUrl": "https://s.qiniu.com/IZbyya",
+    "promoText": "七牛云 AI 为 cc-haha 的用户提供了专属福利，通过此链接注册，企业用户免费领 1200 万 Token，开发者免费领 300 万 Token！",
+    "featured": true,
+    "authStrategy": "auth_token",
+    "defaultEnv": {},
+    "modelContextWindows": {
+      "deepseek/deepseek-v4-pro": 1000000,
+      "deepseek/deepseek-v4-flash": 1000000,
+      "z-ai/glm-5.2": 1000000,
+      "z-ai/glm-5.1": 200000,
+      "moonshotai/kimi-k3": 262144,
+      "moonshotai/kimi-k2.7-code": 262144,
+      "minimax/minimax-m3": 1000000
+    }
+  },
+  {
     "id": "lmstudio",
     "name": "LM Studio",
     "baseUrl": "http://localhost:1234",

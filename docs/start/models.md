@@ -44,9 +44,12 @@ Claude Code Haha 自己不带模型，它只是那个替你干活的壳。装完
 内置预设（按弹窗里的排列）：
 
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
-- **TeamoRouter** · **玄枢API** — 中转类服务商，用它们的通道调 Claude 官方模型。
+- **TeamoRouter** · **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
+- **七牛云 AI** — 聚合类 MaaS 平台，一个密钥调 DeepSeek、GLM、Kimi、通义等多家模型。
 - **LM Studio** · **Ollama** — 本地模型，见下一节。
 - **Custom** — 上面都没有，自己填。
+
+FennoAI 和七牛云 AI 能用哪些模型取决于你买的套餐，所以这两个预设只填接口地址、不预填模型：粘好密钥后点「拉取模型」，从实时列表里挑一个即可。
 
 选中预设后，如果这家服务商有申请密钥的页面，密钥输入框下面会出现一颗「获取 API Key」按钮，点开就是注册/取密钥的地址。
 

@@ -69,7 +69,11 @@ After each turn, a card appears in the conversation reading "**{n} files changed
 - **Undo current turn** — roll back the latest reply and restore the files it changed.
 - **Roll back to before this turn** — for older turns: rewind both the conversation and the files to that checkpoint.
 
-Both ask for confirmation first. Some turns have no file checkpoint; in that case only the conversation rolls back, and the message says so.
+Both ask for confirmation first, where you choose between rolling back **code and conversation together** or **the conversation only** (leaving the files on disk untouched).
+
+Checkpoints capture the files Claude changed through its editing tools. **Files written by shell commands are not checkpointed** — `npm install`, `rm`, or a command redirecting into a file cannot be undone. On such a turn the card and the confirmation name the tools that went unrecorded; undo still works, but it only restores the files it lists. Use git for anything you need a guaranteed way back from.
+
+When a turn's file checkpoint is itself incomplete (a damaged session log, an unsafe path), the code cannot be restored and the confirmation offers only **Roll back conversation only** — the conversation can always be rewound.
 
 ## The Activity panel
 

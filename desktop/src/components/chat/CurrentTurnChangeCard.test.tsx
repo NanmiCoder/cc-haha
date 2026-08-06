@@ -87,11 +87,20 @@ vi.mock('../../i18n', () => ({
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import { localFileUrl } from '../../lib/handlePreviewLink'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
+import { en } from '../../i18n/locales/en'
+import { zh } from '../../i18n/locales/zh'
+import { zh as zhTW } from '../../i18n/locales/zh-TW'
+import { jp } from '../../i18n/locales/jp'
+import { kr } from '../../i18n/locales/kr'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
-function makeCheckpoint(filesChanged: string[]): SessionTurnCheckpoint {
+function makeCheckpoint(
+  filesChanged: string[],
+  restoreAvailable?: boolean,
+  unverifiedChangeSources?: string[],
+): SessionTurnCheckpoint {
   return {
     code: {
       available: true,
@@ -107,11 +116,19 @@ function makeCheckpoint(filesChanged: string[]): SessionTurnCheckpoint {
     conversation: {
       messagesRemoved: 0,
     },
+    ...(restoreAvailable === undefined ? {} : { restoreAvailable }),
+    ...(unverifiedChangeSources === undefined ? {} : { unverifiedChangeSources }),
   }
 }
 
-function renderCard(filesChanged: string[], isLatest = true) {
-  const checkpoint = makeCheckpoint(filesChanged)
+function renderCard(
+  filesChanged: string[],
+  isLatest = true,
+  restoreAvailable?: boolean,
+  unverifiedChangeSources?: string[],
+  onUndo: () => void = vi.fn(),
+) {
+  const checkpoint = makeCheckpoint(filesChanged, restoreAvailable, unverifiedChangeSources)
   return render(
     <CurrentTurnChangeCard
       sessionId="s1"
@@ -120,7 +137,7 @@ function renderCard(filesChanged: string[], isLatest = true) {
       error={null}
       isUndoing={false}
       isLatest={isLatest}
-      onUndo={vi.fn()}
+      onUndo={onUndo}
     />,
   )
 }
@@ -179,6 +196,80 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
   it('renders the extension badge for an HTML file', () => {
     renderCard(['/w/proj/index.html'])
     expect(screen.getByText(/HTML/)).toBeInTheDocument()
+  })
+
+  it('keeps incomplete checkpoint files visible and still offers undo for the conversation', () => {
+    const onUndo = vi.fn()
+    renderCard(['/w/proj/src/main.ts', '/outside/generated.ts'], true, false, undefined, onUndo)
+
+    expect(screen.getByText('main.ts')).toBeInTheDocument()
+    expect(screen.getByText('generated.ts')).toBeInTheDocument()
+    expect(screen.getByText('chat.turnChangesConversationOnlySubtitle')).toBeInTheDocument()
+    // An unrestorable checkpoint must not cost the user the conversation
+    // rollback too — the dialog is where the remaining action is chosen.
+    const undoButton = screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })
+    expect(undoButton).toBeEnabled()
+    fireEvent.click(undoButton)
+    expect(onUndo).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps undo usable and warns instead of blocking when coverage is partial', () => {
+    const onUndo = vi.fn()
+    renderCard(['/w/proj/src/main.ts'], true, true, ['Bash', 'TaskCreate'], onUndo)
+
+    // Warn about what undo will NOT reverse...
+    expect(screen.getByText('chat.turnChangesPartialCoverageSubtitle')).toBeInTheDocument()
+    expect(screen.queryByText('chat.turnChangesConversationOnlySubtitle')).toBeNull()
+
+    // ...while still letting the user reverse the files it did capture.
+    const undoButton = screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })
+    expect(undoButton).toBeEnabled()
+    fireEvent.click(undoButton)
+    expect(onUndo).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the unverified sources in every locale message', () => {
+    // Every surface that warns about partial coverage feeds the joined tool list
+    // in as {sources}; a locale that drops the placeholder would warn without
+    // saying what undo is leaving behind.
+    const keys = [
+      'chat.turnChangesPartialCoverageSubtitle',
+      'chat.turnChangesPartialCoverageConfirmBody',
+      'chat.rewindSuccessPartialCoverage',
+    ] as const
+    for (const [name, messages] of Object.entries({ en, zh, zhTW, jp, kr })) {
+      for (const key of keys) {
+        expect(messages[key], `${name}/${key} must interpolate {sources}`)
+          .toContain('{sources}')
+      }
+    }
+    // The post-undo message also has to say how much of the conversation went.
+    for (const [name, messages] of Object.entries({ en, zh, zhTW, jp, kr })) {
+      expect(
+        messages['chat.rewindSuccessPartialCoverage'],
+        `${name} must interpolate {count}`,
+      ).toContain('{count}')
+    }
+  })
+
+  it('shows no coverage warning when every change source is accounted for', () => {
+    renderCard(['/w/proj/src/main.ts'], true, true, [])
+
+    expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle', { exact: false }))
+      .toBeNull()
+    expect(screen.getByText('chat.turnChangesLatestSubtitle')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).toBeEnabled()
+  })
+
+  it('prefers the conversation-only message over the coverage warning when restore is unavailable', () => {
+    renderCard(['/w/proj/src/main.ts'], true, false, ['Bash'])
+
+    // Both conditions hold, but "files cannot be restored at all" is the one
+    // that changes what the user can do, so it wins the subtitle.
+    expect(screen.getByText('chat.turnChangesConversationOnlySubtitle')).toBeInTheDocument()
+    expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle', { exact: false }))
+      .toBeNull()
+    expect(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).toBeEnabled()
   })
 })
 

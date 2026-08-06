@@ -1,0 +1,1458 @@
+{
+  "text-turn": [
+    {
+      "in": "status",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "Hello",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "Hello world",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "assistant_text",
+            "content": "Hello world",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "thinking-then-text": [
+    {
+      "in": "thinking",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "thinking",
+            "content": "Considering options",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "thinking",
+            "content": "Considering options",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "thinking",
+            "content": "Considering options",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "Answer.",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "thinking",
+            "content": "Considering options",
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "assistant_text",
+            "content": "Answer.",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "tool-call-success": [
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {},
+            "timestamp": 0,
+            "isPending": true,
+            "partialInput": ""
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": "toolu_golden_store",
+        "activeToolName": "Write",
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "timestamp": 0,
+            "isPending": true,
+            "partialInput": "{\"file_path\":\"/tmp/a.txt\"}"
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "{\"file_path\":\"/tmp/a.txt\"}",
+        "activeToolUseId": "toolu_golden_store",
+        "activeToolName": "Write",
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_use_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "timestamp": 0,
+            "isPending": false
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_result",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "wrote 1 line",
+            "isError": false,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/a.txt"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "wrote 1 line",
+            "isError": false,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 5,
+          "output_tokens": 2
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "tool-call-error": [
+    {
+      "in": "tool_use_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Bash",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "command": "exit 1"
+            },
+            "timestamp": 0,
+            "isPending": false
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "tool_result",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Bash",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "command": "exit 1"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "exit code 1",
+            "isError": true,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Bash",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "command": "exit 1"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "exit code 1",
+            "isError": true,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "permission-allow-flow": [
+    {
+      "in": "permission_request",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_store",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/b.txt"
+            },
+            "description": "write a file",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "permission_pending",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": {
+          "requestId": "req_golden_store",
+          "toolName": "Write",
+          "toolUseId": "toolu_golden_store",
+          "input": {
+            "file_path": "/tmp/b.txt"
+          },
+          "description": "write a file"
+        },
+        "pendingPermissions": {
+          "req_golden_store": {
+            "requestId": "req_golden_store",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/b.txt"
+            },
+            "description": "write a file"
+          }
+        },
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "permission_resolved",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_store",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/b.txt"
+            },
+            "description": "write a file",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_result",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_store",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/b.txt"
+            },
+            "description": "write a file",
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "ok",
+            "isError": false,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_store",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/b.txt"
+            },
+            "description": "write a file",
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "ok",
+            "isError": false,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "permission-deny-flow": [
+    {
+      "in": "permission_request",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_deny",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/c.txt"
+            },
+            "timestamp": 0
+          }
+        ],
+        "chatState": "permission_pending",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": {
+          "requestId": "req_golden_deny",
+          "toolName": "Write",
+          "toolUseId": "toolu_golden_store",
+          "input": {
+            "file_path": "/tmp/c.txt"
+          }
+        },
+        "pendingPermissions": {
+          "req_golden_deny": {
+            "requestId": "req_golden_deny",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/c.txt"
+            }
+          }
+        },
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "permission_resolved",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_deny",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/c.txt"
+            },
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_result",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "permission_request",
+            "requestId": "req_golden_deny",
+            "toolName": "Write",
+            "toolUseId": "toolu_golden_store",
+            "input": {
+              "file_path": "/tmp/c.txt"
+            },
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_result",
+            "toolUseId": "toolu_golden_store",
+            "content": "User denied",
+            "isError": true,
+            "timestamp": 0
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "subagent-scoped-tool": [
+    {
+      "in": "tool_use_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Task",
+            "toolUseId": "toolu_parent_agent",
+            "input": {
+              "prompt": "do work"
+            },
+            "timestamp": 0,
+            "isPending": false
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Task",
+            "toolUseId": "toolu_parent_agent",
+            "input": {
+              "prompt": "do work"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_use",
+            "toolName": "Read",
+            "toolUseId": "toolu_parent_agent/toolu_child",
+            "originalToolUseId": "toolu_child",
+            "input": {},
+            "timestamp": 0,
+            "parentToolUseId": "toolu_parent_agent",
+            "isPending": true,
+            "partialInput": ""
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": "toolu_parent_agent/toolu_child",
+        "activeToolName": "Read",
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Task",
+            "toolUseId": "toolu_parent_agent",
+            "input": {
+              "prompt": "do work"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_use",
+            "toolName": "Read",
+            "toolUseId": "toolu_parent_agent/toolu_child",
+            "originalToolUseId": "toolu_child",
+            "input": {
+              "file_path": "/tmp/d.txt"
+            },
+            "timestamp": 0,
+            "parentToolUseId": "toolu_parent_agent",
+            "isPending": true,
+            "partialInput": "{\"file_path\":\"/tmp/d.txt\"}"
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "{\"file_path\":\"/tmp/d.txt\"}",
+        "activeToolUseId": "toolu_parent_agent/toolu_child",
+        "activeToolName": "Read",
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_use_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Task",
+            "toolUseId": "toolu_parent_agent",
+            "input": {
+              "prompt": "do work"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_use",
+            "toolName": "Read",
+            "toolUseId": "toolu_parent_agent/toolu_child",
+            "originalToolUseId": "toolu_child",
+            "input": {
+              "file_path": "/tmp/d.txt"
+            },
+            "timestamp": 0,
+            "parentToolUseId": "toolu_parent_agent",
+            "isPending": false
+          }
+        ],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "tool_result",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "tool_use",
+            "toolName": "Task",
+            "toolUseId": "toolu_parent_agent",
+            "input": {
+              "prompt": "do work"
+            },
+            "timestamp": 0,
+            "isPending": false
+          },
+          {
+            "id": "msg#2",
+            "type": "tool_use",
+            "toolName": "Read",
+            "toolUseId": "toolu_parent_agent/toolu_child",
+            "originalToolUseId": "toolu_child",
+            "input": {
+              "file_path": "/tmp/d.txt"
+            },
+            "timestamp": 0,
+            "parentToolUseId": "toolu_parent_agent",
+            "isPending": false
+          },
+          {
+            "id": "msg#3",
+            "type": "tool_result",
+            "toolUseId": "toolu_parent_agent/toolu_child",
+            "originalToolUseId": "toolu_child",
+            "content": "file body",
+            "isError": false,
+            "timestamp": 0,
+            "parentToolUseId": "toolu_parent_agent"
+          }
+        ],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "api-error-then-recovery": [
+    {
+      "in": "error",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "error",
+            "message": "Prompt is too long",
+            "code": "API_ERROR",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "error",
+            "message": "Prompt is too long",
+            "code": "API_ERROR",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "error",
+            "message": "Prompt is too long",
+            "code": "API_ERROR",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "Recovered.",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "error",
+            "message": "Prompt is too long",
+            "code": "API_ERROR",
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "assistant_text",
+            "content": "Recovered.",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "retry-and-fallback": [
+    {
+      "in": "api_retry",
+      "state": {
+        "messages": [],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": {
+          "attempt": 2,
+          "maxRetries": 5,
+          "retryDelayMs": 1000,
+          "errorStatus": 529,
+          "errorType": "overloaded_error",
+          "receivedAt": 1767323045000
+        }
+      }
+    },
+    {
+      "in": "streaming_fallback",
+      "state": {
+        "messages": [],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": {
+          "cause": "watchdog",
+          "receivedAt": 1767323045051
+        }
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [],
+        "chatState": "streaming",
+        "streamingText": "After fallback.",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "assistant_text",
+            "content": "After fallback.",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "permission-mode-and-session-state": [
+    {
+      "in": "permission_mode_changed",
+      "state": {
+        "messages": [],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "session_state",
+      "state": {
+        "messages": [],
+        "chatState": "thinking",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "status",
+      "state": {
+        "messages": [],
+        "chatState": "tool_executing",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "Running",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "session_state",
+      "state": {
+        "messages": [],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ],
+  "reconnect-replay": [
+    {
+      "in": "user_message_replay",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "user_text",
+            "content": "first ask",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "user_message_replay",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "user_text",
+            "content": "first ask",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null
+      }
+    },
+    {
+      "in": "content_start",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "user_text",
+            "content": "first ask",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "content_delta",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "user_text",
+            "content": "first ask",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "streaming",
+        "streamingText": "reply",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "tokenUsage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    },
+    {
+      "in": "message_complete",
+      "state": {
+        "messages": [
+          {
+            "id": "msg#1",
+            "type": "user_text",
+            "content": "first ask",
+            "timestamp": 0
+          },
+          {
+            "id": "msg#2",
+            "type": "assistant_text",
+            "content": "reply",
+            "timestamp": 0
+          }
+        ],
+        "chatState": "idle",
+        "streamingText": "",
+        "streamingToolInput": "",
+        "activeToolUseId": null,
+        "activeToolName": null,
+        "pendingPermission": null,
+        "pendingPermissions": {},
+        "tokenUsage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "statusVerb": "",
+        "apiRetry": null,
+        "streamingFallback": null
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import { MessageBuffer } from '../message-buffer.js'
 
 describe('MessageBuffer', () => {

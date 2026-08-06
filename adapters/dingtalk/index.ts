@@ -11,7 +11,7 @@ import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-b
 import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
 import { enqueue } from '../common/chat-queue.js'
-import { getConfiguredWorkDir, loadConfig } from '../common/config.js'
+import { loadConfig } from '../common/config.js'
 import { formatImHelp, formatImStatus, formatPermissionRequest, splitMessage } from '../common/format.js'
 import {
   formatPermissionDecisionStatus,
@@ -20,7 +20,8 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { AdapterHttpClient, type RecentProject } from '../common/http-client.js'
+import { type RecentProject } from '../common/http-client.js'
+import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -54,12 +55,11 @@ if (!config.dingtalk.clientId || !config.dingtalk.clientSecret) {
   console.error('[DingTalk] Missing DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET. Bind with QR auth in Desktop Settings or set env.')
   process.exit(1)
 }
-const defaultWorkDir = getConfiguredWorkDir(config, config.dingtalk)
+const { httpClient, defaultWorkDir } = createAdapterClient(config, config.dingtalk)
 
 const bridge = new WsBridge(config.serverUrl, 'dingtalk')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const httpClient = new AdapterHttpClient(config.serverUrl, { allowedProjectRoots: [defaultWorkDir] })
 const attachmentStore = new AttachmentStore()
 const media = new DingTalkMediaService(attachmentStore)
 const aiCards = new DingTalkAiCardService(getAccessToken, config.dingtalk.clientId)

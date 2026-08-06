@@ -19,6 +19,17 @@ function imgSrcs(): string[] {
 }
 
 describe('InlineImageGallery', () => {
+  it('suppresses host-managed ImageGen paths when their dedicated card owns the image', () => {
+    render(
+      <InlineImageGallery
+        text={'已生成：/Users/me/.claude/cc-haha/generated-images/session/result.png'}
+        suppressManagedGeneratedImages
+      />,
+    )
+
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
   it('renders an absolute image path via /api/filesystem/file (legacy behavior)', () => {
     render(<InlineImageGallery text={'see /Users/me/out/result.png done'} />)
 

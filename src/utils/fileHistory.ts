@@ -761,7 +761,7 @@ function getBackupFileName(filePath: string, version: number): string {
   return `${fileNameHash}@v${version}`
 }
 
-function resolveBackupPath(backupFileName: string, sessionId?: string): string {
+export function resolveBackupPath(backupFileName: string, sessionId?: string): string {
   assertSafePathSegment(backupFileName, 'backup file name')
   return join(resolveBackupDirectory(sessionId), backupFileName)
 }
@@ -831,6 +831,38 @@ async function inspectSafeBackupDirectory(
     entries.push({ path: currentPath, stats })
   }
   return entries
+}
+
+export async function readBackupFileSafely(
+  backupFileName: string,
+  sessionId?: string,
+): Promise<{ content: Buffer; mode: number }> {
+  const directoryEntries = await inspectSafeBackupDirectory(sessionId)
+  const backupPath = resolveBackupPath(backupFileName, sessionId)
+  const pathStats = await lstat(backupPath)
+  assertSafeRegularFile(pathStats, backupPath, 'restore')
+  const fileHandle = await open(
+    backupPath,
+    process.platform === 'win32'
+      ? fsConstants.O_RDONLY
+      : fsConstants.O_RDONLY | O_NOFOLLOW,
+  )
+  try {
+    const stats = await fileHandle.stat()
+    assertSafeRegularFile(stats, backupPath, 'restore')
+    if (!sameFileIdentity(pathStats, stats)) {
+      throw new Error(
+        `FileHistory: Refusing a backup that changed while opening: ${backupPath}`,
+      )
+    }
+    await assertSafeDirectoryEntriesUnchanged(directoryEntries)
+    return {
+      content: await fileHandle.readFile(),
+      mode: stats.mode,
+    }
+  } finally {
+    await fileHandle.close()
+  }
 }
 
 async function assertSafeDirectoryEntriesUnchanged(
@@ -1250,8 +1282,12 @@ function maybeShortenFilePath(filePath: string): string {
     return filePath
   }
   const cwd = getOriginalCwd()
-  if (filePath.startsWith(cwd)) {
-    return relative(cwd, filePath)
+  const relativePath = relative(cwd, filePath)
+  if (
+    relativePath === '' ||
+    (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+  ) {
+    return relativePath
   }
   return filePath
 }

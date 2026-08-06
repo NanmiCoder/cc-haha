@@ -11,7 +11,7 @@
  * - 纯 patch fallback 路径
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import {
   StreamingCard,
   buildInitialStreamingCard,

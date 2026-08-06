@@ -1,6 +1,8 @@
 import { memo, useCallback, useState } from 'react'
 import { BookMarked, ChevronDown, ChevronRight, CircleCheck, Settings } from 'lucide-react'
 import { ToolCallBlock } from './ToolCallBlock'
+import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
+import { isImageGenerationToolName } from './imageGenerationTools'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -43,6 +45,21 @@ export function toolCallDurationMs(
   if (!result) return undefined
   const elapsed = result.timestamp - toolCall.timestamp
   return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
+}
+
+function imageGenerationItems(
+  toolCalls: ToolCall[],
+  resultMap: Map<string, ToolResult>,
+): ImageGenerationItem[] {
+  return toolCalls.map((toolCall) => {
+    const result = resultMap.get(toolCall.toolUseId)
+    return {
+      id: toolCall.id,
+      input: toolCall.input,
+      result: result ? { content: result.content, isError: result.isError } : null,
+      durationMs: toolCallDurationMs(toolCall, result),
+    }
+  })
 }
 
 function useExpandableCardState() {
@@ -203,6 +220,61 @@ function ToolCallGroupContent({
   showOpenRun = true,
   isStreaming,
 }: Props) {
+  const hasImageGeneration = toolCalls.some((toolCall) => isImageGenerationToolName(toolCall.toolName))
+  if (hasImageGeneration && !toolCalls.every((toolCall) => isImageGenerationToolName(toolCall.toolName))) {
+    const segments: Array<
+      | { kind: 'images'; toolCalls: ToolCall[] }
+      | { kind: 'regular'; toolCalls: ToolCall[] }
+    > = []
+    let regularToolCalls: ToolCall[] = []
+    let imageToolCalls: ToolCall[] = []
+    const flushRegularCalls = () => {
+      if (regularToolCalls.length === 0) return
+      segments.push({ kind: 'regular', toolCalls: regularToolCalls })
+      regularToolCalls = []
+    }
+    const flushImageCalls = () => {
+      if (imageToolCalls.length === 0) return
+      segments.push({ kind: 'images', toolCalls: imageToolCalls })
+      imageToolCalls = []
+    }
+
+    for (const toolCall of toolCalls) {
+      if (isImageGenerationToolName(toolCall.toolName)) {
+        flushRegularCalls()
+        imageToolCalls.push(toolCall)
+      } else {
+        flushImageCalls()
+        regularToolCalls.push(toolCall)
+      }
+    }
+    flushRegularCalls()
+    flushImageCalls()
+
+    return (
+      <div className="space-y-2">
+        {segments.map((segment, index) => segment.kind === 'images' ? (
+          <ImageGenerationGroup
+            key={segment.toolCalls.map((toolCall) => toolCall.id).join(':')}
+            items={imageGenerationItems(segment.toolCalls, resultMap)}
+          />
+        ) : (
+          <ToolCallGroupContent
+            key={`regular-${index}`}
+            sessionId={sessionId}
+            toolCalls={segment.toolCalls}
+            resultMap={resultMap}
+            childToolCallsByParent={childToolCallsByParent}
+            agentTaskNotifications={agentTaskNotifications}
+            agentTaskStatuses={agentTaskStatuses}
+            showOpenRun={showOpenRun}
+            isStreaming={isStreaming}
+          />
+        ))}
+      </div>
+    )
+  }
+
   const allAgents = toolCalls.every((toolCall) => toolCall.toolName === 'Agent')
 
   if (allAgents) {
@@ -216,6 +288,13 @@ function ToolCallGroupContent({
         agentTaskStatuses={agentTaskStatuses}
         showOpenRun={showOpenRun}
       />
+    )
+  }
+
+  const allImageGeneration = toolCalls.length > 0 && toolCalls.every((toolCall) => isImageGenerationToolName(toolCall.toolName))
+  if (allImageGeneration) {
+    return (
+      <ImageGenerationGroup items={imageGenerationItems(toolCalls, resultMap)} />
     )
   }
 

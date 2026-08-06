@@ -14,6 +14,9 @@ const originalEnv = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+  CC_HAHA_IMAGE_PROVIDER_KIND: process.env.CC_HAHA_IMAGE_PROVIDER_KIND,
+  CC_HAHA_IMAGE_PROVIDER_ID: process.env.CC_HAHA_IMAGE_PROVIDER_ID,
+  CC_HAHA_IMAGE_MODEL: process.env.CC_HAHA_IMAGE_MODEL,
 }
 
 function restoreEnv(key: keyof typeof originalEnv): void {
@@ -40,6 +43,9 @@ describe('managedEnv', () => {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_MODEL
+    delete process.env.CC_HAHA_IMAGE_PROVIDER_KIND
+    delete process.env.CC_HAHA_IMAGE_PROVIDER_ID
+    delete process.env.CC_HAHA_IMAGE_MODEL
   })
 
   afterEach(async () => {
@@ -54,6 +60,9 @@ describe('managedEnv', () => {
     restoreEnv('ANTHROPIC_API_KEY')
     restoreEnv('ANTHROPIC_AUTH_TOKEN')
     restoreEnv('ANTHROPIC_MODEL')
+    restoreEnv('CC_HAHA_IMAGE_PROVIDER_KIND')
+    restoreEnv('CC_HAHA_IMAGE_PROVIDER_ID')
+    restoreEnv('CC_HAHA_IMAGE_MODEL')
   })
 
   test('starts a standalone provider proxy for CLI-only OpenAI-compatible providers', async () => {
@@ -94,14 +103,23 @@ describe('managedEnv', () => {
       env: {
         CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '0',
         CC_HAHA_LOCAL_ACCESS_TOKEN: 'stale-settings-token',
+        CC_HAHA_IMAGE_PROVIDER_KIND: 'openai_oauth',
+        CC_HAHA_IMAGE_PROVIDER_ID: 'openai-official',
+        CC_HAHA_IMAGE_MODEL: 'gpt-image-2',
       },
     })
     process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1'
     process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
+    process.env.CC_HAHA_IMAGE_PROVIDER_KIND = 'grok_oauth'
+    process.env.CC_HAHA_IMAGE_PROVIDER_ID = 'grok-official'
+    process.env.CC_HAHA_IMAGE_MODEL = 'grok-imagine-image-quality'
 
     applySafeConfigEnvironmentVariables()
 
     expect(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(process.env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBe('desktop-local-secret')
+    expect(process.env.CC_HAHA_IMAGE_PROVIDER_KIND).toBe('grok_oauth')
+    expect(process.env.CC_HAHA_IMAGE_PROVIDER_ID).toBe('grok-official')
+    expect(process.env.CC_HAHA_IMAGE_MODEL).toBe('grok-imagine-image-quality')
   })
 })

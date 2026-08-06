@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { Modal } from '@/components/ui/Modal'
 import { useOverlayStore } from '../../stores/overlayStore'
@@ -49,56 +50,74 @@ export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect
   if (!activeImage) return null
 
   return (
-    <Modal open={open} onClose={onClose} width={960}>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-[var(--color-text-primary)]">{activeImage.name}</div>
-            <div className="text-xs text-[var(--color-text-tertiary)]">
-              {activeIndex + 1} / {images.length}
-            </div>
-          </div>
-          {images.length > 1 && (
-            <div className="flex items-center gap-2">
-              <IconButton
-                icon="chevron_left"
-                label={t('attachments.previousImage')}
-                size="lg"
-                tone="secondary"
-                shape="circle"
-                bordered
-                onClick={() => onSelect((activeIndex - 1 + images.length) % images.length)}
-              />
-              <IconButton
-                icon="chevron_right"
-                label={t('attachments.nextImage')}
-                size="lg"
-                tone="secondary"
-                shape="circle"
-                bordered
-                onClick={() => onSelect((activeIndex + 1) % images.length)}
-              />
-            </div>
-          )}
+    <Modal open={open} onClose={onClose} title={activeImage.name} variant="media">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-12 shrink-0 items-center justify-between px-3">
+          <span className="font-mono text-xs tabular-nums text-[var(--color-terminal-muted)]">
+            {activeIndex + 1} / {images.length}
+          </span>
+          <IconButton
+            icon={<X />}
+            label={t('workbench.close')}
+            size="lg"
+            tone="secondary"
+            shape="circle"
+            surface="terminal"
+            onClick={onClose}
+          />
         </div>
 
-        <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-2xl bg-[#111]">
-          <img src={activeImage.src} alt={activeImage.name} className="max-h-[70vh] w-full object-contain" />
+        <div className="relative flex min-h-0 flex-1 items-center justify-center px-4 pb-4">
+          <img
+            src={activeImage.src}
+            alt={activeImage.name}
+            className="max-h-full max-w-full rounded-[var(--radius-md)] object-contain"
+          />
+
+          {images.length > 1 ? (
+            <>
+              <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                <IconButton
+                  icon="chevron_left"
+                  label={t('attachments.previousImage')}
+                  size="xl"
+                  tone="secondary"
+                  shape="circle"
+                  surface="terminal"
+                  className="bg-[var(--color-terminal-header)] shadow-[var(--shadow-card)]"
+                  onClick={() => onSelect((activeIndex - 1 + images.length) % images.length)}
+                />
+              </div>
+              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                <IconButton
+                  icon="chevron_right"
+                  label={t('attachments.nextImage')}
+                  size="xl"
+                  tone="secondary"
+                  shape="circle"
+                  surface="terminal"
+                  className="bg-[var(--color-terminal-header)] shadow-[var(--shadow-card)]"
+                  onClick={() => onSelect((activeIndex + 1) % images.length)}
+                />
+              </div>
+            </>
+          ) : null}
         </div>
 
         {images.length > 1 && (
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex shrink-0 justify-center gap-1.5 overflow-x-auto px-4 pb-3">
             {images.map((image, index) => (
               <button
                 key={`${image.name}-${index}`}
+                type="button"
                 onClick={() => onSelect(index)}
-                className={`overflow-hidden rounded-xl border transition-all ${
+                className={`overflow-hidden rounded-[var(--radius-md)] border transition-[border-color,opacity,transform] duration-200 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                   index === activeIndex
-                    ? 'border-[var(--color-brand)] shadow-[0_0_0_1px_var(--color-brand)]'
-                    : 'border-[var(--color-border)]'
+                    ? 'border-[var(--color-terminal-fg)] opacity-100'
+                    : 'border-[var(--color-terminal-border)] opacity-55 hover:opacity-90'
                 }`}
               >
-                <img src={image.src} alt={image.name} className="h-16 w-16 object-cover" />
+                <img src={image.src} alt={image.name} className="h-12 w-12 object-cover" />
               </button>
             ))}
           </div>

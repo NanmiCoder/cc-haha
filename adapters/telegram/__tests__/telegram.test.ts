@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { splitMessage, formatPermissionRequest, truncateInput, escapeMarkdownV2 } from '../../common/format.js'
+import { splitMessage, formatPermissionRequest, escapeMarkdownV2 } from '../../common/format.js'
 import { parsePermitCallbackData } from '../../common/permission.js'
 import {
   buildTelegramThinkingUpdate,

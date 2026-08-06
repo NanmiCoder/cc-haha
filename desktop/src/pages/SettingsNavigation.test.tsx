@@ -94,5 +94,8 @@ describe('Settings section navigation', () => {
     // The rule is what separates the rail from the section beside it now, so
     // it is load-bearing rather than trim.
     expect(rail?.className).toContain('border-r')
+    // Page chrome stays left-pinned. Chasing the settings tab's strip offset used
+    // to shove this rail mid-panel whenever the tab was not leading.
+    expect((rail as HTMLElement).style.marginLeft).toBe('')
   })
 })

@@ -78,6 +78,37 @@ describe('AskUserQuestion', () => {
     })
   })
 
+  // Regression: the "no questions" early return used to sit above two useMemo calls,
+  // so a mounted instance whose question count crossed zero threw "Rendered fewer/more
+  // hooks than expected" and took the surrounding message list down with it. `input` is
+  // not stable for the lifetime of the instance — chatStore rebuilds tool_use messages
+  // from the transcript under a stable id — so both directions are reachable.
+  //
+  // These assert on rendering rather than on hook counts, which is what a reader can
+  // check: if the early return moves back above a hook, React throws during rerender.
+  describe('hook order across a changing question count', () => {
+    const ONE_QUESTION = { question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }
+
+    it('survives input gaining questions after rendering with none', () => {
+      const { rerender } = render(<AskUserQuestion toolUseId="tool-1" input={{}} />)
+
+      rerender(<AskUserQuestion toolUseId="tool-1" input={ONE_QUESTION} />)
+
+      expect(screen.getByText('Ship it?')).toBeTruthy()
+    })
+
+    it('survives input losing its questions while mounted', () => {
+      const { container, rerender } = render(
+        <AskUserQuestion toolUseId="tool-1" input={ONE_QUESTION} />,
+      )
+      expect(screen.getByText('Ship it?')).toBeTruthy()
+
+      rerender(<AskUserQuestion toolUseId="tool-1" input={{}} />)
+
+      expect(container.textContent).toBe('')
+    })
+  })
+
   it('submits answers through permission_response updatedInput instead of sending a chat message', () => {
     render(
       <AskUserQuestion

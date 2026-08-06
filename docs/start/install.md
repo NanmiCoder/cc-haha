@@ -114,6 +114,10 @@ cp .env.example .env
 安装器的数据保护不等于备份。真正重要的东西请自己另存一份。
 :::
 
+## Code signing policy
+
+Windows 安装包的签名范围、人工审批、责任角色和验证方法见 [Code signing policy](./code-signing.md)。在 SignPath Foundation 接入完成前，Windows Release 仍会明确标注为未签名；软件联网和本地数据处理方式见[隐私与联网说明](./privacy.md)。
+
 ## 装完之后
 
 去 [连接模型服务](./models.md)。没接模型之前，应用能打开，但发不出任何一条消息。

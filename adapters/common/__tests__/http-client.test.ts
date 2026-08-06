@@ -85,6 +85,50 @@ describe('AdapterHttpClient', () => {
     }
   })
 
+  // #1191: /projects showed only the default project on every IM channel because
+  // the allowed root was the default work dir itself. With the boundary resolved
+  // from the user's home instead, sibling projects must survive the filter.
+  it('keeps sibling projects that live outside the default work dir', async () => {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'im-home-'))
+    try {
+      const defaultWorkDir = path.join(homeRoot, 'work', 'my-app')
+      const sibling = path.join(homeRoot, 'work', 'other-app')
+      const elsewhere = path.join(homeRoot, 'side', 'blog')
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'im-outside-'))
+      for (const dir of [defaultWorkDir, sibling, elsewhere]) fs.mkdirSync(dir, { recursive: true })
+
+      // The roots an adapter now gets from resolveAllowedProjectRoots(): the home
+      // directory, not the default work dir.
+      client = new AdapterHttpClient('ws://127.0.0.1:3456', {
+        allowedProjectRoots: [homeRoot, defaultWorkDir],
+      })
+      globalThis.fetch = mock(() =>
+        Promise.resolve(Response.json({
+          projects: [
+            { projectName: 'my-app', realPath: defaultWorkDir, sessionCount: 9 },
+            { projectName: 'other-app', realPath: sibling, sessionCount: 4 },
+            { projectName: 'blog', realPath: elsewhere, sessionCount: 2 },
+            { projectName: 'not-mine', realPath: outside, sessionCount: 1 },
+          ],
+        }))
+      ) as any
+
+      const projects = await client.listRecentProjects()
+      expect(projects.map((p) => p.projectName)).toEqual(['my-app', 'other-app', 'blog'])
+
+      // Picking any of them by name must work too — matchProject shares the filter.
+      await expect(client.matchProject('blog')).resolves.toMatchObject({
+        project: { projectName: 'blog' },
+      })
+      // The boundary still holds for anything outside it.
+      await expect(client.matchProject('not-mine')).resolves.toEqual({})
+
+      fs.rmSync(outside, { recursive: true, force: true })
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true })
+    }
+  })
+
   it('filters recent projects before index, name, and fuzzy matching', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
     const allowedDir = fs.mkdtempSync(path.join(rootDir, 'allowed-'))

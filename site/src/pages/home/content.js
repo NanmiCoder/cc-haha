@@ -58,7 +58,7 @@ export const content = {
       lede: '本地优先的桌面客户端：会话、改动、Agent、定时任务都摆在明处。接哪个模型你说了算，改哪一行你点头才算。',
       primary: '下载桌面端',
       secondary: '三步跑通第一条会话',
-      badges: ['macOS · Windows · Linux', '开源免费', '数据留在本机'],
+      badges: ['macOS · Windows · Linux', '开源免费', '本地优先'],
       caption: '真实 App 的空会话首屏：100% 界面缩放、纯白主题，项目、权限与模型一眼可见。'
     },
     capabilities: {
@@ -189,7 +189,7 @@ export const content = {
       tagline: '本地优先的 Claude Code 桌面客户端',
       columns: [
         ['文档', [['/start', '开始使用'], ['/desktop', '桌面端功能'], ['/im', 'IM 接入'], ['/cli', '命令行']]],
-        ['开发者', [['/internals', '架构总览'], ['/internals/structure', '项目结构'], ['/internals/contributing', '参与贡献']]]
+        ['开发者', [['/internals', '架构总览'], ['/internals/structure', '项目结构'], ['/internals/contributing', '参与贡献'], ['/start/code-signing', 'Code signing policy'], ['/start/privacy', '隐私与联网']]]
       ]
     }
   },
@@ -200,7 +200,7 @@ export const content = {
       lede: 'A local-first desktop client. Sessions, diffs, agents and scheduled runs all sit in the open. You pick the model; nothing lands until you say so.',
       primary: 'Download the app',
       secondary: 'Run your first session',
-      badges: ['macOS · Windows · Linux', 'Open source', 'Your data stays local'],
+      badges: ['macOS · Windows · Linux', 'Open source', 'Local-first'],
       caption: 'The real empty-session screen at 100% UI zoom in Pure White, with project, permissions and model visible up front.'
     },
     capabilities: {
@@ -283,7 +283,7 @@ export const content = {
       tagline: 'A local-first desktop client for Claude Code',
       columns: [
         ['Docs', [['/en/start', 'Get started'], ['/en/desktop', 'Desktop app'], ['/en/im', 'Messaging'], ['/en/cli', 'Command line']]],
-        ['Developers', [['/en/internals', 'Architecture'], ['/en/internals/structure', 'Project structure'], ['/en/internals/contributing', 'Contributing']]]
+        ['Developers', [['/en/internals', 'Architecture'], ['/en/internals/structure', 'Project structure'], ['/en/internals/contributing', 'Contributing'], ['/en/start/code-signing', 'Code signing policy'], ['/en/start/privacy', 'Privacy']]]
       ]
     }
   }

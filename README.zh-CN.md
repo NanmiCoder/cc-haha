@@ -22,7 +22,7 @@
 
 </div>
 
-Claude Code Haha 是一个**桌面端 Claude Code 工作台**：把会话、多项目、分支 / Worktree、工作区改动与 Diff 审阅、权限审批、模型配置、Computer Use、H5 远程访问、IM 接入和定时任务集中到一个 macOS / Windows / Linux APP 里。
+Claude Code Haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。
 
 <p align="center">
   <a href="#桌面端预览">桌面端预览</a> · <a href="#安装桌面端">安装桌面端</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#用户交流群">用户交流群</a>
@@ -83,6 +83,26 @@ Claude Code Haha 是一个**桌面端 Claude Code 工作台**：把会话、多�
         感谢 <a href="https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA">玄枢API</a> 赞助本项目！玄枢API 是一站式企业级 AI 网关，通过一个统一 API 即可接入 Claude Code、Codex、Gemini CLI 等热门 AI 编程工具，调用全球顶尖模型。平台以稳定为前提，通过多账号池调度与自动故障切换屏蔽上游账号波动；模型调用低至官方定价 2.5 折，余额充值再享约 8 折优惠且不设有效期。新用户通过 <a href="https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA">专属链接</a> 注册即赠 5 美元额度。
       </td>
     </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://api.fenno.ai/s/WD8c">
+          <img src="docs/images/sponsors/fennoai-logo.svg" width="180" alt="FennoAI">
+        </a>
+      </td>
+      <td valign="middle">
+        感谢 <a href="https://api.fenno.ai/s/WD8c">FennoAI</a> 赞助本项目！FennoAI 是一家面向企业研发团队和开发者的高稳定、高性能 API 中转服务商，兼容 OpenAI 与 Anthropic 协议，可无缝接入 Codex、Claude Code、OpenCode 等主流 AI 编程工具。平台具备企业级稳定性，可支撑千亿 Token/日的调用规模，并支持境内外主体公对公结算及开票，满足企业级研发与采购需求。作为 cc-haha 用户专属福利，通过 <a href="https://api.fenno.ai/s/WD8c">专属链接</a> 购买订阅，仅需 1.99 美元即可获得价值 50 美元的 Coding Plan 额度；同时支持邀请奖励，邀请好友购买最高可获得 20% 返佣，邀请越多，奖励越高。
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://s.qiniu.com/IZbyya">
+          <img src="docs/images/sponsors/qiniuai-logo.svg" width="180" alt="七牛云 AI">
+        </a>
+      </td>
+      <td valign="middle">
+        感谢 <a href="https://s.qiniu.com/IZbyya">七牛云 AI</a> 赞助本项目！七牛云 AI 是七牛云（02567.HK）旗下企业级大模型 MaaS 平台，一站式调用全球 150+ 主流模型，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。作为 cc-haha 用户专属福利，通过 <a href="https://s.qiniu.com/IZbyya">专属链接</a> 注册，企业用户免费领 1200 万 Token，开发者免费领 300 万 Token。
+      </td>
+    </tr>
   </tbody>
 </table>
 
@@ -95,6 +115,8 @@ Claude Code Haha 是一个**桌面端 Claude Code 工作台**：把会话、多�
 1. 前往 [Releases](https://github.com/NanmiCoder/cc-haha/releases) 下载 macOS / Windows / Linux 桌面端安装包。
 2. 首次启动后，在桌面端设置里配置模型提供商、API Key 和默认模型。
 3. 正式 macOS Release 需要经过签名和公证；如果安装的是 draft/unsigned 临时包，首次打开可能仍需手动放行。Windows 未签名安装包可能出现 SmartScreen 提示，点「更多信息」→「仍要运行」即可。详见 [桌面端安装指南](docs/start/install.md)。
+
+发布可信度与隐私：[Code signing policy](docs/start/code-signing.md) · [隐私与联网说明](docs/start/privacy.md)
 
 ## 从源码启动 CLI
 
@@ -113,13 +135,19 @@ cp .env.example .env
 ## 桌面端亮点
 
 - **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理，侧边栏宽度可拖拽。
+- **全局搜索**：按 Cmd+K 跨所有会话全文搜索，一键跳到命中位置。
 - **分支 / Worktree 启动**：新会话可以选择仓库分支，并决定用当前工作树还是隔离 Worktree。
 - **改动逐个文件审阅**：右侧工作区列出本轮改动，点开就是带语法高亮的 Diff，整轮可撤销。
+- **内置浏览器预览**：Agent 刚改完的页面直接在应用内渲染，登录态和 Cookie 真实可用。
 - **五档权限模式**：从「询问权限」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
 - **模型自选**：Claude / ChatGPT / Grok 官方账号可直接登录；DeepSeek、Kimi、智谱 GLM 等第三方 API 有现成预设；LM Studio、Ollama 的本地模型也接得上。
+- **图片生成**：聊天中直接生成和编辑图片——ChatGPT / Grok 授权登录即可使用，也支持接入任意 OpenAI 兼容的 Images API。
+- **MCP 图形化管理**：界面化增删改 MCP Server，支持 STDIO / Streamable HTTP / SSE 三种传输方式与项目私有、共享、全局三种作用域。
 - **六套配色主题**：纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝，可跟随系统深浅色自动切换。
 - **技能市场**：发现、预览、安装 ClawHub / SkillHub 的第三方技能，来源和安全状态摆在明处。
 - **会话活动面板**：集中查看任务进度、后台任务、SubAgent 与来源。
+- **可视化 SubAgent 管理**：图形界面创建和调校子代理，选择模型、工具与权限模式。
+- **模型请求追踪**：本地记录每轮模型请求的状态与耗时，可搜索筛选，快速定位卡死或失败调用。
 - **Computer Use**：让 Agent 在授权后截图、点击、输入并控制桌面应用。
 - **桌面宠物**：搭搭、弧弧、补补、回回随任务状态换动作，也能自己做一只（默认关闭）。
 - **H5 远程访问**：扫码用手机浏览器接入当前会话，锁屏切后台都不打断正在跑的任务。
@@ -205,10 +233,6 @@ cp .env.example .env
 
 如果这个项目对你有帮助，欢迎点一个 ⭐ Star，让更多人发现 Claude Code Haha。
 
-<a href="https://www.star-history.com/#NanmiCoder/cc-haha&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date" />
-  </picture>
+<a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
+  <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />
 </a>

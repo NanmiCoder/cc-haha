@@ -42,7 +42,10 @@ const PET_DRAG_THRESHOLD_PX = 4
 // The host owns this: it is the only side that knows where the window sits on
 // which display. Until it answers, the panel keeps its usual spot above the
 // mascot.
-const DEFAULT_PANEL_PLACEMENT: DesktopPetPanelPlacement = { vertical: 'above' }
+const DEFAULT_PANEL_PLACEMENT: DesktopPetPanelPlacement = {
+  vertical: 'above',
+  horizontal: 'center',
+}
 
 type PetDragGesture = {
   pointerId: number
@@ -342,7 +345,11 @@ export function PetApp() {
   // pet on every frame of a drag.
   const applyPanelPlacement = useCallback((next: DesktopPetPanelPlacement | undefined) => {
     if (!next) return
-    setPanelPlacement((current) => (current.vertical === next.vertical ? current : next))
+    setPanelPlacement((current) => (
+      current.vertical === next.vertical && current.horizontal === next.horizontal
+        ? current
+        : next
+    ))
   }, [])
 
   useEffect(() => {
@@ -402,6 +409,7 @@ export function PetApp() {
     // A flip re-lays the window out without resizing anything in it, so
     // ResizeObserver never fires and the reported boxes would keep describing
     // the old side. The host needs the new ones to hold the mascot still.
+    panelPlacement.horizontal,
     panelPlacement.vertical,
     preferences?.size,
     selectedPet,
@@ -500,6 +508,7 @@ export function PetApp() {
         ref={stackRef}
         className="pet-window-stack"
         data-panel-placement={panelPlacement.vertical}
+        data-panel-horizontal={panelPlacement.horizontal}
         onMouseEnter={() => void getDesktopHost().pets.setIgnoreMouseEvents(false)}
         onMouseMove={(event) => {
           if (dragGestureRef.current) return

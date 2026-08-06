@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import treeKill from 'tree-kill'
 import { changedFiles, writeDiffPatch } from '../baseline/execute'
+import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { BaselineTarget, LaneResult } from '../types'
 
 const FIXTURE = 'scripts/quality-gate/desktop-smoke/fixtures/chat-edit'
@@ -70,7 +71,7 @@ export function buildDesktopSmokeBrowserEnv(
   }
 }
 
-function agentBrowserCommand(args: string[]) {
+export function agentBrowserCommand(args: string[]) {
   return ['agent-browser', '--proxy-bypass', LOOPBACK_PROXY_BYPASS, ...args]
 }
 
@@ -101,7 +102,7 @@ async function killProcessTree(pid: number, signal: 'SIGTERM' | 'SIGKILL') {
   })
 }
 
-async function cleanupAgentBrowserSession(sessionName: string, logPath: string) {
+export async function cleanupAgentBrowserSession(sessionName: string, logPath: string) {
   if (!sessionName || !existsSync(AGENT_BROWSER_HOME)) return
 
   const metadataSuffixes = ['pid', 'sock', 'stream', 'engine', 'version']
@@ -127,7 +128,7 @@ async function cleanupAgentBrowserSession(sessionName: string, logPath: string) 
   }
 }
 
-function cleanupBrowserProfileProcesses(browserProfileDir: string, logPath: string) {
+export function cleanupBrowserProfileProcesses(browserProfileDir: string, logPath: string) {
   if (process.platform === 'win32') {
     appendFileSync(logPath, '\n[quality-gate] Skipped browser profile process cleanup on Windows\n')
     return
@@ -179,7 +180,7 @@ async function runBrowserStep(
   }
 }
 
-async function getPort(): Promise<number> {
+export async function getPort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer()
     server.on('error', reject)
@@ -195,7 +196,7 @@ async function getPort(): Promise<number> {
   })
 }
 
-async function pipeToFile(stream: ReadableStream<Uint8Array> | null, path: string) {
+export async function pipeToFile(stream: ReadableStream<Uint8Array> | null, path: string) {
   if (!stream) return
   const reader = stream.getReader()
   while (true) {
@@ -205,7 +206,7 @@ async function pipeToFile(stream: ReadableStream<Uint8Array> | null, path: strin
   }
 }
 
-async function waitForHttp(url: string, timeoutMs: number) {
+export async function waitForHttp(url: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs
   let lastError = ''
   while (Date.now() < deadline) {
@@ -221,7 +222,7 @@ async function waitForHttp(url: string, timeoutMs: number) {
   throw new Error(`Timed out waiting for ${url}${lastError ? ` (${lastError})` : ''}`)
 }
 
-async function runLoggedCommand(
+export async function runLoggedCommand(
   command: string[],
   options: {
     cwd: string
@@ -437,10 +438,17 @@ export async function executeDesktopSmoke(
     vitePort,
   }
 
+  // The smoke drives the real server through the real UI, including a global
+  // permission-mode switch to bypassPermissions. Without a sandbox that switch is
+  // written into the developer's real ~/.claude/settings.json and survives any
+  // interrupted run, so the server gets a throwaway config dir seeded with only the
+  // provider state the run needs.
+  const sandbox = createQualityGateSandbox({ label: 'desktop-smoke', seedProviders: true })
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(serverPort)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...sandbox.env, SERVER_PORT: String(serverPort) },
   })
   void pipeToFile(server.stdout, serverLogPath)
   void pipeToFile(server.stderr, serverLogPath)
@@ -570,22 +578,22 @@ export async function executeDesktopSmoke(
       allowFailure: true,
     }, browserStepContext)
 
-    return {
+    return applyUserStateGuard({
       id: resultId,
       title: resultTitle,
-      status: 'passed',
+      status: 'passed' as const,
       durationMs: Date.now() - started,
       artifactDir,
-    }
+    }, sandbox, artifactDir)
   } catch (error) {
-    return {
+    return applyUserStateGuard({
       id: resultId,
       title: resultTitle,
-      status: 'failed',
+      status: 'failed' as const,
       durationMs: Date.now() - started,
       error: error instanceof Error ? error.message : String(error),
       artifactDir,
-    }
+    }, sandbox, artifactDir)
   } finally {
     if (previousPermissionMode) {
       await setPermissionMode(baseUrl, previousPermissionMode).catch((error) => {
@@ -606,5 +614,6 @@ export async function executeDesktopSmoke(
     server.kill()
     vite.kill()
     rmSync(workRoot, { recursive: true, force: true })
+    sandbox.cleanup()
   }
 }

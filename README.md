@@ -22,7 +22,7 @@
 
 </div>
 
-Claude Code Haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: sessions, projects, branch / Worktree launch, workspace changes and diff review, permission approval, model setup, Computer Use, H5 remote access, IM integration, and scheduled tasks in one app.
+Claude Code Haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, model trace, Computer Use, skill marketplace, colour themes, desktop pets, H5 remote access, IM integration, and scheduled tasks, all in one app.
 
 <p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
@@ -83,6 +83,26 @@ This project is maintained in the author's spare time. Corporate or individual s
         Thanks to <a href="https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA">XuanShu API</a> for sponsoring this project. XuanShu API is an all-in-one, enterprise-grade AI gateway that gives you access to leading global models through a single unified API, and works out of the box with popular AI coding tools such as Claude Code, Codex, and Gemini CLI. Stability comes first: multi-account pool scheduling and automatic failover smooth out upstream account fluctuations. Model calls are priced as low as 25% of official rates, and balance top-ups get roughly a 20% bonus with no expiry. New users who register through <a href="https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA">this link</a> receive a $5 credit.
       </td>
     </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://api.fenno.ai/s/WD8c">
+          <img src="docs/images/sponsors/fennoai-logo.svg" width="180" alt="FennoAI">
+        </a>
+      </td>
+      <td valign="middle">
+        Thanks to <a href="https://api.fenno.ai/s/WD8c">FennoAI</a> for sponsoring this project. FennoAI is a high-stability, high-performance API relay service for enterprise engineering teams and individual developers. It speaks both the OpenAI and Anthropic protocols, so it drops straight into Codex, Claude Code, OpenCode, and other mainstream AI coding tools. The platform is built for enterprise-grade stability at hundreds of billions of tokens per day, and supports corporate settlement and invoicing for both domestic and overseas entities. As a cc-haha user perk, buying a subscription through <a href="https://api.fenno.ai/s/WD8c">this link</a> gets you $50 of Coding Plan credit for $1.99. Referrals earn up to 20% commission — the more you invite, the more you get.
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://s.qiniu.com/IZbyya">
+          <img src="docs/images/sponsors/qiniuai-logo.svg" width="180" alt="Qiniu Cloud AI">
+        </a>
+      </td>
+      <td valign="middle">
+        Thanks to <a href="https://s.qiniu.com/IZbyya">Qiniu Cloud AI</a> for sponsoring this project. Qiniu Cloud AI is the enterprise-grade LLM MaaS platform from Qiniu Cloud (02567.HK): one entry point to 150+ leading models worldwide, compatible with the major vendors' protocols, covering text, image, audio, video, and file processing across every modality, and serving more than 1.69 million enterprises and developers. As a cc-haha user perk, registering through <a href="https://s.qiniu.com/IZbyya">this link</a> gets enterprise users 12M free tokens and developers 3M free tokens.
+      </td>
+    </tr>
   </tbody>
 </table>
 
@@ -95,6 +115,8 @@ This project is maintained in the author's spare time. Corporate or individual s
 1. Download the macOS / Windows / Linux desktop installer from [Releases](https://github.com/NanmiCoder/cc-haha/releases).
 2. On first launch, configure your model provider, API key, and default model in Settings.
 3. Public macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway". See the [desktop installation guide](docs/en/start/install.md).
+
+Release trust and privacy: [Code signing policy](docs/en/start/code-signing.md) · [Privacy and network access](docs/en/start/privacy.md)
 
 ## Run the CLI from Source
 
@@ -113,13 +135,19 @@ See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/inde
 ## Desktop Highlights
 
 - **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place, with a resizable sidebar.
+- **Global search**: press Cmd+K to search across every session and jump to the match.
 - **Branch / Worktree launch**: choose a repository branch and decide whether to use the current working tree or an isolated Worktree.
 - **Review edits file by file**: the workspace lists this turn's changes; open any file for a syntax-highlighted diff, or undo the whole turn.
+- **Built-in browser preview**: the page your agent just edited renders right inside the app, cookies and login state included.
 - **Five permission modes**: from "ask every time" to "skip permissions" — risky commands, tool calls, and follow-up questions are all approved in the GUI.
 - **Bring your own model**: sign in to Claude, ChatGPT, or Grok; use presets for DeepSeek, Kimi, Zhipu GLM and others; or point it at LM Studio and Ollama running locally.
+- **Image generation**: generate and edit images right in the chat — sign in with ChatGPT or Grok for instant use, or plug in any OpenAI-compatible Images API.
+- **Visual MCP manager**: add and edit MCP servers in a GUI — STDIO / Streamable HTTP / SSE, with project, shared, or global scope.
 - **Six colour themes**: white, paper, warm classic, celadon, ink night, and ink blue — optionally following your system's light/dark setting.
 - **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status shown up front.
 - **Session activity panel**: track task progress, background tasks, SubAgents, and sources in one side panel.
+- **Visual SubAgent manager**: create and tune SubAgents in a GUI — model, tools, and permission mode.
+- **Model trace**: every model request is logged locally with status and timing — search and filter to diagnose stuck or failed calls.
 - **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization.
 - **Desktop pets**: Dada, Huhu, Bubu, and Huihui change what they do with the task at hand — or raise one of your own (off by default).
 - **H5 remote access**: scan a QR code to continue the session in your phone browser; locking the screen won't kill a running task.
@@ -205,10 +233,6 @@ Thanks to the following open-source projects and community practices for referen
 
 If this project helps you, please support it with a ⭐ Star so more people can discover Claude Code Haha.
 
-<a href="https://www.star-history.com/#NanmiCoder/cc-haha&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=NanmiCoder/cc-haha&type=Date" />
-  </picture>
+<a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
+  <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />
 </a>

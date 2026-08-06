@@ -6,7 +6,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 
 const baseProps = {
   url: 'http://localhost:5173/', canGoBack: false, canGoForward: false,
-  onNavigate: vi.fn(), onBack: vi.fn(), onForward: vi.fn(), onReload: vi.fn(),
+  onNavigate: vi.fn(), onBack: vi.fn(), onForward: vi.fn(), onReload: vi.fn(), onOpenExternal: vi.fn(),
 }
 
 beforeEach(() => {

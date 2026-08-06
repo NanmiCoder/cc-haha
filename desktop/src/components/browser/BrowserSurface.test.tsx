@@ -9,7 +9,7 @@ beforeAll(() => {
   })
 })
 
-const { bridge, sendMessage } = vi.hoisted(() => ({
+const { bridge, openExternal, sendMessage } = vi.hoisted(() => ({
   bridge: {
     open: vi.fn(),
     navigate: vi.fn(),
@@ -19,9 +19,20 @@ const { bridge, sendMessage } = vi.hoisted(() => ({
     close: vi.fn(),
     message: vi.fn(),
   },
+  openExternal: vi.fn().mockResolvedValue(undefined),
   sendMessage: vi.fn(),
 }))
 vi.mock('../../lib/previewBridge', () => ({ previewBridge: bridge }))
+vi.mock('../../lib/desktopHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/desktopHost')>()
+  return {
+    ...actual,
+    getDesktopHost: () => {
+      const host = actual.getDesktopHost()
+      return { ...host, shell: { ...host.shell, open: openExternal } }
+    },
+  }
+})
 vi.mock('../../stores/chatStore', () => ({
   useChatStore: { getState: () => ({ sendMessage }) },
 }))
@@ -49,6 +60,7 @@ afterEach(() => {
   useOverlayStore.setState(useOverlayStore.getInitialState(), true)
   usePreviewSelectionStore.setState({ bySession: {} })
   useSettingsStore.setState({ uiZoom: 1 })
+  openExternal.mockClear()
   sendMessage.mockReset()
   setBaseUrl(getDefaultBaseUrl())
 })
@@ -216,6 +228,15 @@ describe('BrowserSurface', () => {
     expect(actions).toContainElement(screen.getByLabelText('截图'))
     expect(actions).toContainElement(screen.getByLabelText('选择元素'))
     expect(screen.getByRole('textbox').closest('form')!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('opens the current preview URL in the system browser', () => {
+    useBrowserPanelStore.getState().open('s1', 'http://localhost:5173/')
+    render(<BrowserSurface sessionId="s1" />)
+
+    fireEvent.click(screen.getByLabelText('系统浏览器'))
+
+    expect(openExternal).toHaveBeenCalledWith('http://localhost:5173/')
   })
 
   it('选择元素 button toggles pickerActive and signals the bridge', () => {

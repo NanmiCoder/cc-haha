@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { sessionsApi, type SessionContextSnapshot } from '../../api/sessions'
 import { useTranslation } from '../../i18n'
 import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
+import { useDismissable } from '../../hooks/useDismissable'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
+import { ContextUsageDetails, type ContextUsageDetailsStatus } from './ContextUsageDetails'
 
 type Props = {
   sessionId?: string
@@ -32,8 +35,17 @@ const AUTO_REFRESH_MIN_INTERVAL_MS = 10_000
 // still be settling, so retry the event-driven refresh once.
 const FORCED_REFRESH_RETRY_MS = 5_000
 
-function formatNumber(value: number | undefined) {
-  return new Intl.NumberFormat().format(value ?? 0)
+const POPOVER_WIDTH = 340
+const POPOVER_GAP = 8
+const VIEWPORT_MARGIN = 16
+const POPOVER_MAX_HEIGHT = 420
+
+type PopoverPosition = {
+  top?: number
+  bottom?: number
+  left: number
+  width: number
+  maxHeight: number
 }
 
 function formatPercent(value: number | undefined) {
@@ -93,6 +105,9 @@ export function ContextUsageIndicator({
   // panel rather than for touch, so the phone touch target keys off the
   // viewport instead — see the trigger's height below.
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
+  // Narrow composer (Workbench / small window) and real H5 share the sheet
+  // presentation so the breakdown is never clipped by chat-column overflow.
+  const preferSheet = compact || isMobileBrowser
   const contextEnabled = shouldFetchContext(sessionId, draft, messageCount, chatState)
   const [context, setContext] = useState<SessionContextSnapshot | null>(null)
   const [contextSource, setContextSource] = useState<'live' | 'estimate' | null>(null)
@@ -100,7 +115,10 @@ export function ContextUsageIndicator({
   const [error, setError] = useState<string | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   const [inspectionModel, setInspectionModel] = useState<string | null>(null)
-  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const requestSeq = useRef(0)
   const contextIdentityRef = useRef('')
   const contextDataSessionIdRef = useRef<string | undefined>(undefined)
@@ -109,6 +127,10 @@ export function ContextUsageIndicator({
   const lastAutoRefreshAtRef = useRef(0)
   const contextEnabledRef = useRef(contextEnabled)
   contextEnabledRef.current = contextEnabled
+
+  const closeDetails = useCallback(() => {
+    setDetailsOpen(false)
+  }, [])
 
   const refresh = useCallback(async (mode: 'auto' | 'manual' | 'force' = 'manual'): Promise<boolean> => {
     if (!contextEnabledRef.current || !sessionId) {
@@ -286,6 +308,12 @@ export function ContextUsageIndicator({
     return () => clearInterval(timer)
   }, [chatState, messageCount, refresh])
 
+  // If the presentation mode flips (Workbench drag, H5 resize), drop any open
+  // shell so we don't leave a desktop popover stranded on a sheet layout.
+  useEffect(() => {
+    setDetailsOpen(false)
+  }, [preferSheet])
+
   const details = useMemo(() => {
     if (!context) return []
     return pickUsedContextCategory(context)
@@ -315,6 +343,7 @@ export function ContextUsageIndicator({
     ? inspectionModel
     : null
   const displayModel = firstNonEmpty(displayContext?.model, displayInspectionModel, fallbackModelLabel)
+  const modelLabel = displayModel ?? t('contextIndicator.modelUnknown')
   const ariaLabel = displayContext
     ? t('contextIndicator.ariaLabel', { percent: formatPercent(percentage) })
     : isPendingContext
@@ -323,22 +352,118 @@ export function ContextUsageIndicator({
       ? t('contextIndicator.loadingAria')
       : t('contextIndicator.unavailableAria')
 
+  const detailsStatus: ContextUsageDetailsStatus = displayContext
+    ? 'ready'
+    : isPendingContext
+      ? 'pending'
+      : loading
+        ? 'loading'
+        : 'unavailable'
+
+  const detailLabels = useMemo(() => ({
+    title: t('contextIndicator.title'),
+    used: t('contextIndicator.used'),
+    free: t('contextIndicator.free'),
+    window: t('contextIndicator.window'),
+    estimate: t('contextIndicator.estimate'),
+    pendingDetail: t('contextIndicator.pendingDetail'),
+    loading: t('contextIndicator.loading'),
+    unavailableDetail: t('contextIndicator.unavailableDetail'),
+  }), [t])
+
+  const detailsBody = (
+    <ContextUsageDetails
+      variant={preferSheet ? 'sheet' : 'popover'}
+      modelLabel={modelLabel}
+      percentageLabel={displayContext ? formatPercent(percentage) : '--'}
+      usedTokens={usedTokens}
+      freeTokens={freeTokens}
+      maxTokens={maxTokens}
+      categories={details}
+      updatedAtLabel={displayContext ? formatUpdatedAt(updatedAt, t) : undefined}
+      estimate={contextSource === 'estimate'}
+      status={detailsStatus}
+      labels={detailLabels}
+    />
+  )
+
+  const updatePopoverPosition = useCallback(() => {
+    const anchor = triggerRef.current
+    if (!anchor) return
+
+    const rect = anchor.getBoundingClientRect()
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const width = Math.min(POPOVER_WIDTH, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2))
+    const left = Math.min(
+      Math.max(VIEWPORT_MARGIN, rect.right - width),
+      Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
+    )
+
+    // Prefer above the composer (the historical hover direction). Fall below
+    // only when the top side is too short to keep the breakdown readable.
+    const spaceAbove = rect.top - POPOVER_GAP - VIEWPORT_MARGIN
+    const spaceBelow = viewportHeight - rect.bottom - POPOVER_GAP - VIEWPORT_MARGIN
+    const placeAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
+    const availableHeight = Math.max(160, placeAbove ? spaceAbove : spaceBelow)
+    const maxHeight = Math.min(POPOVER_MAX_HEIGHT, availableHeight)
+
+    setPopoverPosition({
+      top: placeAbove ? undefined : rect.bottom + POPOVER_GAP,
+      bottom: placeAbove
+        ? Math.max(VIEWPORT_MARGIN, viewportHeight - rect.top + POPOVER_GAP)
+        : undefined,
+      left,
+      width,
+      maxHeight,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!detailsOpen || preferSheet) {
+      setPopoverPosition(null)
+      return
+    }
+    updatePopoverPosition()
+  }, [detailsOpen, preferSheet, updatePopoverPosition, detailsStatus, details.length, displayPercent, modelLabel])
+
+  useEffect(() => {
+    if (!detailsOpen || preferSheet) return
+    window.addEventListener('resize', updatePopoverPosition)
+    window.addEventListener('scroll', updatePopoverPosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePopoverPosition)
+      window.removeEventListener('scroll', updatePopoverPosition, true)
+    }
+  }, [detailsOpen, preferSheet, updatePopoverPosition])
+
+  useDismissable({
+    open: detailsOpen && !preferSheet,
+    refs: [popoverRef],
+    triggerRef,
+    onDismiss: closeDetails,
+    stopEscapePropagation: true,
+  })
+
+  const handleTriggerClick = () => {
+    setDetailsOpen((open) => !open)
+    void refresh('manual')
+  }
+
   return (
-    <div className="group/context relative pointer-events-auto">
+    <div className="relative pointer-events-auto">
       <button
+        ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
-        onClick={() => {
-          if (compact) {
-            setMobileDetailsOpen(true)
-          }
-          void refresh('manual')
-        }}
+        aria-expanded={detailsOpen}
+        aria-haspopup="dialog"
+        onClick={handleTriggerClick}
         title={t('contextIndicator.title')}
         data-testid="context-usage-indicator"
         className={`flex shrink-0 items-center gap-[7px] rounded-full border border-[var(--color-border)] bg-transparent text-[var(--color-text-secondary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)] ${
           isMobileBrowser ? 'h-11' : 'h-8'
-        } ${compact ? 'px-2' : 'px-3'}`}
+        } ${compact ? 'px-2' : 'px-3'} ${detailsOpen ? 'border-[var(--color-outline)] bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`}
       >
         <span className="relative grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full">
           {loading && !displayContext ? (
@@ -361,160 +486,42 @@ export function ContextUsageIndicator({
         </span>
       </button>
 
-      <div className={`pointer-events-none absolute bottom-full right-0 z-[var(--z-popover)] mb-2 w-[340px] max-w-[calc(100vw-2rem)] translate-y-1 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[22px] py-5 text-left opacity-0 shadow-[var(--shadow-overlay)] transition-all duration-150 group-hover/context:translate-y-0 group-hover/context:opacity-100 group-focus-within/context:translate-y-0 group-focus-within/context:opacity-100 ${
-        compact ? 'hidden' : ''
-      }`}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xs font-semibold tracking-[0.08em] text-[var(--color-text-tertiary)]">
-              {t('contextIndicator.title')}
-            </div>
-            <div className="mt-1 truncate text-base font-bold text-[var(--color-text-primary)]">
-              {displayModel ?? t('contextIndicator.modelUnknown')}
-            </div>
-          </div>
-          {/* The headline serif carries the one large number on the panel —
-              the same treatment the handoff gives every hero statistic. */}
-          <div
-            className="shrink-0 text-[27px] font-bold leading-none text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
-            {displayContext ? formatPercent(percentage) : '--'}
-          </div>
-        </div>
+      {!preferSheet && detailsOpen && popoverPosition && createPortal(
+        <div
+          ref={popoverRef}
+          role="dialog"
+          aria-label={t('contextIndicator.title')}
+          data-testid="context-usage-popover"
+          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[22px] py-5 text-left shadow-[var(--shadow-overlay)]"
+          style={{
+            top: popoverPosition.top,
+            bottom: popoverPosition.bottom,
+            left: popoverPosition.left,
+            width: popoverPosition.width,
+            maxHeight: popoverPosition.maxHeight,
+          }}
+        >
+          {detailsBody}
+        </div>,
+        document.body,
+      )}
 
-        {displayContext ? (
-          <>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <div>
-                <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{t('contextIndicator.used')}</div>
-                <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
-              </div>
-              <div>
-                <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{t('contextIndicator.free')}</div>
-                <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatNumber(freeTokens)}</div>
-              </div>
-              <div className="col-span-2 mt-1">
-                <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{t('contextIndicator.window')}</div>
-                <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
-              </div>
-            </div>
-            {details.length > 0 && (
-              <div className="mt-[18px] flex flex-col gap-3">
-                {details.map((category) => {
-                  const percent = maxTokens > 0 ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100)) : 0
-                  return (
-                    <div key={category.name}>
-                      <div className="flex items-baseline justify-between gap-3">
-                        <span className="min-w-0 truncate text-[13.5px] text-[var(--color-text-primary)]">{category.name}</span>
-                        <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">{formatNumber(category.tokens)}</span>
-                      </div>
-                      {/* One terracotta scale for every row. The per-category
-                          colors that used to fill these bars came from the API
-                          payload and read as six unrelated statuses. */}
-                      <div className="mt-[7px] h-[3px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
-                        <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            <div className="mt-4 text-xs text-[var(--color-text-tertiary)]">
-              {formatUpdatedAt(updatedAt, t)}
-              {contextSource === 'estimate' && (
-                <span className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]">
-                  {t('contextIndicator.estimate')}
-                </span>
-              )}
-            </div>
-          </>
-        ) : isPendingContext ? (
-          <div className="mt-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-            {t('contextIndicator.pendingDetail')}
-          </div>
-        ) : (
-          <div className="mt-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-            {loading ? t('contextIndicator.loading') : t('contextIndicator.unavailableDetail')}
-          </div>
-        )}
-      </div>
-
-      {compact && (
+      {preferSheet && (
         <MobileBottomSheet
-          open={mobileDetailsOpen}
-          onClose={() => setMobileDetailsOpen(false)}
+          open={detailsOpen}
+          onClose={closeDetails}
           title={t('contextIndicator.title')}
           closeLabel={t('tabs.close')}
           ariaLabel={t('contextIndicator.title')}
+          testId="context-usage-sheet"
           headerExtra={(
             <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
-              {displayModel ?? t('contextIndicator.modelUnknown')}
+              {modelLabel}
             </div>
           )}
           contentClassName="p-4"
         >
-          <div className="flex items-end justify-between gap-4">
-            <div
-              className="text-4xl font-bold leading-none text-[var(--color-text-primary)]"
-              style={{ fontFamily: 'var(--font-headline)' }}
-            >
-              {displayContext ? formatPercent(percentage) : '--'}
-            </div>
-            {contextSource === 'estimate' && (
-              <span className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-                {t('contextIndicator.estimate')}
-              </span>
-            )}
-          </div>
-
-          {displayContext ? (
-            <div className="mt-5">
-              <div className="grid grid-cols-3 gap-2 font-mono text-xs">
-                <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                  <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.used')}</div>
-                  <div className="mt-1 text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
-                </div>
-                <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                  <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.free')}</div>
-                  <div className="mt-1 text-[var(--color-text-primary)]">{formatNumber(freeTokens)}</div>
-                </div>
-                <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                  <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.window')}</div>
-                  <div className="mt-1 text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
-                </div>
-              </div>
-              {details.length > 0 && (
-                <div className="mt-5 space-y-3">
-                  {details.map((category) => {
-                    const percent = maxTokens > 0 ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100)) : 0
-                    return (
-                      <div key={category.name}>
-                        <div className="flex items-center justify-between gap-3 text-xs">
-                          <span className="min-w-0 truncate text-[var(--color-text-secondary)]">{category.name}</span>
-                          <span className="shrink-0 font-mono text-[var(--color-text-tertiary)]">{formatNumber(category.tokens)}</span>
-                        </div>
-                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
-                          <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              <div className="mt-4 text-[11px] text-[var(--color-text-tertiary)]">
-                {formatUpdatedAt(updatedAt, t)}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-5 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-              {isPendingContext
-                ? t('contextIndicator.pendingDetail')
-                : loading
-                  ? t('contextIndicator.loading')
-                  : t('contextIndicator.unavailableDetail')}
-            </div>
-          )}
+          {detailsBody}
         </MobileBottomSheet>
       )}
     </div>

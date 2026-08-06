@@ -159,6 +159,38 @@ describe('feature quality contract', () => {
     }
   })
 
+  test('keeps quality gate lanes that boot the real server out of the developer config', () => {
+    // Baseline, desktop smoke, and provider smoke all spawn src/server/index.ts.
+    // That server resolves transcripts, session index, diagnostics, and settings
+    // from CLAUDE_CONFIG_DIR, so inheriting the parent environment makes a QA run
+    // read and write the developer's real ~/.claude. Desktop smoke additionally
+    // switched the global permission mode to bypassPermissions.
+    const laneSources = {
+      'scripts/quality-gate/baseline/execute.ts': readFileSync('scripts/quality-gate/baseline/execute.ts', 'utf8'),
+      'scripts/quality-gate/desktop-smoke/execute.ts': readFileSync('scripts/quality-gate/desktop-smoke/execute.ts', 'utf8'),
+      'scripts/quality-gate/provider-smoke/execute.ts': readFileSync('scripts/quality-gate/provider-smoke/execute.ts', 'utf8'),
+    }
+
+    for (const [path, source] of Object.entries(laneSources)) {
+      const serverSpawns = source.split('\n').filter((line) => line.includes("'src/server/index.ts'"))
+      expect(serverSpawns.length, `${path} should still spawn the real server`).toBeGreaterThan(0)
+      expect(source, `${path} must sandbox the server it spawns`).toContain('createQualityGateSandbox')
+      expect(source, `${path} must pass the sandbox environment to the server`).toContain('...sandbox.env')
+      expect(source, `${path} must not inherit the developer environment`).not.toContain('...process.env,\n      SERVER_PORT')
+      expect(source, `${path} must release the sandbox`).toContain('sandbox.cleanup()')
+      expect(
+        source.includes('applyUserStateGuard') || source.includes('detectUserStateMutations'),
+        `${path} must fail the lane when user state was written`,
+      ).toBe(true)
+    }
+
+    const sandbox = readFileSync('scripts/quality-gate/sandbox.ts', 'utf8')
+    expect(sandbox).toContain('createSandboxedTestEnvironment')
+    expect(sandbox).toContain('GUARDED_USER_STATE_PATHS')
+    expect(sandbox).toContain("'settings.json'")
+    expect(sandbox).toContain("'cc-haha/providers.json'")
+  })
+
   test('keeps general AI coding tools pointed at the same quality bar', () => {
     const instructions = readFileSync('.github/copilot-instructions.md', 'utf8')
 

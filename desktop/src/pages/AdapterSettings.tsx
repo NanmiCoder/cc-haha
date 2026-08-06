@@ -41,6 +41,9 @@ export function AdapterSettings() {
   // Server —— serverUrl 不再暴露在 UI 里（见下方 Server URL 注释），
   // 桌面端用 sidecar env var 注入动态端口。
   const [defaultProjectDir, setDefaultProjectDir] = useState('')
+  // Which directories the IM bots may reach at all. Empty = the built-in default
+  // (home directory + default project), which is what restores /projects (#1191).
+  const [allowedProjectRoots, setAllowedProjectRoots] = useState<string[]>([])
 
   // Telegram
   const [tgBotToken, setTgBotToken] = useState('')
@@ -92,6 +95,11 @@ export function AdapterSettings() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState('')
 
+  // Platforms whose own allowedProjectRoots replace the global list below.
+  const platformsWithOwnRoots = (['telegram', 'feishu', 'wechat', 'dingtalk', 'whatsapp'] as const)
+    .filter((platform) => (config[platform]?.allowedProjectRoots?.length ?? 0) > 0)
+    .map((platform) => t(`settings.adapters.${platform}` as const))
+
   // Pairing
   const [pairingCode, setPairingCode] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -106,6 +114,7 @@ export function AdapterSettings() {
   // Sync form state when config is loaded
   useEffect(() => {
     setDefaultProjectDir(config.defaultProjectDir ?? '')
+    setAllowedProjectRoots(config.allowedProjectRoots ?? [])
     setTgBotToken(config.telegram?.botToken ?? '')
     setTgAllowedUsers(config.telegram?.allowedUsers?.join(', ') ?? '')
     setFsAppId(config.feishu?.appId ?? '')
@@ -259,6 +268,7 @@ export function AdapterSettings() {
     try {
       const patch: Record<string, unknown> = {
         defaultProjectDir,
+        allowedProjectRoots,
       }
 
       const tgUsers = tgAllowedUsers
@@ -611,6 +621,61 @@ export function AdapterSettings() {
         <p className="text-xs text-[var(--color-text-tertiary)]">
           {t('settings.adapters.defaultProjectHint')}
         </p>
+      </div>
+
+      {/* Allowed project roots —— 这是 IM 通道真正的边界。刻意和「默认项目」分开：
+          「默认项目」只决定新会话开在哪，一度被当成唯一允许的根目录，导致 /projects
+          只剩下那一个项目（#1191）。留空 = 主目录，足以覆盖绝大多数用法。 */}
+      <div className="flex flex-col gap-1">
+        <label className="text-sm font-medium text-[var(--color-text-primary)]">
+          {t('settings.adapters.allowedRoots')}
+        </label>
+        {allowedProjectRoots.length > 0 ? (
+          <ul className="flex flex-col gap-1">
+            {allowedProjectRoots.map((root) => (
+              <li
+                key={root}
+                className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-1.5"
+              >
+                <span className="truncate text-xs text-[var(--color-text-secondary)]" title={root}>{root}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('settings.adapters.removeAllowedRoot')}
+                  onClick={() => setAllowedProjectRoots((prev) => prev.filter((item) => item !== root))}
+                >
+                  {t('settings.adapters.removeAllowedRoot')}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-[var(--color-text-secondary)]">
+            {t('settings.adapters.allowedRootsDefault')}
+          </p>
+        )}
+        <div className="flex items-center gap-2">
+          <DirectoryPicker
+            value=""
+            onChange={(dir) => {
+              if (!dir) return
+              setAllowedProjectRoots((prev) => (prev.includes(dir) ? prev : [...prev, dir]))
+            }}
+          />
+        </div>
+        <p className="text-xs text-[var(--color-text-tertiary)]">
+          {t('settings.adapters.allowedRootsHint')}
+        </p>
+        {/* A platform-level list replaces the global one, and the docs teach
+            hand-editing adapters.json — so say it, rather than letting a save
+            here look like it applied everywhere. */}
+        {platformsWithOwnRoots.length > 0 && (
+          <p className="text-xs text-[var(--color-text-tertiary)]">
+            {t('settings.adapters.allowedRootsOverridden', {
+              platforms: platformsWithOwnRoots.join(', '),
+            })}
+          </p>
+        )}
       </div>
 
       {/* IM Adapter Tabs */}

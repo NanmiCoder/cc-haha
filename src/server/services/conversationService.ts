@@ -23,6 +23,13 @@ import {
   OPENAI_CODEX_REASONING_EFFORT_ENV_KEY,
   isOpenAIReasoningEffort,
 } from '../../services/openaiAuth/models.js'
+import {
+  IMAGE_GENERATION_API_KEY_ENV_KEY,
+  IMAGE_GENERATION_BASE_URL_ENV_KEY,
+  IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+} from '../../services/imageGeneration/config.js'
 import { sessionService } from './sessionService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
@@ -1542,6 +1549,11 @@ export class ConversationService {
       OPENAI_CODEX_REASONING_EFFORT_ENV_KEY,
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
+      IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+      IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
+      IMAGE_GENERATION_BASE_URL_ENV_KEY,
+      IMAGE_GENERATION_API_KEY_ENV_KEY,
+      IMAGE_GENERATION_MODEL_ENV_KEY,
     ] as const
 
     const cleanEnv = await getProcessEnvWithTerminalShellEnvironment()
@@ -1816,6 +1828,11 @@ export class ConversationService {
         OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
         GROK_OAUTH_PROVIDER_ENV_KEY,
         GROK_OAUTH_FILE_ENV_KEY,
+        IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+        IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
+        IMAGE_GENERATION_BASE_URL_ENV_KEY,
+        IMAGE_GENERATION_API_KEY_ENV_KEY,
+        IMAGE_GENERATION_MODEL_ENV_KEY,
       ].some((key) => typeof env[key] === 'string' && env[key]!.trim().length > 0)
     } catch {
       return false
@@ -2250,7 +2267,10 @@ export class ConversationService {
         this.sanitizeAttachmentName(attachment.name, attachment.type, normalizedExt),
         normalizedExt,
       )
-      const sourcePath = source.sourcePath ?? this.writeUploadAttachment(
+      // Always stage the normalized bytes. ImageGen only accepts session uploads
+      // and prior generated outputs, so an attachment can be edited without
+      // granting the tool arbitrary filesystem read/upload access.
+      const sourcePath = this.writeUploadAttachment(
         uploadDir,
         storedName,
         resized.buffer,

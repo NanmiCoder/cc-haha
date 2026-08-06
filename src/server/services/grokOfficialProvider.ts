@@ -8,6 +8,12 @@ import {
 import { GROK_OAUTH_FILE_ENV_KEY } from '../../services/grokAuth/storage.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 import {
+  GROK_IMAGE_DEFAULT_MODEL,
+  IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
+  IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+} from '../../services/imageGeneration/config.js'
+import {
   GROK_OFFICIAL_PROVIDER_ID,
   type SavedProvider,
 } from '../types/provider.js'
@@ -49,6 +55,9 @@ export function buildGrokOfficialRuntimeEnv(): Record<string, string> {
   return {
     [GROK_OAUTH_PROVIDER_ENV_KEY]: '1',
     [GROK_OAUTH_FILE_ENV_KEY]: getHahaGrokOAuthFilePath(),
+    [IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY]: 'grok_oauth',
+    [IMAGE_GENERATION_PROVIDER_ID_ENV_KEY]: GROK_OFFICIAL_PROVIDER_ID,
+    [IMAGE_GENERATION_MODEL_ENV_KEY]: GROK_IMAGE_DEFAULT_MODEL,
     [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     ANTHROPIC_MODEL: GROK_DEFAULT_MAIN_MODEL,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: GROK_DEFAULT_HAIKU_MODEL,

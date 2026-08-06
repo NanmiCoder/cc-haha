@@ -198,6 +198,17 @@ export type MessageEntry = {
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean
+  cwd?: string
+}
+
+export type SessionMessagesWithEvidence = {
+  messages: MessageEntry[]
+  transcriptEvidenceComplete: boolean
+}
+
+type SubagentMessagesResult = {
+  messages: MessageEntry[]
+  subagentEvidenceComplete: boolean
 }
 
 export type SessionTaskNotification = {
@@ -800,28 +811,37 @@ export class SessionService {
   // JSONL parsing
   // --------------------------------------------------------------------------
 
-  private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
+  private async readJsonlFileWithDiagnostics(filePath: string): Promise<{
+    entries: RawEntry[]
+    exists: boolean
+    parseComplete: boolean
+  }> {
     let content: string
     try {
       content = await fs.readFile(filePath, 'utf-8')
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return []
+        return { entries: [], exists: false, parseComplete: false }
       }
       throw err
     }
 
     const entries: RawEntry[] = []
+    let parseComplete = true
     for (const line of content.split('\n')) {
       const trimmed = line.trim()
       if (!trimmed) continue
       try {
         entries.push(JSON.parse(trimmed) as RawEntry)
       } catch {
-        // skip malformed lines
+        parseComplete = false
       }
     }
-    return entries
+    return { entries, exists: true, parseComplete }
+  }
+
+  private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
+    return (await this.readJsonlFileWithDiagnostics(filePath)).entries
   }
 
   private async readTargetedJsonlEntries(
@@ -1521,6 +1541,7 @@ export class SessionService {
       parentUuid: entry.parentUuid ?? undefined,
       parentToolUseId,
       isSidechain: entry.isSidechain,
+      ...(typeof entry.cwd === 'string' && entry.cwd.trim() ? { cwd: entry.cwd } : {}),
     }
   }
 
@@ -1740,7 +1761,7 @@ export class SessionService {
     for (const block of content as Array<Record<string, unknown>>) {
       if (
         block.type === 'tool_use' &&
-        block.name === 'Agent' &&
+        (block.name === 'Agent' || block.name === 'Task') &&
         typeof block.id === 'string'
       ) {
         return block.id
@@ -1756,7 +1777,9 @@ export class SessionService {
     }
 
     return (message.content as ContentBlock[])
-      .filter((block) => block.type === 'tool_use' && block.name === 'Agent')
+      .filter((block) =>
+        block.type === 'tool_use' && (block.name === 'Agent' || block.name === 'Task')
+      )
       .flatMap((block) => (typeof block.id === 'string' ? [block.id] : []))
   }
 
@@ -1848,9 +1871,9 @@ export class SessionService {
     sessionId: string,
     parentToolUseId: string,
     agentId: string,
-  ): Promise<MessageEntry[]> {
+  ): Promise<SubagentMessagesResult> {
     const filePath = this.subagentTranscriptPath(projectDir, sessionId, agentId)
-    const entries = await this.readJsonlFile(filePath)
+    const { entries, exists, parseComplete } = await this.readJsonlFileWithDiagnostics(filePath)
     const namespace = `${parentToolUseId}/${agentId}`
     const messages: MessageEntry[] = []
 
@@ -1876,25 +1899,118 @@ export class SessionService {
       }
     }
 
-    return messages
+    return {
+      messages,
+      subagentEvidenceComplete: exists && parseComplete,
+    }
   }
 
   private async appendSubagentToolMessages(
     projectDir: string,
     sessionId: string,
     messages: MessageEntry[],
-  ): Promise<MessageEntry[]> {
-    const resultLinks = this.extractAgentResultLinks(messages)
-    if (resultLinks.size === 0) {
-      return messages
+  ): Promise<SubagentMessagesResult> {
+    const maxSubagentDepth = 16
+    const maxSubagentTranscripts = 128
+    const maxSubagentMessages = 20_000
+    type PendingLink = {
+      parentToolUseId: string
+      agentId: string
+      depth: number
+      ancestry: Set<string>
+    }
+    const transcriptIdentity = (agentId: string) => {
+      const transcriptPath = path.resolve(
+        this.subagentTranscriptPath(projectDir, sessionId, agentId),
+      )
+      return process.platform === 'win32' ? transcriptPath.toLowerCase() : transcriptPath
     }
 
-    const childMessages = await Promise.all(
-      [...resultLinks.entries()].map(([parentToolUseId, agentId]) =>
-        this.loadSubagentToolMessages(projectDir, sessionId, parentToolUseId, agentId),
-      ),
-    )
-    return [...messages, ...childMessages.flat()]
+    const allMessages = [...messages]
+    const loadedLinks = new Set<string>()
+    let loadedTranscriptCount = 0
+    let loadedMessageCount = 0
+    let subagentEvidenceComplete = true
+    const initialResultLinks = this.extractAgentResultLinks(messages)
+    if (messages.some((message) =>
+      this.extractAgentToolUseIdsFromMessage(message).some((id) => !initialResultLinks.has(id))
+    )) {
+      subagentEvidenceComplete = false
+    }
+    let pendingLinks: PendingLink[] = [...initialResultLinks.entries()]
+      .map(([parentToolUseId, agentId]) => ({
+        parentToolUseId,
+        agentId,
+        depth: 1,
+        ancestry: new Set<string>(),
+      }))
+
+    while (pendingLinks.length > 0) {
+      const newLinks = pendingLinks.filter(({ parentToolUseId, agentId, depth, ancestry }) => {
+        const identity = transcriptIdentity(agentId)
+        if (ancestry.has(identity)) {
+          return false
+        }
+        if (depth > maxSubagentDepth || loadedTranscriptCount >= maxSubagentTranscripts) {
+          subagentEvidenceComplete = false
+          return false
+        }
+        const key = `${parentToolUseId}\u0000${agentId}`
+        if (loadedLinks.has(key)) return false
+        loadedLinks.add(key)
+        loadedTranscriptCount += 1
+        return true
+      })
+      if (newLinks.length === 0) break
+
+      const loadedChildren = await Promise.all(
+        newLinks.map(async (link) => ({
+          link,
+          result: await this.loadSubagentToolMessages(
+            projectDir,
+            sessionId,
+            link.parentToolUseId,
+            link.agentId,
+          ),
+        })),
+      )
+      pendingLinks = []
+      for (const { link, result } of loadedChildren) {
+        const childMessages = result.messages
+        if (!result.subagentEvidenceComplete) subagentEvidenceComplete = false
+        const remainingMessageCapacity = maxSubagentMessages - loadedMessageCount
+        if (remainingMessageCapacity <= 0) {
+          subagentEvidenceComplete = false
+          break
+        }
+        const acceptedMessages = childMessages.slice(0, remainingMessageCapacity)
+        if (acceptedMessages.length < childMessages.length) {
+          subagentEvidenceComplete = false
+        }
+        loadedMessageCount += acceptedMessages.length
+        allMessages.push(...acceptedMessages)
+
+        const ancestry = new Set(link.ancestry)
+        ancestry.add(transcriptIdentity(link.agentId))
+        const childResultLinks = this.extractAgentResultLinks(acceptedMessages)
+        if (acceptedMessages.some((message) =>
+          this.extractAgentToolUseIdsFromMessage(message)
+            .some((id) => !childResultLinks.has(id))
+        )) {
+          subagentEvidenceComplete = false
+        }
+        for (const [parentToolUseId, agentId] of childResultLinks) {
+          pendingLinks.push({
+            parentToolUseId,
+            agentId,
+            depth: link.depth + 1,
+            ancestry,
+          })
+        }
+      }
+    }
+
+    return { messages: allMessages, subagentEvidenceComplete }
   }
 
   private resolveParentToolUseId(
@@ -3349,7 +3465,7 @@ export class SessionService {
     const stat = await fs.stat(filePath)
     const entries = await this.readJsonlFile(filePath)
 
-    const messages = await this.appendSubagentToolMessages(
+    const { messages } = await this.appendSubagentToolMessages(
       projectDir,
       sessionId,
       this.entriesToMessages(entries),
@@ -3395,17 +3511,29 @@ export class SessionService {
    * Get only the messages for a session (lighter than full detail).
    */
   async getSessionMessages(sessionId: string): Promise<MessageEntry[]> {
+    return (await this.getSessionMessagesWithEvidence(sessionId)).messages
+  }
+
+  async getSessionMessagesWithEvidence(
+    sessionId: string,
+  ): Promise<SessionMessagesWithEvidence> {
     const found = await this.findSessionFile(sessionId)
     if (!found) {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
-    const entries = await this.readJsonlFile(found.filePath)
-    return await this.appendSubagentToolMessages(
+    const rootTranscript = await this.readJsonlFileWithDiagnostics(found.filePath)
+    const subagentResult = await this.appendSubagentToolMessages(
       found.projectDir,
       sessionId,
-      this.entriesToMessages(entries),
+      this.entriesToMessages(rootTranscript.entries),
     )
+    return {
+      messages: subagentResult.messages,
+      transcriptEvidenceComplete: rootTranscript.exists &&
+        rootTranscript.parseComplete &&
+        subagentResult.subagentEvidenceComplete,
+    }
   }
 
   async getSubagentTranscriptMessages(
@@ -3984,7 +4112,17 @@ export class SessionService {
       filteredEntries.length > 0
         ? filteredEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
         : ''
-    await fs.writeFile(found.filePath, content, 'utf-8')
+    const transcriptStats = await fs.stat(found.filePath)
+    const tempFilePath = `${found.filePath}.rewind-${crypto.randomUUID()}.tmp`
+    try {
+      await fs.writeFile(tempFilePath, content, {
+        encoding: 'utf-8',
+        mode: transcriptStats.mode,
+      })
+      await fs.rename(tempFilePath, found.filePath)
+    } finally {
+      await fs.rm(tempFilePath, { force: true })
+    }
     this.invalidateSessionListCache()
 
     return {

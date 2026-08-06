@@ -225,7 +225,15 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const previousH5Access = get().h5Access
-      const [{ mode }, modelsRes, { model }, { level }, userSettings, h5AccessResult, traceCapture] = await Promise.all([
+      const [
+        { mode },
+        modelsRes,
+        { model },
+        { level },
+        userSettings,
+        h5AccessResult,
+        traceCapture,
+      ] = await Promise.all([
         settingsApi.getPermissionMode(),
         modelsApi.list(),
         modelsApi.getCurrent(),

@@ -89,7 +89,13 @@ export type ServerMessage =
     }
   | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage }
-  | { type: 'thinking'; text: string }
+  /**
+   * `text` is a fragment when the CLI streams `thinking_delta`, and a whole block when
+   * it hands over a finished `thinking` block. The client has to concatenate the first
+   * kind and separate the second, so the emit site says which it is instead of leaving
+   * the renderer to guess from content.
+   */
+  | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | {
       type: typeof RUNTIME_CONFIG_APPLIED_EVENT

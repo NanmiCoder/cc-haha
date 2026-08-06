@@ -33,6 +33,19 @@ bun install
 
 不要提交本地运行产物，例如 `artifacts/quality-runs/`、`node_modules/`、`desktop/node_modules/`。
 
+## 四层门禁分工
+
+| 层级 | 触发 | 运行内容 | 约束 |
+| --- | --- | --- | --- |
+| 本地迭代 | 手动 | 最窄的相关测试；`bun run check:impact` 选中的命令 | 秒级反馈 |
+| PR（必过） | `pull_request` | impact 选中的确定性 lane，含 `check:agent-flow` | 无模型、无 provider、无 secret、fork 可跑 |
+| 全量 | 维护者手动触发（`workflow_dispatch`） | 全部确定性 lane（不做路径选择）+ 模块图健康度 + `check:desktop-ui-smoke` | 仍然无模型、无 secret |
+| Release | 维护者手动 `bun run quality:release`（**不是** `release-desktop.yml`） | PR + 全量层全部内容 + native/打包 smoke + 维护者授权的真实 provider baseline | 真实模型只在此层，且需显式授权 |
+
+注意：`release-desktop.yml` 按设计**不跑任何质量门禁**——打 tag 不应被 `bun run verify` 阻塞，`scripts/pr/release-workflow.test.ts` 有守卫测试锁定这一点。因此发版前的质量证据来自「合并进来的那些 PR」+ 维护者手动跑的全量层 + `quality:release`。全量层刻意不设定时：跑不跑、什么时候跑由维护者决定，`pr-quality-workflow.test.ts` 会拦住重新加回 `schedule:` 的改动。
+
+分层原则：**PR 只跑改动能影响到的范围**，因此它天然无法覆盖"没有 PR 碰过的检查"和"只有全套一起跑才暴露的问题"——这两个盲区交给手动触发的全量层；**真实模型/额度只出现在 Release 与维护者手动 smoke**，任何贡献者在没有 provider 的情况下都必须能跑通 PR 层的全部门禁。
+
 ## 普通 PR 的影响面检查
 
 先让仓库按变更路径列出需要运行的检查：
@@ -40,6 +53,21 @@ bun install
 ```bash
 bun run check:impact
 ```
+
+选择是**依赖感知**的：除了改动文件自身的路径前缀，还会把「谁 import 了这些文件」纳入检查范围（`scripts/pr/module-graph.ts`）。这修掉了纯前缀路由的漏检，例如改 `src/shared/modelReasoning.ts` 会选中 `check:desktop`（`desktop/src/lib/runtimeSelection.ts` 直接 import 它），改 `desktop/src/lib/browserSafePort.ts` 会选中 `check:native`（`desktop/electron/services/sidecarManager.ts` import 它，而 `desktop/tsconfig.json` 并不编译 `desktop/electron/`）。报告的 `## Cross-surface impact` 会指名是哪个 importer 触发了额外检查。
+
+依赖图只**放宽检查选择**，不影响 area 标签和任何 blocking 规则——改一个 hub 文件不会因此要求你为没碰过的文件补测试。图构建失败时会选中全部 surface 并打印告警，不会静默退回前缀路由。
+
+## 无模型的端到端 Agent 门禁
+
+```bash
+bun run check:agent-flow       # 真实 server + 真实 WebSocket + mock CLI
+bun run check:desktop-ui-smoke # 真实桌面 UI + 真实权限对话框 + mock CLI
+```
+
+两条通道都不需要 provider、凭据或公网。`check:agent-flow` 覆盖新建 Session → 选运行时 → 首轮流式 → 工具调用 → 权限批准/拒绝 → 工具失败 → API 错误 → 中断 → 断线重连权限重放 → 会话恢复。`check:desktop-ui-smoke` 在真实浏览器里点真实的 Allow 按钮，需要 `agent-browser` 与已安装的 desktop 依赖，缺失时会打印原因并跳过。
+
+所有会启动真实 server 的 quality-gate lane 都跑在沙箱配置目录里（`scripts/quality-gate/sandbox.ts`），并在结束时校验没有写过开发者真实的 `~/.claude`；写了就判定 lane 失败。
 
 开发时运行 impact report 选中的窄命令即可。准备声明 PR-ready、改动风险较高，或需要完整复现托管 CI 时，再运行统一入口：
 

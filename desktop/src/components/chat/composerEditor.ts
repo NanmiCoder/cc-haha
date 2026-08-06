@@ -229,11 +229,37 @@ export function deleteAdjacentMentionAtom(direction: 'backward' | 'forward'): Co
   return (state, dispatch) => {
     const { empty, $from } = state.selection
     if (!empty || !$from.parent.isTextblock) return false
-    const node = direction === 'backward' ? $from.nodeBefore : $from.nodeAfter
-    if (!node || node.type.name !== AT_MENTION_NODE) return false
+
+    let from = $from.pos
+    let to = $from.pos
+
+    if (direction === 'backward') {
+      let node = $from.nodeBefore
+      // Picker insertion deliberately leaves one separator space after the
+      // pill so subsequent typing starts outside the atom. The caret lands
+      // after that space, so treat both pieces as one insertion unit when the
+      // user immediately deletes it.
+      if (node?.isText && node.text === ' ') {
+        const separatorStart = $from.pos - 1
+        node = state.doc.resolve(separatorStart).nodeBefore
+        if (node?.type.name !== AT_MENTION_NODE) return false
+        from = separatorStart - node.nodeSize
+      } else {
+        if (node?.type.name !== AT_MENTION_NODE) return false
+        from = $from.pos - node.nodeSize
+        const afterMention = state.doc.resolve($from.pos).nodeAfter
+        if (afterMention?.isText && afterMention.text?.startsWith(' ')) to += 1
+      }
+    } else {
+      const node = $from.nodeAfter
+      if (node?.type.name !== AT_MENTION_NODE) return false
+      to = $from.pos + node.nodeSize
+      const afterMention = state.doc.resolve(to).nodeAfter
+      if (afterMention?.isText && afterMention.text?.startsWith(' ')) to += 1
+    }
+
     if (dispatch) {
-      const from = direction === 'backward' ? $from.pos - node.nodeSize : $from.pos
-      dispatch(state.tr.delete(from, from + node.nodeSize))
+      dispatch(state.tr.delete(from, to))
     }
     return true
   }

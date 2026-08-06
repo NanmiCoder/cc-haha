@@ -33,6 +33,19 @@ bun install
 
 Do not commit local artifacts such as `artifacts/quality-runs/`, `node_modules/`, or `desktop/node_modules/`.
 
+## Gate Tiers
+
+| Tier | Trigger | What runs | Constraint |
+| --- | --- | --- | --- |
+| Local | manual | The narrowest relevant tests, then whatever `bun run check:impact` selects | seconds |
+| PR (required) | `pull_request` | The deterministic lanes the impact report selects, including `check:agent-flow` | no model, no provider, no secret, runs on an untrusted fork |
+| Full sweep | Maintainer-triggered (`workflow_dispatch`) | Every deterministic lane with no path selection, plus module-graph health and `check:desktop-ui-smoke` | still no model, no secret |
+| Release | maintainer-run `bun run quality:release` (**not** `release-desktop.yml`) | Everything above, plus native/packaging smoke and maintainer-authorized live provider baselines | live models only here, only with explicit authorization |
+
+Note: `release-desktop.yml` deliberately runs no quality gate — tagging must not be blocked by `bun run verify`, and `scripts/pr/release-workflow.test.ts` guards that decision. Release-time evidence therefore comes from the PRs that were merged, plus whatever full sweeps the maintainer ran, plus the manual `quality:release`. The full sweep is deliberately not scheduled: spending ~90 minutes of CI is a decision, not a default, and `pr-quality-workflow.test.ts` fails if a `schedule:` is added back.
+
+The split follows from what each tier can prove. A per-PR gate only ever covers what the diff reaches, so it is structurally blind to checks no recent PR selected and to failures that only appear when the whole suite runs together — the full sweep closes both, when the maintainer asks for it. Live model quota is spent only at release time, so every contributor can pass the required gate with no provider at all.
+
 ## Path-Aware PR Checks
 
 First ask the repository which deterministic checks match the changed paths:
@@ -40,6 +53,21 @@ First ask the repository which deterministic checks match the changed paths:
 ```bash
 bun run check:impact
 ```
+
+Selection is **import-aware**. Besides the changed paths themselves, the router adds every surface that imports a changed file (`scripts/pr/module-graph.ts`). This closes holes that prefix-only routing could not see: editing `src/shared/modelReasoning.ts` now selects `check:desktop` because `desktop/src/lib/runtimeSelection.ts` imports it, and editing `desktop/src/lib/browserSafePort.ts` now selects `check:native` because `desktop/electron/services/sidecarManager.ts` imports it while `desktop/tsconfig.json` does not compile `desktop/electron/`. The report's `## Cross-surface impact` section names the importer behind each extra check.
+
+The graph only widens *check selection*. Areas, labels, and every blocking rule stay scoped to the actual diff, so editing a hub file never demands tests for files you did not touch. If the graph cannot be built, the run selects every surface and says so rather than silently reverting to prefix routing.
+
+## Deterministic Agent Gate (no model required)
+
+```bash
+bun run check:agent-flow       # real server + real WebSocket + mock CLI
+bun run check:desktop-ui-smoke # real desktop UI + real permission dialog + mock CLI
+```
+
+Neither needs a provider, credentials, or the public network. `check:agent-flow` covers session creation, runtime selection, first-turn streaming, tool execution, permission allow/deny, tool failure, API error, interrupt, reconnect permission replay, and session recovery. `check:desktop-ui-smoke` clicks the real Allow button in a real browser; it needs `agent-browser` and installed desktop dependencies and skips with a printed reason when either is missing.
+
+Every quality-gate lane that boots the real server runs against a sandbox config dir (`scripts/quality-gate/sandbox.ts`) and fails if it wrote to the developer's real `~/.claude`.
 
 Run the selected focused commands while developing. Before claiming PR-ready, for a high-risk change, or when reproducing the full hosted CI locally, use the unified entrypoint:
 

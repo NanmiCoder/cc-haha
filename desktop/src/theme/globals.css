@@ -1015,7 +1015,6 @@
   --sidebar-width: 280px;
   --sidebar-rail-width: 72px;
   --titlebar-height: 52px;
-  --statusbar-height: 36px;
   --motion-sidebar-duration: 280ms;
   --motion-sidebar-easing: cubic-bezier(0.22, 1, 0.36, 1);
 
@@ -1527,8 +1526,8 @@ button, input, textarea, select, a, [role="button"] {
 
 /* Inline @-mention pill (an atom node in the document). */
 .composer-mention {
-  color: var(--color-success);
-  background: var(--color-success-container);
+  color: var(--color-on-brand-soft);
+  background: var(--color-brand-soft);
   border-radius: var(--radius-md);
   padding: 0 4px;
   margin: 0 1px;
@@ -2260,6 +2259,18 @@ html[data-window-kind='pet'] #root {
 
 .pet-window-stack[data-panel-placement='below'] .pet-mascot-wrap {
   order: 1;
+}
+
+/* At a side edge the fixed window follows the mascot partly off-screen. Keep
+   the wide card centred in the window and move only the mascot to the outer
+   side; the host moves the window back by the same amount, so the mascot stays
+   under the pointer while the card lands wholly inside the work area. */
+.pet-window-stack[data-panel-horizontal='left'] .pet-mascot-wrap {
+  align-self: flex-end;
+}
+
+.pet-window-stack[data-panel-horizontal='right'] .pet-mascot-wrap {
+  align-self: flex-start;
 }
 
 .pet-task-badge {

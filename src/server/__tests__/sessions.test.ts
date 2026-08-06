@@ -9,6 +9,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { SessionService, sessionService } from '../services/sessionService.js'
 import {
+  createRepositoryBranch,
   getRepositoryContext,
   prepareSessionWorkspace,
 } from '../services/repositoryLaunchService.js'
@@ -461,7 +462,7 @@ async function createThreeTurnCheckpointFixture(
       },
       'notes/generated.txt': {
         backupFileName: null,
-        version: 3,
+        version: 1,
         backupTime: '2026-01-01T00:00:00.000Z',
       },
     }),
@@ -2579,6 +2580,232 @@ describe('SessionService', () => {
     expect(context.branches.some((branch) => branch.name.startsWith('worktree-desktop-'))).toBe(false)
   })
 
+  // --------------------------------------------------------------------------
+  // createRepositoryBranch
+  // --------------------------------------------------------------------------
+
+  it('should create a branch at the selected base without moving HEAD', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    const result = await createRepositoryBranch(workDir, {
+      name: 'feature/new-rail',
+      from: 'feature/rail',
+    })
+
+    expect(result.branch).toBe('feature/new-rail')
+    expect(result.baseRef).toBe('feature/rail')
+    expect(git(workDir, 'rev-parse', 'feature/new-rail'))
+      .toBe(git(workDir, 'rev-parse', 'feature/rail'))
+    // Picking a branch in the launch controls has never checked it out on the
+    // spot; the switch happens when the session starts, behind the dirty and
+    // already-checked-out guards. Creating the ref must not jump that queue.
+    expect(git(workDir, 'branch', '--show-current')).toBe('main\n')
+    expect(result.context.branches.some((branch) => (
+      branch.name === 'feature/new-rail' && branch.local && !branch.current
+    ))).toBe(true)
+  })
+
+  it('should start a branch at HEAD when no base is given', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    const result = await createRepositoryBranch(workDir, { name: 'from-head' })
+
+    expect(result.baseRef).toBe('HEAD')
+    expect(git(workDir, 'rev-parse', 'from-head')).toBe(git(workDir, 'rev-parse', 'HEAD'))
+  })
+
+  it('should leave uncommitted work untouched when creating a branch', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    await fs.writeFile(path.join(workDir, 'README.md'), 'main\nwork in progress\n')
+
+    await createRepositoryBranch(workDir, { name: 'wip', from: 'main' })
+
+    expect(git(workDir, 'status', '--porcelain')).toBe(' M README.md\n')
+    expect(await fs.readFile(path.join(workDir, 'README.md'), 'utf-8'))
+      .toBe('main\nwork in progress\n')
+  })
+
+  it('should report the commit each branch points at alongside HEAD', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    await createRepositoryBranch(workDir, { name: 'same-commit', from: 'main' })
+
+    const context = await getRepositoryContext(workDir)
+    const head = git(workDir, 'rev-parse', 'HEAD').trim()
+
+    // Without these the UI cannot tell a switch that rewrites files from one
+    // that only moves the ref, and warns about uncommitted changes for both.
+    expect(context.headCommit).toBe(head)
+    expect(context.branches.find((branch) => branch.name === 'same-commit')?.commit).toBe(head)
+    expect(context.branches.find((branch) => branch.name === 'feature/rail')?.commit)
+      .toBe(git(workDir, 'rev-parse', 'feature/rail').trim())
+  })
+
+  it('should reject a branch name that already exists', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    await expect(createRepositoryBranch(workDir, { name: 'feature/rail' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_EXISTS' })
+  })
+
+  it('should start a branch from a remote-only base at the remote commit', async () => {
+    const originDir = await createCleanGitRepo(tmpDir)
+    const workDir = path.join(tmpDir, `clone-${Date.now()}`)
+    git(tmpDir, 'clone', '--quiet', originDir, workDir)
+    git(workDir, 'config', 'user.email', 'clone@example.com')
+    git(workDir, 'config', 'user.name', 'Clone')
+
+    const result = await createRepositoryBranch(workDir, {
+      name: 'local-rail',
+      from: 'feature/rail',
+    })
+
+    // Resolving the base to its plain name instead of the tracking ref would
+    // silently branch off HEAD, which is a different commit.
+    expect(result.baseRef).toBe('origin/feature/rail')
+    expect(git(workDir, 'rev-parse', 'local-rail'))
+      .toBe(git(workDir, 'rev-parse', 'origin/feature/rail'))
+    expect(git(workDir, 'rev-parse', 'local-rail'))
+      .not.toBe(git(workDir, 'rev-parse', 'HEAD'))
+  })
+
+  it('should refuse to shadow a remote-only branch with a local one', async () => {
+    const originDir = await createCleanGitRepo(tmpDir)
+    const workDir = path.join(tmpDir, `shadow-${Date.now()}`)
+    git(tmpDir, 'clone', '--quiet', originDir, workDir)
+
+    // The picker lists `feature/rail` as a selectable remote branch, and picking
+    // it launches `switch --track -c feature/rail origin/feature/rail`. Creating
+    // a second local branch under that name off `main` wins the name and makes
+    // the launch silently run on main's content instead.
+    await expect(createRepositoryBranch(workDir, { name: 'feature/rail', from: 'main' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_EXISTS' })
+    expect(git(workDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').trim())
+      .toBe('main')
+  })
+
+  it('should not create a hidden desktop worktree branch', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    // `listBranches` filters this prefix out, so such a branch would exist on
+    // disk and appear in no context the app ever renders — unselectable, and
+    // undeletable from the app.
+    await expect(createRepositoryBranch(workDir, { name: 'worktree-desktop-sneaky' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
+    expect(git(workDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').trim().split('\n'))
+      .toEqual(['feature/rail', 'main'])
+  })
+
+  it('should reject a branch name past the length cap', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    await expect(createRepositoryBranch(workDir, { name: 'a'.repeat(201) }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
+    await expect(createRepositoryBranch(workDir, { name: 'a'.repeat(200) }))
+      .resolves.toMatchObject({ branch: 'a'.repeat(200) })
+  })
+
+  it('should not let a flag-shaped base branch reach git as an option', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    // `git branch` refuses to create this, but a ref written out of band is
+    // listed like any other and can be picked as the base.
+    git(workDir, 'update-ref', 'refs/heads/-x', 'feature/rail')
+
+    const context = await getRepositoryContext(workDir)
+    expect(context.branches.some((branch) => branch.name === '-x')).toBe(true)
+
+    const result = await createRepositoryBranch(workDir, { name: 'from-dash', from: '-x' })
+    expect(result.baseRef).toBe('-x')
+    expect(git(workDir, 'rev-parse', 'from-dash')).toBe(git(workDir, 'rev-parse', 'feature/rail'))
+  })
+
+  it('should map a case-folded collision onto the already-exists code', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const created = await createRepositoryBranch(workDir, { name: 'Main' })
+      .then(() => 'created' as const, (error: { code?: string }) => error.code)
+
+    // macOS and Windows fold the ref path, so git rejects this even though the
+    // branch list has no exact match. Case-sensitive filesystems create it
+    // happily, and both outcomes are correct — a raw English `fatal:` in a form
+    // translated into five locales is not.
+    expect(['created', 'REPOSITORY_BRANCH_EXISTS']).toContain(created)
+  })
+
+  it('should reject branch creation in a repository with no commits', async () => {
+    const workDir = path.join(tmpDir, `unborn-${Date.now()}`)
+    await fs.mkdir(workDir, { recursive: true })
+    git(workDir, 'init')
+    git(workDir, 'checkout', '-b', 'main')
+
+    // The picker renders normally here — `state: 'ok'`, one branch from the
+    // current-branch fallback — so "Create branch…" is offered and used to fail
+    // with untranslated `fatal: not a valid object name`.
+    const context = await getRepositoryContext(workDir)
+    expect(context.state).toBe('ok')
+    expect(context.headCommit).toBeNull()
+
+    await expect(createRepositoryBranch(workDir, { name: 'first', from: 'main' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_NO_COMMITS' })
+  })
+
+  it('should branch from the picked worktree HEAD, not the main checkout', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const linked = path.join(tmpDir, `linked-${Date.now()}`)
+    git(workDir, 'worktree', 'add', linked, 'feature/rail')
+
+    const context = await getRepositoryContext(linked)
+    const result = await createRepositoryBranch(linked, { name: 'from-linked' })
+
+    // `repoRoot` resolves a linked worktree back to the main checkout, where
+    // HEAD is a different commit than the one `headCommit` just reported.
+    expect(result.baseRef).toBe('HEAD')
+    expect(git(linked, 'rev-parse', 'from-linked')).toBe(`${context.headCommit}\n`)
+    expect(git(linked, 'rev-parse', 'from-linked'))
+      .not.toBe(git(workDir, 'rev-parse', 'HEAD'))
+  })
+
+  it.each([
+    ['a space', 'bad name'],
+    ['a double dot', 'bad..name'],
+    ['a trailing slash', 'bad/'],
+    ['a lock suffix', 'bad.lock'],
+    ['nothing at all', '   '],
+  ])('should reject a branch name with %s', async (_label, name) => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    await expect(createRepositoryBranch(workDir, { name }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
+    expect(git(workDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').trim().split('\n'))
+      .toEqual(['feature/rail', 'main'])
+  })
+
+  it('should not let a branch name starting with a dash reach git as a flag', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    // `-D` / `--delete` would be read as "delete a branch" by any call that
+    // interpolates the name before `--`.
+    await expect(createRepositoryBranch(workDir, { name: '--delete' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
+    await expect(createRepositoryBranch(workDir, { name: '-D' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
+    expect(git(workDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').trim().split('\n'))
+      .toEqual(['feature/rail', 'main'])
+  })
+
+  it('should reject a base branch the repository does not have', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+
+    await expect(createRepositoryBranch(workDir, { name: 'ok-name', from: 'missing/branch' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NOT_FOUND' })
+  })
+
+  it('should reject branch creation outside a Git repository', async () => {
+    const workDir = path.join(tmpDir, `not-git-branch-${Date.now()}`)
+    await fs.mkdir(workDir, { recursive: true })
+
+    await expect(createRepositoryBranch(workDir, { name: 'ok-name' }))
+      .rejects.toMatchObject({ code: 'REPOSITORY_NOT_GIT' })
+  })
+
   it('should keep stale worktree records when their paths cannot be resolved', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
     const staleWorktreeName = `stale-worktree-${Date.now()}`
@@ -3280,6 +3507,42 @@ describe('Sessions API', () => {
     expect(body.branches.some((branch) => branch.name === 'feature/rail' && branch.local)).toBe(true)
     const realWorkDir = await fs.realpath(workDir)
     expect(body.worktrees.some((worktree) => worktree.path === realWorkDir && worktree.current)).toBe(true)
+  })
+
+  it('POST /api/sessions/repository-branch should create a branch and return the refreshed context', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const res = await fetch(`${baseUrl}/api/sessions/repository-branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, name: 'feature/from-api', from: 'feature/rail' }),
+    })
+    expect(res.status).toBe(201)
+
+    const body = (await res.json()) as {
+      branch: string
+      baseRef: string
+      context: { state: string; branches: Array<{ name: string; local: boolean }> }
+    }
+    expect(body.branch).toBe('feature/from-api')
+    expect(body.baseRef).toBe('feature/rail')
+    expect(body.context.state).toBe('ok')
+    expect(body.context.branches.some((branch) => (
+      branch.name === 'feature/from-api' && branch.local
+    ))).toBe(true)
+    expect(git(workDir, 'branch', '--show-current')).toBe('main\n')
+  })
+
+  it('POST /api/sessions/repository-branch should surface a rejected name as a stable error code', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const res = await fetch(`${baseUrl}/api/sessions/repository-branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, name: 'feature/rail' }),
+    })
+    expect(res.status).toBe(400)
+    // The desktop form translates this code; a changed spelling silently
+    // downgrades it to the untranslated generic failure.
+    expect((await res.json()).error).toBe('REPOSITORY_BRANCH_EXISTS')
   })
 
   it('GET /api/sessions/recent-projects should keep pending repository launches on the source project', async () => {
@@ -5152,7 +5415,7 @@ describe('Sessions API', () => {
     expect(remainingMessages).toHaveLength(0)
   })
 
-  it('POST /api/sessions/:id/rewind should skip symlink and hard-link tracked paths', async () => {
+  it('POST /api/sessions/:id/rewind should reject unsafe tracked paths before any partial restore', async () => {
     const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeef'
     const workDir = path.join(tmpDir, 'linked-file-fixture')
     const outsideDir = path.join(tmpDir, 'outside-linked-file-fixture')
@@ -5256,23 +5519,30 @@ describe('Sessions API', () => {
     expect(previewRes.status).toBe(200)
     const preview = await previewRes.json() as {
       code: { available: boolean; filesChanged: string[] }
+      restoreAvailable?: boolean
     }
     expect(preview.code.filesChanged).toEqual([
       safeFile,
       missingFile,
       outsideSafeFile,
+      outsideRelativeFile,
+      symlinkFile,
+      path.join(linkedDir, 'delete-target.txt'),
+      hardLinkFile,
+      hardLinkDeleteFile,
     ])
+    expect(preview.restoreAvailable).toBe(false)
 
     const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userMessageIndex: 0 }),
     })
-    expect(executeRes.status).toBe(200)
+    expect(executeRes.status).toBe(400)
 
-    expect(await fs.readFile(safeFile, 'utf-8')).toBe('safe before\n')
-    expect(await fs.readFile(missingFile, 'utf-8')).toBe('missing before\n')
-    expect(await fs.readFile(outsideSafeFile, 'utf-8')).toBe('safe absolute before\n')
+    expect(await fs.readFile(safeFile, 'utf-8')).toBe('safe after\n')
+    await expect(fs.stat(missingFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await fs.readFile(outsideSafeFile, 'utf-8')).toBe('safe absolute after\n')
     expect(await fs.readFile(outsideRelativeFile, 'utf-8')).toBe(
       'relative outside after\n',
     )
@@ -5286,6 +5556,8 @@ describe('Sessions API', () => {
     expect((await fs.lstat(linkedDir)).isSymbolicLink()).toBe(true)
     expect((await fs.stat(hardLinkFile)).nlink).toBe(2)
     expect((await fs.stat(hardLinkDeleteFile)).nlink).toBe(2)
+    expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+      .toContain(userId)
   })
 
   it('POST /api/sessions/:id/rewind should resolve checkpoint paths from the target prompt cwd', async () => {
@@ -5676,6 +5948,8 @@ describe('Sessions API', () => {
           deletions: 1,
         },
         workDir: fixture.workDir,
+        restoreAvailable: true,
+        unverifiedChangeSources: [],
       },
       {
         target: {
@@ -5691,6 +5965,8 @@ describe('Sessions API', () => {
           deletions: 1,
         },
         workDir: fixture.workDir,
+        restoreAvailable: true,
+        unverifiedChangeSources: [],
       },
       {
         target: {
@@ -5706,6 +5982,8 @@ describe('Sessions API', () => {
           deletions: 1,
         },
         workDir: fixture.workDir,
+        restoreAvailable: true,
+        unverifiedChangeSources: [],
       },
     ])
   })
@@ -5798,6 +6076,13 @@ describe('Sessions API', () => {
           content: '# Notes\n',
         },
       }], userId),
+      makeToolResultUserEntry(
+        'Write:empty-snapshot-fallback',
+        `The file ${transcriptFile} has been written successfully.`,
+        undefined,
+        undefined,
+        sessionId,
+      ),
       makeAssistantEntry('Note written.', userId),
     ])
 
@@ -5821,6 +6106,800 @@ describe('Sessions API', () => {
       insertions: 1,
       deletions: 0,
     })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should merge successful transcript edits missing from a partial snapshot', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000007'
+    const workDir = path.join(tmpDir, 'partial-snapshot-transcript-session')
+    const capturedFile = path.join(workDir, 'src', 'captured.ts')
+    const missedFile = path.join(workDir, 'src', 'missed.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'partial-snapshot-captured@v1'
+    const capturedBefore = "export const captured = 'before'\n"
+    const capturedAfter = "export const captured = 'after'\n"
+    const missedBefore = "export const missed = 'before'\n"
+    const missedAfter = "export const missed = 'after'\n"
+
+    await fs.mkdir(path.dirname(capturedFile), { recursive: true })
+    await fs.writeFile(capturedFile, capturedAfter, 'utf-8')
+    await fs.writeFile(missedFile, missedAfter, 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupName, capturedBefore)
+    await writeSessionFile('-tmp-partial-snapshot-transcript-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src/captured.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('update both files', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:captured-by-snapshot',
+          name: 'Edit',
+          input: {
+            file_path: capturedFile,
+            old_string: capturedBefore.trim(),
+            new_string: capturedAfter.trim(),
+          },
+        },
+        {
+          id: 'Edit:missing-from-snapshot',
+          name: 'Edit',
+          input: {
+            file_path: missedFile,
+            old_string: missedBefore.trim(),
+            new_string: missedAfter.trim(),
+          },
+        },
+      ], userId),
+      makeToolResultUserEntry(
+        'Edit:captured-by-snapshot',
+        `The file ${capturedFile} has been updated successfully.`,
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeToolResultUserEntry(
+        'Edit:missing-from-snapshot',
+        `The file ${missedFile} has been updated successfully.`,
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Both files updated.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        code: {
+          available: boolean
+          filesChanged: string[]
+          insertions: number
+          deletions: number
+        }
+      }>
+    }
+
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]!.code).toEqual({
+      available: true,
+      filesChanged: [capturedFile, missedFile],
+      insertions: 2,
+      deletions: 2,
+    })
+
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, dryRun: true }),
+    })
+    expect(dryRunRes.status).toBe(200)
+    expect(await dryRunRes.json()).toMatchObject({
+      code: {
+        filesChanged: [capturedFile, missedFile],
+        insertions: 2,
+        deletions: 2,
+      },
+      restoreAvailable: false,
+    })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should include a successful external edit missing from a partial snapshot', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000008'
+    const workDir = path.join(tmpDir, 'partial-snapshot-external-session')
+    const outsideDir = path.join(tmpDir, 'partial-snapshot-external-target')
+    const capturedFile = path.join(workDir, 'captured.ts')
+    const externalFile = path.join(outsideDir, 'external.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'partial-snapshot-external@v1'
+    const capturedBefore = "export const captured = 'before'\n"
+    const capturedAfter = "export const captured = 'after'\n"
+    const externalBefore = "export const external = 'before'\n"
+    const externalAfter = "export const external = 'after'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(outsideDir, { recursive: true })
+    await fs.writeFile(capturedFile, capturedAfter, 'utf-8')
+    await fs.writeFile(externalFile, externalAfter, 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupName, capturedBefore)
+    await writeSessionFile('-tmp-partial-snapshot-external-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'captured.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('update an internal and external file', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:captured-external-case',
+          name: 'Edit',
+          input: {
+            file_path: capturedFile,
+            old_string: capturedBefore.trim(),
+            new_string: capturedAfter.trim(),
+          },
+        },
+        {
+          id: 'Edit:external-missing-from-snapshot',
+          name: 'Edit',
+          input: {
+            file_path: externalFile,
+            old_string: externalBefore.trim(),
+            new_string: externalAfter.trim(),
+          },
+        },
+      ], userId),
+      makeToolResultUserEntry(
+        'Edit:captured-external-case',
+        `The file ${capturedFile} has been updated successfully.`,
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeToolResultUserEntry(
+        'Edit:external-missing-from-snapshot',
+        `The file ${externalFile} has been updated successfully.`,
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Both files updated.', userId),
+    ])
+
+    const checkpointsRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(checkpointsRes.status).toBe(200)
+    const checkpointsBody = await checkpointsRes.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[]; insertions: number; deletions: number }
+        restoreAvailable?: boolean
+      }>
+    }
+    expect(checkpointsBody.checkpoints).toHaveLength(1)
+    expect(checkpointsBody.checkpoints[0]).toMatchObject({
+      code: {
+        filesChanged: [capturedFile, externalFile],
+        insertions: 2,
+        deletions: 2,
+      },
+      restoreAvailable: false,
+    })
+
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, dryRun: true }),
+    })
+    expect(dryRunRes.status).toBe(200)
+    expect(await dryRunRes.json()).toMatchObject({
+      code: { filesChanged: [capturedFile, externalFile] },
+      restoreAvailable: false,
+    })
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(capturedFile, 'utf-8')).toBe(capturedAfter)
+    expect(await fs.readFile(externalFile, 'utf-8')).toBe(externalAfter)
+    expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+      .toContain(userId)
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should not treat a next-turn backup as a restorable target snapshot', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000015'
+    const workDir = path.join(tmpDir, 'historical-partial-snapshot-session')
+    const capturedFile = path.join(workDir, 'captured.ts')
+    const missedFile = path.join(workDir, 'missed.ts')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const capturedBeforeBackup = 'historical-captured-before@v1'
+    const capturedAfterBackup = 'historical-captured-after@v2'
+    const missedAfterBackup = 'historical-missed-after@v1'
+    const before = "export const value = 'before'\n"
+    const after = "export const value = 'after'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, after, 'utf-8')
+    await fs.writeFile(missedFile, after, 'utf-8')
+    await writeFileHistoryBackup(sessionId, capturedBeforeBackup, before)
+    await writeFileHistoryBackup(sessionId, capturedAfterBackup, after)
+    await writeFileHistoryBackup(sessionId, missedAfterBackup, after)
+    await writeSessionFile('-tmp-historical-partial-snapshot-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'captured.ts': {
+          backupFileName: capturedBeforeBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('update both files', firstUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:historical-captured',
+          name: 'Edit',
+          input: {
+            file_path: capturedFile,
+            old_string: before.trim(),
+            new_string: after.trim(),
+          },
+        },
+        {
+          id: 'Edit:historical-missed',
+          name: 'Edit',
+          input: {
+            file_path: missedFile,
+            old_string: before.trim(),
+            new_string: after.trim(),
+          },
+        },
+      ], firstUserId),
+      makeToolResultUserEntry(
+        'Edit:historical-captured',
+        'Updated successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeToolResultUserEntry(
+        'Edit:historical-missed',
+        'Updated successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('First turn complete.', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'captured.ts': {
+          backupFileName: capturedAfterBackup,
+          version: 2,
+          backupTime: '2026-01-01T00:01:00.000Z',
+        },
+        'missed.ts': {
+          backupFileName: missedAfterBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:01:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('inspect the result', secondUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('Second turn complete.', secondUserId),
+    ])
+
+    const checkpointsRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(checkpointsRes.status).toBe(200)
+    const checkpointsBody = await checkpointsRes.json() as {
+      checkpoints: Array<{
+        target: { targetUserMessageId: string }
+        code: { filesChanged: string[] }
+        restoreAvailable?: boolean
+      }>
+    }
+    const firstCheckpoint = checkpointsBody.checkpoints.find(
+      (checkpoint) => checkpoint.target.targetUserMessageId === firstUserId,
+    )
+    expect(firstCheckpoint).toMatchObject({
+      code: { filesChanged: [capturedFile, missedFile] },
+      restoreAvailable: false,
+    })
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: firstUserId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(capturedFile, 'utf-8')).toBe(after)
+    expect(await fs.readFile(missedFile, 'utf-8')).toBe(after)
+    expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+      .toContain(firstUserId)
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should not restore a snapshot-covered zero-net file from transcript edits', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000009'
+    const workDir = path.join(tmpDir, 'snapshot-covered-zero-net-session')
+    const changedFile = path.join(workDir, 'changed.ts')
+    const restoredFile = path.join(workDir, 'restored.ts')
+    const userId = crypto.randomUUID()
+    const changedBackup = 'snapshot-covered-changed@v1'
+    const restoredBackup = 'snapshot-covered-restored@v1'
+    const changedBefore = "export const changed = 'before'\n"
+    const changedAfter = "export const changed = 'after'\n"
+    const restoredContent = "export const restored = 'original'\n"
+    const restoredIntermediate = "export const restored = 'temporary'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(changedFile, changedAfter, 'utf-8')
+    await fs.writeFile(restoredFile, restoredContent, 'utf-8')
+    await writeFileHistoryBackup(sessionId, changedBackup, changedBefore)
+    await writeFileHistoryBackup(sessionId, restoredBackup, restoredContent)
+    await writeSessionFile('-tmp-snapshot-covered-zero-net-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'changed.ts': {
+          backupFileName: changedBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+        'restored.ts': {
+          backupFileName: restoredBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('change one file and restore another', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:changed-net',
+          name: 'Edit',
+          input: {
+            file_path: changedFile,
+            old_string: changedBefore.trim(),
+            new_string: changedAfter.trim(),
+          },
+        },
+        {
+          id: 'Edit:restored-forward',
+          name: 'Edit',
+          input: {
+            file_path: restoredFile,
+            old_string: restoredContent.trim(),
+            new_string: restoredIntermediate.trim(),
+          },
+        },
+        {
+          id: 'Edit:restored-back',
+          name: 'Edit',
+          input: {
+            file_path: restoredFile,
+            old_string: restoredIntermediate.trim(),
+            new_string: restoredContent.trim(),
+          },
+        },
+      ], userId),
+      makeToolResultUserEntry('Edit:changed-net', 'Updated successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('Edit:restored-forward', 'Updated successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('Edit:restored-back', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Finished.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[]; insertions: number; deletions: number }
+        restoreAvailable?: boolean
+      }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: {
+        filesChanged: [changedFile],
+        insertions: 1,
+        deletions: 1,
+      },
+      restoreAvailable: true,
+    })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should ignore transcript edits without a completed tool result', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000010'
+    const workDir = path.join(tmpDir, 'partial-snapshot-incomplete-tool-session')
+    const capturedFile = path.join(workDir, 'captured.ts')
+    const interruptedFile = path.join(workDir, 'interrupted.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'partial-snapshot-incomplete-tool@v1'
+    const before = "export const value = 'before'\n"
+    const after = "export const value = 'after'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, after, 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupName, before)
+    await writeSessionFile('-tmp-partial-snapshot-incomplete-tool-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'captured.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('update two files before interruption', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:captured-complete',
+          name: 'Edit',
+          input: {
+            file_path: capturedFile,
+            old_string: before.trim(),
+            new_string: after.trim(),
+          },
+        },
+        {
+          id: 'Edit:interrupted-without-result',
+          name: 'Edit',
+          input: {
+            file_path: interruptedFile,
+            old_string: before.trim(),
+            new_string: after.trim(),
+          },
+        },
+      ], userId),
+      makeToolResultUserEntry(
+        'Edit:captured-complete',
+        'Updated successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('The second edit was interrupted.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{ code: { filesChanged: string[] }; restoreAvailable?: boolean }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: { filesChanged: [capturedFile] },
+      restoreAvailable: false,
+    })
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(capturedFile, 'utf-8')).toBe(after)
+    expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+      .toContain(userId)
+  })
+
+  it('POST /api/sessions/:id/rewind should recheck late tool output after stopping the runtime', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000017'
+    const workDir = path.join(tmpDir, 'rewind-stop-recheck-session')
+    const capturedFile = path.join(workDir, 'captured.ts')
+    const lateFile = path.join(workDir, 'late.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'rewind-stop-recheck@v1'
+    const before = "export const value = 'before'\n"
+    const after = "export const value = 'after'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, after, 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupName, before)
+    const transcriptPath = await writeSessionFile('-tmp-rewind-stop-recheck-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'captured.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('update files', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('Initial response complete.', userId),
+    ])
+
+    const originalStopSessionAndWait = conversationService.stopSessionAndWait
+    conversationService.stopSessionAndWait = async (targetSessionId: string) => {
+      if (targetSessionId !== sessionId) return
+      await fs.writeFile(lateFile, after, 'utf-8')
+      const lateEntries = [
+        {
+          ...makeAssistantToolUseEntry([{
+            id: 'Write:late-after-stop-started',
+            name: 'Write',
+            input: { file_path: lateFile, content: after },
+          }], userId),
+          cwd: workDir,
+        },
+        {
+          ...makeToolResultUserEntry(
+            'Write:late-after-stop-started',
+            'Written successfully.',
+            undefined,
+            undefined,
+            sessionId,
+          ),
+          cwd: workDir,
+        },
+      ]
+      await fs.appendFile(
+        transcriptPath,
+        lateEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n',
+        'utf-8',
+      )
+    }
+
+    try {
+      const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserMessageId: userId }),
+      })
+      expect(rewindRes.status).toBe(400)
+      expect(await fs.readFile(capturedFile, 'utf-8')).toBe(after)
+      expect(await fs.readFile(lateFile, 'utf-8')).toBe(after)
+      expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+        .toContain(userId)
+    } finally {
+      conversationService.stopSessionAndWait = originalStopSessionAndWait
+    }
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should deduplicate snapshot and transcript aliases by canonical path', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000011'
+    const workDir = path.join(tmpDir, 'snapshot-transcript-alias-session')
+    const aliasDir = path.join(tmpDir, 'snapshot-transcript-alias-link')
+    const targetFile = path.join(workDir, 'src', 'aliased.ts')
+    const aliasFile = path.join(aliasDir, 'src', 'aliased.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'snapshot-transcript-alias@v1'
+    const before = "export const alias = 'before'\n"
+    const after = "export const alias = 'after'\n"
+
+    await fs.mkdir(path.dirname(targetFile), { recursive: true })
+    await fs.writeFile(targetFile, after, 'utf-8')
+    await fs.symlink(workDir, aliasDir, 'dir')
+    await writeFileHistoryBackup(sessionId, backupName, before)
+    await writeSessionFile('-tmp-snapshot-transcript-alias-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src/aliased.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+        'src/../src/aliased.ts': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('edit a file through an alias', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:canonical-alias',
+        name: 'Edit',
+        input: {
+          file_path: aliasFile,
+          old_string: before.trim(),
+          new_string: after.trim(),
+        },
+      }], userId),
+      makeToolResultUserEntry(
+        'Edit:canonical-alias',
+        'Updated successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Finished.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[]; insertions: number; deletions: number }
+        restoreAvailable?: boolean
+      }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: {
+        filesChanged: [targetFile],
+        insertions: 1,
+        deletions: 1,
+      },
+      restoreAvailable: true,
+    })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should resolve relative tool paths from the tool message cwd', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000012'
+    const workDir = path.join(tmpDir, 'transcript-tool-cwd-session')
+    const toolCwd = path.join(workDir, 'MyDemo')
+    const targetFile = path.join(toolCwd, 'src', 'App.ts')
+    const userId = crypto.randomUUID()
+
+    await fs.mkdir(path.dirname(targetFile), { recursive: true })
+    await fs.writeFile(targetFile, 'export const app = true\n', 'utf-8')
+    await writeSessionFile('-tmp-transcript-tool-cwd-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('create a nested app file', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      {
+        ...makeAssistantToolUseEntry([{
+          id: 'Write:tool-message-cwd',
+          name: 'Write',
+          input: {
+            file_path: 'src/App.ts',
+            content: 'export const app = true\n',
+          },
+        }], userId),
+        cwd: toolCwd,
+      },
+      makeToolResultUserEntry(
+        'Write:tool-message-cwd',
+        'Written successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Finished.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[] }
+        restoreAvailable?: boolean
+      }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: { filesChanged: [targetFile] },
+      restoreAvailable: false,
+    })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should collect every supported successful file tool', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000014'
+    const workDir = path.join(tmpDir, 'transcript-supported-tools-session')
+    const writeFile = path.join(workDir, 'write.txt')
+    const multiEditFile = path.join(workDir, 'multi.ts')
+    const notebookFile = path.join(workDir, 'notes.ipynb')
+    const patchSourceFile = path.join(workDir, 'old-name.ts')
+    const patchTargetFile = path.join(workDir, 'new-name.ts')
+    const outsideFile = path.join(tmpDir, 'transcript-supported-tools-outside.txt')
+    const userId = crypto.randomUUID()
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(writeFile, 'written\n', 'utf-8')
+    await fs.writeFile(multiEditFile, 'const value = 2\n', 'utf-8')
+    await fs.writeFile(notebookFile, '{"cells": []}\n', 'utf-8')
+    await fs.writeFile(patchTargetFile, 'export const renamed = true\n', 'utf-8')
+    await fs.writeFile(outsideFile, 'outside\n', 'utf-8')
+    await writeSessionFile('-tmp-transcript-supported-tools-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('exercise every file editing tool', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      {
+        ...makeAssistantToolUseEntry([
+          {
+            id: 'Write:supported',
+            name: 'Write',
+            input: { file_path: writeFile, content: 'written\n' },
+          },
+          {
+            id: 'MultiEdit:supported',
+            name: 'MultiEdit',
+            input: {
+              file_path: multiEditFile,
+              edits: [{ old_string: 'const value = 1', new_string: 'const value = 2' }],
+            },
+          },
+          {
+            id: 'NotebookEdit:supported',
+            name: 'NotebookEdit',
+            input: { notebook_path: notebookFile, new_source: 'print("done")' },
+          },
+          {
+            id: 'ApplyPatch:supported',
+            name: 'apply_patch',
+            input: {
+              patch: [
+                '*** Begin Patch',
+                '*** Update File: old-name.ts',
+                '*** Move to: new-name.ts',
+                '*** End Patch',
+              ].join('\n'),
+            },
+          },
+          {
+            id: 'Write:relative-outside',
+            name: 'Write',
+            input: {
+              file_path: path.relative(workDir, outsideFile),
+              content: 'outside\n',
+            },
+          },
+        ], userId),
+        cwd: workDir,
+      },
+      makeToolResultUserEntry('Write:supported', 'Written successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('MultiEdit:supported', 'Updated successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('NotebookEdit:supported', 'Updated successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('ApplyPatch:supported', 'Patched successfully.', undefined, undefined, sessionId),
+      makeToolResultUserEntry('Write:relative-outside', 'Written successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Finished.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{ code: { filesChanged: string[] }; restoreAvailable?: boolean }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]!.code.filesChanged.sort()).toEqual([
+      writeFile,
+      multiEditFile,
+      notebookFile,
+      patchSourceFile,
+      patchTargetFile,
+      outsideFile,
+    ].sort())
+    expect(body.checkpoints[0]!.restoreAvailable).toBe(false)
   })
 
   it('GET /api/sessions/:id/turn-checkpoints/diff should return target-bound checkpoint diffs', async () => {
@@ -5904,6 +6983,20 @@ describe('Sessions API', () => {
           },
         },
       ], userId),
+      makeToolResultUserEntry(
+        'Write:1',
+        'The file App.tsx has been written successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeToolResultUserEntry(
+        'Write:2',
+        'The file vite.config.ts has been written successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
       makeAssistantEntry('Todo app created', userId),
     ])
 
@@ -6010,6 +7103,13 @@ describe('Sessions API', () => {
           },
         },
       ], userId),
+      makeToolResultUserEntry(
+        'Edit:1',
+        'The file vite.config.ts has been updated successfully.',
+        undefined,
+        undefined,
+        sessionId,
+      ),
       makeAssistantEntry('Config updated', userId),
     ])
 
@@ -6094,6 +7194,18 @@ describe('Sessions API', () => {
         uuid: crypto.randomUUID(),
         timestamp: '2026-01-01T00:03:00.000Z',
       },
+      {
+        ...makeToolResultUserEntry(
+          'Write:child',
+          'The file Board.tsx has been written successfully.',
+          undefined,
+          undefined,
+          sessionId,
+        ),
+        parent_tool_use_id: 'Agent:todo',
+        isSidechain: true,
+        cwd: workDir,
+      },
     ])
 
     const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
@@ -6114,6 +7226,1001 @@ describe('Sessions API', () => {
     expect(body.checkpoints[0]!.code.deletions).toBe(0)
   })
 
+  it('GET /api/sessions/:id/turn-checkpoints should include nested subagent changes with their own cwd', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000013'
+    const projectDir = '-tmp-transcript-nested-subagent-session'
+    const workDir = path.join(tmpDir, 'transcript-nested-subagent-session')
+    const nestedCwd = path.join(workDir, 'nested-project')
+    const targetFile = path.join(nestedCwd, 'src', 'Deep.ts')
+    const userId = crypto.randomUUID()
+
+    await fs.mkdir(path.dirname(targetFile), { recursive: true })
+    await fs.writeFile(targetFile, 'export const deep = true\n', 'utf-8')
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('delegate a nested project change', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([{
+        id: 'Agent:outer',
+        name: 'Agent',
+        input: { description: 'Run an outer agent' },
+      }], userId),
+      makeToolResultUserEntry(
+        'Agent:outer',
+        'Outer agent completed.\nagentId: outer',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Delegation completed.', userId),
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'outer', [
+      {
+        ...makeAssistantToolUseEntry([{
+          id: 'Agent:nested',
+          name: 'Agent',
+          input: { description: 'Run a nested agent' },
+        }]),
+        cwd: workDir,
+      },
+      {
+        ...makeToolResultUserEntry(
+          'Agent:nested',
+          'Nested agent completed.\nagentId: nested',
+          undefined,
+          undefined,
+          sessionId,
+        ),
+        cwd: workDir,
+      },
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'nested', [
+      {
+        ...makeAssistantToolUseEntry([{
+          id: 'Write:deep-child',
+          name: 'Write',
+          input: {
+            file_path: 'src/Deep.ts',
+            content: 'export const deep = true\n',
+          },
+        }]),
+        cwd: nestedCwd,
+      },
+      {
+        ...makeToolResultUserEntry(
+          'Write:deep-child',
+          'Written successfully.',
+          undefined,
+          undefined,
+          sessionId,
+        ),
+        cwd: nestedCwd,
+      },
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[]; insertions: number; deletions: number }
+        restoreAvailable?: boolean
+      }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: {
+        filesChanged: [targetFile],
+        insertions: 1,
+        deletions: 0,
+      },
+      restoreAvailable: false,
+    })
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should bound cyclic subagent transcript links', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000016'
+    const projectDir = '-tmp-transcript-cyclic-subagent-session'
+    const workDir = path.join(tmpDir, 'transcript-cyclic-subagent-session')
+    const targetFile = path.join(workDir, 'once.ts')
+    const userId = crypto.randomUUID()
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'export const once = true\n', 'utf-8')
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('run a self-referencing agent', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([{
+        id: 'Agent:cycle-root',
+        name: 'Agent',
+        input: { description: 'Run the cyclic agent fixture' },
+      }], userId),
+      makeToolResultUserEntry(
+        'Agent:cycle-root',
+        'Agent completed.\nagentId: cycle',
+        undefined,
+        undefined,
+        sessionId,
+      ),
+      makeAssistantEntry('Delegation complete.', userId),
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'cycle', [
+      {
+        ...makeAssistantToolUseEntry([
+          {
+            id: 'Write:cycle-once',
+            name: 'Write',
+            input: {
+              file_path: targetFile,
+              content: 'export const once = true\n',
+            },
+          },
+          {
+            id: 'Agent:cycle-self',
+            name: 'Agent',
+            input: { description: 'Reference the same transcript again' },
+          },
+        ]),
+        cwd: workDir,
+      },
+      {
+        ...makeToolResultUserEntry(
+          'Write:cycle-once',
+          'Written successfully.',
+          undefined,
+          undefined,
+          sessionId,
+        ),
+        cwd: workDir,
+      },
+      {
+        ...makeToolResultUserEntry(
+          'Agent:cycle-self',
+          'Agent completed.\nagentId: cycle',
+          undefined,
+          undefined,
+          sessionId,
+        ),
+        cwd: workDir,
+      },
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{ code: { filesChanged: string[] }; restoreAvailable?: boolean }>
+    }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]).toMatchObject({
+      code: { filesChanged: [targetFile] },
+      restoreAvailable: false,
+    })
+  })
+
+  it('should fall back to transcript evidence when the next partial snapshot drops a tracked path', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000017'
+    const projectDir = '-tmp-next-partial-drops-path'
+    const workDir = path.join(tmpDir, 'next-partial-drops-path')
+    const keptFile = path.join(workDir, 'kept.ts')
+    const droppedFile = path.join(workDir, 'dropped.ts')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const keptBackup = 'next-partial-kept@v1'
+    const droppedBackup = 'next-partial-dropped@v1'
+    const before = "export const value = 'before'\n"
+    const after = "export const value = 'after'\n"
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(keptFile, before)
+    await fs.writeFile(droppedFile, after)
+    await writeFileHistoryBackup(sessionId, keptBackup, before)
+    await writeFileHistoryBackup(sessionId, droppedBackup, before)
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'kept.ts': { backupFileName: keptBackup, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+        'dropped.ts': { backupFileName: droppedBackup, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit dropped', firstUserId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:dropped-from-next',
+        name: 'Edit',
+        input: { file_path: droppedFile, old_string: before.trim(), new_string: after.trim() },
+      }], firstUserId),
+      makeToolResultUserEntry('Edit:dropped-from-next', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'kept.ts': { backupFileName: keptBackup, version: 1, backupTime: '2026-01-01T00:01:00.000Z' },
+      }),
+      { ...makeUserEntry('inspect', secondUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('Inspected.', secondUserId),
+    ])
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const listBody = await listRes.json() as {
+      checkpoints: Array<{ target: { targetUserMessageId: string }; code: { filesChanged: string[] }; restoreAvailable?: boolean }>
+    }
+    expect(listBody.checkpoints.find((item) =>
+      item.target.targetUserMessageId === firstUserId
+    )).toMatchObject({
+      code: { filesChanged: [droppedFile] },
+      restoreAvailable: true,
+    })
+
+    const diffRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/turn-checkpoints/diff?targetUserMessageId=${firstUserId}&path=dropped.ts`,
+    )
+    expect(await diffRes.json()).toMatchObject({ state: 'ok', path: 'dropped.ts' })
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: firstUserId }),
+    })
+    expect(rewindRes.status).toBe(200)
+    expect(await fs.readFile(droppedFile, 'utf-8')).toBe(before)
+  })
+
+  it('should restore snapshot-covered files while reporting a writing shell command as unverified', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000018'
+    const workDir = path.join(tmpDir, 'unknown-write-tool')
+    const capturedFile = path.join(workDir, 'captured.txt')
+    const shellFile = path.join(workDir, 'shell.txt')
+    const userId = crypto.randomUUID()
+    const backupName = 'unknown-tool-captured@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, 'after\n')
+    await fs.writeFile(shellFile, 'written by shell\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    await writeSessionFile('-tmp-unknown-write-tool', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'captured.txt': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('write with shell', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Bash:write-file',
+        name: 'Bash',
+        input: { command: `printf written > ${shellFile}` },
+      }], userId),
+      makeToolResultUserEntry('Bash:write-file', 'Done.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as {
+      checkpoints: Array<{ restoreAvailable?: boolean; unverifiedChangeSources?: string[] }>
+    }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(true)
+    expect(body.checkpoints[0]?.unverifiedChangeSources).toEqual(['Bash'])
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(200)
+    expect(await rewindRes.json()).toMatchObject({ unverifiedChangeSources: ['Bash'] })
+    // The snapshot-covered file is undone; the shell-written file is untouched,
+    // which is exactly what the unverified source is warning about.
+    expect(await fs.readFile(capturedFile, 'utf-8')).toBe('before\n')
+    expect(await fs.readFile(shellFile, 'utf-8')).toBe('written by shell\n')
+  })
+
+  it('should keep restore available and unflagged when the turn only ran a read-only shell command', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0001'
+    const workDir = path.join(tmpDir, 'repro-1192-readonly-bash')
+    const editedFile = path.join(workDir, 'src.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'repro-1192-src@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    await writeSessionFile('-tmp-repro-1192-readonly-bash', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit then check status', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], userId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantToolUseEntry([{
+        id: 'Bash:git-status',
+        name: 'Bash',
+        input: { command: 'git status --short' },
+      }], userId),
+      makeToolResultUserEntry('Bash:git-status', ' M src.ts', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as {
+      checkpoints: Array<{
+        code: { filesChanged: string[] }
+        restoreAvailable?: boolean
+        unverifiedChangeSources?: string[]
+      }>
+    }
+    expect(body.checkpoints[0]).toMatchObject({
+      code: { filesChanged: [editedFile] },
+      restoreAvailable: true,
+      // `git status` is provably read-only, so it must not even be reported.
+      unverifiedChangeSources: [],
+    })
+
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(200)
+    expect(await fs.readFile(editedFile, 'utf-8')).toBe('before\n')
+  })
+
+  it('should keep restore available when the turn ran a tool with no file-change extractor', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0002'
+    const workDir = path.join(tmpDir, 'repro-1192-taskcreate')
+    const editedFile = path.join(workDir, 'src.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'repro-1192-task-src@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    await writeSessionFile('-tmp-repro-1192-taskcreate', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('track then edit', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'TaskCreate:1',
+        name: 'TaskCreate',
+        input: { tasks: [{ content: 'do it', activeForm: 'doing it' }] },
+      }], userId),
+      makeToolResultUserEntry('TaskCreate:1', 'Created.', undefined, undefined, sessionId),
+      makeAssistantToolUseEntry([{
+        id: 'TaskUpdate:1',
+        name: 'TaskUpdate',
+        input: { taskId: 't1', status: 'completed' },
+      }], userId),
+      makeToolResultUserEntry('TaskUpdate:1', 'Updated.', undefined, undefined, sessionId),
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], userId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as {
+      checkpoints: Array<{ restoreAvailable?: boolean; unverifiedChangeSources?: string[] }>
+    }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(true)
+    // TaskCreate can spawn shell/agent work that writes files, so it is reported;
+    // TaskUpdate only touches task metadata, so it must not add noise.
+    expect(body.checkpoints[0]?.unverifiedChangeSources).toEqual(['TaskCreate'])
+  })
+
+  it('should deduplicate and cap the reported unverified change sources', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0003'
+    const workDir = path.join(tmpDir, 'repro-1192-many-sources')
+    const editedFile = path.join(workDir, 'src.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'repro-1192-many-src@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    // 10 distinct unknown tools plus a repeat, to prove both the dedup and the cap.
+    const unknownTools = [
+      'ToolA', 'ToolB', 'ToolC', 'ToolD', 'ToolE',
+      'ToolF', 'ToolG', 'ToolH', 'ToolI', 'ToolJ', 'ToolA',
+    ]
+    await writeSessionFile('-tmp-repro-1192-many-sources', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('many tools', userId), cwd: workDir, sessionId },
+      ...unknownTools.flatMap((name, index) => [
+        makeAssistantToolUseEntry([{ id: `${name}:${index}`, name, input: { x: 1 } }], userId),
+        makeToolResultUserEntry(`${name}:${index}`, 'ok', undefined, undefined, sessionId),
+      ]),
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], userId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as {
+      checkpoints: Array<{ restoreAvailable?: boolean; unverifiedChangeSources?: string[] }>
+    }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(true)
+    expect(body.checkpoints[0]?.unverifiedChangeSources).toEqual([
+      'ToolA', 'ToolB', 'ToolC', 'ToolD', 'ToolE', 'ToolF', 'ToolG', 'ToolH',
+    ])
+  })
+
+  it('should keep blocking restore when the transcript itself cannot be read', async () => {
+    // Guards the split introduced for issue #1192: an unknown *tool* only
+    // downgrades coverage, but an unreadable *transcript* still blocks, because
+    // then even the reported file list may be wrong.
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0004'
+    const workDir = path.join(tmpDir, 'repro-1192-broken-transcript')
+    const editedFile = path.join(workDir, 'src.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'repro-1192-broken@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    const projectDir = '-tmp-repro-1192-broken-transcript'
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit src', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], userId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+    const transcriptPath = path.join(tmpDir, 'projects', projectDir, `${sessionId}.jsonl`)
+    await fs.appendFile(transcriptPath, '{"type":"assistant","truncated\n')
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as { checkpoints: Array<{ restoreAvailable?: boolean }> }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(false)
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(editedFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should roll back the conversation alone when the files cannot be restored', async () => {
+    // The whole point of the mode: an unreadable transcript blocks the file
+    // restore, but the user must still be able to back out of their prompt.
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0005'
+    const workDir = path.join(tmpDir, 'repro-1192-conversation-only')
+    const editedFile = path.join(workDir, 'src.ts')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const backupName = 'repro-1192-convonly@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    const projectDir = '-tmp-repro-1192-conversation-only'
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('first prompt', firstUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('First done.', firstUserId),
+      { ...makeUserEntry('second prompt', secondUserId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], secondUserId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Second done.', secondUserId),
+    ])
+    const transcriptPath = path.join(tmpDir, 'projects', projectDir, `${sessionId}.jsonl`)
+    await fs.appendFile(transcriptPath, '{"type":"assistant","truncated\n')
+
+    // Default mode still refuses, and changes nothing.
+    const bothRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: secondUserId }),
+    })
+    expect(bothRes.status).toBe(400)
+    expect(await fs.readFile(editedFile, 'utf-8')).toBe('after\n')
+
+    const conversationRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: secondUserId, mode: 'conversation' }),
+    })
+    expect(conversationRes.status).toBe(200)
+    expect(await conversationRes.json()).toMatchObject({
+      mode: 'conversation',
+      // Reported honestly: the files were left alone because we could not
+      // restore them, not because the user declined.
+      restoreAvailable: false,
+    })
+    // Files untouched...
+    expect(await fs.readFile(editedFile, 'utf-8')).toBe('after\n')
+    // ...conversation actually trimmed back to before the second prompt.
+    const messagesRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/messages`)
+    const messages = await messagesRes.json() as { messages: Array<{ id: string }> }
+    expect(messages.messages.some((message) => message.id === secondUserId)).toBe(false)
+    expect(messages.messages.some((message) => message.id === firstUserId)).toBe(true)
+  })
+
+  it('should leave files alone in conversation mode even when they are restorable', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0006'
+    const workDir = path.join(tmpDir, 'repro-1192-conversation-opt-out')
+    const editedFile = path.join(workDir, 'src.ts')
+    const userId = crypto.randomUUID()
+    const backupName = 'repro-1192-optout@v1'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(editedFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    await writeSessionFile('-tmp-repro-1192-conversation-opt-out', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'src.ts': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit src', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:src',
+        name: 'Edit',
+        input: { file_path: editedFile, old_string: 'before', new_string: 'after' },
+      }], userId),
+      makeToolResultUserEntry('Edit:src', 'Updated successfully.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, mode: 'conversation' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ mode: 'conversation', restoreAvailable: true })
+    expect(await fs.readFile(editedFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should echo the default mode and reject an unknown one', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-0000000f0007'
+    const workDir = path.join(tmpDir, 'repro-1192-mode-validation')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await writeSessionFile('-tmp-repro-1192-mode-validation', sessionId, [
+      makeSessionMetaEntry(workDir),
+      { ...makeUserEntry('hello', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Hi.', userId),
+    ])
+
+    const badRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, mode: 'code' }),
+    })
+    expect(badRes.status).toBe(400)
+
+    const defaultRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(defaultRes.status).toBe(200)
+    expect(await defaultRes.json()).toMatchObject({ mode: 'both' })
+  })
+
+  it('should reject unsafe backup file names without reading outside file history', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000019'
+    const workDir = path.join(tmpDir, 'unsafe-backup-name')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeSessionFile('-tmp-unsafe-backup-name', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: '../../../../outside-secret', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, dryRun: true }),
+    })
+    expect(await dryRunRes.json()).toMatchObject({ restoreAvailable: false })
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(targetFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should reject conflicting snapshot aliases before presenting undo as available', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000020'
+    const workDir = path.join(tmpDir, 'conflicting-snapshot-aliases')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'alias-one@v1', 'before one\n')
+    await writeFileHistoryBackup(sessionId, 'alias-two@v1', 'before two\n')
+    await writeSessionFile('-tmp-conflicting-snapshot-aliases', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'alias-one@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+        'nested/../target.txt': { backupFileName: 'alias-two@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await res.json() as { checkpoints: Array<{ restoreAvailable?: boolean }> }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(false)
+  })
+
+  it('should preflight every restore target before changing the first file', async () => {
+    if (process.platform === 'win32') return
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000021'
+    const workDir = path.join(tmpDir, 'restore-preflight')
+    const firstFile = path.join(workDir, 'first.txt')
+    const secondFile = path.join(workDir, 'second.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(firstFile, 'first after\n')
+    await fs.writeFile(secondFile, 'second after\n')
+    await writeFileHistoryBackup(sessionId, 'preflight-first@v1', 'first before\n')
+    await writeFileHistoryBackup(sessionId, 'preflight-second@v1', 'second before\n')
+    await writeSessionFile('-tmp-restore-preflight', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'first.txt': { backupFileName: 'preflight-first@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+        'second.txt': { backupFileName: 'preflight-second@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit both', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    await fs.chmod(secondFile, 0o400)
+    try {
+      const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserMessageId: userId }),
+      })
+      expect(rewindRes.status).toBe(400)
+      expect(await fs.readFile(firstFile, 'utf-8')).toBe('first after\n')
+      expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+        .toContain(userId)
+    } finally {
+      await fs.chmod(secondFile, 0o600)
+    }
+  })
+
+  it('should roll restored files forward again when transcript trimming fails', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000026'
+    const workDir = path.join(tmpDir, 'trim-failure-file-rollback')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'trim-failure@v1', 'before\n')
+    await writeSessionFile('-tmp-trim-failure-file-rollback', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'trim-failure@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    const originalTrim = sessionService.trimSessionMessagesFrom.bind(sessionService)
+    sessionService.trimSessionMessagesFrom = async () => {
+      throw new Error('simulated atomic transcript replacement failure')
+    }
+    try {
+      const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserMessageId: userId }),
+      })
+      expect(rewindRes.status).toBe(500)
+      expect(await fs.readFile(targetFile, 'utf-8')).toBe('after\n')
+    } finally {
+      sessionService.trimSessionMessagesFrom = originalTrim
+    }
+    expect((await service.getSessionMessages(sessionId)).map((message) => message.id))
+      .toContain(userId)
+  })
+
+  it('should not require write access for an unchanged tracked file', async () => {
+    if (process.platform === 'win32') return
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000027'
+    const workDir = path.join(tmpDir, 'unchanged-read-only-rewind')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'same\n')
+    await writeFileHistoryBackup(sessionId, 'unchanged-read-only@v1', 'same\n')
+    await writeSessionFile('-tmp-unchanged-read-only-rewind', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'unchanged-read-only@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('inspect only', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    await fs.chmod(targetFile, 0o400)
+    try {
+      const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserMessageId: userId }),
+      })
+      expect(rewindRes.status).toBe(200)
+      expect(await fs.readFile(targetFile, 'utf-8')).toBe('same\n')
+    } finally {
+      await fs.chmod(targetFile, 0o600)
+    }
+  })
+
+  it('should disable rewind when nested subagent evidence hits the depth bound', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000022'
+    const projectDir = '-tmp-subagent-depth-bound'
+    const workDir = path.join(tmpDir, 'subagent-depth-bound')
+    const capturedFile = path.join(workDir, 'captured.txt')
+    const omittedFile = path.join(workDir, 'omitted.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, 'same\n')
+    await fs.writeFile(omittedFile, 'deep write\n')
+    await writeFileHistoryBackup(sessionId, 'depth-captured@v1', 'same\n')
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'captured.txt': { backupFileName: 'depth-captured@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('delegate deeply', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{ id: 'Agent:depth-root', name: 'Agent', input: {} }], userId),
+      makeToolResultUserEntry('Agent:depth-root', 'agentId: depth-1', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+    for (let depth = 1; depth <= 17; depth += 1) {
+      const entries = depth === 17
+        ? [
+            { ...makeAssistantToolUseEntry([{ id: 'Write:deep', name: 'Write', input: { file_path: omittedFile, content: 'deep write\n' } }]), cwd: workDir },
+            { ...makeToolResultUserEntry('Write:deep', 'Written.', undefined, undefined, sessionId), cwd: workDir },
+          ]
+        : [
+            { ...makeAssistantToolUseEntry([{ id: `Agent:depth-${depth}`, name: 'Agent', input: {} }]), cwd: workDir },
+            { ...makeToolResultUserEntry(`Agent:depth-${depth}`, `agentId: depth-${depth + 1}`, undefined, undefined, sessionId), cwd: workDir },
+          ]
+      await writeSubagentTranscriptFile(projectDir, sessionId, `depth-${depth}`, entries)
+    }
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await res.json() as { checkpoints: Array<{ restoreAvailable?: boolean }> }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(false)
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(omittedFile, 'utf-8')).toBe('deep write\n')
+  })
+
+  it('should disable rewind when the root transcript contains an incomplete JSONL entry', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000023'
+    const workDir = path.join(tmpDir, 'incomplete-root-transcript')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'incomplete-root@v1', 'before\n')
+    const transcriptPath = await writeSessionFile('-tmp-incomplete-root-transcript', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'incomplete-root@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    await fs.appendFile(transcriptPath, '{"type":"assistant","message":\n')
+
+    const listRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await listRes.json() as { checkpoints: Array<{ restoreAvailable?: boolean }> }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(false)
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(targetFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should disable rewind when an Agent result has no resolvable child transcript id', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000024'
+    const workDir = path.join(tmpDir, 'unresolved-agent-result')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'unresolved-agent@v1', 'before\n')
+    await writeSessionFile('-tmp-unresolved-agent-result', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'unresolved-agent@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('delegate edit', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{ id: 'Agent:missing-id', name: 'Agent', input: {} }], userId),
+      makeToolResultUserEntry('Agent:missing-id', 'Agent completed.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await res.json() as { checkpoints: Array<{ restoreAvailable?: boolean }> }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(false)
+  })
+
+  it('should load Task subagent edits outside the prompt workdir', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000025'
+    const projectDir = '-tmp-task-subagent-external'
+    const workDir = path.join(tmpDir, 'task-subagent-workdir')
+    const outsideFile = path.join(tmpDir, 'task-subagent-outside', 'outside.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.dirname(outsideFile), { recursive: true })
+    await fs.writeFile(outsideFile, 'outside\n')
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      { ...makeUserEntry('delegate external edit', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{ id: 'Task:external', name: 'Task', input: {} }], userId),
+      makeToolResultUserEntry('Task:external', 'agentId: task-external', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', userId),
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'task-external', [
+      { ...makeAssistantToolUseEntry([{ id: 'Write:task-external', name: 'Write', input: { file_path: outsideFile, content: 'outside\n' } }]), cwd: workDir },
+      { ...makeToolResultUserEntry('Write:task-external', 'Written.', undefined, undefined, sessionId), cwd: workDir },
+    ])
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await res.json() as {
+      checkpoints: Array<{ code: { filesChanged: string[] }; restoreAvailable?: boolean }>
+    }
+    expect(body.checkpoints[0]).toMatchObject({
+      code: { filesChanged: [outsideFile] },
+      restoreAvailable: false,
+    })
+  })
+
+  it('should validate transcript-only changes from every turn removed by rewind', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000028'
+    const workDir = path.join(tmpDir, 'later-turn-evidence')
+    const capturedFile = path.join(workDir, 'captured.txt')
+    const outsideFile = path.join(tmpDir, 'later-turn-outside.txt')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(capturedFile, 'same\n')
+    await fs.writeFile(outsideFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'later-turn-captured@v1', 'same\n')
+    await writeSessionFile('-tmp-later-turn-evidence', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'captured.txt': { backupFileName: 'later-turn-captured@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('first turn', firstUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', firstUserId),
+      { ...makeUserEntry('edit outside', secondUserId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Edit:later-external', name: 'Edit',
+        input: { file_path: outsideFile, old_string: 'before', new_string: 'after' },
+      }], secondUserId),
+      makeToolResultUserEntry('Edit:later-external', 'Updated.', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', secondUserId),
+    ])
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: firstUserId, dryRun: true }),
+    })
+    expect(await dryRunRes.json()).toMatchObject({
+      code: { filesChanged: [outsideFile] },
+      restoreAvailable: false,
+    })
+    const rewindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: firstUserId }),
+    })
+    expect(rewindRes.status).toBe(400)
+    expect(await fs.readFile(outsideFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should report errored write-capable tools as unverified without blocking restore', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000029'
+    const workDir = path.join(tmpDir, 'errored-write-tool')
+    const targetFile = path.join(workDir, 'target.txt')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await writeFileHistoryBackup(sessionId, 'errored-write@v1', 'before\n')
+    await writeSessionFile('-tmp-errored-write-tool', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: 'errored-write@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('run a failing write', userId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{ id: 'Bash:error-after-write', name: 'Bash', input: { command: 'write then fail' } }], userId),
+      makeToolResultUserEntry('Bash:error-after-write', 'failed after write', true, undefined, sessionId),
+      makeAssistantEntry('Failed.', userId),
+    ])
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    const body = await res.json() as {
+      checkpoints: Array<{ restoreAvailable?: boolean; unverifiedChangeSources?: string[] }>
+    }
+    expect(body.checkpoints[0]?.restoreAvailable).toBe(true)
+    expect(body.checkpoints[0]?.unverifiedChangeSources).toEqual(['Bash'])
+  })
+
+  it('should reject a symlinked file-history session directory', async () => {
+    if (process.platform === 'win32') return
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000030'
+    const workDir = path.join(tmpDir, 'symlinked-backup-directory')
+    const targetFile = path.join(workDir, 'target.txt')
+    const outsideBackupDir = path.join(tmpDir, 'outside-backup-directory')
+    const backupName = 'symlinked-directory@v1'
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(outsideBackupDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await fs.writeFile(path.join(outsideBackupDir, backupName), 'outside secret\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    const backupDir = path.join(tmpDir, 'file-history', sessionId)
+    await fs.rm(backupDir, { recursive: true })
+    await fs.symlink(outsideBackupDir, backupDir, 'dir')
+    await writeSessionFile('-tmp-symlinked-backup-directory', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, dryRun: true }),
+    })
+    expect(await dryRunRes.json()).toMatchObject({ restoreAvailable: false })
+    expect(await fs.readFile(targetFile, 'utf-8')).toBe('after\n')
+  })
+
+  it('should reject a symlinked backup file', async () => {
+    if (process.platform === 'win32') return
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000031'
+    const workDir = path.join(tmpDir, 'symlinked-backup-file')
+    const targetFile = path.join(workDir, 'target.txt')
+    const outsideBackup = path.join(tmpDir, 'outside-backup.txt')
+    const backupName = 'symlinked-file@v1'
+    const userId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, 'after\n')
+    await fs.writeFile(outsideBackup, 'outside secret\n')
+    await writeFileHistoryBackup(sessionId, backupName, 'before\n')
+    const backupPath = path.join(tmpDir, 'file-history', sessionId, backupName)
+    await fs.unlink(backupPath)
+    await fs.symlink(outsideBackup, backupPath)
+    await writeSessionFile('-tmp-symlinked-backup-file', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(userId, {
+        'target.txt': { backupFileName: backupName, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('edit target', userId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', userId),
+    ])
+    const dryRunRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userId, dryRun: true }),
+    })
+    expect(await dryRunRes.json()).toMatchObject({ restoreAvailable: false })
+    expect(await fs.readFile(targetFile, 'utf-8')).toBe('after\n')
+  })
+
   it('POST /api/sessions/:id/rewind should restore the base state when rewinding the first turn of a three-turn file history', async () => {
     const fixture = await createThreeTurnCheckpointFixture(
       'aaaaaaaa-1111-2222-3333-444444444444',
@@ -6131,6 +8238,92 @@ describe('Sessions API', () => {
 
     const remainingMessages = await service.getSessionMessages(fixture.sessionId)
     expect(remainingMessages).toHaveLength(0)
+  })
+
+  // Files created by the FIRST turn (the mirror of the fixture above, which
+  // creates its file in the third turn). Rewinding back to turn 1 has to delete
+  // them, because "before turn 1" is a state in which they did not exist.
+  async function writeFirstTurnCreatesFilesFixture(sessionId: string) {
+    const workDir = path.join(tmpDir, `first-turn-creates-${sessionId}`)
+    const fileA = path.join(workDir, 'a.ts')
+    const fileB = path.join(workDir, 'b.ts')
+    const fileC = path.join(workDir, 'c.ts')
+    const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    await fs.mkdir(workDir, { recursive: true })
+    // Disk holds the third-turn content.
+    await fs.writeFile(fileA, 'a v3\n')
+    await fs.writeFile(fileB, 'b v3\n')
+    await fs.writeFile(fileC, 'c v3\n')
+    await writeFileHistoryBackup(sessionId, 'a@v2', 'a v1\n')
+    await writeFileHistoryBackup(sessionId, 'b@v2', 'b v1\n')
+    await writeFileHistoryBackup(sessionId, 'a@v3', 'a v2\n')
+    await writeFileHistoryBackup(sessionId, 'b@v3', 'b v2\n')
+    await writeFileHistoryBackup(sessionId, 'c@v2', 'c v2\n')
+    const stamp = '2026-01-01T00:00:00.000Z'
+    await writeSessionFile(`-tmp-first-turn-creates-${sessionId}`, sessionId, [
+      makeSessionMetaEntry(workDir),
+      // Turn 1 creates a.ts and b.ts — neither existed before it.
+      makeFileHistorySnapshotEntry(ids[0]!, {
+        'a.ts': { backupFileName: null, version: 1, backupTime: stamp },
+        'b.ts': { backupFileName: null, version: 1, backupTime: stamp },
+      }),
+      { ...makeUserEntry('create a and b', ids[0]), cwd: workDir, sessionId },
+      makeAssistantEntry('Created.', ids[0]),
+      // Turn 2 edits both and creates c.ts.
+      makeFileHistorySnapshotEntry(ids[1]!, {
+        'a.ts': { backupFileName: 'a@v2', version: 2, backupTime: stamp },
+        'b.ts': { backupFileName: 'b@v2', version: 2, backupTime: stamp },
+        'c.ts': { backupFileName: null, version: 1, backupTime: stamp },
+      }),
+      { ...makeUserEntry('edit a, b and create c', ids[1]), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', ids[1]),
+      // Turn 3 edits a.ts, b.ts and c.ts again.
+      makeFileHistorySnapshotEntry(ids[2]!, {
+        'a.ts': { backupFileName: 'a@v3', version: 3, backupTime: stamp },
+        'b.ts': { backupFileName: 'b@v3', version: 3, backupTime: stamp },
+        'c.ts': { backupFileName: 'c@v2', version: 2, backupTime: stamp },
+      }),
+      { ...makeUserEntry('edit again', ids[2]), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', ids[2]),
+    ])
+    return { workDir, fileA, fileB, fileC, ids }
+  }
+
+  it('POST /api/sessions/:id/rewind should return to the start of the third turn without touching earlier turns', async () => {
+    const sessionId = 'aaaaaaaa-9999-1111-2222-333333333333'
+    const f = await writeFirstTurnCreatesFilesFixture(sessionId)
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: f.ids[2] }),
+    })
+    expect(res.status).toBe(200)
+
+    // Back to the state captured when turn 3's prompt was submitted.
+    expect(await fs.readFile(f.fileA, 'utf-8')).toBe('a v2\n')
+    expect(await fs.readFile(f.fileB, 'utf-8')).toBe('b v2\n')
+    // c.ts existed before turn 3, so it survives with its pre-turn-3 content.
+    expect(await fs.readFile(f.fileC, 'utf-8')).toBe('c v2\n')
+  })
+
+  it('POST /api/sessions/:id/rewind should delete first-turn-created files when rewinding all the way back', async () => {
+    const sessionId = 'aaaaaaaa-9999-4444-5555-666666666666'
+    const f = await writeFirstTurnCreatesFilesFixture(sessionId)
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: f.ids[0] }),
+    })
+    expect(res.status).toBe(200)
+
+    // a.ts and b.ts did not exist before turn 1 — undo removes them outright.
+    await expect(fs.stat(f.fileA)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.stat(f.fileB)).rejects.toMatchObject({ code: 'ENOENT' })
+    // c.ts was created two turns later and is removed as well: the restore plan
+    // spans every tracked path, not just the ones in the target snapshot.
+    await expect(fs.stat(f.fileC)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    expect(await service.getSessionMessages(sessionId)).toHaveLength(0)
   })
 
   it('POST /api/sessions/:id/rewind should keep the first turn and remove later file changes when rewinding the second turn of a three-turn history', async () => {

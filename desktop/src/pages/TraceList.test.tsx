@@ -131,8 +131,30 @@ describe('TraceList', () => {
 
     // right metrics: calls / duration / compact tokens
     expect(within(row).getByText('3')).toBeInTheDocument()
-    expect(within(row).getByText('4.7s')).toBeInTheDocument()
+    // '4.71s', not '4.7s': the list used to carry its own formatter with one
+    // decimal. It now shares formatDurationMs with the detail view, which is the
+    // whole point — see the minutes case below.
+    expect(within(row).getByText('4.71s')).toBeInTheDocument()
     expect(within(row).getByText('1.5k')).toBeInTheDocument()
+  })
+
+  // Regression: the list had a private formatDuration that stopped at seconds, so a
+  // 12-minute session read "739.0s" here while the detail view — same field, same
+  // t('trace.modelTime') label, shared formatter — read "12m 19s". Anything over a
+  // minute exposes the fork, which is why no existing fixture caught it.
+  it('renders a duration over a minute the same way the detail view does', async () => {
+    vi.mocked(tracesApi.list).mockResolvedValue({
+      ...traceList,
+      traces: [{
+        ...traceList.traces[0]!,
+        summary: { ...traceList.traces[0]!.summary, totalDurationMs: 739_000 },
+      }],
+    })
+
+    render(<TraceList />)
+    const row = await findTraceRow(/Debug stuck agent/)
+
+    expect(within(row).getByText('12m 19s')).toBeInTheDocument()
   })
 
   it('opens a trace tab when the row is clicked or activated via keyboard', async () => {

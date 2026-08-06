@@ -60,6 +60,76 @@ describe('AdapterSettings IM setup entry', () => {
   })
 })
 
+// #1191: the access boundary is its own setting, separate from the default
+// project, and it round-trips through the config patch.
+describe('AdapterSettings allowed project roots', () => {
+  it('explains the default when no roots are configured', () => {
+    renderAdapterSettings({})
+
+    expect(screen.getByText('Allowed project directories')).toBeInTheDocument()
+    expect(
+      screen.getByText('Default: your home directory (plus the default project, if it is outside home).'),
+    ).toBeInTheDocument()
+  })
+
+  it('lists configured roots and saves them after removing one', async () => {
+    const updateConfig = vi.fn(async (_patch: Partial<AdapterFileConfig>) => {})
+    renderAdapterSettings(
+      { allowedProjectRoots: ['/Users/me/work', '/Users/me/side'] },
+      { updateConfig },
+    )
+
+    expect(screen.getByText('/Users/me/work')).toBeInTheDocument()
+    expect(screen.getByText('/Users/me/side')).toBeInTheDocument()
+
+    const sideRow = screen.getByText('/Users/me/side').closest('li')!
+    fireEvent.click(within(sideRow).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(1)
+    })
+    expect(updateConfig.mock.calls[0]![0]).toMatchObject({
+      allowedProjectRoots: ['/Users/me/work'],
+    })
+  })
+
+  // A platform-level list replaces the global one, so a save here would silently
+  // not apply to that platform.
+  it('warns when a platform overrides the global roots', () => {
+    renderAdapterSettings({
+      allowedProjectRoots: ['/Users/me/work'],
+      whatsapp: { allowedProjectRoots: ['/Users/me/work/sandbox'] },
+    })
+
+    expect(
+      screen.getByText(
+        'Overridden for WhatsApp by a per-platform setting in adapters.json — changes here do not affect WhatsApp.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no override warning when only the global roots are set', () => {
+    renderAdapterSettings({ allowedProjectRoots: ['/Users/me/work'] })
+
+    expect(screen.queryByText(/per-platform setting/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the default when nothing is configured instead of pinning the default project', async () => {
+    const updateConfig = vi.fn(async (_patch: Partial<AdapterFileConfig>) => {})
+    renderAdapterSettings({ defaultProjectDir: '/Users/me/work/my-app' }, { updateConfig })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(1)
+    })
+    const patch = updateConfig.mock.calls[0]![0]
+    expect(patch.defaultProjectDir).toBe('/Users/me/work/my-app')
+    expect(patch.allowedProjectRoots).toEqual([])
+  })
+})
+
 describe('AdapterSettings Feishu onboarding', () => {
   it('shows the documented one-click Feishu bot link before credentials are configured', () => {
     renderAdapterSettings({})

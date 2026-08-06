@@ -33,11 +33,12 @@ const PALETTE_CLASS = new RegExp(
 /**
  * Known offenders, with the count they are allowed to keep.
  *
- * - `Settings.tsx` — two neutrals inside the H5-access QR panel. That panel is a
- *   hardcoded `bg-white` box because scanners need the contrast, so its text has
- *   to stay dark under `data-theme="dark"` as well. Theme tokens are the wrong
+ * - `settings/H5AccessSettings.tsx` — two neutrals inside the QR panel. That panel
+ *   is a hardcoded `bg-white` box because scanners need the contrast, so its text
+ *   has to stay dark under `data-theme="dark"` as well. Theme tokens are the wrong
  *   answer here; the right one is a token pair for content on a permanently
- *   light surface, which does not exist yet.
+ *   light surface, which does not exist yet. (The entry read `pages/Settings.tsx`
+ *   until that file was split into one module per panel; the code is unchanged.)
  *
  * `StreamingIndicator.tsx` used to sit here with 20. Its retry banner is now on
  * the `warning` token pair, so it needed no `dark:` variants at all — the entry
@@ -53,7 +54,7 @@ const PALETTE_CLASS = new RegExp(
  * Safari 15 drops entirely.
  */
 const ALLOWED: Record<string, number> = {
-  'pages/Settings.tsx': 2,
+  'pages/settings/H5AccessSettings.tsx': 2,
 }
 
 function collectSources(dir: string, out: string[] = []): string[] {

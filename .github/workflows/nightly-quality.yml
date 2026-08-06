@@ -1,0 +1,115 @@
+name: Full Quality
+
+# The PR gate is intentionally scoped: it runs only the surfaces a diff can reach.
+# That leaves two blind spots no per-PR run can close — regressions that only appear
+# when the whole suite runs together, and drift in checks no recent PR happened to
+# select. This workflow closes them, without any model, provider, or repository
+# secret.
+#
+# Manual only, on purpose. It is here so the full sweep is one click away, not so
+# it runs on its own — deciding when to spend an hour and a half of CI is the
+# maintainer's call, not this file's.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_coverage:
+        description: 'Skip the coverage ratchet (faster smoke of the rest)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-quality
+  cancel-in-progress: false
+
+jobs:
+  full-deterministic:
+    name: full-deterministic
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      - name: Install adapter dependencies
+        working-directory: adapters
+        run: bun install --frozen-lockfile
+
+      # Every deterministic lane, unconditionally — no path routing, no dependency
+      # graph. This is the run that catches a check the router stopped selecting.
+      - name: Policy and gate regressions
+        run: bun run check:policy
+      - name: Deterministic agent flow
+        run: bun run check:agent-flow
+      - name: Root runtime tests
+        run: bun run check:server
+      - name: Provider contracts
+        run: bun run check:provider-contract
+      - name: Desktop/server chat contracts
+        run: bun run check:chat-contract
+      - name: Adapter tests
+        run: bun run check:adapters
+      - name: Desktop lint, tests, and build
+        run: bun run check:desktop
+      - name: Electron host checks
+        run: bun run check:electron
+      - name: Persistence upgrade contracts
+        run: bun run check:persistence-upgrade
+      - name: Quarantine governance
+        run: bun run check:quarantine
+      - name: Coverage ratchet
+        if: ${{ !inputs.skip_coverage }}
+        env:
+          COVERAGE_BASE_REF: origin/main
+        run: bun run check:coverage
+
+      # Real desktop UI, real permission dialog, mock runtime. Skips with a printed
+      # reason when agent-browser is unavailable on the runner rather than failing
+      # the whole nightly run.
+      - name: Deterministic desktop UI smoke
+        run: bun run check:desktop-ui-smoke
+
+      - name: Upload nightly artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-quality
+          path: |
+            artifacts/agent-flow/
+            artifacts/desktop-ui-smoke/
+            artifacts/coverage/
+          retention-days: 14
+
+  selection-drift:
+    name: selection-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      # A dependency graph that silently stops resolving would quietly downgrade the
+      # PR gate to prefix-only routing, which is the failure this repository already
+      # shipped. Re-prove the graph nightly against the real tree.
+      - name: Module graph health
+        run: bun test ./scripts/pr/module-graph.test.ts
+      - name: Impact report on the full tree
+        run: bun run check:impact --files "$(git ls-files 'src/*' 'desktop/*' 'adapters/*' | head -400 | tr '\n' ',')"

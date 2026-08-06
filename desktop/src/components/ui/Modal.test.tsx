@@ -48,6 +48,20 @@ describe('Modal', () => {
     expect(backdrop).toHaveClass('bg-[var(--color-modal-scrim)]')
   })
 
+  it('gives media a viewport stage instead of wrapping it in a dialog card', () => {
+    render(
+      <Modal open onClose={vi.fn()} title="Preview" variant="media">
+        <img src="preview.png" alt="Preview" />
+      </Modal>,
+    )
+
+    const dialog = screen.getByRole('dialog', { name: 'Preview' })
+    expect(dialog).toHaveClass('bg-[var(--color-terminal-bg)]')
+    expect(dialog).toHaveClass('h-[calc(100dvh-24px)]')
+    expect(dialog).not.toHaveClass('dialog-panel')
+    expect(screen.getByRole('img', { name: 'Preview' }).parentElement).not.toHaveClass('px-6')
+  })
+
   it('closes when the backdrop is clicked', () => {
     const onClose = vi.fn()
     render(

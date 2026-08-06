@@ -8,6 +8,8 @@ const viewportMocks = vi.hoisted(() => ({
 }))
 
 const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+const originalRangeGetClientRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
+const originalRangeGetBoundingClientRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -99,7 +101,7 @@ vi.mock('../controls/ModelSelector', async () => {
 })
 
 import { ChatInput } from './ChatInput'
-import { getComposerElement, getComposerText, setComposerSelection, setComposerText } from './composerTestUtils'
+import { getComposerElement, getComposerText, setComposerText } from './composerTestUtils'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -239,8 +241,29 @@ describe('ChatInput file mentions', () => {
         },
       },
     })
-    // jsdom does not implement it, and the branch list scrolls its active row
-    // into view whenever the selection moves.
+    // jsdom does not implement these layout APIs. ProseMirror reads Range
+    // geometry when a newline transaction scrolls the new selection into view.
+    Object.defineProperties(Range.prototype, {
+      getClientRects: {
+        configurable: true,
+        value: () => [],
+      },
+      getBoundingClientRect: {
+        configurable: true,
+        value: () => ({
+          x: 0,
+          y: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => ({}),
+        }),
+      },
+    })
+    // The branch list also scrolls its active row whenever the selection moves.
     Element.prototype.scrollIntoView = vi.fn()
     mocks.getGitInfo.mockResolvedValue({ branch: 'main', repoName: 'repo', workDir: '/repo', changedFiles: 0 })
     mocks.getRepositoryContext.mockResolvedValue(okRepositoryContext())
@@ -259,6 +282,16 @@ describe('ChatInput file mentions', () => {
       Object.defineProperty(HTMLElement.prototype, 'offsetWidth', originalOffsetWidth)
     } else {
       Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth')
+    }
+    if (originalRangeGetClientRects) {
+      Object.defineProperty(Range.prototype, 'getClientRects', originalRangeGetClientRects)
+    } else {
+      Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    }
+    if (originalRangeGetBoundingClientRect) {
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', originalRangeGetBoundingClientRect)
+    } else {
+      Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
     }
   })
 
@@ -1610,18 +1643,19 @@ describe('ChatInput file mentions', () => {
       expect(getComposerText()).toBe('看下 @backend/ 这个目录')
     })
 
-    // Caret directly after the atom: one Backspace removes the whole pill —
-    // it can never be half-deleted character by character.
-    setComposerSelection('看下 @backend/'.length)
+    // Keep the caret exactly where the real picker transition placed it:
+    // after the separator space that insertion adds behind the atom. One
+    // Backspace must remove that insertion unit, not consume the invisible
+    // separator first and make the user press Backspace a second time.
     fireEvent.keyDown(getComposerElement(), { key: 'Backspace' })
-    expect(getComposerText()).toBe('看下  这个目录')
+    expect(getComposerText()).toBe('看下 这个目录')
     expect(document.querySelector('.composer-mention')).not.toBeInTheDocument()
 
     // Nothing to serialize any more: the path is gone from the model text too.
     fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
       type: 'user_message',
-      content: '看下  这个目录',
+      content: '看下 这个目录',
       attachments: [],
     })
   })
@@ -1935,7 +1969,37 @@ describe('ChatInput file mentions', () => {
     expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('-mx-3')
   })
 
-  it('uses Ctrl or Command Enter to send when that composer preference is selected', async () => {
+  it('uses Shift+Enter for a newline when Enter is the configured send shortcut', async () => {
+    useSettingsStore.setState({
+      chatSendBehavior: 'enter',
+    })
+
+    render(<ChatInput />)
+
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId)
+    })
+
+    const input = getComposerElement()
+    setComposerText('firstsecond', 5)
+
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('first\nsecond')
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: 'first\nsecond',
+      attachments: [],
+    })
+  })
+
+  it.each([
+    ['Ctrl+Enter', { ctrlKey: true }],
+    ['Command+Enter', { metaKey: true }],
+  ])('uses Enter or Shift+Enter for newlines and %s to send when configured', async (_shortcut, modifier) => {
     useSettingsStore.setState({
       chatSendBehavior: 'modifierEnter',
     })
@@ -1947,15 +2011,20 @@ describe('ChatInput file mentions', () => {
     })
 
     const input = getComposerElement()
-    setComposerText('avoid accidental sends', 'avoid accidental sends'.length)
+    setComposerText('firstsecond', 5)
 
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('first\nsecond')
 
-    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('first\n\nsecond')
+
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier })
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
       type: 'user_message',
-      content: 'avoid accidental sends',
+      content: 'first\n\nsecond',
       attachments: [],
     })
   })

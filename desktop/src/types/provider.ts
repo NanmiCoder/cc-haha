@@ -28,6 +28,12 @@ export type Model1mSupport = {
 
 export type ModelContextWindows = Record<string, number>
 
+export type ImageGenerationConfig = {
+  model: string
+  baseUrl?: string
+  apiKey?: string
+}
+
 export type SavedProvider = {
   id: string
   presetId: string
@@ -43,6 +49,7 @@ export type SavedProvider = {
   modelContextWindows?: ModelContextWindows
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
+  imageGeneration?: ImageGenerationConfig
   notes?: string
 }
 
@@ -60,6 +67,7 @@ export type CreateProviderInput = {
   modelContextWindows?: ModelContextWindows
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
+  imageGeneration?: ImageGenerationConfig
   notes?: string
 }
 
@@ -76,6 +84,7 @@ export type UpdateProviderInput = {
   modelContextWindows?: ModelContextWindows | null
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
+  imageGeneration?: ImageGenerationConfig | null
   notes?: string
 }
 

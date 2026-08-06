@@ -7,7 +7,7 @@ import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import { BUILT_IN_PROVIDER_IDS } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 2
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 3
 
 type MigrationReport = {
   migratedEntries: string[]

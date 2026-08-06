@@ -62,18 +62,18 @@ export type PetWindowDragPayload = PetWindowPosition & {
  * window position and the work area, so it picks the side and the renderer
  * follows.
  *
- * Left and right are deliberately not handled here. The panel is wider than the
- * mascot by more than the padding that remains beside it, so sliding it back
- * on-screen inside a fixed-size window just moves the clipping from the display
- * edge to the window edge. Fixing those needs the window itself to grow or
- * move, which is a different change.
+ * Horizontally the renderer moves the mascot, rather than the wider panel, to
+ * the outside of the fixed window. This process then moves the window in the
+ * opposite direction to keep the mascot still and bring the panel on-screen.
  */
 export type PetPanelPlacement = {
   vertical: 'above' | 'below'
+  horizontal: 'center' | 'left' | 'right'
 }
 
 export const PET_PANEL_DEFAULT_PLACEMENT: PetPanelPlacement = Object.freeze({
   vertical: 'above',
+  horizontal: 'center',
 })
 
 /** Gap the renderer keeps between the panel and the mascot. */
@@ -86,6 +86,7 @@ const PET_PANEL_GAP = 12
  * test would then find room again and flip straight back, once per frame.
  */
 const PET_PANEL_FLIP_HYSTERESIS = 24
+const PET_PANEL_HORIZONTAL_HYSTERESIS = 24
 
 function isFiniteScreenCoordinate(value: unknown): value is number {
   return typeof value === 'number'
@@ -271,7 +272,40 @@ export function resolvePetPanelPlacement({
   const threshold = previous.vertical === 'above'
     ? required
     : required + PET_PANEL_FLIP_HYSTERESIS
-  return { vertical: spaceAbove >= threshold ? 'above' : 'below' }
+  const vertical = spaceAbove >= threshold ? 'above' : 'below'
+
+  const workAreaRight = workArea.x + workArea.width
+  const mascotScreenLeft = windowPosition.x + mascot.x
+  const mascotScreenRight = mascotScreenLeft + mascot.width
+  const mascotScreenCenter = mascotScreenLeft + mascot.width / 2
+  const centeredPanelLeft = mascotScreenCenter - panel.width / 2
+  const centeredPanelRight = mascotScreenCenter + panel.width / 2
+  const centeredFits = centeredPanelLeft >= workArea.x
+    && centeredPanelRight <= workAreaRight
+  let horizontal = previous.horizontal
+
+  if (previous.horizontal === 'center') {
+    if (centeredPanelLeft < workArea.x) horizontal = 'right'
+    else if (centeredPanelRight > workAreaRight) horizontal = 'left'
+  } else if (previous.horizontal === 'left') {
+    const leftAlignedFits = mascotScreenRight - panel.width >= workArea.x
+    const rightAlignedFits = mascotScreenLeft + panel.width <= workAreaRight
+    if (!leftAlignedFits && rightAlignedFits) horizontal = 'right'
+    else if (
+      centeredFits
+      && centeredPanelRight <= workAreaRight - PET_PANEL_HORIZONTAL_HYSTERESIS
+    ) horizontal = 'center'
+  } else {
+    const rightAlignedFits = mascotScreenLeft + panel.width <= workAreaRight
+    const leftAlignedFits = mascotScreenRight - panel.width >= workArea.x
+    if (!rightAlignedFits && leftAlignedFits) horizontal = 'left'
+    else if (
+      centeredFits
+      && centeredPanelLeft >= workArea.x + PET_PANEL_HORIZONTAL_HYSTERESIS
+    ) horizontal = 'center'
+  }
+
+  return { vertical, horizontal }
 }
 
 type PetWindowExtent = { width: number; height: number }
@@ -436,15 +470,17 @@ export class PetWindowController {
   private panelBounds: Rectangle | null = null
   private panelPlacement: PetPanelPlacement = PET_PANEL_DEFAULT_PLACEMENT
   /**
-   * Screen y the mascot has to keep once the renderer reports its next layout.
+   * Screen position the mascot has to keep once the renderer reports its next
+   * layout.
    *
    * Set whenever the mascot is about to move inside the window while the user
    * expects it to stay put on screen: a flip moves it by the panel's height, and
    * a restart hands the renderer a saved position whose mascot offset belongs to
-   * whichever side the panel was on when it was saved. Both cases need the
-   * window to move the opposite way by the same amount.
+   * whichever side the panel was on when it was saved. Horizontal placement
+   * moves the mascot inside the window too. Every case needs the window to move
+   * the opposite way by the same amount.
    */
-  private pendingMascotAnchorScreenY: number | null = null
+  private pendingMascotAnchorScreen: Point | null = null
   private pendingRestoredPosition: PetWindowState | null = null
   private readonly options: PetWindowControllerOptions
 
@@ -462,7 +498,10 @@ export class PetWindowController {
     // otherwise drop the mascot by the panel's height on the next launch.
     // Restoring where the *mascot* was survives that, and a resized mascot too.
     if (restoredPosition?.region) {
-      this.pendingMascotAnchorScreenY = restoredPosition.y + restoredPosition.region.y
+      this.pendingMascotAnchorScreen = {
+        x: restoredPosition.x + restoredPosition.region.x,
+        y: restoredPosition.y + restoredPosition.region.y,
+      }
     }
     const currentWorkArea = restoredPosition && this.options.getWorkAreaForPoint
       ? this.options.getWorkAreaForPoint(petWindowAnchor(restoredPosition))
@@ -544,7 +583,7 @@ export class PetWindowController {
     this.visibleDragRegion = null
     this.panelBounds = null
     this.panelPlacement = PET_PANEL_DEFAULT_PLACEMENT
-    this.pendingMascotAnchorScreenY = null
+    this.pendingMascotAnchorScreen = null
   }
 
   owns(window: PetWindow | null): boolean {
@@ -614,25 +653,28 @@ export class PetWindowController {
    * Rebases the window on the screen position the mascot has to keep.
    *
    * The reported region is the first news of where the mascot actually sits
-   * inside the window, so this is the point where a flip or a restore can be
-   * turned into a window move that leaves the mascot where the user last saw it.
+   * inside the window, so this is the point where a placement change or restore
+   * becomes a window move that leaves the mascot where the user last saw it.
    */
   private holdMascotAnchor(
     mascot: Rectangle,
     requestedPosition: PetWindowPosition,
   ): PetWindowPosition {
-    const anchorScreenY = this.pendingMascotAnchorScreenY
-    if (anchorScreenY === null) return requestedPosition
-    this.pendingMascotAnchorScreenY = null
+    const anchorScreen = this.pendingMascotAnchorScreen
+    if (anchorScreen === null) return requestedPosition
+    this.pendingMascotAnchorScreen = null
 
-    const compensated = { x: requestedPosition.x, y: anchorScreenY - mascot.y }
+    const compensated = {
+      x: anchorScreen.x - mascot.x,
+      y: anchorScreen.y - mascot.y,
+    }
     const drag = this.drag
     if (drag) {
       // A drag maps pointer travel from a fixed window origin, so the origin has
       // to absorb the flip too — otherwise the next tick recomputes the pre-flip
       // position and drags the mascot straight back.
       drag.windowStart = {
-        ...drag.windowStart,
+        x: drag.windowStart.x + compensated.x - requestedPosition.x,
         y: drag.windowStart.y + compensated.y - requestedPosition.y,
       }
     }
@@ -653,9 +695,15 @@ export class PetWindowController {
       panel: this.panelBounds,
       previous,
     })
-    if (next.vertical === previous.vertical) return
+    if (
+      next.vertical === previous.vertical
+      && next.horizontal === previous.horizontal
+    ) return
 
-    this.pendingMascotAnchorScreenY = windowPosition.y + mascot.y
+    this.pendingMascotAnchorScreen = {
+      x: windowPosition.x + mascot.x,
+      y: windowPosition.y + mascot.y,
+    }
     this.panelPlacement = next
     this.options.onPanelPlacementChanged?.(window, next)
   }

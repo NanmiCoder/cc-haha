@@ -49,9 +49,11 @@ type Props = {
   sessionId?: string
   workDir?: string | null
   changedFiles?: string[]
+  /** ImageGen outputs already have a dedicated placeholder/result card. */
+  suppressManagedGeneratedImages?: boolean
 }
 
-export function InlineImageGallery({ text, sessionId, workDir, changedFiles }: Props) {
+export function InlineImageGallery({ text, sessionId, workDir, changedFiles, suppressManagedGeneratedImages = false }: Props) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
 
   // Absolute paths are explicitly written out in the prose (not guessed), and the
@@ -59,7 +61,12 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles }: P
   // — so they keep the legacy behavior and render unconditionally. changedFiles
   // only steers the relative-target extraction below, where mentions genuinely
   // need to be reconciled against what the turn actually wrote.
-  const imagePaths = useMemo(() => extractImagePaths(text), [text])
+  const imagePaths = useMemo(
+    () => extractImagePaths(text).filter(
+      (imagePath) => !suppressManagedGeneratedImages || !isManagedGeneratedImagePath(imagePath),
+    ),
+    [suppressManagedGeneratedImages, text],
+  )
 
   // An empty changedFiles only means "no TRACKED file changed" (Bash writes are
   // invisible to the checkpoint), so it is treated as "no evidence" and falls
@@ -162,4 +169,8 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles }: P
       )}
     </>
   )
+}
+
+function isManagedGeneratedImagePath(imagePath: string): boolean {
+  return imagePath.replaceAll('\\', '/').includes('/.claude/cc-haha/generated-images/')
 }

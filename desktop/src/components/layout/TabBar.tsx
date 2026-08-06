@@ -193,6 +193,8 @@ export function TabBar() {
   const [draggingSessionId, setDraggingSessionId] = useState<string | null>(null)
   const [dragOffsetX, setDragOffsetX] = useState(0)
   const dragIndexRef = useRef<number | null>(null)
+  const dragOverIndexRef = useRef<number | null>(null)
+  const dragTabCentersRef = useRef<number[]>([])
   const pendingDragRef = useRef<{ index: number; startX: number; startY: number } | null>(null)
   const suppressClickRef = useRef(false)
   const tabRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -260,17 +262,21 @@ export function TabBar() {
   }, [])
 
   useEffect(() => {
-    updateScrollState()
+    const syncStripLayout = () => {
+      updateScrollState()
+    }
+
+    syncStripLayout()
     const el = scrollRef.current
     if (!el) return
-    el.addEventListener('scroll', updateScrollState)
+    el.addEventListener('scroll', syncStripLayout)
     const ro = new ResizeObserver(() => {
-      updateScrollState()
+      syncStripLayout()
       realignActiveTab()
     })
     ro.observe(el)
     return () => {
-      el.removeEventListener('scroll', updateScrollState)
+      el.removeEventListener('scroll', syncStripLayout)
       ro.disconnect()
     }
   }, [realignActiveTab, updateScrollState, tabs.length])
@@ -287,7 +293,9 @@ export function TabBar() {
     // has to come on screen even from completely outside the strip.
     activeTabEl.scrollIntoView(REVEAL_ACTIVE_TAB)
 
-    const frame = window.requestAnimationFrame(updateScrollState)
+    const frame = window.requestAnimationFrame(() => {
+      updateScrollState()
+    })
     return () => window.cancelAnimationFrame(frame)
   }, [activeTabId, tabs.length, updateScrollState])
 
@@ -406,23 +414,26 @@ export function TabBar() {
   }
 
   const getTargetIndexFromClientX = useCallback((clientX: number) => {
-    for (let index = 0; index < tabs.length; index++) {
-      const tab = tabs[index]
-      if (!tab) continue
-      const el = tabRefs.current.get(tab.sessionId)
-      if (!el) continue
-      const rect = el.getBoundingClientRect()
-      if (clientX < rect.left + rect.width / 2) return index
+    for (let index = 0; index < dragTabCentersRef.current.length; index++) {
+      const center = dragTabCentersRef.current[index]
+      if (center !== undefined && Number.isFinite(center) && clientX < center) return index
     }
 
     return tabs.length > 0 ? tabs.length - 1 : null
   }, [tabs])
+
+  const updateDragOverIndex = useCallback((index: number | null) => {
+    dragOverIndexRef.current = index
+    setDragOverIndex(index)
+  }, [])
 
   const finalizeDrag = useCallback((targetIndex: number | null) => {
     if (dragIndexRef.current !== null && targetIndex !== null && dragIndexRef.current !== targetIndex) {
       moveTab(dragIndexRef.current, targetIndex)
     }
     dragIndexRef.current = null
+    dragOverIndexRef.current = null
+    dragTabCentersRef.current = []
     pendingDragRef.current = null
     setDraggingSessionId(null)
     setDragOffsetX(0)
@@ -447,16 +458,16 @@ export function TabBar() {
 
     const targetIndex = getTargetIndexFromClientX(event.clientX)
     if (targetIndex === null || targetIndex === dragIndexRef.current) {
-      setDragOverIndex(null)
+      updateDragOverIndex(null)
       return
     }
 
-    setDragOverIndex(targetIndex)
-  }, [getTargetIndexFromClientX])
+    updateDragOverIndex(targetIndex)
+  }, [getTargetIndexFromClientX, updateDragOverIndex])
 
   const handlePointerUp = useCallback(() => {
-    finalizeDrag(dragOverIndex)
-  }, [dragOverIndex, finalizeDrag])
+    finalizeDrag(dragOverIndexRef.current)
+  }, [finalizeDrag])
 
   useEffect(() => {
     window.addEventListener('mousemove', handlePointerMove)
@@ -478,6 +489,20 @@ export function TabBar() {
 
   const handleTabMouseDown = (event: React.MouseEvent, index: number) => {
     if (event.button !== 0) return
+    // Arm the suppression fresh for this gesture. handleTabClick is the only reader,
+    // and it is only reachable from a tab's own onClick — so a drag that releases
+    // away from any tab (below the strip, or outside the window) leaves the flag set
+    // with nothing to consume it, and the user's next tab click gets swallowed.
+    // Clearing here rather than in finalizeDrag is deliberate: `click` fires after
+    // `mouseup`, so clearing at the end of the drag would defeat the suppression it
+    // exists for.
+    suppressClickRef.current = false
+    // Freeze hit targets before the preview starts transforming. Reading the live
+    // rect of the dragged tab makes its midpoint follow the pointer and target itself.
+    dragTabCentersRef.current = tabs.map((tab) => {
+      const rect = tabRefs.current.get(tab.sessionId)?.getBoundingClientRect()
+      return rect ? rect.left + rect.width / 2 : Number.NaN
+    })
     pendingDragRef.current = { index, startX: event.clientX, startY: event.clientY }
   }
 
@@ -744,7 +769,8 @@ const TabItem = forwardRef<HTMLDivElement, {
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
       className={`
-        tab-bar-interactive tab-strip-item group relative flex min-h-[46px] min-w-[140px] max-w-[200px] flex-shrink-0 items-center rounded-t-[8px] border border-b-0 px-3
+        tab-bar-interactive tab-strip-item group relative flex min-h-[46px] flex-shrink-0 items-center rounded-t-[8px] border border-b-0 px-3
+        ${tab.type === 'settings' ? 'min-w-[195px] max-w-[195px]' : 'min-w-[140px] max-w-[200px]'}
         ${isDragging ? 'z-[var(--z-sticky)] cursor-grabbing' : 'cursor-grab'}
         transition-[background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out
         ${isActive || isDragging

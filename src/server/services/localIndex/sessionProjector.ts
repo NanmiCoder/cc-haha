@@ -24,7 +24,6 @@ import {
   reduceTranscriptWithLocators,
 } from './transcriptReducer.js'
 import type {
-  SessionListSummary,
   TranscriptChunk,
   TranscriptEntryLocator,
   TranscriptProjection,

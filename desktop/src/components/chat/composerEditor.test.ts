@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { EditorState, TextSelection } from 'prosemirror-state'
 import {
   AT_MENTION_NODE,
   buildComposerDoc,
+  composerSchema,
+  deleteAdjacentMentionAtom,
   pmPosToTextOffset,
   projectComposerDoc,
   projectedDocLength,
@@ -120,5 +123,23 @@ describe('pmPosToTextOffset / textOffsetToPmPos', () => {
   it('clamps offsets outside the document', () => {
     expect(textOffsetToPmPos(doc, 9999)).toBe(doc.content.size)
     expect(pmPosToTextOffset(doc, 9999)).toBe(text.length)
+  })
+})
+
+describe('deleteAdjacentMentionAtom', () => {
+  it.each([
+    ['Backspace after the separator', 'backward' as const, mentionToken(dirMention).length + 1],
+    ['Backspace at the atom edge', 'backward' as const, mentionToken(dirMention).length],
+    ['Delete before the atom', 'forward' as const, 0],
+  ])('removes a mention and its picker-inserted separator with %s', (_key, direction, offset) => {
+    const doc = buildComposerDoc(`${mentionToken(dirMention)} tail`, [dirMention])
+    const selection = TextSelection.near(doc.resolve(textOffsetToPmPos(doc, offset)))
+    let state = EditorState.create({ schema: composerSchema, doc, selection })
+
+    expect(deleteAdjacentMentionAtom(direction)(state, (tr) => {
+      state = state.apply(tr)
+    })).toBe(true)
+
+    expect(projectComposerDoc(state.doc)).toEqual({ text: 'tail', mentions: [] })
   })
 })

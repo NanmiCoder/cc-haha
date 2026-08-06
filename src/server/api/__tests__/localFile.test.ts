@@ -7,7 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir, homedir } from 'node:os'
+import { homedir } from 'node:os'
 import * as path from 'node:path'
 import { handleLocalFile, reconstructAbsolutePath } from '../localFile'
 import { isAllowedFilesystemPath } from '../filesystem'

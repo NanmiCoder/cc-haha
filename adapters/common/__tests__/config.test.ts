@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { getConfiguredWorkDir, loadConfig } from '../config.js'
+import { getConfiguredWorkDir, loadConfig, resolveAllowedProjectRoots } from '../config.js'
 
 describe('adapter config defaults', () => {
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -126,6 +126,189 @@ describe('adapter config defaults', () => {
     } finally {
       restoreEnv('WHATSAPP_AUTH_DIR', originalWhatsAppAuthDir)
       fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveAllowedProjectRoots', () => {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalEnvRoots = process.env.ADAPTER_ALLOWED_PROJECT_ROOTS
+  const originalAdapterDefaultWorkDir = process.env.CLAUDE_ADAPTER_DEFAULT_WORK_DIR
+  const originalPwd = process.env.PWD
+  const home = fs.realpathSync(os.homedir())
+
+  afterEach(() => {
+    restoreEnv('CLAUDE_CONFIG_DIR', originalConfigDir)
+    restoreEnv('ADAPTER_ALLOWED_PROJECT_ROOTS', originalEnvRoots)
+    restoreEnv('CLAUDE_ADAPTER_DEFAULT_WORK_DIR', originalAdapterDefaultWorkDir)
+    restoreEnv('PWD', originalPwd)
+  })
+
+  function withConfig<T>(file: Record<string, unknown>, run: (configDir: string) => T): T {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-config-'))
+    try {
+      fs.writeFileSync(path.join(configDir, 'adapters.json'), JSON.stringify(file))
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      delete process.env.ADAPTER_ALLOWED_PROJECT_ROOTS
+      return run(configDir)
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  }
+
+  // The #1191 regression: `defaultProjectDir` is the default work dir for NEW
+  // sessions, not the boundary. Deriving the only allowed root from it hid every
+  // other project from /projects on all five IM channels.
+  it('does not collapse the boundary onto the configured default project', () => {
+    const defaultProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-project-'))
+    try {
+      withConfig({ defaultProjectDir }, () => {
+        const config = loadConfig()
+        for (const platform of [config.telegram, config.feishu, config.wechat, config.dingtalk, config.whatsapp]) {
+          const roots = resolveAllowedProjectRoots(config, platform)
+          expect(roots).not.toEqual([fs.realpathSync(defaultProjectDir)])
+          expect(roots).toContain(home)
+          expect(roots).toContain(fs.realpathSync(defaultProjectDir))
+        }
+      })
+    } finally {
+      fs.rmSync(defaultProjectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults to the home directory so sibling projects stay reachable', () => {
+    withConfig({}, () => {
+      const config = loadConfig()
+      expect(resolveAllowedProjectRoots(config, config.feishu)).toContain(home)
+    })
+  })
+
+  it('uses explicitly configured global roots instead of the default', () => {
+    const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-a-'))
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-b-'))
+    try {
+      withConfig({ allowedProjectRoots: [rootA, rootB] }, () => {
+        const config = loadConfig()
+        expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([
+          fs.realpathSync(rootA),
+          fs.realpathSync(rootB),
+        ])
+      })
+    } finally {
+      fs.rmSync(rootA, { recursive: true, force: true })
+      fs.rmSync(rootB, { recursive: true, force: true })
+    }
+  })
+
+  it('lets a platform narrow the global roots', () => {
+    const globalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-global-'))
+    const feishuRoot = fs.mkdtempSync(path.join(globalRoot, 'feishu-'))
+    try {
+      withConfig({ allowedProjectRoots: [globalRoot], feishu: { allowedProjectRoots: [feishuRoot] } }, () => {
+        const config = loadConfig()
+        expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([fs.realpathSync(feishuRoot)])
+        // Other platforms keep the global roots.
+        expect(resolveAllowedProjectRoots(config, config.telegram)).toEqual([fs.realpathSync(globalRoot)])
+      })
+    } finally {
+      fs.rmSync(globalRoot, { recursive: true, force: true })
+    }
+  })
+
+  // A relative entry would resolve against the sidecar's cwd — "/" for a
+  // GUI-launched app — making the boundary depend on how the app was started.
+  it('rejects relative roots', () => {
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-'))
+    try {
+      withConfig({ allowedProjectRoots: ['..', 'relative/path', realRoot] }, () => {
+        const config = loadConfig()
+        expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([fs.realpathSync(realRoot)])
+      })
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('does not warn about duplicates as if they were missing', () => {
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-'))
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')) }
+    try {
+      withConfig({ allowedProjectRoots: [realRoot, realRoot, '~', os.homedir()] }, () => {
+        const config = loadConfig()
+        expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([
+          fs.realpathSync(realRoot),
+          home,
+        ])
+      })
+      expect(warnings.filter((line) => line.includes('do not exist') || line.includes('does not exist')))
+        .toEqual([])
+    } finally {
+      console.warn = originalWarn
+      fs.rmSync(realRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('expands ~ and drops entries that do not exist', () => {
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-root-'))
+    try {
+      withConfig({ allowedProjectRoots: [realRoot, path.join(os.tmpdir(), 'definitely-missing-root'), '~'] }, () => {
+        const config = loadConfig()
+        expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([fs.realpathSync(realRoot), home])
+      })
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true })
+    }
+  })
+
+  // Failing closed here would brick every IM command on a typo. The pairing gate
+  // is the primary authorization control; these roots are defense-in-depth.
+  it('falls back to the default when no configured root exists', () => {
+    withConfig({ allowedProjectRoots: [path.join(os.tmpdir(), 'missing-a'), path.join(os.tmpdir(), 'missing-b')] }, () => {
+      const config = loadConfig()
+      const roots = resolveAllowedProjectRoots(config, config.feishu)
+      expect(roots).toContain(home)
+      expect(roots.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('reads roots from ADAPTER_ALLOWED_PROJECT_ROOTS for standalone runs', () => {
+    const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-env-root-a-'))
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-env-root-b-'))
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-config-'))
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      process.env.ADAPTER_ALLOWED_PROJECT_ROOTS = [rootA, rootB].join(path.delimiter)
+
+      const config = loadConfig()
+      expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([
+        fs.realpathSync(rootA),
+        fs.realpathSync(rootB),
+      ])
+    } finally {
+      fs.rmSync(rootA, { recursive: true, force: true })
+      fs.rmSync(rootB, { recursive: true, force: true })
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  it('lets the env override win over both file scopes', () => {
+    const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-env-root-'))
+    const fileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-file-root-'))
+    try {
+      withConfig(
+        { allowedProjectRoots: [fileRoot], feishu: { allowedProjectRoots: [fileRoot] } },
+        () => {
+          process.env.ADAPTER_ALLOWED_PROJECT_ROOTS = envRoot
+          const config = loadConfig()
+          expect(resolveAllowedProjectRoots(config, config.feishu)).toEqual([fs.realpathSync(envRoot)])
+          expect(resolveAllowedProjectRoots(config, config.telegram)).toEqual([fs.realpathSync(envRoot)])
+        },
+      )
+    } finally {
+      fs.rmSync(envRoot, { recursive: true, force: true })
+      fs.rmSync(fileRoot, { recursive: true, force: true })
     }
   })
 })

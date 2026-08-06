@@ -484,6 +484,72 @@ describe('chatStore history mapping', () => {
     expect(mapped[3]).toMatchObject({ parentToolUseId: 'agent-1' })
   })
 
+  it('collapses replayed and blank thinking blocks from history mapping', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'assistant-snap-1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: [{ type: 'thinking', thinking: 'plan the fix' }],
+      },
+      // 流式快照整块重发：逐字相同，应丢弃
+      {
+        id: 'assistant-snap-2',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:01.000Z',
+        content: [{ type: 'thinking', thinking: 'plan the fix' }],
+      },
+      // 流式快照前缀增长：应替换为更全的新块而非追加
+      {
+        id: 'assistant-snap-3',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:02.000Z',
+        content: [{ type: 'thinking', thinking: 'plan the fix carefully' }],
+      },
+      // 纯空白块：不应产生空壳气泡
+      {
+        id: 'assistant-blank',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:03.000Z',
+        content: [{ type: 'thinking', thinking: '   \n  ' }],
+      },
+      // 相邻但内容无关的思考：合并为一个气泡
+      {
+        id: 'assistant-more',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:04.000Z',
+        content: [{ type: 'thinking', thinking: 'then run tests' }],
+      },
+      // 被工具打断后的新思考：保持独立
+      {
+        id: 'assistant-tools',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:05.000Z',
+        content: [
+          { type: 'tool_use', name: 'Bash', id: 'bash-1', input: { command: 'pwd' } },
+        ],
+      },
+      {
+        id: 'assistant-final',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:06.000Z',
+        content: [{ type: 'thinking', thinking: 'tests pass' }],
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped.map((message) => message.type)).toEqual(['thinking', 'tool_use', 'thinking'])
+    expect(mapped[0]).toMatchObject({
+      id: 'assistant-snap-1-block-0',
+      // Two finished thoughts merge into one bubble, but they are still two thoughts:
+      // the original expectation here was 'carefullythen', which pinned the missing
+      // separator as correct rather than reading it as the bug it was.
+      content: 'plan the fix carefully\n\nthen run tests',
+    })
+    expect(mapped[2]).toMatchObject({ id: 'assistant-final-block-0', content: 'tests pass' })
+  })
+
   it('maps AskUserQuestion transcript answers from toolUseResult metadata', () => {
     const messages: MessageEntry[] = [
       {
@@ -1538,6 +1604,84 @@ describe('chatStore history mapping', () => {
       },
     ])
     expect(notifyDesktopMock).not.toHaveBeenCalled()
+  })
+
+  // Both directions of the thinking merge, because one `thinking` message carries two
+  // granularities: handler.ts:2956 forwards a `thinking_delta` fragment, handler.ts:2787
+  // forwards a finished block. Concatenating the first is required; concatenating the
+  // second glued words together on screen.
+  describe('thinking blocks merge by granularity, not by content', () => {
+    it('concatenates stream fragments with nothing between them', () => {
+      useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
+      const store = useChatStore.getState()
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the ' })
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'fix' })
+
+      const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+        .filter((message) => message.type === 'thinking')
+      expect(thinking).toHaveLength(1)
+      expect(thinking?.[0]).toMatchObject({ content: 'plan the fix' })
+    })
+
+    it('separates two finished blocks so their words do not run together', () => {
+      useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
+      const store = useChatStore.getState()
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the fix carefully', complete: true })
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'then run tests', complete: true })
+
+      const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+        .filter((message) => message.type === 'thinking')
+      expect(thinking).toHaveLength(1)
+      expect(thinking?.[0]).toMatchObject({ content: 'plan the fix carefully\n\nthen run tests' })
+      expect(thinking?.[0]?.content).not.toContain('carefullythen')
+    })
+  })
+
+  // The bug this guard causes, as a test rather than a commit message. A turn can
+  // legitimately produce the same short text twice — "Done.", "好的", a one-line
+  // command result — and a mid-turn loadHistory back-fills a transcriptMessageId onto
+  // the first one by exact content match (mergeRestoredTranscriptMessageIds). The
+  // second then looks identical to a replay and is dropped at message_complete, with
+  // no recovery: appendedCompletionMessage stays false so the notification is skipped,
+  // and loadHistory's live-merge branch can annotate and filter but never re-add.
+  //
+  // d39e82b62 tried to fix this by bounding the scan to the current turn and was
+  // reverted in 3a630db11: it still dropped same-turn repeats and disarmed the guard
+  // whenever a user_text sat at the tail. Content equality cannot separate a replay
+  // from a repeat at all — the distinguishing signal is identity, which the server
+  // already computes and does not forward.
+  it('keeps a reply the agent genuinely produced twice in one turn', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [
+            { id: 'u1', type: 'user_text', content: 'rename it then delete the backup', timestamp: 1 },
+            {
+              id: 'a1',
+              type: 'assistant_text',
+              content: 'Done.',
+              timestamp: 2,
+              transcriptMessageId: 'transcript-a1',
+            },
+            { id: 't1', type: 'tool_use', toolName: 'Bash', toolUseId: 'tool-1', input: {}, timestamp: 3 },
+          ],
+          streamingText: 'Done.',
+          chatState: 'streaming',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 2 },
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const replies = session?.messages.filter(
+      (message) => message.type === 'assistant_text' && message.content.trim() === 'Done.',
+    )
+    expect(replies).toHaveLength(2)
+    expect(session?.streamingText).toBe('')
   })
 
   // Same reconnect replay as above, one block type over. A thinking UIMessage
@@ -2616,6 +2760,47 @@ describe('chatStore history mapping', () => {
       type: 'tool_use',
       input: { file_path: '/private/tmp/story.md' },
       partialInput: '{"file_path":"/private/tmp/story.md","content":"第一章\\n第二段',
+    })
+
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
+  it('exposes complete nested tool input while the tool result is still pending', () => {
+    vi.useFakeTimers()
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession(),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'ImageGen',
+      toolUseId: 'imagegen-1',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      toolInput: JSON.stringify({
+        prompt: 'change only the color',
+        count: 1,
+        input_images: [{ path: '/tmp/upload.png', role: 'edit_target' }],
+      }),
+    })
+    vi.advanceTimersByTime(60)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages[0]).toMatchObject({
+      type: 'tool_use',
+      toolName: 'ImageGen',
+      toolUseId: 'imagegen-1',
+      isPending: true,
+      input: {
+        prompt: 'change only the color',
+        count: 1,
+        input_images: [{ path: '/tmp/upload.png', role: 'edit_target' }],
+      },
     })
 
     vi.runOnlyPendingTimers()
@@ -8215,11 +8400,26 @@ describe('chatStore wake replay of a finished thinking turn', () => {
     })
   })
 
-  // Secondary gap. The reported screenshot has no reply text between the
-  // bubbles, so the observed replay carries thinking only — but the existing
-  // appendAssistantTextMessage guard would not have held either: it only
-  // matches while the tail still is the hydrated assistant message.
-  it('does not re-append replayed reply text once the tail moves past the hydrated message', () => {
+  // Reply text is deliberately NOT deduped here any more, and this test records why.
+  //
+  // de52656bb added two defences at once: uuid dedup on the server, and a content-
+  // equality scan in this store. Only the first can be correct — the second cannot
+  // tell a replay from a reply the model genuinely produced twice, and it dropped the
+  // second one with no way to get it back (see 'keeps a reply the agent genuinely
+  // produced twice in one turn'). d39e82b62 tried to bound the scan and was reverted
+  // in 3a630db11.
+  //
+  // Removing it is safe because a whole-turn replay cannot reach this store: the SDK
+  // channel has exactly one ingress, handler.ts:583 -> handleSdkPayload, which drops
+  // every already-seen uuid at conversationService.ts:1047 before parsing goes any
+  // further. Its 2000-uuid window covers the worst case de52656bb measured, 858
+  // messages replayed 31 times.
+  //
+  // So this asserts what the store is actually responsible for: replayed text arrives
+  // as normal text and is appended: the identity check belongs upstream. The thinking
+  // case above still dedupes, because a thinking block carries no id at all — that
+  // guard has no identity-based alternative to defer to.
+  it('appends replayed reply text, leaving replay identity to the server', () => {
     const assistantTextOf = () => (useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? [])
       .filter((message) => message.type === 'assistant_text')
       .map((message) => message.content)
@@ -8227,7 +8427,7 @@ describe('chatStore wake replay of a finished thinking turn', () => {
 
     replayFinishedTurn({ withText: true })
 
-    expect(assistantTextOf()).toEqual(before)
+    expect(assistantTextOf().length).toBeGreaterThan(before.length)
   })
 })
 

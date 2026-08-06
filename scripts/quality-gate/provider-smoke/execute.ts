@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { ProviderService } from '../../../src/server/services/providerService'
+import { createQualityGateSandbox } from '../sandbox'
 import type { BaselineTarget, LaneResult } from '../types'
 
 type SavedProvider = Awaited<ReturnType<ProviderService['getProvider']>>
@@ -57,12 +58,16 @@ async function runProxyProbe(
   const serverLogPath = join(artifactDir, 'proxy-server.log')
   ProviderService.setServerPort(port)
 
+  // The proxy probe needs the saved provider, but the spawned server must not write
+  // diagnostics, session index, or settings into the developer's real ~/.claude.
+  // Seed a throwaway config dir with the provider state and nothing else.
+  const sandbox = createQualityGateSandbox({ label: 'provider-smoke', seedProviders: true })
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
-      ...process.env,
+      ...sandbox.env,
       SERVER_PORT: String(port),
     },
   })
@@ -114,6 +119,11 @@ async function runProxyProbe(
   } finally {
     server.kill()
     await server.exited.catch(() => undefined)
+    const mutations = sandbox.detectUserStateMutations()
+    sandbox.cleanup()
+    if (mutations.length > 0) {
+      throw new Error(`provider smoke wrote to the developer's real config: ${mutations.join(', ')}`)
+    }
   }
 }
 

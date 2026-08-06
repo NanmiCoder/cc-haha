@@ -250,12 +250,13 @@ export type DesktopPetWindowDrag = {
  * Which side of the mascot the host wants the activity panel drawn on.
  *
  * The mascot is clamped to the display edge through the window's transparent
- * padding, so at the top of the screen the panel that shares that padding ends
- * up behind the menu bar. Only the host knows the window position and the work
- * area, so it decides and the renderer follows.
+ * padding, so at a display edge the wider panel that shares that padding ends
+ * up off-screen. Only the host knows the window position and the work area, so
+ * it decides and the renderer follows.
  */
 export type DesktopPetPanelPlacement = {
   vertical: 'above' | 'below'
+  horizontal: 'center' | 'left' | 'right'
 }
 
 export type AppModeConfig = SettingsAppModeConfig

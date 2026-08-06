@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 
 export type ReconciliationBatch = {
   paths: string[]

@@ -26,21 +26,64 @@ Rules closer to the code take precedence. Before editing `.github/`, `src/`, `de
 
 - Make narrow, owned diffs. Every changed line must trace to the request, a failing test, or a verified compatibility constraint.
 - Prefer existing utilities, stores, services, and test harnesses. Do not add dependencies or speculative abstractions unless the task requires them.
-- Production changes under `src/`, `desktop/src/`, or `adapters/` require a same-area regression test unless a maintainer explicitly approves an exception.
+- Production changes under `src/`, `desktop/src/`, or `adapters/` require a same-area regression test unless a maintainer explicitly approves an exception. A test that only covers the hop you just changed satisfies this rule and still lets the next change break — see "Writing a test that holds" below.
 - Keep TypeScript ESM style: 2-space indentation, no semicolons, `PascalCase` components, and `camelCase` functions/hooks/stores.
 - Use structured parsers and existing boundaries instead of ad hoc string manipulation. Add comments only for non-obvious control flow or external constraints.
 - Do not commit generated output such as `artifacts/`, coverage reports, `node_modules/`, build directories, or Rust `target/` trees.
 - When publishing is explicitly requested, use Conventional Commit subjects and normal product branch prefixes such as `fix/`, `feat/`, or `docs/`; do not create `codex/` branches in this repository.
 
+## Writing a Test That Holds
+
+Most regressions here are repairs of a recent repair: 21 of the last 70 `fix` commits
+edit lines another `fix` wrote within 30 days. Coverage is not the missing signal —
+`ContextUsageIndicator.tsx` sits at 87% branch coverage and was fixed three times in
+ninety minutes. What those tests had in common is shape, so choose it deliberately.
+
+- **Drive the transition; never hand-write the state it produces.** Component tests in
+  `desktop/src` call `setState` 744 times and a real store action 3 times. State you
+  assigned is self-consistent by construction and cannot expose "transition A did not
+  update B" — which is where these bugs live. Use `handleServerMessage`, store actions,
+  and real user events.
+- **Assert the invariant, not today's output.** `2262973a4` shipped
+  `expect(getByText('deepseek-reasoner'))` at a moment when the screen showed another
+  model's number: it wrote the bug in as a passing assertion, and the next fix had to
+  invert that exact line. Ask what must be true after this step, not what it prints now.
+- **Cover both directions of any rule that drops or merges something.** The replay guard
+  was tested for "a replay must be discarded" and never for "a genuine repeat must be
+  kept", so it shipped dropping real replies.
+- **Test the join, not each end.** Server, store, and component each had a test for
+  `runtime_config_applied`; nothing crossed them, and deleting the term that joins them
+  (`ChatInput.tsx` `refreshNonce`) left 314 tests green.
+- **Never retune an existing test's inputs to keep it green.** `128f75ab5` changed five
+  tests' props (`messageCount={0}` → `{1}`) instead of accepting that they described
+  states a real session cannot reach. If a test only passes after you edit its inputs,
+  the test was describing the implementation.
+- **Do not mock the module under test.** A hand-written factory freezes an interface
+  snapshot: the store can be renamed or gutted and the test still passes.
+- **If you are comparing content to decide identity, the identity exists upstream.**
+  Deduping by text cannot separate a replay from a legitimate repeat; forward the id
+  (`uuid`, `toolUseId`) instead of guessing.
+
+Blind spots to check rather than trust:
+
+- `desktop/electron/` is not instrumented at all (`vitest.config.ts` collects only
+  `desktop/src`), so main-process diffs score zero covered lines.
+- Bun's LCOV emits no branch records, so `src/` and `adapters/` report **100% branch
+  coverage** for data that was never collected (`pct(0, 0) === 100`). Only `desktop/`
+  has real branch numbers.
+
 ## Verification
 
 1. Run the narrowest relevant test while iterating.
-2. Run `bun run check:impact`; every command it selects is part of the minimum handoff for the current diff.
+2. Run `bun run check:impact`; every command it selects is part of the minimum handoff for the current diff. Selection is import-aware: a change is routed to every surface that imports it, not only to its own directory. The report's `## Cross-surface impact` section names the importer that pulled in each extra check.
 3. Run `bun run verify` only when full validation is requested or before claiming a code change is PR-ready or push-ready.
 
 Additional invariants:
 
 - Required PR checks must be deterministic and work on an untrusted fork: no real models, public network, repository secrets, saved providers, or real user home/config. Use fake credentials, fixtures, mocked/loopback transports, temporary directories, and explicit cleanup.
+- `bun run check:agent-flow` is the deterministic end-to-end agent lane: it drives the real server and WebSocket through session creation, runtime selection, streaming, tool permission allow/deny, tool failure, API error, interrupt, reconnect replay, and session recovery using the repository's mock SDK CLI. It needs no provider, credentials, or network, so every contributor can run it.
+- `bun run check:desktop-ui-smoke` drives the real desktop UI against that same mock runtime and answers the permission dialog by clicking the real button. It skips with a printed reason when `agent-browser` or desktop dependencies are missing.
+- Quality-gate lanes that boot the real server must run in a sandbox config dir (`scripts/quality-gate/sandbox.ts`) and fail if they wrote to the developer's real `~/.claude`.
 - Provider/auth/proxy/runtime changes may select `bun run check:provider-contract`; desktop chat/WebSocket/session changes may select `bun run check:chat-contract`. These contracts are offline and do not replace their selected surface checks.
 - Any persisted JSON, `localStorage`, or app-config shape change requires a forward migration, an old-fixture regression test, and `bun run check:persistence-upgrade`.
 - User-visible desktop or cross-process behavior needs an actual browser/desktop smoke path when unit tests cannot prove the workflow.
