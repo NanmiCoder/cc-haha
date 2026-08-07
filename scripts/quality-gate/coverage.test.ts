@@ -123,6 +123,24 @@ describe('coverage gate helpers', () => {
     expect(parseBunTestFileCount('process terminated before summary')).toBeNull()
   })
 
+  test('counts unique GitHub Actions test groups when Bun omits the summary', () => {
+    const output = [
+      '39 tests failed:',
+      '::group::src/bridge/inboundAttachments.test.ts:',
+      '::endgroup::',
+      '::group::src/cli/structuredIO.test.ts:',
+      '::endgroup::',
+      '::group::src/bridge/inboundAttachments.test.ts:',
+      '::endgroup::',
+      '::group::src\\bridge\\inboundAttachments.test.ts:',
+      '::endgroup::',
+      '::group::coverage summary:',
+      '::endgroup::',
+    ].join('\r\n')
+
+    expect(parseBunTestFileCount(output)).toBe(2)
+  })
+
   test('rejects empty aggregate coverage summaries', () => {
     expect(hasUsableCoverageSummary({
       lines: { total: 0, covered: 0, pct: 100 },
