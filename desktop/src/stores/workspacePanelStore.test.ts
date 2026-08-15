@@ -895,4 +895,192 @@ describe('workspacePanelStore', () => {
     expect(state.errors.previewRefreshStateByTabId['session-clear::file:src/a.ts']).toBeUndefined()
     expect(state.errors.previewRefreshStateByTabId['session-reset::file:src/b.ts']).toBeUndefined()
   })
+
+  it('refreshes root and all expanded directories for a session', async () => {
+    mocks.getWorkspaceTreeMock
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: '',
+        entries: [{ name: 'src', path: 'src', isDirectory: true }],
+      })
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src',
+        entries: [{ name: 'components', path: 'src/components', isDirectory: true }],
+      })
+      .mockResolvedValueOnce({
+        state: 'ok',
+        path: 'src/components',
+        entries: [{ name: 'Button.tsx', path: 'src/components/Button.tsx', isDirectory: false }],
+      })
+
+    useWorkspacePanelStore.setState({
+      expandedPathsBySession: {
+        'session-refresh-tree': ['src', 'src/components'],
+      },
+    })
+
+    await useWorkspacePanelStore.getState().refreshWorkspaceTree('session-refresh-tree')
+
+    expect(mocks.getWorkspaceTreeMock).toHaveBeenCalledTimes(3)
+    expect(mocks.getWorkspaceTreeMock).toHaveBeenCalledWith('session-refresh-tree', '')
+    expect(mocks.getWorkspaceTreeMock).toHaveBeenCalledWith('session-refresh-tree', 'src')
+    expect(mocks.getWorkspaceTreeMock).toHaveBeenCalledWith('session-refresh-tree', 'src/components')
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-refresh-tree']).toMatchObject({
+      '': { entries: [{ path: 'src' }] },
+      src: { entries: [{ path: 'src/components' }] },
+      'src/components': { entries: [{ path: 'src/components/Button.tsx' }] },
+    })
+  })
+
+  it('retains existing tree cache while refresh calls are pending', async () => {
+    const rootDeferred = deferred<{ state: 'ok'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }>()
+    const srcDeferred = deferred<{ state: 'ok'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }>()
+
+    useWorkspacePanelStore.setState({
+      expandedPathsBySession: {
+        'session-pending-cache': ['src'],
+      },
+      treeBySessionPath: {
+        'session-pending-cache': {
+          '': {
+            state: 'ok',
+            path: '',
+            entries: [{ name: 'src', path: 'src', isDirectory: true }],
+          },
+          src: {
+            state: 'ok',
+            path: 'src',
+            entries: [{ name: 'old.ts', path: 'src/old.ts', isDirectory: false }],
+          },
+        },
+      },
+    })
+
+    mocks.getWorkspaceTreeMock.mockImplementation(async (_sessionId: string, path: string) => {
+      if (path === '') return rootDeferred.promise
+      if (path === 'src') return srcDeferred.promise
+      return { state: 'ok', path, entries: [] }
+    })
+
+    const refreshPromise = useWorkspacePanelStore.getState().refreshWorkspaceTree('session-pending-cache')
+
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-pending-cache']?.['']?.entries).toEqual([
+      { name: 'src', path: 'src', isDirectory: true },
+    ])
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-pending-cache']?.['src']?.entries).toEqual([
+      { name: 'old.ts', path: 'src/old.ts', isDirectory: false },
+    ])
+
+    rootDeferred.resolve({
+      state: 'ok',
+      path: '',
+      entries: [{ name: 'src', path: 'src', isDirectory: true }],
+    })
+    srcDeferred.resolve({
+      state: 'ok',
+      path: 'src',
+      entries: [{ name: 'new.ts', path: 'src/new.ts', isDirectory: false }],
+    })
+
+    await refreshPromise
+
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-pending-cache']?.['src']?.entries).toEqual([
+      { name: 'new.ts', path: 'src/new.ts', isDirectory: false },
+    ])
+  })
+
+  it('preserves other directories and expanded state when a refreshed directory returns an error', async () => {
+    useWorkspacePanelStore.setState({
+      expandedPathsBySession: {
+        'session-error-tree': ['src', 'docs'],
+      },
+      treeBySessionPath: {
+        'session-error-tree': {
+          '': {
+            state: 'ok',
+            path: '',
+            entries: [
+              { name: 'src', path: 'src', isDirectory: true },
+              { name: 'docs', path: 'docs', isDirectory: true },
+            ],
+          },
+          src: {
+            state: 'ok',
+            path: 'src',
+            entries: [{ name: 'index.ts', path: 'src/index.ts', isDirectory: false }],
+          },
+          docs: {
+            state: 'ok',
+            path: 'docs',
+            entries: [{ name: 'readme.md', path: 'docs/readme.md', isDirectory: false }],
+          },
+        },
+      },
+    })
+
+    mocks.getWorkspaceTreeMock.mockImplementation(async (_sessionId: string, path: string) => {
+      if (path === '') {
+        return {
+          state: 'ok',
+          path: '',
+          entries: [
+            { name: 'src', path: 'src', isDirectory: true },
+            { name: 'docs', path: 'docs', isDirectory: true },
+          ],
+        }
+      }
+      if (path === 'src') {
+        return {
+          state: 'ok',
+          path: 'src',
+          entries: [{ name: 'index.ts', path: 'src/index.ts', isDirectory: false }, { name: 'app.ts', path: 'src/app.ts', isDirectory: false }],
+        }
+      }
+      if (path === 'docs') {
+        return {
+          state: 'error',
+          path: 'docs',
+          error: 'Access denied',
+        }
+      }
+      return { state: 'ok', path, entries: [] }
+    })
+
+    await useWorkspacePanelStore.getState().refreshWorkspaceTree('session-error-tree')
+
+    expect(useWorkspacePanelStore.getState().expandedPathsBySession['session-error-tree']).toEqual(['src', 'docs'])
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-error-tree']?.['src']?.entries).toHaveLength(2)
+    expect(useWorkspacePanelStore.getState().errors.treeBySessionPath['session-error-tree::docs']).toBe('Access denied')
+  })
+
+  it('ensures the latest response wins when refreshWorkspaceTree is called concurrently', async () => {
+    const firstRoot = deferred<{ state: 'ok'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }>()
+    const secondRoot = deferred<{ state: 'ok'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }>()
+
+    mocks.getWorkspaceTreeMock
+      .mockReturnValueOnce(firstRoot.promise)
+      .mockReturnValueOnce(secondRoot.promise)
+
+    const firstRefresh = useWorkspacePanelStore.getState().refreshWorkspaceTree('session-concurrent-refresh')
+    const secondRefresh = useWorkspacePanelStore.getState().refreshWorkspaceTree('session-concurrent-refresh')
+
+    secondRoot.resolve({
+      state: 'ok',
+      path: '',
+      entries: [{ name: 'latest.ts', path: 'latest.ts', isDirectory: false }],
+    })
+    await secondRefresh
+
+    firstRoot.resolve({
+      state: 'ok',
+      path: '',
+      entries: [{ name: 'stale.ts', path: 'stale.ts', isDirectory: false }],
+    })
+    await firstRefresh
+
+    expect(useWorkspacePanelStore.getState().treeBySessionPath['session-concurrent-refresh']?.['']?.entries).toEqual([
+      { name: 'latest.ts', path: 'latest.ts', isDirectory: false },
+    ])
+  })
 })
