@@ -345,6 +345,7 @@ type ChatStore = {
     guard?: {
       messages: UIMessage[]
       backgroundAgentTasks?: Record<string, BackgroundAgentTask>
+      preserveUnrestoredCurrentUserMessage?: boolean
     },
   ) => Promise<void>
   queueComposerPrefill: (
@@ -1507,6 +1508,58 @@ function mergeRestoredHistoryIntoLiveMessages(
   )
 }
 
+function preserveUnrestoredCurrentUserMessage(
+  restoredMessages: UIMessage[],
+  liveMessages: UIMessage[],
+): UIMessage[] {
+  let liveUserIndex = -1
+  for (let index = liveMessages.length - 1; index >= 0; index--) {
+    if (liveMessages[index]?.type !== 'user_text') continue
+    liveUserIndex = index
+    break
+  }
+  if (liveUserIndex === -1) return restoredMessages
+
+  const liveUser = liveMessages[liveUserIndex]
+  if (liveUser?.type !== 'user_text') return restoredMessages
+
+  const restoredHasUser = liveUser.transcriptMessageId
+    ? restoredMessages.some((message) =>
+        message.type === 'user_text' &&
+        message.transcriptMessageId === liveUser.transcriptMessageId)
+    : restoredMessages.filter((message) =>
+        message.type === 'user_text' &&
+        message.content.trim() === liveUser.content.trim()).length >=
+      liveMessages.slice(0, liveUserIndex + 1).filter((message) =>
+        message.type === 'user_text' &&
+        message.content.trim() === liveUser.content.trim()).length
+  if (restoredHasUser) return restoredMessages
+
+  const liveReply = liveMessages.slice(liveUserIndex + 1).find((message) =>
+    message.type === 'assistant_text' && message.content.trim().length > 0)
+  let insertionIndex = liveReply?.type === 'assistant_text'
+    ? restoredMessages.findIndex((message) =>
+        message.type === 'assistant_text' &&
+        (
+          (liveReply.transcriptMessageId &&
+            message.transcriptMessageId === liveReply.transcriptMessageId) ||
+          message.content.trim() === liveReply.content.trim()
+        ))
+    : -1
+
+  if (insertionIndex === -1) {
+    insertionIndex = restoredMessages.findIndex((message) =>
+      message.timestamp >= liveUser.timestamp)
+  }
+  if (insertionIndex === -1) insertionIndex = restoredMessages.length
+
+  return [
+    ...restoredMessages.slice(0, insertionIndex),
+    liveUser,
+    ...restoredMessages.slice(insertionIndex),
+  ]
+}
+
 function needsTranscriptIdHydrationRetry(session: PerSessionState | undefined): boolean {
   if (!session || session.chatState !== 'idle') return false
 
@@ -1556,6 +1609,7 @@ function reconcileCompletedTranscriptHistory(
   void get().reloadHistory(sessionId, {
     messages: session.messages,
     backgroundAgentTasks: session.backgroundAgentTasks,
+    preserveUnrestoredCurrentUserMessage: true,
   })
 }
 
@@ -2430,7 +2484,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           session.backgroundAgentTasks ?? {},
           restoredBackgroundTasks,
         )
-        const messages = mergeBackgroundTaskMessages(uiMessages, backgroundAgentTasks)
+        let messages = mergeBackgroundTaskMessages(uiMessages, backgroundAgentTasks)
+        if (guard?.preserveUnrestoredCurrentUserMessage) {
+          messages = preserveUnrestoredCurrentUserMessage(messages, guard.messages)
+        }
         historyApplied = true
         return {
           sessions: updateSessionIn(state.sessions, sessionId, () => ({
