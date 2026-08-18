@@ -10,9 +10,17 @@ export const OFFICIAL_MODELS: ModelInfo[] = [
     context: '1m',
   },
   {
+    id: 'claude-opus-5',
+    name: 'Opus 5',
+    description: 'Best for complex agentic coding and enterprise work',
+    context: '1m',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-opus-4-8',
     name: 'Opus 4.8',
-    description: 'Best for complex agentic coding and enterprise work',
+    description: 'Previous Opus version',
     context: '1m',
     defaultReasoningEffort: 'high',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],

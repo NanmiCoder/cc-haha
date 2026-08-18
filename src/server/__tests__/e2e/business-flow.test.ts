@@ -374,9 +374,10 @@ describe('Business Flow: Models & Effort', () => {
 
   it('should return available fallback models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(4)
+    expect(data.models.length).toBe(5)
     const names = data.models.map((m: any) => m.name)
     expect(names).toContain('Fable 5')
+    expect(names).toContain('Opus 5')
     expect(names).toContain('Opus 4.8')
     expect(names).toContain('Sonnet 5')
     expect(names).toContain('Haiku 4.5')
@@ -417,7 +418,7 @@ describe('Business Flow: Models & Effort', () => {
   it('should default effort to max', async () => {
     const { data } = await api('GET', '/api/effort')
     expect(data.level).toBe('max')
-    expect(data.available).toEqual(['low', 'medium', 'high', 'max'])
+    expect(data.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('should set effort to max', async () => {
