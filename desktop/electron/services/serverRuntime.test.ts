@@ -48,6 +48,10 @@ function writeAdapterConfig(platforms: {
   whatsapp?: boolean
 }): void {
   const whatsappAuthDir = path.join(isolatedConfigDir, 'whatsapp-auth')
+  // Rewrite, not merge: WhatsApp is credentialed by a file on disk, so leaving
+  // a previous call's creds.json behind would keep it "configured" no matter
+  // what this call declares.
+  rmSync(whatsappAuthDir, { recursive: true, force: true })
   if (platforms.whatsapp) {
     mkdirSync(whatsappAuthDir, { recursive: true })
     writeFileSync(path.join(whatsappAuthDir, 'creds.json'), '{}')

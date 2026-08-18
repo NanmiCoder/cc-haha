@@ -287,7 +287,7 @@ export class ElectronServerRuntime {
    */
   private readAdapterConfig(): AdapterConfig | null {
     try {
-      return loadConfig({ configDir: this.baseEnv.CLAUDE_CONFIG_DIR })
+      return loadConfig({ configDir: this.baseEnv.CLAUDE_CONFIG_DIR, strict: true })
     } catch (error) {
       console.error('[desktop] failed to read adapter config; starting all adapters', error)
       return null

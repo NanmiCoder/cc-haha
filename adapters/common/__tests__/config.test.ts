@@ -415,6 +415,36 @@ describe('isAdapterConfigured', () => {
   it('treats a blank authDir as unconfigured rather than resolving to cwd', () => {
     expect(hasWhatsAppCreds('')).toBe(false)
   })
+
+  it('distinguishes a malformed config from an empty one only in strict mode', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-malformed-'))
+    try {
+      fs.writeFileSync(path.join(configDir, 'adapters.json'), 'not json at all')
+
+      // Lenient (the sidecar's path) keeps working off defaults.
+      expect(() => loadConfig({ configDir })).not.toThrow()
+      expect(isAdapterConfigured(loadConfig({ configDir }), 'telegram')).toBe(false)
+
+      // Strict lets a caller tell "cannot read" apart from "nothing
+      // configured" — otherwise a typo is indistinguishable from an empty
+      // config and would silently disable every working adapter.
+      expect(() => loadConfig({ configDir, strict: true })).toThrow()
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a missing config file as empty even in strict mode', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-missing-'))
+    try {
+      expect(() => loadConfig({ configDir, strict: true })).not.toThrow()
+      const configured = ADAPTER_PLATFORMS.filter((platform) =>
+        isAdapterConfigured(loadConfig({ configDir, strict: true }), platform))
+      expect(configured).toEqual([])
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
 })
 
 function restoreEnv(key: string, value: string | undefined): void {

@@ -141,13 +141,17 @@ function getConfigPath(configDir?: string): string {
   return path.join(dir, 'adapters.json')
 }
 
-function loadFile(configDir?: string): Record<string, any> {
+function loadFile(configDir?: string, strict = false): Record<string, any> {
   try {
     return JSON.parse(fs.readFileSync(getConfigPath(configDir), 'utf-8'))
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      console.warn(`[Config] Failed to parse ${getConfigPath(configDir)}, using defaults`)
-    }
+    // A missing file is a valid state — nothing is configured yet — and stays
+    // silent in both modes. A malformed file is a real error, which strict
+    // callers need to tell apart from "no adapters configured" before acting
+    // on the difference.
+    if (err?.code === 'ENOENT') return {}
+    if (strict) throw err
+    console.warn(`[Config] Failed to parse ${getConfigPath(configDir)}, using defaults`)
     return {}
   }
 }
@@ -160,10 +164,15 @@ export type LoadConfigOptions = {
    * process.env matching.
    */
   configDir?: string
+  /**
+   * Throw instead of falling back to defaults when adapters.json exists but
+   * cannot be parsed. A missing file is still an empty config, not an error.
+   */
+  strict?: boolean
 }
 
 export function loadConfig(options?: LoadConfigOptions): AdapterConfig {
-  const file = loadFile(options?.configDir)
+  const file = loadFile(options?.configDir, options?.strict)
   const tg = file.telegram ?? {}
   const fs_ = file.feishu ?? {}
   const wc = file.wechat ?? {}
