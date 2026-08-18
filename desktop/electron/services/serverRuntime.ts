@@ -27,6 +27,11 @@ import {
 } from './sidecarManager'
 import { readDesktopTerminalConfig, resolveDesktopTerminalShell } from './terminal'
 import {
+  isAdapterConfigured,
+  loadConfig,
+  type AdapterConfig,
+} from '../../../adapters/common/config'
+import {
   SystemProxyBridge,
   type SystemProxyBridgeLike,
 } from './systemProxyBridge'
@@ -273,6 +278,22 @@ export class ElectronServerRuntime {
     if (generation !== this.lifecycleGeneration) throw new Error('server startup stopped')
   }
 
+  /**
+   * Read adapter credentials, or null when they cannot be read.
+   *
+   * Returning null deliberately falls back to spawning every adapter: a
+   * config that cannot be parsed should not silently disable working
+   * integrations. The sidecar still refuses to start uncredentialed adapters.
+   */
+  private readAdapterConfig(): AdapterConfig | null {
+    try {
+      return loadConfig({ configDir: this.baseEnv.CLAUDE_CONFIG_DIR })
+    } catch (error) {
+      console.error('[desktop] failed to read adapter config; starting all adapters', error)
+      return null
+    }
+  }
+
   private async startAdaptersSidecars(
     serverUrl: string,
     startState?: ServerStartState,
@@ -291,6 +312,10 @@ export class ElectronServerRuntime {
     if (!isCurrentGeneration()) return
     const ownedAdapters = startState?.adapterChildren
       ?? activeServer?.adapterChildren
+    // Spawning an adapter without credentials costs a process launch and
+    // produces a guaranteed exit(1), so ask the same question the sidecar
+    // would ask on startup before paying for it.
+    const adapterConfig = this.readAdapterConfig()
     for (const [label, flag] of [
       ['feishu', '--feishu'],
       ['telegram', '--telegram'],
@@ -299,6 +324,7 @@ export class ElectronServerRuntime {
       ['whatsapp', '--whatsapp'],
     ] as const) {
       if (!isCurrentGeneration()) break
+      if (adapterConfig && !isAdapterConfigured(adapterConfig, label)) continue
       try {
         const child = this.deps.spawnSidecar(createAdapterPlan({
           desktopRoot: this.desktopRoot,

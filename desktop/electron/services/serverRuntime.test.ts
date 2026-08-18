@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -33,6 +33,46 @@ const sidecarMocks = {
 }
 
 let isolatedConfigDir = ''
+
+/**
+ * Write adapters.json into the isolated config dir.
+ *
+ * Adapters only spawn when credentials are present, so tests that assert on
+ * adapter lifecycle have to declare which platforms are configured.
+ */
+function writeAdapterConfig(platforms: {
+  telegram?: boolean
+  feishu?: boolean
+  wechat?: boolean
+  dingtalk?: boolean
+  whatsapp?: boolean
+}): void {
+  const whatsappAuthDir = path.join(isolatedConfigDir, 'whatsapp-auth')
+  if (platforms.whatsapp) {
+    mkdirSync(whatsappAuthDir, { recursive: true })
+    writeFileSync(path.join(whatsappAuthDir, 'creds.json'), '{}')
+  }
+  writeFileSync(
+    path.join(isolatedConfigDir, 'adapters.json'),
+    JSON.stringify({
+      ...(platforms.telegram ? { telegram: { botToken: 'test-bot-token' } } : {}),
+      ...(platforms.feishu ? { feishu: { appId: 'test-app-id', appSecret: 'test-app-secret' } } : {}),
+      ...(platforms.wechat ? { wechat: { accountId: 'test-account', botToken: 'test-token' } } : {}),
+      ...(platforms.dingtalk
+        ? { dingtalk: { clientId: 'test-client-id', clientSecret: 'test-client-secret' } }
+        : {}),
+      whatsapp: { authDir: whatsappAuthDir },
+    }),
+  )
+}
+
+const ALL_ADAPTERS_CONFIGURED = {
+  telegram: true,
+  feishu: true,
+  wechat: true,
+  dingtalk: true,
+  whatsapp: true,
+} as const
 
 class FakeSidecarChild extends EventEmitter {
   readonly stdout = new PassThrough()
@@ -77,6 +117,7 @@ async function waitForServerChildren(count: number): Promise<void> {
 describe('ElectronServerRuntime', () => {
   beforeEach(() => {
     isolatedConfigDir = mkdtempSync(path.join(tmpdir(), 'cc-haha-electron-runtime-'))
+    writeAdapterConfig(ALL_ADAPTERS_CONFIGURED)
     sidecarMocks.nextPort = 49321
     sidecarMocks.spawnError = null
     sidecarMocks.serverChildren.length = 0
@@ -90,6 +131,42 @@ describe('ElectronServerRuntime', () => {
 
   afterEach(() => {
     rmSync(isolatedConfigDir, { recursive: true, force: true })
+  })
+
+  it('only spawns adapters that have credentials', async () => {
+    writeAdapterConfig({ telegram: true })
+
+    const runtime = createRuntime({ appRoot: '/isolated/app' })
+    await runtime.getServerUrl()
+
+    expect(sidecarMocks.adapterChildren).toHaveLength(1)
+    // createAdapterPlan builds ['adapters', '--app-root', <root>, <flag>],
+    // so the platform flag is the trailing arg.
+    const adapterFlags = sidecarMocks.spawnSidecar.mock.calls
+      .map(([plan]) => plan.args)
+      .filter(args => args[0] === 'adapters')
+      .map(args => args.at(-1))
+    expect(adapterFlags).toEqual(['--telegram'])
+  })
+
+  it('spawns no adapters when adapters.json declares no credentials', async () => {
+    writeAdapterConfig({})
+
+    const runtime = createRuntime({ appRoot: '/isolated/app' })
+    await runtime.getServerUrl()
+
+    expect(sidecarMocks.adapterChildren).toHaveLength(0)
+  })
+
+  it('falls back to spawning every adapter when the config cannot be read', async () => {
+    writeFileSync(path.join(isolatedConfigDir, 'adapters.json'), 'not json at all')
+
+    const runtime = createRuntime({ appRoot: '/isolated/app' })
+    await runtime.getServerUrl()
+
+    // An unreadable config must not silently disable working integrations;
+    // the sidecar still refuses uncredentialed adapters on its own.
+    expect(sidecarMocks.adapterChildren).toHaveLength(5)
   })
 
   it('restarts after the active healthy server exits and ignores its late exit', async () => {

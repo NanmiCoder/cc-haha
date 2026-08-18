@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { hasWhatsAppCreds } from '../common/config'
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -17,7 +18,7 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401
 const credsSaveQueues = new Map<string, Promise<void>>()
 
 export function hasWhatsAppAuth(authDir: string): boolean {
-  return fs.existsSync(resolveCredsPath(authDir))
+  return hasWhatsAppCreds(authDir)
 }
 
 export function clearWhatsAppAuth(authDir: string): void {
