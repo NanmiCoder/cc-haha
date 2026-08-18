@@ -1186,7 +1186,7 @@ describe('Models API', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.level).toBe('max')
-    expect(body.available).toEqual(['low', 'medium', 'high', 'max'])
+    expect(body.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('GET /api/effort should fall back when stored effort is stale', async () => {
@@ -1199,7 +1199,7 @@ describe('Models API', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.level).toBe('max')
-    expect(body.available).toEqual(['low', 'medium', 'high', 'max'])
+    expect(body.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('PUT /api/effort should set effort level', async () => {
@@ -1216,6 +1216,32 @@ describe('Models API', () => {
     const { req, url, segments } = makeRequest('PUT', '/api/effort', { level: 'turbo' })
     const res = await handleModelsApi(req, url, segments)
     expect(res.status).toBe(400)
+  })
+
+  it('PUT /api/effort should accept xhigh', async () => {
+    const { req, url, segments } = makeRequest('PUT', '/api/effort', { level: 'xhigh' })
+    const res = await handleModelsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.level).toBe('xhigh')
+  })
+
+  it('GET /api/effort should preserve a stored xhigh instead of falling back', async () => {
+    const settingsSvc = new SettingsService()
+    await settingsSvc.updateUserSettings({ effort: 'xhigh' })
+
+    const { req, url, segments } = makeRequest('GET', '/api/effort')
+    const res = await handleModelsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // The runtime already honours a stored xhigh (getDefaultRuntimeSettings
+    // reads userSettings.effort directly), so normalising it away here made the
+    // UI disagree with what the session actually ran at.
+    expect(body.level).toBe('xhigh')
+    expect(body.available).toContain('xhigh')
   })
 
   it('should return 404 for unknown models endpoint', async () => {

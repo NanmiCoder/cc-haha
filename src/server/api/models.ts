@@ -75,7 +75,13 @@ const DEFAULT_MODELS = [
   },
 ] as const
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'max'] as const
+// Keep in step with VALID_SESSION_EFFORT_LEVELS (services/sessionService.ts),
+// EFFORT_LEVELS (desktop/src/lib/persistenceMigrations.ts) and the per-model
+// supportedReasoningEfforts in desktop/src/constants/modelCatalog.ts. Omitting
+// a level here does not disable it — the runtime reads userSettings.effort
+// directly — it only makes the level unreachable through this endpoint while
+// still being live in the session.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 const DEFAULT_MODEL = 'claude-opus-4-8'
 const DEFAULT_EFFORT = 'max'
