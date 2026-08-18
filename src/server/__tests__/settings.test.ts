@@ -720,9 +720,17 @@ describe('Models API', () => {
         context: '1m',
       },
       {
+        id: 'claude-opus-5',
+        name: 'Opus 5',
+        description: 'Best for complex agentic coding and enterprise work',
+        context: '1m',
+        defaultReasoningEffort: 'high',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+      {
         id: 'claude-opus-4-8',
         name: 'Opus 4.8',
-        description: 'Best for complex agentic coding and enterprise work',
+        description: 'Previous Opus version',
         context: '1m',
         defaultReasoningEffort: 'high',
         supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -932,6 +940,7 @@ describe('Models API', () => {
     const listBody = await listResponse.json()
     expect(listBody.models.map((model: { id: string }) => model.id)).toEqual([
       'claude-fable-5',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-sonnet-5',
       'claude-haiku-4-5',
