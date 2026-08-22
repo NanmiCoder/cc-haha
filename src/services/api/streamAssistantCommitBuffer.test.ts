@@ -40,4 +40,18 @@ describe('StreamAssistantCommitBuffer', () => {
     expect(buffer.add(serverTool, 'server_tool_use')).toEqual([serverTool])
     expect(buffer.hasCrossedSideEffectBoundary()).toBe(true)
   })
+
+  test('can defer tool blocks until the response stop reason is known', () => {
+    const buffer = new StreamAssistantCommitBuffer<ReturnType<typeof assistant>>({
+      deferToolUseCommit: true,
+    })
+    const thinking = assistant('thinking')
+    const tool = assistant('tool')
+
+    expect(buffer.add(thinking, 'thinking')).toEqual([])
+    expect(buffer.add(tool, 'tool_use')).toEqual([])
+    expect(buffer.hasCrossedSideEffectBoundary()).toBe(true)
+    expect(buffer.flushWithoutToolUse()).toEqual([thinking])
+    expect(buffer.flush()).toEqual([])
+  })
 })

@@ -6,23 +6,29 @@ import { act } from 'react'
 // ──────────────────────────────────────────────────────────────────────────────
 // Hoisted mocks (vi.hoisted runs before module evaluation)
 // ──────────────────────────────────────────────────────────────────────────────
-const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, panelState } = vi.hoisted(() => {
+const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState } = vi.hoisted(() => {
   const openPreviewSpy = vi.fn().mockResolvedValue(undefined)
   const browserOpenSpy = vi.fn()
   const openTargetSpy = vi.fn().mockResolvedValue(undefined)
   const ensureTargetsMock = vi.fn().mockResolvedValue(undefined)
+  const getTargetsForPathMock = vi.fn().mockResolvedValue([
+    { id: 'code', kind: 'ide', label: 'VS Code', icon: '', platform: 'darwin' },
+    { id: 'system-default', kind: 'system_default', label: 'System default', icon: '', platform: 'darwin' },
+  ])
+  const openSystemFileSpy = vi.fn().mockResolvedValue(undefined)
   const panelState = { isOpen: false }
-  return { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, panelState }
+  return { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState }
 })
 
 // Mock openTargetStore
 vi.mock('../../stores/openTargetStore', () => ({
   useOpenTargetStore: Object.assign(
     // Selector hook form: useOpenTargetStore((s) => s.xxx)
-    (selector: (s: { targets: unknown[]; ensureTargets: () => Promise<void>; openTarget: () => Promise<void> }) => unknown) =>
+    (selector: (s: { targets: unknown[]; ensureTargets: () => Promise<void>; getTargetsForPath: () => Promise<unknown[]>; openTarget: () => Promise<void> }) => unknown) =>
       selector({
         targets: [{ id: 'code', kind: 'ide', label: 'VS Code', icon: '', platform: 'darwin' }],
         ensureTargets: ensureTargetsMock,
+        getTargetsForPath: getTargetsForPathMock,
         openTarget: openTargetSpy,
       }),
     {
@@ -30,6 +36,7 @@ vi.mock('../../stores/openTargetStore', () => ({
       getState: vi.fn(() => ({
         targets: [{ id: 'code', kind: 'ide', label: 'VS Code', icon: '', platform: 'darwin' }],
         ensureTargets: ensureTargetsMock,
+        getTargetsForPath: getTargetsForPathMock,
         openTarget: openTargetSpy,
       })),
     },
@@ -66,6 +73,13 @@ vi.mock('@tauri-apps/plugin-shell', () => ({
 // Mock desktopRuntime.getServerBaseUrl
 vi.mock('../../lib/desktopRuntime', () => ({
   getServerBaseUrl: vi.fn(() => 'http://127.0.0.1:4321'),
+}))
+
+vi.mock('../../lib/systemFileOpen', () => ({
+  openLocalFileWithSystem: openSystemFileSpy,
+  resolveAbsoluteOpenPath: (path: string, workDir?: string) => (
+    path.startsWith('/') || !workDir ? path : `${workDir}/${path}`
+  ),
 }))
 
 // Mock useTranslation: returns identity-ish t function
@@ -345,22 +359,21 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     expect(buttons).toHaveLength(2)
   })
 
-  it('does NOT render an "open-with" button for a source file (row still opens workspace)', () => {
+  it('renders an "open-with" button for a source file while its row still opens workspace', () => {
     renderCard(['/w/proj/src/main.ts'])
-    expect(screen.queryAllByRole('button', { name: 'openWith.title' })).toHaveLength(0)
-    // source files keep their workspace-open row — only the open-with pill is dropped
+    expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(1)
     expect(screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toBeInTheDocument()
   })
 
-  it('mixed turn: only previewable rows (md/html) get the open-with button, not .ts', () => {
+  it('mixed turn: every real changed file gets the open-with button', () => {
     renderCard(['/w/proj/README.md', '/w/proj/src/main.ts', '/w/proj/index.html'])
-    expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(3)
   })
 
   it('keeps open-with secondary while every row retains its workspace chevron', () => {
     renderCard(['/w/proj/README.md', '/w/proj/index.html', '/w/proj/src/main.ts'])
 
-    expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(3)
     const rows = screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     expect(rows.every((row) => row.querySelector('.lucide-chevron-right'))).toBe(true)
   })
@@ -439,7 +452,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     expect(await screen.findByText('openWith.inAppBrowser')).toBeInTheDocument()
   })
 
-  it('ensureTargets is called when open-with button is clicked', async () => {
+  it('loads targets for the concrete file when open-with is clicked', async () => {
     renderCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
@@ -447,7 +460,16 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
       fireEvent.click(openWithBtn!)
     })
 
-    expect(ensureTargetsMock).toHaveBeenCalledTimes(1)
+    expect(getTargetsForPathMock).toHaveBeenCalledWith('/w/proj/README.md')
+  })
+
+  it('opens an office changed file with the system application instead of the binary workspace preview', () => {
+    renderCard(['/w/proj/reports/brief.docx'])
+
+    fireEvent.click(screen.getByRole('button', { name: /turnChangesOpenFileAria/ }))
+
+    expect(openSystemFileSpy).toHaveBeenCalledWith('/w/proj/reports/brief.docx')
+    expect(openPreviewSpy).not.toHaveBeenCalled()
   })
 
   it('open-with button does not also trigger the row workspace-open (stopPropagation)', async () => {

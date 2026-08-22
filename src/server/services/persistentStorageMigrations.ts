@@ -5,9 +5,12 @@ import { randomBytes } from 'node:crypto'
 import { normalizeLegacyDeepSeekManagedEnv } from '../../utils/providerManagedEnvCompat.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
-import { BUILT_IN_PROVIDER_IDS } from '../types/provider.js'
+import {
+  BUILT_IN_PROVIDER_IDS,
+  PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
+} from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = 3
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -168,7 +171,12 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     providerOrder: rawProviderOrder,
     ...rest
   } = value
-  const providers = value.providers.filter(isSavedProvider)
+  const sourceSchemaVersion = typeof value.schemaVersion === 'number' ? value.schemaVersion : 1
+  const providers = value.providers
+    .filter(isSavedProvider)
+    .map((provider) => sourceSchemaVersion < PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION
+      ? { ...provider, toolSearchEnabled: false }
+      : provider)
   const rawActiveId =
     typeof value.activeId === 'string'
       ? value.activeId

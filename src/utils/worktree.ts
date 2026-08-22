@@ -1043,19 +1043,65 @@ export async function cleanupWorktree(): Promise<void> {
   }
 }
 
+export type AgentWorktree = {
+  worktreePath: string
+  worktreeBranch?: string
+  headCommit?: string
+  gitRoot?: string
+  hookBased?: boolean
+}
+
+export const AGENT_WORKTREE_UNAVAILABLE_REASON =
+  'the workspace is not a git repository and no WorktreeCreate hook is configured'
+
+/**
+ * Why agent worktree isolation cannot be provisioned here, or null when it can.
+ *
+ * Subagent isolation is an optimization — it keeps parallel writers off each
+ * other's files — not something an agent needs in order to run. A workspace
+ * with no git repository and no WorktreeCreate hook has nothing to isolate
+ * against, so callers degrade to the shared cwd (see
+ * createAgentWorktreeIfSupported) instead of failing every agent they spawn.
+ */
+export function agentWorktreeUnavailableReason(): string | null {
+  if (hasWorktreeCreateHook()) return null
+  if (findCanonicalGitRoot(getCwd())) return null
+  return AGENT_WORKTREE_UNAVAILABLE_REASON
+}
+
+export type AgentWorktreeAttempt =
+  | { worktree: AgentWorktree; unavailableReason?: undefined }
+  | { worktree?: undefined; unavailableReason: string }
+
+/**
+ * Best-effort createAgentWorktree: reports why isolation was skipped instead
+ * of throwing when the workspace has no VCS to provision one from.
+ *
+ * Only that precondition is softened. A repository (or a configured
+ * WorktreeCreate hook) that fails mid-creation still throws: that is a real
+ * failure the caller should surface, not a reason to quietly share the cwd.
+ */
+export async function createAgentWorktreeIfSupported(
+  slug: string,
+): Promise<AgentWorktreeAttempt> {
+  const unavailableReason = agentWorktreeUnavailableReason()
+  if (unavailableReason) {
+    logForDebugging(
+      `Skipping worktree isolation for "${slug}": ${unavailableReason}`,
+      { level: 'warn' },
+    )
+    return { unavailableReason }
+  }
+  return { worktree: await createAgentWorktree(slug) }
+}
+
 /**
  * Create a lightweight worktree for a subagent.
  * Reuses getOrCreateWorktree/performPostCreationSetup but does NOT touch
  * global session state (currentWorktreeSession, process.chdir, project config).
  * Falls back to hook-based creation if not in a git repository.
  */
-export async function createAgentWorktree(slug: string): Promise<{
-  worktreePath: string
-  worktreeBranch?: string
-  headCommit?: string
-  gitRoot?: string
-  hookBased?: boolean
-}> {
+export async function createAgentWorktree(slug: string): Promise<AgentWorktree> {
   validateWorktreeSlug(slug)
 
   // Try hook-based worktree creation first (allows user-configured VCS)
@@ -1076,7 +1122,7 @@ export async function createAgentWorktree(slug: string): Promise<{
   const gitRoot = findCanonicalGitRoot(getCwd())
   if (!gitRoot) {
     throw new Error(
-      'Cannot create agent worktree: not in a git repository and no WorktreeCreate hooks are configured. ' +
+      `Cannot create agent worktree: ${AGENT_WORKTREE_UNAVAILABLE_REASON}. ` +
         'Configure WorktreeCreate/WorktreeRemove hooks in settings.json to use worktree isolation with other VCS systems.',
     )
   }

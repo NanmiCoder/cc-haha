@@ -16,7 +16,7 @@
  * textarea handlers calling preventDefault).
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import type { Node as PMNode } from 'prosemirror-model'
+import { Slice, type Node as PMNode } from 'prosemirror-model'
 import { EditorState, Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet, EditorView } from 'prosemirror-view'
 import { keymap } from 'prosemirror-keymap'
@@ -150,7 +150,30 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
               key: new PluginKey('mention-composer-props'),
               props: {
                 handleKeyDown: (_view, event) => propsRef.current.onKeyDown?.(event) ?? false,
-                handlePaste: (_view, event, _slice) => propsRef.current.onPaste?.(event) ?? false,
+                handlePaste: (editorView, event, _slice) => {
+                  if (propsRef.current.onPaste?.(event)) return true
+
+                  const clipboard = event.clipboardData
+                  if (!clipboard) return false
+                  const html = clipboard.getData('text/html')
+                  // Preserve ProseMirror's own slice metadata so copied mention
+                  // atoms remain atoms. External rich text only projects to
+                  // plain composer text, so its text/plain representation is
+                  // the authoritative source for exact line and blank-line
+                  // boundaries (Feishu uses empty HTML blocks for blank lines).
+                  if (html.includes('data-pm-slice')) return false
+                  const text = clipboard.getData('text/plain')
+                  if (!text) return false
+
+                  const normalizedText = text.replace(/\r\n?/g, '\n')
+                  const pastedDoc = buildComposerDoc(normalizedText, [])
+                  editorView.dispatch(
+                    editorView.state.tr
+                      .replaceSelection(Slice.maxOpen(pastedDoc.content))
+                      .scrollIntoView(),
+                  )
+                  return true
+                },
                 handleDOMEvents: {
                   // File drops belong to the composer's outer drop zone, which
                   // turns them into attachments. Left to ProseMirror, a drop

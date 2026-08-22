@@ -1640,6 +1640,11 @@ export class ConversationService {
       // no completion (#766: "卡住" with slowly growing tokens). This independent
       // cap frees such a stream after a fixed duration regardless of trickle.
       CLAUDE_STREAM_MAX_DURATION_MS: cleanEnv.CLAUDE_STREAM_MAX_DURATION_MS || '600000',
+      // A local tool call should finish generating its JSON arguments quickly.
+      // Bound this separately from the full response so a truncated, continuously
+      // streaming Write payload cannot occupy the session for the full 10 minutes.
+      CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS:
+        cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS || '120000',
       // Time-to-first-token budget: how long to wait for the FIRST streamed
       // chunk after response headers arrive. The idle timer above is the wrong
       // knob for slow prefill — it kills healthy local/3P models that take

@@ -7,6 +7,12 @@ export type ReconciliationBatch = {
   fullSweep: boolean
 }
 
+type PendingReconciliationSnapshot = {
+  generation: number
+  paths: Set<string>
+  fullSweep: boolean
+}
+
 export type ReconciliationWatchHandle = {
   close(): void
 }
@@ -154,7 +160,8 @@ export function createReconciliationWatcher(
   let watchRetryTimer: ReturnType<typeof setTimeout> | undefined
   let watchRetryMs = watchRetryBaseMs
   let handles = new Map<string, ReconciliationWatchHandle>()
-  let processing = Promise.resolve()
+  let processing: Promise<void> | undefined
+  let pendingSnapshot: PendingReconciliationSnapshot | undefined
   const dirtyPaths = new Set<string>()
   let needsFullSweep = false
   const metrics: ReconciliationWatcherMetrics = {
@@ -277,6 +284,61 @@ export function createReconciliationWatcher(
     }
   }
 
+  const drainPendingSnapshots = async (): Promise<void> => {
+    while (pendingSnapshot) {
+      const snapshot = pendingSnapshot
+      pendingSnapshot = undefined
+      await runSnapshot(
+        snapshot.generation,
+        snapshot.fullSweep,
+        snapshot.fullSweep ? [] : [...snapshot.paths].sort(),
+      )
+    }
+  }
+
+  const startPendingProcessing = (): void => {
+    if (processing || !pendingSnapshot) return
+    const task = Promise.resolve().then(drainPendingSnapshots)
+    processing = task
+    void task.then(
+      () => {
+        if (processing !== task) return
+        processing = undefined
+        if (active && pendingSnapshot) startPendingProcessing()
+      },
+      () => {
+        if (processing !== task) return
+        processing = undefined
+        if (active && pendingSnapshot) startPendingProcessing()
+      },
+    )
+  }
+
+  const mergePendingSnapshot = (
+    expectedGeneration: number,
+    fullSweep: boolean,
+    paths: string[],
+  ): void => {
+    if (!active || expectedGeneration !== generation) return
+    if (!pendingSnapshot || pendingSnapshot.generation !== expectedGeneration) {
+      pendingSnapshot = {
+        generation: expectedGeneration,
+        paths: new Set(fullSweep ? [] : paths),
+        fullSweep,
+      }
+    } else if (fullSweep) {
+      pendingSnapshot.fullSweep = true
+      pendingSnapshot.paths.clear()
+    } else if (!pendingSnapshot.fullSweep) {
+      for (const path of paths) pendingSnapshot.paths.add(path)
+      if (pendingSnapshot.paths.size > maxQueuedPaths) {
+        pendingSnapshot.fullSweep = true
+        pendingSnapshot.paths.clear()
+      }
+    }
+    startPendingProcessing()
+  }
+
   const flush = (): void => {
     if (!active) return
     clearFlushTimers()
@@ -287,10 +349,7 @@ export function createReconciliationWatcher(
     dirtyPaths.clear()
     metrics.queuedPaths = 0
     if (!fullSweep && paths.length === 0) return
-    processing = processing.then(
-      () => runSnapshot(expectedGeneration, fullSweep, paths),
-      () => runSnapshot(expectedGeneration, fullSweep, paths),
-    )
+    mergePendingSnapshot(expectedGeneration, fullSweep, paths)
   }
 
   const scheduleFlush = (): void => {
@@ -354,10 +413,11 @@ export function createReconciliationWatcher(
       watchRetryTimer = undefined
       dirtyPaths.clear()
       needsFullSweep = false
+      pendingSnapshot = undefined
       metrics.queuedPaths = 0
       for (const handle of handles.values()) handle.close()
       handles = new Map()
-      await processing.catch(() => undefined)
+      await processing?.catch(() => undefined)
     },
     queueTranscriptPath,
     queueFullSweep,

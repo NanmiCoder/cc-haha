@@ -57,7 +57,11 @@ export const RUNTIME_CONFIG_APPLIED_EVENT = 'runtime_config_applied' as const
 
 export type ServerMessage =
   | { type: 'connected'; sessionId: string }
-  | { type: 'session_state'; turnState: 'running' | 'idle' }
+  | {
+      type: 'session_state'
+      turnState: 'running' | 'idle'
+      activeBackgroundTaskIds?: string[]
+    }
   | {
       type: 'agent_run_event'
       runAgentId: string

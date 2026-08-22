@@ -140,4 +140,26 @@ describe('stream watchdog state', () => {
     expect(error.message).toContain('Stream max duration exceeded')
     expect(error.message).toContain('last event: text_delta')
   })
+
+  test('does not retry a tool input that exceeded its generation budget', () => {
+    const state = createStreamWatchdogState()
+    state.recordEvent({ type: 'message_start' })
+    state.recordEvent({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use' },
+    })
+    state.recordEvent({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'input_json_delta', partial_json: '{"content":"partial' },
+    })
+
+    const error = state.createTimeoutError('tool_input_duration', 120_000)
+
+    expect(error.code).toBe('STREAM_TOOL_INPUT_DURATION')
+    expect(error.safeToRetryStream()).toBe(false)
+    expect(error.message).toContain('Tool input generation exceeded 120s')
+    expect(error.message).toContain('last event: input_json_delta')
+  })
 })

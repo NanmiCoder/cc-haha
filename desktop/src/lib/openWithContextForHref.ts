@@ -2,6 +2,8 @@ import { classifyPreviewLink } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
 import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from './handlePreviewLink'
 import type { OpenWithContext } from './openWithItems'
+import { isWorkspacePreviewableFile } from './fileCapabilities'
+import { resolveAbsoluteOpenPath } from './systemFileOpen'
 
 /**
  * Build an open-with context for a workspace file (we have both its relative +
@@ -31,17 +33,9 @@ export function openWithContextForWorkspaceFile(
     kind: 'file',
     absolutePath,
     relPath,
-    previewable: true,
+    previewable: isWorkspacePreviewableFile(relPath),
     inAppBrowserUrl,
   }
-}
-
-function resolveAbsolute(workDir: string | undefined, p: string): string {
-  // Tilde paths are home-relative, not workspace-relative — pass them through
-  // for the backend (which knows the home dir and platform) to expand.
-  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) return p
-  if (!workDir || p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)) return p
-  return `${workDir.replace(/[\\/]+$/, '')}/${p.replace(/^[/\\]+/, '')}`
 }
 
 export function openWithContextForHref(
@@ -53,12 +47,12 @@ export function openWithContextForHref(
     return { kind: 'url', url: c.url }
   }
   if (c.kind === 'file-preview' && c.path) {
-    return { kind: 'file', absolutePath: resolveAbsolute(opts.workDir, c.path), relPath: c.path, previewable: true }
+    return { kind: 'file', absolutePath: resolveAbsoluteOpenPath(c.path, opts.workDir), relPath: c.path, previewable: true }
   }
   if (c.kind === 'browser-file' && c.path) {
     // Absolute paths may be outside the session workspace → serve via the
     // $HOME-sandboxed /local-file route; relative paths stay workspace-scoped.
-    const absolutePath = resolveAbsolute(opts.workDir, c.path)
+    const absolutePath = resolveAbsoluteOpenPath(c.path, opts.workDir)
     if (isAbsoluteLocalPath(c.path)) {
       return { kind: 'file', absolutePath, inAppBrowserUrl: localFileUrl(opts.serverBaseUrl, c.path) }
     }
@@ -66,6 +60,14 @@ export function openWithContextForHref(
       return { kind: 'file', absolutePath, inAppBrowserUrl: previewFsUrl(opts.serverBaseUrl, opts.sessionId, c.path) }
     }
     return { kind: 'file', absolutePath, relPath: c.path, previewable: true }
+  }
+  if (c.kind === 'system-file' && c.path) {
+    return {
+      kind: 'file',
+      absolutePath: resolveAbsoluteOpenPath(c.path, opts.workDir),
+      relPath: c.path,
+      previewable: false,
+    }
   }
   return null
 }

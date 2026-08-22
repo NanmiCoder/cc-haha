@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Code2, FolderOpen } from 'lucide-react'
+import { AppWindow, Code2, ExternalLink, FolderOpen } from 'lucide-react'
 import type { OpenTarget } from '../../stores/openTargetStore'
 
-export function getFallbackIcon(kind: 'ide' | 'file_manager', size = 17) {
+export function getFallbackIcon(kind: OpenTarget['kind'], size = 17) {
   if (kind === 'file_manager') {
     return <FolderOpen size={size} strokeWidth={1.9} />
   }
+  if (kind === 'application') return <AppWindow size={size} strokeWidth={1.9} />
+  if (kind === 'system_default') return <ExternalLink size={size} strokeWidth={1.9} />
   return <Code2 size={size} strokeWidth={1.9} />
 }
 

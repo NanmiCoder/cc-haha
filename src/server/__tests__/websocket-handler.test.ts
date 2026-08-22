@@ -569,7 +569,7 @@ describe('WebSocket handler session isolation', () => {
 
     expect(ws.sent.map((payload) => JSON.parse(payload))).toEqual([
       { type: 'status', state: 'idle' },
-      { type: 'session_state', turnState: 'idle' },
+      { type: 'session_state', turnState: 'idle', activeBackgroundTaskIds: [] },
     ])
   })
 
@@ -659,7 +659,11 @@ describe('WebSocket handler session isolation', () => {
         type: 'message_complete',
         usage: { input_tokens: 12, output_tokens: 3 },
       },
-      { type: 'session_state', turnState: 'idle' },
+      {
+        type: 'session_state',
+        turnState: 'idle',
+        activeBackgroundTaskIds: ['background-task-1'],
+      },
     ])
   })
 
@@ -972,6 +976,7 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'idle',
+      activeBackgroundTaskIds: ['agent-task-1'],
     })
 
     __markActiveTurnForTests(sessionId)
@@ -994,6 +999,24 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'running',
+      activeBackgroundTaskIds: ['agent-task-1'],
+    })
+
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'agent-task-1',
+      tool_use_id: 'agent-tool-1',
+      status: 'completed',
+      summary: 'Playwright checks passed',
+      task_type: 'local_agent',
+    })
+    ws.sent.length = 0
+    handleWebSocket.message(ws, JSON.stringify({ type: 'sync_state' }))
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
     })
   })
 
@@ -2948,6 +2971,7 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'idle',
+      activeBackgroundTaskIds: [],
     })
   })
 
@@ -4471,6 +4495,7 @@ describe('WebSocket handler session isolation', () => {
     expect(runningSocket.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'running',
+      activeBackgroundTaskIds: [],
     })
 
     const idleSessionId = `sync-idle-${crypto.randomUUID()}`
@@ -4482,6 +4507,7 @@ describe('WebSocket handler session isolation', () => {
     expect(idleSocket.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'idle',
+      activeBackgroundTaskIds: [],
     })
   })
 
@@ -4515,6 +4541,7 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'idle',
+      activeBackgroundTaskIds: [],
     })
   })
 
@@ -4558,6 +4585,7 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'session_state',
       turnState: 'running',
+      activeBackgroundTaskIds: [],
     })
   })
 })

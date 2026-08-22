@@ -3,6 +3,7 @@ import { handleOpenTargetsApi } from '../api/open-targets.js'
 import { openTargetService } from '../services/openTargetService.js'
 
 let listTargetsSpy: ReturnType<typeof spyOn> | undefined
+let listTargetsForPathSpy: ReturnType<typeof spyOn> | undefined
 let openTargetSpy: ReturnType<typeof spyOn> | undefined
 let getTargetIconSpy: ReturnType<typeof spyOn> | undefined
 
@@ -29,6 +30,8 @@ describe('open-targets API', () => {
   afterEach(() => {
     listTargetsSpy?.mockRestore()
     listTargetsSpy = undefined
+    listTargetsForPathSpy?.mockRestore()
+    listTargetsForPathSpy = undefined
     openTargetSpy?.mockRestore()
     openTargetSpy = undefined
     getTargetIconSpy?.mockRestore()
@@ -55,6 +58,28 @@ describe('open-targets API', () => {
       platform: 'darwin',
       primaryTargetId: 'vscode',
       targets: [{ id: 'vscode', kind: 'ide' }],
+    })
+  })
+
+  it('returns path-specific application targets when a file path is supplied', async () => {
+    listTargetsForPathSpy = spyOn(openTargetService, 'listTargetsForPath').mockResolvedValue({
+      platform: 'darwin',
+      targets: [
+        { id: 'application:pages', kind: 'application', label: 'Pages', icon: 'application', platform: 'darwin', isDefault: true },
+      ],
+      primaryTargetId: 'application:pages',
+      cachedAt: 123,
+      ttlMs: 1_000,
+    })
+
+    const { req, url, segments } = makeRequest('GET', '/api/open-targets?path=%2Ftmp%2Fbrief.docx')
+    const res = await handleOpenTargetsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    expect(listTargetsForPathSpy).toHaveBeenCalledWith('/tmp/brief.docx')
+    await expect(res.json()).resolves.toMatchObject({
+      primaryTargetId: 'application:pages',
+      targets: [{ kind: 'application', isDefault: true }],
     })
   })
 

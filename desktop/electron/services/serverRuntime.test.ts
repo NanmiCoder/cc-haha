@@ -44,7 +44,9 @@ function createRuntime(options: {
   appRoot?: string
   diagnosticsFile?: string
   env?: NodeJS.ProcessEnv
+  now?: () => number
   resolveSystemProxy?: (url: string) => Promise<string>
+  sleep?: (delayMs: number) => Promise<void>
   proxyBridge?: SystemProxyBridgeLike
 } = {}) {
   return new ElectronServerRuntime({
@@ -55,8 +57,10 @@ function createRuntime(options: {
     resolveSystemProxy: options.resolveSystemProxy,
     deps: {
       appendHostDiagnostic: sidecarMocks.appendHostDiagnostic,
+      ...(options.now ? { now: options.now } : {}),
       preferredServerPorts: () => [],
       reserveServerPort: async () => sidecarMocks.nextPort++,
+      ...(options.sleep ? { sleep: options.sleep } : {}),
       spawnSidecar: sidecarMocks.spawnSidecar,
       waitForServer: async () => await sidecarMocks.waitForServerImpl(),
       writeLastServerPort: () => undefined,
@@ -72,6 +76,13 @@ async function waitForServerChildren(count: number): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 0))
   }
   expect(sidecarMocks.serverChildren).toHaveLength(count)
+}
+
+async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 20 && mock.mock.calls.length !== count; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  expect(mock).toHaveBeenCalledTimes(count)
 }
 
 describe('ElectronServerRuntime', () => {
@@ -309,17 +320,127 @@ describe('ElectronServerRuntime', () => {
     expect(sidecarMocks.serverChildren[0]!.kill).toHaveBeenCalledTimes(1)
   })
 
-  it('stops active adapters immediately when the server exits without restart demand', async () => {
+  it('stops active adapters and waits for the replacement server to become healthy', async () => {
     const runtime = createRuntime()
     await runtime.startServer()
     const activeAdapters = [...sidecarMocks.adapterChildren]
+    let releaseReplacementHealth!: () => void
+    sidecarMocks.waitForServerImpl = () => new Promise<void>(resolve => {
+      releaseReplacementHealth = resolve
+    })
 
     sidecarMocks.serverChildren[0]!.emit('exit', 19, null)
+    await waitForServerChildren(2)
 
     for (const adapter of activeAdapters) {
       expect(adapter.kill).toHaveBeenCalledTimes(1)
     }
-    expect(sidecarMocks.serverChildren).toHaveLength(1)
+    let recoveredUrl: string | null = null
+    const recovery = runtime.getServerUrl().then((url) => {
+      recoveredUrl = url
+    })
+    await Promise.resolve()
+    expect(recoveredUrl).toBeNull()
+
+    releaseReplacementHealth()
+    await recovery
+    expect(recoveredUrl).toBe('http://127.0.0.1:49322')
+    expect(sidecarMocks.adapterChildren).toHaveLength(10)
+  })
+
+  it('keeps demand recovery available after an immediate restart fails transiently', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = createRuntime()
+    await runtime.startServer()
+    let replacementAttempts = 0
+    sidecarMocks.waitForServerImpl = () => {
+      replacementAttempts += 1
+      return replacementAttempts === 1
+        ? Promise.reject(new Error('port release race'))
+        : Promise.resolve()
+    }
+
+    sidecarMocks.serverChildren[0]!.emit('exit', 24, null)
+    await waitForServerChildren(2)
+    await waitForMockCalls(sidecarMocks.serverChildren[1]!.kill, 1)
+
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49323')
+    expect(sidecarMocks.serverChildren).toHaveLength(3)
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('failed to restart server sidecar after exit'),
+    )
+  })
+
+  it('opens a circuit after three consecutive automatic restarts', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let now = 0
+    const restartDelays: number[] = []
+    const runtime = createRuntime({
+      now: () => now,
+      sleep: async (delayMs) => {
+        restartDelays.push(delayMs)
+        now += delayMs
+      },
+    })
+    await runtime.startServer()
+
+    for (let crash = 0; crash < 3; crash++) {
+      sidecarMocks.serverChildren[crash]!.emit('exit', 30 + crash, null)
+      await waitForServerChildren(crash + 2)
+    }
+    sidecarMocks.serverChildren[3]!.emit('exit', 33, null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(sidecarMocks.serverChildren).toHaveLength(4)
+    await expect(runtime.getServerUrl()).rejects.toThrow('automatic restart paused')
+    expect(restartDelays).toEqual([250, 1_000])
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('automatic restart paused after 3 consecutive crashes'),
+    )
+
+    now += 60_000
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49325')
+    expect(sidecarMocks.serverChildren).toHaveLength(5)
+  })
+
+  it('resets the automatic restart budget after a stable server window', async () => {
+    let now = 0
+    const restartDelays: number[] = []
+    const runtime = createRuntime({
+      now: () => now,
+      sleep: async (delayMs) => {
+        restartDelays.push(delayMs)
+      },
+    })
+    await runtime.startServer()
+
+    sidecarMocks.serverChildren[0]!.emit('exit', 40, null)
+    await waitForServerChildren(2)
+    now = 60_000
+    sidecarMocks.serverChildren[1]!.emit('exit', 41, null)
+    await waitForServerChildren(3)
+
+    expect(restartDelays).toEqual([])
+  })
+
+  it('cancels a delayed automatic restart when the runtime stops', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let releaseBackoff!: () => void
+    const sleep = vi.fn(() => new Promise<void>(resolve => {
+      releaseBackoff = resolve
+    }))
+    const runtime = createRuntime({ now: () => 0, sleep })
+    await runtime.startServer()
+
+    sidecarMocks.serverChildren[0]!.emit('exit', 42, null)
+    await waitForServerChildren(2)
+    sidecarMocks.serverChildren[1]!.emit('exit', 43, null)
+    await waitForMockCalls(sleep, 1)
+    runtime.stopAll()
+    releaseBackoff()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(sidecarMocks.serverChildren).toHaveLength(2)
   })
 
   it('stops active adapters immediately when the server emits a process error', async () => {
@@ -328,6 +449,7 @@ describe('ElectronServerRuntime', () => {
     const activeAdapters = [...sidecarMocks.adapterChildren]
 
     sidecarMocks.serverChildren[0]!.emit('error', new Error('active server failed'))
+    await waitForServerChildren(2)
 
     for (const adapter of activeAdapters) {
       expect(adapter.kill).toHaveBeenCalledTimes(1)
@@ -358,6 +480,7 @@ describe('ElectronServerRuntime', () => {
     await runtime.restartAdaptersSidecars()
     const restartedAdapters = sidecarMocks.adapterChildren.slice(5)
     sidecarMocks.serverChildren[0]!.emit('exit', 22, null)
+    await waitForServerChildren(2)
 
     for (const adapter of firstAdapters) {
       expect(adapter.kill).toHaveBeenCalledTimes(1)

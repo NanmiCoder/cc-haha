@@ -457,6 +457,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       }
     : null
 
+  const selectedRuntimeProvider = activeRuntimeSelection?.providerId
+    ? providers.find((provider) => provider.id === activeRuntimeSelection.providerId) ?? null
+    : null
+  const runtimeEffortSuppressedByProvider =
+    selectedRuntimeProvider?.disableExperimentalBetas === true &&
+    (selectedRuntimeProvider.apiFormat ?? 'anthropic') === 'anthropic'
+
   const needsProviderConfiguration = isRuntimeScoped && providerChoices.length === 0
   const buttonModelLabel = isRuntimeScoped
     ? selectedRuntimeModel?.name
@@ -466,7 +473,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     ? selectedProviderChoice?.providerName ?? null
     : null
   const supportedRuntimeEfforts = selectedRuntimeModel?.supportedReasoningEfforts
-  const selectedRuntimeEffort = selectedRuntimeModel
+  const selectedRuntimeEffort = selectedRuntimeModel && !runtimeEffortSuppressedByProvider
     ? supportedRuntimeEfforts?.length === 0
       ? undefined
       : activeRuntimeSelection?.effortLevel

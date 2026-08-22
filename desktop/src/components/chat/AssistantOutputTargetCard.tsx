@@ -30,7 +30,9 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
       ? t('assistantOutputs.kind.html')
       : target.kind === 'markdown'
         ? t('assistantOutputs.kind.markdown')
-        : t('assistantOutputs.kind.image')
+        : target.kind === 'file'
+          ? t(typeInfo.categoryKey as TranslationKey)
+          : t('assistantOutputs.kind.image')
   const subtitle = target.subtitle ?? target.normalizedPath ?? target.href
   const showSubtitle = subtitle !== target.title
 

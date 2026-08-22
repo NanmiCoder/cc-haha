@@ -124,7 +124,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(input.model1mSupport !== undefined && { model1mSupport: input.model1mSupport }),
     ...(input.autoCompactWindow !== undefined && { autoCompactWindow: input.autoCompactWindow }),
     ...(input.modelContextWindows !== undefined && { modelContextWindows: input.modelContextWindows }),
-    toolSearchEnabled: input.toolSearchEnabled ?? true,
+    toolSearchEnabled: input.toolSearchEnabled ?? false,
     ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.notes !== undefined && { notes: input.notes }),

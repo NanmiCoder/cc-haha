@@ -1999,6 +1999,30 @@ describe('ChatInput file mentions', () => {
     })
   })
 
+  it('preserves Feishu-style paragraph breaks when pasting text', async () => {
+    render(<ChatInput compact />)
+
+    const input = getComposerElement()
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ['text/plain', 'text/html'],
+        getData: (type: string) => {
+          if (type === 'text/plain') return '第一行\r\n第二行\r\n\r\n第四行'
+          if (type === 'text/html') {
+            return '<div><span>第一行</span></div><div><span>第二行</span></div><div><br></div><div><span>第四行</span></div>'
+          }
+          return ''
+        },
+      },
+    })
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('第一行\n第二行\n\n第四行')
+    })
+  })
+
   it('ignores pasted files that finish loading after the prompt was sent', async () => {
     class DeferredFileReader {
       result: string | ArrayBuffer | null = null

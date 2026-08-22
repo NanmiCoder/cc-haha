@@ -1,6 +1,6 @@
 import { api, getApiUrl } from './client'
 
-export type OpenTargetKind = 'ide' | 'file_manager'
+export type OpenTargetKind = 'application' | 'system_default' | 'ide' | 'file_manager'
 
 export type OpenTarget = {
   id: string
@@ -9,6 +9,9 @@ export type OpenTarget = {
   icon: string
   iconUrl?: string
   platform: string
+  appPath?: string
+  bundleId?: string | null
+  isDefault?: boolean
 }
 
 export type OpenTargetList = {
@@ -38,6 +41,9 @@ function normalizeOpenTargetList(result: OpenTargetList): OpenTargetList {
 export const openTargetsApi = {
   async list() {
     return normalizeOpenTargetList(await api.get<OpenTargetList>('/api/open-targets'))
+  },
+  async listForPath(path: string) {
+    return normalizeOpenTargetList(await api.get<OpenTargetList>(`/api/open-targets?path=${encodeURIComponent(path)}`))
   },
   open(targetId: string, path: string) {
     return api.post<OpenTargetOpenResponse>('/api/open-targets/open', { targetId, path })

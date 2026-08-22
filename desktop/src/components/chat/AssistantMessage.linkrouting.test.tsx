@@ -169,6 +169,46 @@ describe('AssistantMessage output-target cards', () => {
     expect(screen.queryByText('assistantOutputs.kind.image')).toBeNull()
   })
 
+  it('hands a Markdown image to the inline gallery without leaving a source-less duplicate', () => {
+    const { container, rerender } = render(
+      <AssistantMessage
+        sessionId="s1"
+        content={'![preview](outputs/foo/preview_frame.png "Rendered frame")'}
+        isStreaming
+      />,
+    )
+
+    expect(container.querySelectorAll('img')).toHaveLength(0)
+
+    rerender(
+      <AssistantMessage
+        sessionId="s1"
+        content={'![preview](outputs/foo/preview_frame.png "Rendered frame")'}
+        isStreaming={false}
+      />,
+    )
+
+    const images = Array.from(container.querySelectorAll('img'))
+    expect(images).toHaveLength(1)
+    expect(images[0]).toHaveAttribute(
+      'src',
+      'http://127.0.0.1:4321/preview-fs/s1/outputs/foo/preview_frame.png',
+    )
+    expect(container.querySelector('img:not([src])')).toBeNull()
+  })
+
+  it('does not leave image nodes for remote or loopback sources rejected by assistant Markdown', () => {
+    const { container } = render(
+      <AssistantMessage
+        sessionId="s1"
+        content={'![loopback](http://127.0.0.1:3456/status) ![remote](https://attacker.example/track.png)'}
+        isStreaming={false}
+      />,
+    )
+
+    expect(container.querySelectorAll('img')).toHaveLength(0)
+  })
+
   it('renders a relative video inline (a <video>) but NOT as a card', () => {
     const { container } = render(
       <AssistantMessage

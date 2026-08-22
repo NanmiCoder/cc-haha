@@ -8,6 +8,7 @@ import {
   mergeActiveProviderManagedEnv,
   readActiveProviderManagedEnv,
 } from '../services/providerRuntimeEnv.js'
+import { PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION } from '../types/provider.js'
 import { get3PModelCapabilityOverride } from '../../utils/model/modelSupportOverrides.js'
 
 let tmpDir: string
@@ -168,7 +169,7 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://api.example.com/anthropic',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-active',
-      ENABLE_TOOL_SEARCH: 'true',
+      ENABLE_TOOL_SEARCH: 'false',
       ANTHROPIC_MODEL: 'active-main',
       ANTHROPIC_DEFAULT_FABLE_MODEL: 'active-fable',
       ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES:
@@ -285,7 +286,7 @@ describe('providerRuntimeEnv', () => {
       ANTHROPIC_BASE_URL: 'https://sub2api.example.com',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: 'sk-sub2api',
-      ENABLE_TOOL_SEARCH: 'true',
+      ENABLE_TOOL_SEARCH: 'false',
       ANTHROPIC_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.5',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.5',
@@ -295,19 +296,20 @@ describe('providerRuntimeEnv', () => {
     expect(env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBeUndefined()
   })
 
-  test('honors disabled tool search for native Anthropic providers', async () => {
+  test('honors explicitly enabled tool search for native Anthropic providers', async () => {
     await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      schemaVersion: PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
       activeId: 'provider-1',
       providers: [
         {
           id: 'provider-1',
           presetId: 'custom',
-          name: 'Tool Search Off',
+          name: 'Tool Search On',
           apiKey: 'sk-active',
           authStrategy: 'auth_token',
           baseUrl: 'https://api.example.com/anthropic',
           apiFormat: 'anthropic',
-          toolSearchEnabled: false,
+          toolSearchEnabled: true,
           models: {
             main: 'active-main',
             haiku: 'active-main',
@@ -320,7 +322,7 @@ describe('providerRuntimeEnv', () => {
 
     const env = readActiveProviderManagedEnv(tmpDir)
 
-    expect(env.ENABLE_TOOL_SEARCH).toBe('false')
+    expect(env.ENABLE_TOOL_SEARCH).toBe('true')
   })
 
   test('honors disabled experimental betas for active providers', async () => {

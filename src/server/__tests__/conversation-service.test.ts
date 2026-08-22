@@ -241,7 +241,9 @@ describe('ConversationService', () => {
 
   test('buildChildEnv injects stream watchdog + overall max-duration so a trickling provider stream cannot hang the desktop forever (#766)', async () => {
     const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    const previousToolInputDuration = process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS
     delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    delete process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS
     try {
       const service = new ConversationService() as any
       const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
@@ -254,11 +256,20 @@ describe('ConversationService', () => {
       // 240s apart keeps it alive forever. The overall-duration cap is NOT reset
       // by chunks and is what actually frees that case (#766).
       expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('600000')
+      // Tool JSON is not user-visible and should normally finish in seconds.
+      // Bound it separately so a model cannot spend the full response budget
+      // streaming a truncated Write payload (#1237).
+      expect(env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS).toBe('120000')
       // Non-streaming fallback stays off — its retry loop also hangs the UI (#766).
       expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('1')
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
       else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
+      if (previousToolInputDuration === undefined) {
+        delete process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS
+      } else {
+        process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS = previousToolInputDuration
+      }
     }
   })
 
@@ -1269,10 +1280,12 @@ describe('ConversationService', () => {
     const previous = {
       watchdog: process.env.CLAUDE_ENABLE_STREAM_WATCHDOG,
       idle: process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS,
+      toolInput: process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS,
       fallback: process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK,
     }
     process.env.CLAUDE_ENABLE_STREAM_WATCHDOG = '0'
     process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '90000'
+    process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS = '45000'
     process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK = '0'
     try {
       const env = (await service.buildChildEnv(
@@ -1282,11 +1295,13 @@ describe('ConversationService', () => {
 
       expect(env.CLAUDE_ENABLE_STREAM_WATCHDOG).toBe('0')
       expect(env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe('90000')
+      expect(env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS).toBe('45000')
       expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('0')
     } finally {
       for (const [key, value] of [
         ['CLAUDE_ENABLE_STREAM_WATCHDOG', previous.watchdog],
         ['CLAUDE_STREAM_IDLE_TIMEOUT_MS', previous.idle],
+        ['CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS', previous.toolInput],
         ['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK', previous.fallback],
       ] as const) {
         if (value === undefined) delete process.env[key]

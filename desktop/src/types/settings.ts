@@ -2,8 +2,8 @@
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions' | 'dontAsk'
 
-export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
-export type ReasoningEffortLevel = EffortLevel | 'xhigh'
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ReasoningEffortLevel = EffortLevel
 /**
  * The six 「纸 · 墨 · 印」 palettes, in the order the appearance picker shows
  * them: four paper grounds, then two ink ones. Each name matches a

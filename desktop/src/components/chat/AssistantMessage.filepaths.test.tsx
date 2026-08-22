@@ -12,14 +12,16 @@ vi.mock('../../lib/desktopRuntime', async (orig) => ({
 }))
 
 const ensureTargets = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+const getTargetsForPath = vi.hoisted(() => vi.fn())
 const openTargetFn = vi.hoisted(() => vi.fn())
 const openTargets = vi.hoisted(() => [
   { id: 'code', kind: 'ide', label: 'VS Code', icon: '', platform: 'darwin' },
   { id: 'finder', kind: 'file_manager', label: 'Finder', icon: '', platform: 'darwin' },
 ])
+getTargetsForPath.mockResolvedValue(openTargets)
 vi.mock('../../stores/openTargetStore', () => ({
   useOpenTargetStore: {
-    getState: () => ({ ensureTargets, targets: openTargets, openTarget: openTargetFn }),
+    getState: () => ({ ensureTargets, getTargetsForPath, targets: openTargets, openTarget: openTargetFn }),
   },
 }))
 
@@ -63,6 +65,7 @@ import { AssistantMessage } from './AssistantMessage'
 afterEach(() => {
   openBrowser.mockReset()
   ensureTargets.mockReset().mockResolvedValue(undefined)
+  getTargetsForPath.mockReset().mockResolvedValue(openTargets)
   openTargetFn.mockReset()
   openPreviewFn.mockReset().mockResolvedValue(undefined)
   copyTextToClipboard.mockReset().mockResolvedValue(true)

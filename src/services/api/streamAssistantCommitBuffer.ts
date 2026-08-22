@@ -4,18 +4,29 @@
  * failed attempt without leaving orphan thinking/text in the transcript.
  */
 export class StreamAssistantCommitBuffer<T> {
-  private pending: T[] = []
+  private pending: Array<{ value: T; blockType: string }> = []
   private crossedSideEffectBoundary = false
 
-  add(value: T, blockType: string): T[] {
-    if (this.crossedSideEffectBoundary) return [value]
+  constructor(
+    private readonly options: { deferToolUseCommit?: boolean } = {},
+  ) {}
 
-    this.pending.push(value)
+  add(value: T, blockType: string): T[] {
+    if (this.crossedSideEffectBoundary) {
+      if (!this.options.deferToolUseCommit) return [value]
+      this.pending.push({ value, blockType })
+      return []
+    }
+
+    this.pending.push({ value, blockType })
     if (blockType !== 'tool_use' && blockType !== 'server_tool_use') {
       return []
     }
 
     this.crossedSideEffectBoundary = true
+    if (this.options.deferToolUseCommit && blockType === 'tool_use') {
+      return []
+    }
     return this.drain()
   }
 
@@ -23,12 +34,24 @@ export class StreamAssistantCommitBuffer<T> {
     return this.drain()
   }
 
+  flushWithoutToolUse(): T[] {
+    const values = this.pending
+      .filter(entry => entry.blockType !== 'tool_use')
+      .map(entry => entry.value)
+    this.pending = []
+    return values
+  }
+
+  hasPendingToolUse(): boolean {
+    return this.pending.some(entry => entry.blockType === 'tool_use')
+  }
+
   hasCrossedSideEffectBoundary(): boolean {
     return this.crossedSideEffectBoundary
   }
 
   private drain(): T[] {
-    const values = this.pending
+    const values = this.pending.map(entry => entry.value)
     this.pending = []
     return values
   }

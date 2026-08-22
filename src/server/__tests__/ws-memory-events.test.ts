@@ -106,6 +106,25 @@ describe('WebSocket memory events', () => {
         code: 'STREAM_MAX_DURATION',
       },
     ])
+
+    expect(translateCliMessage({
+      type: 'assistant',
+      error: 'server_error',
+      isApiErrorMessage: true,
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'text',
+          text: 'API Error: Tool input generation exceeded 120s - aborting incomplete tool call (last event: input_json_delta)',
+        }],
+      },
+    }, 'session-1')).toEqual([
+      {
+        type: 'error',
+        message: 'API Error: Tool input generation exceeded 120s - aborting incomplete tool call (last event: input_json_delta)',
+        code: 'STREAM_TOOL_INPUT_DURATION',
+      },
+    ])
   })
 
   it('replays slash-command breadcrumbs as readable user messages', () => {

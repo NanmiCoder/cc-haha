@@ -36,8 +36,7 @@ const PREVIEWABLE_CHANGED_FILE_RE = /\.(md|markdown|html?|png|jpe?g|gif|webp|svg
 /**
  * True only for changed-file types with a meaningful *rendered* preview
  * (markdown / html / image). Source files (.ts/.json/.css …) return false.
- * Used to decide which change-card rows get the "open with" affordance —
- * we don't want an open-with pill on every file when a turn touches many.
+ * Used only to sort rich-preview files ahead of generic source/document rows.
  */
 export function isPreviewableChangedFile(path: string): boolean {
   return PREVIEWABLE_CHANGED_FILE_RE.test(path)
@@ -45,13 +44,13 @@ export function isPreviewableChangedFile(path: string): boolean {
 
 // ─── Open-with items ──────────────────────────────────────────────────────────
 
-export type OpenWithIcon = 'in-app-browser' | 'system' | 'ide' | 'file-manager' | 'preview' | 'copy'
+export type OpenWithIcon = 'in-app-browser' | 'system' | 'application' | 'ide' | 'file-manager' | 'preview' | 'copy'
 
 export type OpenWithItem = {
   id: string
   label: string
   icon: OpenWithIcon
-  target?: OpenTarget          // present for ide/file-manager items (to render its favicon)
+  target?: OpenTarget          // present for native app / IDE / file-manager items
   onSelect: () => void
 }
 
@@ -85,6 +84,13 @@ export function buildOpenWithItems(ctx: OpenWithContext, targets: OpenTarget[], 
     const url = ctx.inAppBrowserUrl
     items.push({ id: 'in-app', label: deps.t('openWith.inAppBrowser'), icon: 'in-app-browser', onSelect: () => deps.openInAppBrowser(url) })
   }
+  for (const target of targets.filter((x) => x.kind === 'application')) {
+    items.push({ id: `app:${target.id}`, label: deps.t('openWith.openInTarget', { target: target.label }), icon: 'application', target, onSelect: () => deps.openTarget(target.id, ctx.absolutePath) })
+  }
+  const systemTarget = targets.find((target) => target.kind === 'system_default')
+  items.push(systemTarget
+    ? { id: 'system', label: deps.t('openWith.systemDefault'), icon: 'system', target: systemTarget, onSelect: () => deps.openTarget(systemTarget.id, ctx.absolutePath) }
+    : { id: 'system', label: deps.t('openWith.systemDefault'), icon: 'system', onSelect: () => deps.openSystem(ctx.absolutePath) })
   for (const target of targets.filter((x) => x.kind === 'ide')) {
     items.push({ id: `ide:${target.id}`, label: deps.t('openWith.openInTarget', { target: target.label }), icon: 'ide', target, onSelect: () => deps.openTarget(target.id, ctx.absolutePath) })
   }

@@ -17,7 +17,7 @@ type Props = {
 }
 
 function ItemIcon({ item }: { item: OpenWithItem }) {
-  if ((item.icon === 'ide' || item.icon === 'file-manager') && item.target) return <TargetIcon target={item.target} size={20} />
+  if (item.target) return <TargetIcon target={item.target} size={20} />
   if (item.icon === 'in-app-browser') return <Globe size={18} strokeWidth={1.9} />
   if (item.icon === 'preview') return <FileText size={18} strokeWidth={1.9} />
   if (item.icon === 'copy') return <Copy size={18} strokeWidth={1.9} />

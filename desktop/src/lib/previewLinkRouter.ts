@@ -1,10 +1,12 @@
 import { isLoopbackHostname } from './desktopRuntime'
 import { parseFilePathRef } from './filePathBoundary'
+import { isWorkspacePreviewableFile } from './fileCapabilities'
 
 export type PreviewLinkKind =
   | 'browser-localhost'
   | 'browser-file'
   | 'file-preview'
+  | 'system-file'
   | 'remote'
   | 'ignored'
 
@@ -45,7 +47,9 @@ function classifyFileRef(raw: string): PreviewLinkClass {
   // is the whole point of the `file_path:line_number` reference format.
   if (ext === 'html' || ext === 'htm') return { kind: 'browser-file', path: ref.path, ...position }
 
-  return { kind: 'file-preview', path: ref.path, ...position }
+  return isWorkspacePreviewableFile(ref.path)
+    ? { kind: 'file-preview', path: ref.path, ...position }
+    : { kind: 'system-file', path: ref.path, ...position }
 }
 
 export function classifyPreviewLink(href: string): PreviewLinkClass {
@@ -65,7 +69,7 @@ export function classifyPreviewLink(href: string): PreviewLinkClass {
         : { kind: 'remote', url: u.toString() }
     }
     if (u.protocol === 'file:') {
-      return { kind: 'browser-file', path: decodeURIComponent(u.pathname) }
+      return classifyFileRef(decodeURIComponent(u.pathname))
     }
     return { kind: 'ignored' }
   } catch {

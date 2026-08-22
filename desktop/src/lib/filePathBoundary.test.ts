@@ -189,4 +189,14 @@ describe('isLinkableFilePath', () => {
     expect(isLinkableFilePath('.github/workflows/release-desktop.yml')).toBe(true)
     expect(isLinkableFilePath('scripts/windows-installer-smoke.ps1')).toBe(true)
   })
+
+  it.each([
+    'reports/brief.docx',
+    'reports/budget.xlsx',
+    'reports/launch.pptx',
+    'exports/archive.zip',
+  ])('keeps generated attachment paths actionable: %s', (filePath) => {
+    expect(isLinkableFilePath(filePath)).toBe(true)
+    expect(parseFilePathRef(filePath)?.path).toBe(filePath)
+  })
 })

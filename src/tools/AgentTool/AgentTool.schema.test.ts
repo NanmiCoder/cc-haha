@@ -3,10 +3,18 @@ import { existsSync } from 'fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
+import {
+  getCwdState,
+  getOriginalCwd,
+  setCwdState,
+  setOriginalCwd,
+} from '../../bootstrap/state.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { ToolUseContext } from '../../Tool.js'
 import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import { resetGitFileWatcher } from '../../utils/git/gitFilesystem.js'
 import { createAssistantMessage } from '../../utils/messages.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import {
   getTeamFilePath,
   mutateTeamFileAsync,
@@ -193,5 +201,151 @@ describe('AgentTool nested lifecycle ownership', () => {
       spawningToolUseId: 'toolu_parent_agent',
       ownerAgentId: 'parent-agent-run',
     }))
+  })
+})
+
+describe('AgentTool worktree isolation', () => {
+  let workspaceRoot = ''
+  let savedCwdState = ''
+  let savedOriginalCwd = ''
+
+  beforeEach(async () => {
+    savedCwdState = getCwdState()
+    savedOriginalCwd = getOriginalCwd()
+    workspaceRoot = await mkdtemp(join(tmpdir(), 'cc-haha-agent-isolation-'))
+    resetSettingsCache()
+    resetGitFileWatcher()
+  })
+
+  afterEach(async () => {
+    process.chdir(savedOriginalCwd)
+    setCwdState(savedCwdState)
+    setOriginalCwd(savedOriginalCwd)
+    resetGitFileWatcher()
+    resetSettingsCache()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  })
+
+  function runGit(cwd: string, args: string[]): void {
+    const result = Bun.spawnSync(['git', ...args], {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    if (result.exitCode !== 0) {
+      throw new Error(new TextDecoder().decode(result.stderr))
+    }
+  }
+
+  function enterWorkspace(dir: string): void {
+    setCwdState(dir)
+    setOriginalCwd(dir)
+    process.chdir(dir)
+  }
+
+  /** Spawn a background agent that asks for worktree isolation. */
+  async function spawnIsolatedAgent(): Promise<{
+    data: Record<string, unknown>
+    runAgentSpy: ReturnType<typeof spyOn<typeof runAgentModule, 'runAgent'>>
+    makeStream: () => void
+  }> {
+    const appState = {
+      ...getDefaultAppState(),
+      agentDefinitions: {
+        activeAgents: [GENERAL_PURPOSE_AGENT],
+        allAgents: [GENERAL_PURPOSE_AGENT],
+      },
+    }
+    const toolUseContext = {
+      options: {
+        mainLoopModel: 'sonnet',
+        tools: [],
+        mcpClients: [],
+        agentDefinitions: appState.agentDefinitions,
+      },
+      getAppState: () => appState,
+      setAppState: () => {},
+      messages: [],
+      toolUseId: 'toolu_isolated_agent',
+    } as unknown as ToolUseContext
+    spyOn(localAgentTask, 'registerAsyncAgent').mockReturnValue({
+      agentId: 'isolated-agent-run',
+      abortController: new AbortController(),
+    } as never)
+    let lifecycleParams:
+      | Parameters<typeof agentToolUtils.runAsyncAgentLifecycle>[0]
+      | undefined
+    spyOn(agentToolUtils, 'runAsyncAgentLifecycle').mockImplementation(
+      async params => {
+        lifecycleParams = params
+      },
+    )
+    const runAgentSpy = spyOn(runAgentModule, 'runAgent').mockImplementation(
+      (async function* () {}) as typeof runAgentModule.runAgent,
+    )
+
+    const result = await AgentTool.call(
+      {
+        description: 'Isolated worker',
+        prompt: 'Mutate files without touching the parent workspace.',
+        subagent_type: GENERAL_PURPOSE_AGENT.agentType,
+        run_in_background: true,
+        isolation: 'worktree',
+      },
+      toolUseContext,
+      (async () => ({ behavior: 'allow' })) as never,
+      createAssistantMessage({ content: 'Launch the isolated agent.' }),
+    )
+
+    return {
+      data: result.data as Record<string, unknown>,
+      runAgentSpy,
+      makeStream: () => lifecycleParams?.makeStream(() => {}),
+    }
+  }
+
+  test('launches the agent in a plain directory and reports the skipped isolation', async () => {
+    enterWorkspace(workspaceRoot)
+
+    const { data, runAgentSpy, makeStream } = await spawnIsolatedAgent()
+
+    expect(data.status).toBe('async_launched')
+    expect(String(data.worktreeIsolationSkipped)).toContain(
+      'not a git repository',
+    )
+    makeStream()
+    expect(runAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath: undefined }),
+    )
+
+    const rendered = AgentTool.mapToolResultToToolResultBlockParam(
+      data as never,
+      'toolu_isolated_agent',
+    )
+    expect(JSON.stringify(rendered)).toContain('worktree isolation was skipped')
+  })
+
+  test('still isolates the agent when the workspace is a repository', async () => {
+    const repoDir = join(workspaceRoot, 'repo')
+    await mkdir(repoDir, { recursive: true })
+    runGit(repoDir, ['init', '-b', 'main'])
+    runGit(repoDir, ['config', 'user.email', 'agent-test@example.com'])
+    runGit(repoDir, ['config', 'user.name', 'Agent Test'])
+    await writeFile(join(repoDir, 'README.md'), '# agent isolation test\n')
+    runGit(repoDir, ['add', '.'])
+    runGit(repoDir, ['commit', '-m', 'initial'])
+    enterWorkspace(repoDir)
+
+    const { data, runAgentSpy, makeStream } = await spawnIsolatedAgent()
+
+    expect(data.worktreeIsolationSkipped).toBeUndefined()
+    makeStream()
+    expect(runAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: expect.stringContaining(
+          join('.claude', 'worktrees', 'agent-'),
+        ),
+      }),
+    )
   })
 })

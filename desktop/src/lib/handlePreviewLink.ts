@@ -9,6 +9,7 @@ export type PreviewLinkDeps = {
   openBrowser: (sessionId: string, url: string) => void
   /** `reveal` carries the `:42` suffix through to the code view's scroll target. */
   openFilePreview: (sessionId: string, path: string, reveal?: PreviewLinkReveal) => void
+  openSystemFile: (path: string) => void
   openExternal: (url: string) => void
 }
 
@@ -80,6 +81,9 @@ export function handlePreviewLink(href: string, deps: PreviewLinkDeps): boolean 
     }
     case 'file-preview':
       deps.openFilePreview(deps.sessionId, cls.path!, reveal)
+      return true
+    case 'system-file':
+      deps.openSystemFile(cls.path!)
       return true
     case 'remote':
       deps.openExternal(cls.url!)

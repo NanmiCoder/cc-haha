@@ -2,7 +2,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { mkdtemp } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import treeKill from 'tree-kill'
 import { changedFiles, writeDiffPatch } from '../baseline/execute'
 import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
@@ -11,6 +11,14 @@ import type { BaselineTarget, LaneResult } from '../types'
 const FIXTURE = 'scripts/quality-gate/desktop-smoke/fixtures/chat-edit'
 const AGENT_BROWSER_HOME = join(process.env.HOME ?? '', '.agent-browser')
 const LOOPBACK_PROXY_BYPASS = '127.0.0.1,localhost,::1,[::1]'
+export const DESKTOP_SMOKE_COMPOSER_SELECTOR = '[data-composer-editor]'
+export const DESKTOP_SMOKE_RUN_SELECTOR = [
+  'button[aria-label="Run"]',
+  'button[aria-label="运行"]',
+  'button[aria-label="執行"]',
+  'button[aria-label="実行"]',
+  'button[aria-label="실행"]',
+].join(',')
 const PROMPT = [
   'Run the tests in this project, fix the failing greeting implementation, and rerun the tests.',
   'Only edit src/greeting.ts. Do not edit package.json or tests.',
@@ -44,6 +52,26 @@ export function resolveDesktopSmokeRuntimeSelection(target: BaselineTarget | und
   }
 }
 
+export function resolveDesktopViteExecutable(
+  rootDir: string,
+  platform = process.platform,
+): string | null {
+  const binDir = join(rootDir, 'desktop', 'node_modules', '.bin')
+  const candidates = platform === 'win32'
+    ? ['vite.exe', 'vite.cmd', 'vite.bunx']
+    : ['vite']
+
+  for (const candidate of candidates) {
+    const executable = join(binDir, candidate)
+    if (existsSync(executable)) return executable
+  }
+  return null
+}
+
+export function desktopSmokeAppUrl(vitePort: number) {
+  return `http://localhost:${vitePort}`
+}
+
 function mergeProxyBypass(value: string | undefined) {
   const entries = new Set(
     (value ?? '')
@@ -71,8 +99,42 @@ export function buildDesktopSmokeBrowserEnv(
   }
 }
 
+export function resolveAgentBrowserExecutable(
+  resolved = Bun.which('agent-browser'),
+  platform = process.platform,
+  arch = process.arch,
+): string | null {
+  if (!resolved) return null
+  if (platform !== 'win32' || !resolved.toLowerCase().endsWith('.cmd')) return resolved
+
+  const nativeExecutable = join(
+    dirname(resolved),
+    'node_modules',
+    'agent-browser',
+    'bin',
+    `agent-browser-win32-${arch}.exe`,
+  )
+  return existsSync(nativeExecutable) ? nativeExecutable : null
+}
+
+function collectCommandStream(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let output = ''
+  const done = (async () => {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      output += decoder.decode(chunk.value, { stream: true })
+    }
+    output += decoder.decode()
+    return output
+  })()
+  return { done, cancel: () => reader.cancel() }
+}
+
 export function agentBrowserCommand(args: string[]) {
-  return ['agent-browser', '--proxy-bypass', LOOPBACK_PROXY_BYPASS, ...args]
+  return [resolveAgentBrowserExecutable() ?? 'agent-browser', '--proxy-bypass', LOOPBACK_PROXY_BYPASS, ...args]
 }
 
 function isProcessAlive(pid: number) {
@@ -240,12 +302,8 @@ export async function runLoggedCommand(
     stdout: 'pipe',
     stderr: 'pipe',
   })
-
-  const outputPromise = Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
+  const stdout = collectCommandStream(proc.stdout)
+  const stderr = collectCommandStream(proc.stderr)
   const timeout = options.timeoutMs
     ? Bun.sleep(options.timeoutMs).then(() => {
       proc.kill()
@@ -253,10 +311,19 @@ export async function runLoggedCommand(
     })
     : null
 
-  const [stdout, stderr, exitCode] = timeout
-    ? await Promise.race([outputPromise, timeout])
-    : await outputPromise
-  const output = `${stdout}${stderr}`
+  const exitCode = timeout
+    ? await Promise.race([proc.exited, timeout])
+    : await proc.exited
+  let captured = await Promise.race([
+    Promise.all([stdout.done, stderr.done]),
+    Bun.sleep(250).then(() => null),
+  ])
+  if (!captured) {
+    await Promise.allSettled([stdout.cancel(), stderr.cancel()])
+    captured = await Promise.all([stdout.done, stderr.done])
+  }
+  const [stdoutText, stderrText] = captured
+  const output = `${stdoutText}${stderrText}`
   appendFileSync(
     options.logPath,
     options.maxLogChars && output.length > options.maxLogChars
@@ -268,7 +335,25 @@ export async function runLoggedCommand(
     throw new Error(`Command failed (${exitCode}): ${command.join(' ')}`)
   }
 
-  return { stdout, stderr, exitCode }
+  return { stdout: stdoutText, stderr: stderrText, exitCode }
+}
+
+export async function stopDesktopSmokeProcess(
+  proc: { pid: number; kill: () => void; exited: Promise<number> },
+  label: string,
+  logPath: string,
+) {
+  try {
+    await killProcessTree(proc.pid, 'SIGTERM')
+  } catch (error) {
+    proc.kill()
+    appendFileSync(logPath, `\n[quality-gate] ${label} tree cleanup fell back to direct kill: ${error instanceof Error ? error.message : String(error)}\n`)
+  }
+  await Promise.race([proc.exited.catch(() => -1), Bun.sleep(3_000)])
+}
+
+export function removeDesktopSmokeTree(path: string) {
+  rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -335,12 +420,12 @@ async function waitForVerifiedProject(
   throw new Error(`Timed out waiting for desktop project verification: ${lastVerificationError}`)
 }
 
-export function desktopSmokeTextShowsProject(text: string, projectName: string) {
+export function desktopSmokeTextShowsProject(text: string, projectDir: string) {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-  return lines.includes(projectName)
+  return lines.includes(projectDir) || lines.includes(basename(projectDir))
 }
 
 async function waitForDesktopSmokeSessionReady(
@@ -350,7 +435,6 @@ async function waitForDesktopSmokeSessionReady(
   projectDir: string,
   timeoutMs: number,
 ) {
-  const projectName = basename(projectDir)
   const deadline = Date.now() + timeoutMs
   let lastText = ''
   while (Date.now() < deadline) {
@@ -363,15 +447,15 @@ async function waitForDesktopSmokeSessionReady(
       maxLogChars: 4_000,
     })
     lastText = `${body.stdout}\n${body.stderr}`
-    if (desktopSmokeTextShowsProject(lastText, projectName)) return
+    if (desktopSmokeTextShowsProject(lastText, projectDir)) return
     await Bun.sleep(1_000)
   }
-  throw new Error(`Timed out waiting for desktop smoke session to restore project "${projectName}". Last content text: ${lastText.slice(0, 500)}`)
+  throw new Error(`Timed out waiting for desktop smoke session to restore project "${basename(projectDir)}". Last content text: ${lastText.slice(0, 500)}`)
 }
 
 async function verifyProject(originalDir: string, projectDir: string, artifactDir: string) {
   await writeDiffPatch(originalDir, projectDir, join(artifactDir, 'diff.patch'))
-  const changed = changedFiles(originalDir, projectDir)
+  const changed = changedFiles(originalDir, projectDir).map((file) => file.replaceAll('\\', '/'))
   const unexpected = changed.filter((file) => file !== 'src/greeting.ts')
   if (unexpected.length > 0) {
     throw new Error(`desktop smoke changed unexpected files: ${unexpected.join(', ')}`)
@@ -422,7 +506,7 @@ export async function executeDesktopSmoke(
   const serverPort = await getPort()
   const vitePort = await getPort()
   const baseUrl = `http://127.0.0.1:${serverPort}`
-  const appUrl = `http://127.0.0.1:${vitePort}`
+  const appUrl = desktopSmokeAppUrl(vitePort)
   const sessionName = `quality-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const browserEnv = buildDesktopSmokeBrowserEnv(sessionName, browserProfileDir)
   const browserStepContext = {
@@ -453,13 +537,10 @@ export async function executeDesktopSmoke(
   void pipeToFile(server.stdout, serverLogPath)
   void pipeToFile(server.stderr, serverLogPath)
 
-  const viteExecutable = join(
-    rootDir,
-    'desktop',
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'vite.cmd' : 'vite',
-  )
+  const viteExecutable = resolveDesktopViteExecutable(rootDir)
+  if (!viteExecutable) {
+    throw new Error('desktop Vite executable is missing; reinstall desktop dependencies')
+  }
   const vite = Bun.spawn([viteExecutable, '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], {
     cwd: join(rootDir, 'desktop'),
     env: {
@@ -520,7 +601,7 @@ export async function executeDesktopSmoke(
       logPath: browserLogPath,
       timeoutMs: 30_000,
     }, browserStepContext)
-    await runBrowserStep('wait', ['wait', 'textarea'], {
+    await runBrowserStep('wait', ['wait', DESKTOP_SMOKE_COMPOSER_SELECTOR], {
       cwd: rootDir,
       env: browserEnv,
       logPath: browserLogPath,
@@ -548,13 +629,13 @@ export async function executeDesktopSmoke(
       timeoutMs: 20_000,
       allowFailure: true,
     }, browserStepContext)
-    await runBrowserStep('fill', ['fill', 'textarea', PROMPT], {
+    await runBrowserStep('fill', ['type', DESKTOP_SMOKE_COMPOSER_SELECTOR, PROMPT], {
       cwd: rootDir,
       env: browserEnv,
       logPath: browserLogPath,
       timeoutMs: 20_000,
     }, browserStepContext)
-    await runBrowserStep('press', ['press', 'Enter'], {
+    await runBrowserStep('press', ['click', DESKTOP_SMOKE_RUN_SELECTOR], {
       cwd: rootDir,
       env: browserEnv,
       logPath: browserLogPath,
@@ -609,11 +690,13 @@ export async function executeDesktopSmoke(
     }).catch(() => {})
     await cleanupAgentBrowserSession(sessionName, browserLogPath)
     cleanupBrowserProfileProcesses(browserProfileDir, browserLogPath)
-    rmSync(browserProfileDir, { recursive: true, force: true })
+    removeDesktopSmokeTree(browserProfileDir)
     appendFileSync(browserLogPath, `\n[quality-gate] Removed browser profile ${browserProfileDir}\n`)
-    server.kill()
-    vite.kill()
-    rmSync(workRoot, { recursive: true, force: true })
+    await Promise.all([
+      stopDesktopSmokeProcess(server, 'server', serverLogPath),
+      stopDesktopSmokeProcess(vite, 'Vite', viteLogPath),
+    ])
+    removeDesktopSmokeTree(workRoot)
     sandbox.cleanup()
   }
 }

@@ -561,6 +561,25 @@ function inferAuthStrategyFromEnv(env: Record<string, string>): ProviderAuthStra
   return null
 }
 
+function readApiKeyField(meta: unknown): 'ANTHROPIC_API_KEY' | 'ANTHROPIC_AUTH_TOKEN' | undefined {
+  const parsed = parseJsonLike(meta)
+  if (!isRecord(parsed)) return undefined
+  const field = toOptionalString(parsed.apiKeyField)?.toUpperCase()
+  if (field === 'ANTHROPIC_API_KEY' || field === 'ANTHROPIC_AUTH_TOKEN') return field
+  return undefined
+}
+
+function readProviderCredential(
+  env: Record<string, unknown>,
+  apiKeyField: 'ANTHROPIC_API_KEY' | 'ANTHROPIC_AUTH_TOKEN' | undefined,
+): string {
+  if (apiKeyField) {
+    const selected = readCredential(env, apiKeyField)
+    if (selected) return selected
+  }
+  return readCredential(env, 'ANTHROPIC_AUTH_TOKEN') ?? readCredential(env, 'ANTHROPIC_API_KEY') ?? ''
+}
+
 function readModelMappingFromSettingsEnv(env: Record<string, unknown>): Partial<ModelMapping> {
   const hasModelEnv = [
     'ANTHROPIC_MODEL',
@@ -717,8 +736,15 @@ function toEntry(
 
   const name = row.name.trim() || row.id
   const baseUrl = readEnvString(env, 'ANTHROPIC_BASE_URL') ?? ''
-  const apiKey = readCredential(env, 'ANTHROPIC_AUTH_TOKEN') ?? readCredential(env, 'ANTHROPIC_API_KEY') ?? ''
-  const authStrategy = inferAuthStrategyFromEnv(stringEnv) ?? DEFAULT_AUTH_STRATEGY
+  const apiKeyField = readApiKeyField(row.meta)
+  const apiKey = readProviderCredential(env, apiKeyField)
+  // cc-switch's explicit meta field controls which header reaches the
+  // upstream. It may intentionally disagree with a historical env key.
+  const authStrategy = apiKeyField === 'ANTHROPIC_API_KEY'
+    ? 'api_key'
+    : apiKeyField === 'ANTHROPIC_AUTH_TOKEN'
+      ? 'auth_token'
+      : inferAuthStrategyFromEnv(stringEnv) ?? DEFAULT_AUTH_STRATEGY
   const apiFormat = readApiFormat(row.meta)
 
   const partialModels = readModelMappingFromSettingsEnv(env)

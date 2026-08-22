@@ -21,6 +21,28 @@ describe('extractAssistantOutputTargets', () => {
     ])
   })
 
+  it('extracts Markdown images with empty alt text or a destination title', () => {
+    const targets = extractAssistantOutputTargets(
+      '![](outputs/empty-alt.png) ![preview](outputs/titled.png "Rendered preview")',
+      { workDir },
+    )
+
+    expect(targets).toMatchObject([
+      {
+        kind: 'image',
+        title: 'empty-alt.png',
+        href: 'outputs/empty-alt.png',
+        normalizedPath: 'outputs/empty-alt.png',
+      },
+      {
+        kind: 'image',
+        title: 'preview',
+        href: 'outputs/titled.png',
+        normalizedPath: 'outputs/titled.png',
+      },
+    ])
+  })
+
   it('detects a naked relative video path as a video target', () => {
     const targets = extractAssistantOutputTargets('渲染完成，见 outputs/clip.mp4 。', { workDir })
 
@@ -45,6 +67,18 @@ describe('extractAssistantOutputTargets', () => {
         source: 'markdown-link',
       },
     ])
+  })
+
+  it('extracts office documents as resources while source references stay inline', () => {
+    const targets = extractAssistantOutputTargets(
+      '交付物见 [合同](reports/brief.docx)，实现位于 src/main.ts。',
+      { workDir },
+    )
+
+    expect(targets).toMatchObject([
+      { kind: 'file', href: 'reports/brief.docx', normalizedPath: 'reports/brief.docx' },
+    ])
+    expect(targets.some((target) => target.normalizedPath === 'src/main.ts')).toBe(false)
   })
 
   it('rejects a video path outside the active workspace (sandbox)', () => {
@@ -233,13 +267,15 @@ describe('extractAssistantOutputTargets', () => {
     ])
   })
 
-  it('limits the result set to high-confidence preview targets', () => {
+  it('keeps explicit generated document paths while ignoring remote and file URLs', () => {
     const targets = extractAssistantOutputTargets(
       'Read https://example.com and maybe file:///etc/passwd, but use report.pdf only externally.',
       { workDir },
     )
 
-    expect(targets).toEqual([])
+    expect(targets).toMatchObject([
+      { kind: 'file', href: 'report.pdf', normalizedPath: 'report.pdf' },
+    ])
   })
 
   it('caps results at 6 by default', () => {
@@ -277,6 +313,23 @@ describe('extractAssistantOutputTargets', () => {
 })
 
 describe('extractAssistantOutputTargets with changedFiles reconciliation', () => {
+  it('surfaces a generated office artifact even when the assistant forgot to name it', () => {
+    const targets = extractAssistantOutputTargets('已经生成完成。', {
+      workDir: '/work',
+      changedFiles: ['/work/reports/brief.docx', '/work/src/main.ts'],
+    })
+
+    expect(targets).toMatchObject([
+      {
+        kind: 'file',
+        href: 'reports/brief.docx',
+        normalizedPath: 'reports/brief.docx',
+        source: 'changed-file',
+      },
+    ])
+    expect(targets.some((target) => target.normalizedPath === 'src/main.ts')).toBe(false)
+  })
+
   it('corrects a bare mention to the real changed path in a subfolder', () => {
     // The reported bug: the model writes /private/tmp/todo-app/index.html but the
     // prose only says `index.html`, so the chip used to point at the (missing)

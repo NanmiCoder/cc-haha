@@ -280,10 +280,7 @@ describe('MarkdownRenderer', () => {
       />,
     )
 
-    const images = Array.from(container.querySelectorAll('img'))
-    expect(images).toHaveLength(3)
-    expect(images.every((image) => !image.hasAttribute('src'))).toBe(true)
-    expect(images.every((image) => !image.hasAttribute('srcset'))).toBe(true)
+    expect(container.querySelectorAll('img, source')).toHaveLength(0)
   })
 
   it('preserves local in-memory image sources in markdown', () => {
@@ -335,9 +332,8 @@ describe('MarkdownRenderer', () => {
     )
 
     const images = Array.from(container.querySelectorAll('img'))
-    expect(images).toHaveLength(2)
+    expect(images).toHaveLength(1)
     expect(images[0]!.getAttribute('src')).toBe('resolved:keep.png')
-    expect(images[1]!.hasAttribute('src')).toBe(false)
   })
 
   it('strips style tags from assistant text before injecting markdown html', () => {

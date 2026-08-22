@@ -1,5 +1,11 @@
-export type StreamWatchdogAbortReason = 'idle' | 'max_duration'
-export type StreamWatchdogErrorCode = 'STREAM_IDLE_TIMEOUT' | 'STREAM_MAX_DURATION'
+export type StreamWatchdogAbortReason =
+  | 'idle'
+  | 'max_duration'
+  | 'tool_input_duration'
+export type StreamWatchdogErrorCode =
+  | 'STREAM_IDLE_TIMEOUT'
+  | 'STREAM_MAX_DURATION'
+  | 'STREAM_TOOL_INPUT_DURATION'
 export type StreamWatchdogPhase =
   | 'before_first_event'
   | 'before_content'
@@ -121,6 +127,9 @@ function buildMessage(
   if (reason === 'max_duration') {
     return `Stream max duration exceeded - no completion received after ${seconds} (${formatDetails(snapshot)})`
   }
+  if (reason === 'tool_input_duration') {
+    return `Tool input generation exceeded ${seconds} - aborting incomplete tool call (${formatDetails(snapshot)})`
+  }
 
   switch (snapshot.phase) {
     case 'before_first_event':
@@ -145,7 +154,9 @@ export class StreamWatchdogTimeoutError extends Error {
     this.name = 'StreamWatchdogTimeoutError'
     this.code = reason === 'max_duration'
       ? 'STREAM_MAX_DURATION'
-      : 'STREAM_IDLE_TIMEOUT'
+      : reason === 'tool_input_duration'
+        ? 'STREAM_TOOL_INPUT_DURATION'
+        : 'STREAM_IDLE_TIMEOUT'
     this.phase = streamSnapshot.phase
   }
 

@@ -16,6 +16,7 @@ const openTargetState = vi.hoisted(() => ({
     { id: 'finder', kind: 'file_manager', label: 'Finder', icon: '', platform: 'darwin' },
   ],
   ensureTargets: () => {},
+  getTargetsForPath: vi.fn((): Promise<unknown[]> => new Promise(() => {})),
 }))
 
 // A zustand store is callable as a hook AND exposes getState; the shared menu
@@ -76,14 +77,14 @@ describe('WorkspaceFileOpenWith', () => {
     )
 
     const labels = getAllByRole('menuitem').map((el) => el.textContent)
-    expect(labels).toHaveLength(3)
+    expect(labels).toHaveLength(4)
     expect(labels.some((l) => l?.includes('VS Code'))).toBe(true)
     expect(labels.some((l) => l?.includes('Finder'))).toBe(true)
     // Added with #1146. "Copy path" is deliberately absent: WorkspacePanel
     // already renders its own copy-path pair directly above this block.
     expect(labels).toContain('openWith.copyFileContent')
     expect(labels).not.toContain('openWith.copyPath')
-    expect(labels.some((l) => l?.includes('openWith.systemDefault'))).toBe(false)
+    expect(labels).toContain('openWith.systemDefault')
   })
 
   it('clicking the IDE item calls openTarget and onAfterSelect', () => {
@@ -100,6 +101,18 @@ describe('WorkspaceFileOpenWith', () => {
 
     expect(openTarget).toHaveBeenCalledWith('code', '/w/report.md')
     expect(onAfter).toHaveBeenCalledTimes(1)
+  })
+
+  it('adds native applications discovered for this exact file path', async () => {
+    openTargetState.getTargetsForPath.mockResolvedValueOnce([
+      { id: 'application:pages', kind: 'application', label: 'Pages', icon: 'application', platform: 'darwin' },
+      { id: 'system-default', kind: 'system_default', label: 'System default', icon: 'system', platform: 'darwin' },
+    ])
+
+    const view = render(<WorkspaceFileOpenWith absolutePath="/w/brief.docx" />)
+
+    expect(await view.findByText('openWith.openInTarget:Pages')).toBeInTheDocument()
+    expect(openTargetState.getTargetsForPath).toHaveBeenCalledWith('/w/brief.docx')
   })
 
   it('does not call shell open from the file open-with menu', () => {

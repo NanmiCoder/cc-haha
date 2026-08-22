@@ -102,6 +102,8 @@ export async function buildOpenWithMenuItemsForHref(
   })
   if (!ctx) return []
 
-  await useOpenTargetStore.getState().ensureTargets()
-  return buildOpenWithMenuItems(ctx, useOpenTargetStore.getState().targets, opts)
+  const targets = ctx.kind === 'file'
+    ? await useOpenTargetStore.getState().getTargetsForPath(ctx.absolutePath)
+    : []
+  return buildOpenWithMenuItems(ctx, targets, opts)
 }

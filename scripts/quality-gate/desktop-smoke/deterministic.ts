@@ -1,4 +1,4 @@
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -10,9 +10,16 @@ import {
   buildDesktopSmokeBrowserEnv,
   cleanupAgentBrowserSession,
   cleanupBrowserProfileProcesses,
+  DESKTOP_SMOKE_COMPOSER_SELECTOR,
+  DESKTOP_SMOKE_RUN_SELECTOR,
+  desktopSmokeAppUrl,
   getPort,
   pipeToFile,
+  resolveAgentBrowserExecutable,
+  resolveDesktopViteExecutable,
+  removeDesktopSmokeTree,
   runLoggedCommand,
+  stopDesktopSmokeProcess,
   waitForHttp,
 } from './execute'
 
@@ -32,6 +39,8 @@ const FIXTURE = 'scripts/quality-gate/agent-flow/fixtures/workspace'
 const MOCK_CLI = 'src/server/__tests__/fixtures/mock-sdk-cli.ts'
 const TARGET_FILE = 'ui-smoke-output.txt'
 const TARGET_CONTENT = 'written-through-the-desktop-ui'
+const SMOKE_PROVIDER_ID = 'desktop-ui-smoke-provider'
+const SMOKE_MODEL_ID = 'desktop-ui-smoke-model'
 
 /** Locale is pinned so the approval button label is stable across contributors. */
 export const DESKTOP_UI_SMOKE_LOCALE = 'en'
@@ -61,6 +70,30 @@ export function buildDesktopUiSmokePrompt(projectDir: string) {
   }
 }
 
+export function seedDesktopUiSmokeProvider(configDir: string) {
+  const ccHahaDir = join(configDir, 'cc-haha')
+  mkdirSync(ccHahaDir, { recursive: true })
+  writeFileSync(join(ccHahaDir, 'providers.json'), JSON.stringify({
+    activeId: SMOKE_PROVIDER_ID,
+    providers: [{
+      id: SMOKE_PROVIDER_ID,
+      presetId: 'custom',
+      name: 'Desktop UI Smoke (isolated)',
+      apiKey: 'desktop-ui-smoke-fake-key',
+      baseUrl: 'http://127.0.0.1:1',
+      apiFormat: 'anthropic',
+      runtimeKind: 'anthropic_compatible',
+      models: {
+        main: SMOKE_MODEL_ID,
+        haiku: SMOKE_MODEL_ID,
+        sonnet: SMOKE_MODEL_ID,
+        opus: SMOKE_MODEL_ID,
+      },
+    }],
+    providerOrder: ['claude-official', 'openai-official', 'grok-official', SMOKE_PROVIDER_ID],
+  }, null, 2) + '\n')
+}
+
 async function pollUntil(
   check: () => Promise<boolean>,
   timeoutMs: number,
@@ -88,7 +121,14 @@ export function describeDesktopUiSmokePrerequisites(rootDir: string): string | n
   if (!existsSync(join(rootDir, 'desktop', 'node_modules', '.bin'))) {
     return 'desktop dependencies are not installed (run `bun install` in desktop/)'
   }
-  const probe = Bun.spawnSync(['agent-browser', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+  if (!resolveDesktopViteExecutable(rootDir)) {
+    return 'desktop Vite executable is missing (reinstall desktop dependencies)'
+  }
+  const agentBrowserExecutable = resolveAgentBrowserExecutable()
+  if (!agentBrowserExecutable) {
+    return 'agent-browser is not installed (see https://github.com/anthropics/agent-browser)'
+  }
+  const probe = Bun.spawnSync([agentBrowserExecutable, '--version'], { stdout: 'pipe', stderr: 'pipe' })
   if (probe.exitCode !== 0) {
     return 'agent-browser is not installed (see https://github.com/anthropics/agent-browser)'
   }
@@ -127,7 +167,7 @@ export async function executeDeterministicDesktopSmoke(
   const serverPort = await getPort()
   const vitePort = await getPort()
   const baseUrl = `http://127.0.0.1:${serverPort}`
-  const appUrl = `http://127.0.0.1:${vitePort}`
+  const appUrl = desktopSmokeAppUrl(vitePort)
   const sessionName = `quality-gate-ui-${serverPort}-${vitePort}`
   const browserEnv = buildDesktopSmokeBrowserEnv(sessionName, browserProfileDir)
 
@@ -139,6 +179,7 @@ export async function executeDeterministicDesktopSmoke(
       CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1',
     },
   })
+  seedDesktopUiSmokeProvider(sandbox.configDir)
 
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(serverPort)], {
     cwd: rootDir,
@@ -149,13 +190,10 @@ export async function executeDeterministicDesktopSmoke(
   void pipeToFile(server.stdout, serverLogPath)
   void pipeToFile(server.stderr, serverLogPath)
 
-  const viteExecutable = join(
-    rootDir,
-    'desktop',
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'vite.cmd' : 'vite',
-  )
+  const viteExecutable = resolveDesktopViteExecutable(rootDir)
+  if (!viteExecutable) {
+    throw new Error('desktop Vite executable disappeared after prerequisite checks')
+  }
   const vite = Bun.spawn([viteExecutable, '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], {
     cwd: join(rootDir, 'desktop'),
     env: { ...process.env, VITE_DESKTOP_SERVER_URL: baseUrl },
@@ -197,10 +235,16 @@ export async function executeDeterministicDesktopSmoke(
     // The composer is a ProseMirror contenteditable (MentionComposer), not a
     // <textarea> — `[data-composer-editor]` is the attribute the editor sets on
     // its editable node and the same hook composerTestUtils drives.
-    await browserStep(['wait', '[data-composer-editor]'])
+    await browserStep(['wait', DESKTOP_SMOKE_COMPOSER_SELECTOR])
 
-    await browserStep(['fill', '[data-composer-editor]', prompt], { timeoutMs: 20_000 })
-    await browserStep(['press', 'Enter'], { timeoutMs: 15_000 })
+    // `type` drives the editor's input path so React and ProseMirror observe the
+    // same update as a person typing. `fill` can replace only the DOM text while
+    // leaving the editor state empty.
+    await browserStep(['type', DESKTOP_SMOKE_COMPOSER_SELECTOR, prompt], { timeoutMs: 20_000 })
+    // Click the visible Run control. A standalone `press Enter` command starts a
+    // separate agent-browser invocation and does not reliably preserve the
+    // contenteditable focus on Windows.
+    await browserStep(['click', DESKTOP_SMOKE_RUN_SELECTOR], { timeoutMs: 15_000 })
 
     // The permission dialog is the point of this lane: nothing may touch the
     // fixture until the real button is clicked.
@@ -251,9 +295,11 @@ export async function executeDeterministicDesktopSmoke(
     await cleanupAgentBrowserSession(sessionName, browserLogPath)
     cleanupBrowserProfileProcesses(browserProfileDir, browserLogPath)
     appendFileSync(browserLogPath, `\n[quality-gate] Removed browser profile ${browserProfileDir}\n`)
-    server.kill()
-    vite.kill()
-    rmSync(workRoot, { recursive: true, force: true })
+    await Promise.all([
+      stopDesktopSmokeProcess(server, 'server', serverLogPath),
+      stopDesktopSmokeProcess(vite, 'Vite', viteLogPath),
+    ])
+    removeDesktopSmokeTree(workRoot)
     sandbox.cleanup()
   }
 }

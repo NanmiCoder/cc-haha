@@ -14,7 +14,10 @@ export async function handleOpenTargetsApi(
         throw new ApiError(405, `Method ${req.method} not allowed`, 'METHOD_NOT_ALLOWED')
       }
 
-      return Response.json(await openTargetService.listTargets())
+      const targetPath = url.searchParams.get('path')
+      return Response.json(targetPath
+        ? await openTargetService.listTargetsForPath(targetPath)
+        : await openTargetService.listTargets())
     }
 
     if (action === 'open') {

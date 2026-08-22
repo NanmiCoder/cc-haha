@@ -13,6 +13,7 @@ function makeDeps(overrides?: Partial<PreviewLinkDeps>): PreviewLinkDeps {
     serverBaseUrl: 'http://127.0.0.1:8787',
     openBrowser: vi.fn(),
     openFilePreview: vi.fn(),
+    openSystemFile: vi.fn(),
     openExternal: vi.fn(),
     ...overrides,
   }
@@ -108,6 +109,15 @@ describe('handlePreviewLink', () => {
     const withColumn = makeDeps()
     handlePreviewLink('src/app.ts:42:8', withColumn)
     expect(withColumn.openFilePreview).toHaveBeenCalledWith('s1', 'src/app.ts', { line: 42, column: 8 })
+  })
+
+  it('routes an office file to the system opener instead of the workspace preview', () => {
+    const deps = makeDeps()
+
+    expect(handlePreviewLink('reports/brief.docx', deps)).toBe(true)
+    expect(deps.openSystemFile).toHaveBeenCalledWith('reports/brief.docx')
+    expect(deps.openFilePreview).not.toHaveBeenCalled()
+    expect(deps.openBrowser).not.toHaveBeenCalled()
   })
 
   it('routes remote http(s) to openExternal with the url', () => {

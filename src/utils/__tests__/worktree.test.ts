@@ -20,8 +20,10 @@ import {
 import { resetGitFileWatcher } from '../git/gitFilesystem.js'
 import { resetSettingsCache } from '../settings/settingsCache.js'
 import {
+  agentWorktreeUnavailableReason,
   cleanupStaleAgentWorktrees,
   createAgentWorktree,
+  createAgentWorktreeIfSupported,
   removeAgentWorktree,
   worktreeBranchName,
 } from '../worktree.js'
@@ -213,5 +215,72 @@ describe('createAgentWorktree', () => {
         repoDir,
       ),
     ).toBe(false)
+  })
+
+  test('reports isolation as available and still provisions a worktree', async () => {
+    expect(agentWorktreeUnavailableReason()).toBeNull()
+
+    const attempt = await createAgentWorktreeIfSupported('agent-a7654321')
+    expect(attempt.unavailableReason).toBeUndefined()
+    expect(attempt.worktree?.worktreePath).toBe(
+      join(repoDir, '.claude', 'worktrees', 'agent-a7654321'),
+    )
+    expect(existsSync(attempt.worktree?.worktreePath ?? '')).toBe(true)
+  })
+})
+
+describe('agent worktree isolation outside a repository', () => {
+  let plainTempDir: string
+  let plainDir: string
+  let savedCwdState: string
+  let savedOriginalCwd: string
+  let savedConfigDir: string | undefined
+
+  beforeEach(() => {
+    savedCwdState = getCwdState()
+    savedOriginalCwd = getOriginalCwd()
+    savedConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+    plainTempDir = mkdtempSync(join(tmpdir(), 'cc-haha-plain-dir-'))
+    plainDir = join(plainTempDir, 'stock')
+    mkdirSync(plainDir, { recursive: true })
+
+    // Point config at a scratch dir: a real ~/.claude with a WorktreeCreate
+    // hook would make isolation "available" and silently invert these tests.
+    process.env.CLAUDE_CONFIG_DIR = join(plainTempDir, 'claude-config')
+    resetSettingsCache()
+    resetGitFileWatcher()
+
+    setCwdState(plainDir)
+    setOriginalCwd(plainDir)
+    process.chdir(plainDir)
+  })
+
+  afterEach(() => {
+    process.chdir(savedOriginalCwd)
+    setCwdState(savedCwdState)
+    setOriginalCwd(savedOriginalCwd)
+    resetGitFileWatcher()
+    resetSettingsCache()
+    if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
+    rmSync(plainTempDir, { recursive: true, force: true })
+  })
+
+  test('reports why isolation is unavailable instead of provisioning one', async () => {
+    expect(agentWorktreeUnavailableReason()).toBe(
+      'the workspace is not a git repository and no WorktreeCreate hook is configured',
+    )
+
+    const attempt = await createAgentWorktreeIfSupported('agent-a1234567')
+    expect(attempt.worktree).toBeUndefined()
+    expect(attempt.unavailableReason).toContain('not a git repository')
+    expect(existsSync(join(plainDir, '.claude', 'worktrees'))).toBe(false)
+  })
+
+  test('createAgentWorktree still throws for callers that require isolation', async () => {
+    await expect(createAgentWorktree('agent-a1234567')).rejects.toThrow(
+      /Cannot create agent worktree/,
+    )
   })
 })

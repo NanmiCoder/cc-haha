@@ -117,23 +117,27 @@ async function writeFixtureDb(rows: DbRow[], dir = ccSwitchDir): Promise<void> {
         is_current, in_failover_queue
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
-    for (const row of rows) {
-      insert.run(
-        row.id,
-        row.appType ?? 'claude',
-        row.name ?? row.id,
-        row.settingsConfig ?? JSON.stringify({ env: row.env ?? {} }),
-        'https://example.com',
-        'third_party',
-        row.createdAt ?? null,
-        row.sortIndex ?? null,
-        row.notes ?? null,
-        null,
-        null,
-        row.meta ?? null,
-        row.isCurrent ? 1 : 0,
-        0,
-      )
+    try {
+      for (const row of rows) {
+        insert.run(
+          row.id,
+          row.appType ?? 'claude',
+          row.name ?? row.id,
+          row.settingsConfig ?? JSON.stringify({ env: row.env ?? {} }),
+          'https://example.com',
+          'third_party',
+          row.createdAt ?? null,
+          row.sortIndex ?? null,
+          row.notes ?? null,
+          null,
+          null,
+          row.meta ?? null,
+          row.isCurrent ? 1 : 0,
+          0,
+        )
+      }
+    } finally {
+      insert.finalize()
     }
   } finally {
     db.close()
@@ -370,6 +374,17 @@ describe('cc-switch store discovery', () => {
       'Delta',
       'Zeta',
     ])
+  })
+
+  test('releases the SQLite store after scanning', async () => {
+    await writeFixtureDb([
+      { id: 'releasable', name: 'Releasable', env: claudeEnv() },
+    ])
+
+    const result = await scanCcSwitchProviders()
+
+    expect(result.available).toBe(true)
+    await expect(fs.rm(ccSwitchDir, { recursive: true })).resolves.toBeUndefined()
   })
 
   test('reads claude-desktop rows alongside claude rows', async () => {
@@ -1626,6 +1641,49 @@ describe('cc-switch REST routes', () => {
       'openai-official',
       'grok-official',
     ])
+  })
+
+  test('POST import preserves cc-switch meta.apiKeyField through provider testing', async () => {
+    await writeFixtureDb([{
+      id: 'explicit-api-key-header',
+      name: 'Explicit API Key Header',
+      meta: JSON.stringify({
+        apiFormat: 'anthropic',
+        apiKeyField: 'ANTHROPIC_API_KEY',
+      }),
+      // cc-switch treats meta.apiKeyField as the source of truth. Historical
+      // entries can still retain the credential under AUTH_TOKEN in settings.
+      env: claudeEnv({ ANTHROPIC_AUTH_TOKEN: FULL_KEY }),
+    }])
+
+    const { body } = await callProvidersApi('POST', '/api/providers/cc-switch/import', {
+      sourceIds: ['claude:explicit-api-key-header'],
+    })
+    const [imported] = body.imported as SavedProvider[]
+
+    const originalFetch = globalThis.fetch
+    const calls: Headers[] = []
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls.push(new Headers(init?.headers))
+      return new Response(JSON.stringify({
+        type: 'message',
+        model: imported.models.main,
+        content: [],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    try {
+      const result = await new ProviderService().testProvider(imported.id)
+
+      expect(result.connectivity.success).toBe(true)
+      expect(calls[0].get('x-api-key')).toBe(FULL_KEY)
+      expect(calls[0].get('authorization')).toBeNull()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('POST /api/providers/cc-switch/import keeps previously saved providers', async () => {

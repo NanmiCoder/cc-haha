@@ -41,4 +41,22 @@ describe('openTargetsApi', () => {
       ],
     })
   })
+
+  it('requests open targets for the concrete file path', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      platform: 'darwin',
+      targets: [],
+      primaryTargetId: null,
+      cachedAt: 1,
+      ttlMs: 30_000,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    setBaseUrl('http://127.0.0.1:49237')
+    await openTargetsApi.listForPath('/tmp/My Report.docx')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:49237/api/open-targets?path=%2Ftmp%2FMy%20Report.docx',
+      expect.any(Object),
+    )
+  })
 })

@@ -27,13 +27,15 @@ vi.mock('../../api/sessions', () => ({
 const openTargetStoreMock = vi.hoisted(() => ({
   ensureTargets: vi.fn(),
   openTarget: vi.fn(),
+  platform: 'darwin',
   targets: [{ id: 'finder', kind: 'file_manager', label: 'Finder', platform: 'darwin' }],
 }))
 
 vi.mock('../../stores/openTargetStore', () => ({
-  useOpenTargetStore: {
-    getState: () => openTargetStoreMock,
-  },
+  useOpenTargetStore: Object.assign(
+    (selector: (state: typeof openTargetStoreMock) => unknown) => selector(openTargetStoreMock),
+    { getState: () => openTargetStoreMock },
+  ),
 }))
 
 vi.mock('../../i18n', () => ({
@@ -69,9 +71,12 @@ vi.mock('../../i18n', () => ({
       'sidebar.projectActions': 'Project actions for {project}',
       'sidebar.pinProject': 'Pin Project',
       'sidebar.unpinProject': 'Unpin Project',
-      'sidebar.openInFinder': 'Open in Finder',
-      'sidebar.openInFinderFailed': 'Could not open the project in Finder.',
-      'sidebar.openInFinderUnavailable': 'No file manager is available.',
+      'sidebar.openInFileManager.darwin': 'Open in Finder',
+      'sidebar.openInFileManager.win32': 'Open in File Explorer',
+      'sidebar.openInFileManager.linux': 'Open in File Manager',
+      'sidebar.openInFileManager.default': 'Open in File Manager',
+      'sidebar.openInFileManagerFailed': 'Could not open the project in the file manager.',
+      'sidebar.openInFileManagerUnavailable': 'No file manager is available.',
       'sidebar.hideProjectFromSidebar': 'Hide from Sidebar',
       'sidebar.restoreProjectToSidebar': 'Restore to Sidebar',
       'sidebar.restoreHiddenProjects': 'Restore hidden projects ({count})',
@@ -404,6 +409,7 @@ describe('Sidebar', () => {
     })
     openTargetStoreMock.ensureTargets.mockReset()
     openTargetStoreMock.openTarget.mockReset()
+    openTargetStoreMock.platform = 'darwin'
     openTargetStoreMock.targets = [{ id: 'finder', kind: 'file_manager', label: 'Finder', platform: 'darwin' }]
     window.localStorage.removeItem(PROJECT_ORDER_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_PINNED_STORAGE_KEY)
@@ -1256,8 +1262,33 @@ describe('Sidebar', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: 'Open in Finder' }))
     })
 
-    expect(openTargetStoreMock.ensureTargets).toHaveBeenCalledTimes(1)
+    expect(openTargetStoreMock.ensureTargets).toHaveBeenCalledTimes(2)
     expect(openTargetStoreMock.openTarget).toHaveBeenCalledWith('finder', '/workspace/alpha')
+  })
+
+  it.each([
+    ['win32', 'explorer', 'Open in File Explorer'],
+    ['linux', 'file-manager', 'Open in File Manager'],
+  ])('uses the %s file-manager name in project actions', (platform, targetId, actionName) => {
+    openTargetStoreMock.platform = platform
+    openTargetStoreMock.targets = [{
+      id: targetId,
+      kind: 'file_manager',
+      label: actionName,
+      platform,
+    }]
+    useSessionStore.setState({
+      sessions: [
+        makeSession('alpha-1', 'Alpha Session', '/workspace/alpha', new Date().toISOString()),
+      ],
+    })
+
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for alpha' }))
+
+    expect(screen.getByRole('menuitem', { name: actionName })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Open in Finder' })).not.toBeInTheDocument()
   })
 
   it('pins a project above the rest of the project list', async () => {

@@ -33,6 +33,14 @@ async function waitFor(
   }
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>(settle => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
 describe('local index reconciliation watcher', () => {
   test('deduplicates exact transcript paths and emits bounded serial batches', async () => {
     const scope = await createTempDir()
@@ -184,6 +192,228 @@ describe('local index reconciliation watcher', () => {
     expect(batches).toEqual([{ paths: [], fullSweep: true }])
     expect(watcher.getMetrics().queuedPaths).toBe(0)
     await watcher.stop()
+  })
+
+  test('coalesces repeated debounce snapshots while the first batch is running', async () => {
+    const scope = await createTempDir()
+    const firstBatch = deferred()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 5,
+      maxWaitMs: 10,
+      safetySweepMs: 60_000,
+      watchDirectory: () => ({ close() {} }),
+      onBatch: async batch => {
+        batches.push(batch)
+        if (batches.length === 1) await firstBatch.promise
+      },
+    })
+    await watcher.start()
+
+    try {
+      watcher.queueFullSweep()
+      await waitFor(() => batches.length === 1)
+      for (let index = 0; index < 4; index += 1) {
+        watcher.queueFullSweep()
+        await Bun.sleep(15)
+      }
+
+      expect(batches).toHaveLength(1)
+      firstBatch.resolve()
+      await waitFor(() => batches.length >= 2)
+      await Bun.sleep(20)
+      expect(batches).toEqual([
+        { paths: [], fullSweep: true },
+        { paths: [], fullSweep: true },
+      ])
+    } finally {
+      firstBatch.resolve()
+      await watcher.stop()
+    }
+  })
+
+  test('deduplicates every exact path merged into the pending snapshot', async () => {
+    const scope = await createTempDir()
+    const projectDir = join(scope, 'projects', '-repo')
+    await mkdir(projectDir, { recursive: true })
+    const firstBatch = deferred()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 5,
+      maxWaitMs: 10,
+      safetySweepMs: 60_000,
+      watchDirectory: () => ({ close() {} }),
+      onBatch: async batch => {
+        batches.push(batch)
+        if (batches.length === 1) await firstBatch.promise
+      },
+    })
+    await watcher.start()
+
+    try {
+      watcher.queueFullSweep()
+      await waitFor(() => batches.length === 1)
+      const paths = ['alpha.jsonl', 'beta.jsonl', 'gamma.jsonl']
+        .map(name => join(projectDir, name))
+      watcher.queueTranscriptPath(paths[0]!)
+      watcher.queueTranscriptPath(paths[1]!)
+      await Bun.sleep(15)
+      watcher.queueTranscriptPath(paths[1]!)
+      watcher.queueTranscriptPath(paths[2]!)
+      await Bun.sleep(15)
+
+      firstBatch.resolve()
+      await waitFor(() => batches.length >= 2)
+      await Bun.sleep(20)
+      expect(batches).toEqual([
+        { paths: [], fullSweep: true },
+        { paths, fullSweep: false },
+      ])
+    } finally {
+      firstBatch.resolve()
+      await watcher.stop()
+    }
+  })
+
+  test('lets a pending full sweep supersede pending exact paths', async () => {
+    const scope = await createTempDir()
+    const projectDir = join(scope, 'projects', '-repo')
+    await mkdir(projectDir, { recursive: true })
+    const firstBatch = deferred()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 5,
+      maxWaitMs: 10,
+      safetySweepMs: 60_000,
+      watchDirectory: () => ({ close() {} }),
+      onBatch: async batch => {
+        batches.push(batch)
+        if (batches.length === 1) await firstBatch.promise
+      },
+    })
+    await watcher.start()
+
+    try {
+      watcher.queueTranscriptPath(join(projectDir, 'initial.jsonl'))
+      await waitFor(() => batches.length === 1)
+      watcher.queueTranscriptPath(join(projectDir, 'before-sweep.jsonl'))
+      await Bun.sleep(15)
+      watcher.queueFullSweep()
+      await Bun.sleep(15)
+      watcher.queueTranscriptPath(join(projectDir, 'after-sweep.jsonl'))
+      await Bun.sleep(15)
+
+      firstBatch.resolve()
+      await waitFor(() => batches.length >= 2)
+      await Bun.sleep(20)
+      expect(batches).toEqual([
+        { paths: [join(projectDir, 'initial.jsonl')], fullSweep: false },
+        { paths: [], fullSweep: true },
+      ])
+    } finally {
+      firstBatch.resolve()
+      await watcher.stop()
+    }
+  })
+
+  test('opens a new pending window for events arriving during the second batch', async () => {
+    const scope = await createTempDir()
+    const projectDir = join(scope, 'projects', '-repo')
+    await mkdir(projectDir, { recursive: true })
+    const firstBatch = deferred()
+    const secondBatch = deferred()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 5,
+      maxWaitMs: 10,
+      safetySweepMs: 60_000,
+      watchDirectory: () => ({ close() {} }),
+      onBatch: async batch => {
+        batches.push(batch)
+        if (batches.length === 1) await firstBatch.promise
+        if (batches.length === 2) await secondBatch.promise
+      },
+    })
+    await watcher.start()
+
+    try {
+      watcher.queueFullSweep()
+      await waitFor(() => batches.length === 1)
+      const secondPaths = ['second-a.jsonl', 'second-b.jsonl']
+        .map(name => join(projectDir, name))
+      secondPaths.forEach(path => watcher.queueTranscriptPath(path))
+      await Bun.sleep(15)
+      firstBatch.resolve()
+      await waitFor(() => batches.length === 2)
+
+      const thirdPaths = ['third-a.jsonl', 'third-b.jsonl']
+        .map(name => join(projectDir, name))
+      watcher.queueTranscriptPath(thirdPaths[0]!)
+      await Bun.sleep(15)
+      watcher.queueTranscriptPath(thirdPaths[1]!)
+      await Bun.sleep(15)
+      secondBatch.resolve()
+      await waitFor(() => batches.length >= 3)
+      await Bun.sleep(20)
+
+      expect(batches).toEqual([
+        { paths: [], fullSweep: true },
+        { paths: secondPaths, fullSweep: false },
+        { paths: thirdPaths, fullSweep: false },
+      ])
+    } finally {
+      firstBatch.resolve()
+      secondBatch.resolve()
+      await watcher.stop()
+    }
+  })
+
+  test('drops an already debounced pending snapshot across stop and restart', async () => {
+    const scope = await createTempDir()
+    const projectDir = join(scope, 'projects', '-repo')
+    await mkdir(projectDir, { recursive: true })
+    const firstBatch = deferred()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 5,
+      maxWaitMs: 10,
+      safetySweepMs: 60_000,
+      watchDirectory: () => ({ close() {} }),
+      onBatch: async batch => {
+        batches.push(batch)
+        if (batches.length === 1) await firstBatch.promise
+      },
+    })
+    await watcher.start()
+
+    try {
+      watcher.queueFullSweep()
+      await waitFor(() => batches.length === 1)
+      watcher.queueTranscriptPath(join(projectDir, 'stale.jsonl'))
+      await Bun.sleep(15)
+
+      const stopping = watcher.stop()
+      firstBatch.resolve()
+      await stopping
+      await watcher.start()
+      await Bun.sleep(20)
+      expect(batches).toHaveLength(1)
+
+      watcher.queueTranscriptPath(join(projectDir, 'fresh.jsonl'))
+      await waitFor(() => batches.length === 2)
+      expect(batches[1]).toEqual({
+        paths: [join(projectDir, 'fresh.jsonl')],
+        fullSweep: false,
+      })
+    } finally {
+      firstBatch.resolve()
+      await watcher.stop()
+    }
   })
 
   test('honors the max-wait deadline during a continuous trailing debounce storm', async () => {

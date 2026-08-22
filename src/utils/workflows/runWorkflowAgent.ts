@@ -26,9 +26,10 @@ import { createUserMessage, extractTextContent } from '../messages.js'
 import { createAgentId } from '../uuid.js'
 import type { AgentMetadata } from '../sessionStorage.js'
 import {
-  createAgentWorktree,
+  createAgentWorktreeIfSupported,
   hasWorktreeChanges,
   removeAgentWorktree,
+  type AgentWorktree,
 } from '../worktree.js'
 import {
   WORKFLOW_SUBAGENT_PROMPT,
@@ -148,9 +149,16 @@ export async function runWorkflowAgent(
     ? `${prompt}${workflowStructuredOutputNote(SYNTHETIC_OUTPUT_TOOL_NAME)}`
     : prompt
 
-  let worktree: Awaited<ReturnType<typeof createAgentWorktree>> | null = null
+  // Isolation is best-effort: a workspace with no git repository and no
+  // WorktreeCreate hook has no worktree to give, and failing every agent over
+  // that would make the whole run unusable. The agent runs in the shared cwd
+  // instead; the harness reports the degrade once per run.
+  let worktree: AgentWorktree | null = null
   if (opts?.isolation === 'worktree') {
-    worktree = await createAgentWorktree(`agent-${agentId.slice(0, 8)}`)
+    const attempt = await createAgentWorktreeIfSupported(
+      `agent-${agentId.slice(0, 8)}`,
+    )
+    worktree = attempt.worktree ?? null
   }
 
   const tracker = createProgressTracker()
@@ -313,9 +321,7 @@ function extractFinalText(messages: Message[]): string {
   return ''
 }
 
-async function cleanupWorkflowWorktree(
-  worktree: Awaited<ReturnType<typeof createAgentWorktree>>,
-): Promise<void> {
+async function cleanupWorkflowWorktree(worktree: AgentWorktree): Promise<void> {
   const { worktreePath, worktreeBranch, headCommit, gitRoot, hookBased } =
     worktree
   if (hookBased) return

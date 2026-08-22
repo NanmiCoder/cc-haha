@@ -1,4 +1,6 @@
 import { trimTrailingPunctuation } from './urlBoundary'
+import { isLinkableFilePath, splitTextByFilePaths } from './filePathBoundary'
+import { isGeneratedArtifactFile, isOutputResourceFile } from './fileCapabilities'
 
 export type AssistantOutputTargetKind =
   | 'local-html'
@@ -6,11 +8,13 @@ export type AssistantOutputTargetKind =
   | 'image'
   | 'video'
   | 'markdown'
+  | 'file'
 
 export type AssistantOutputTargetSource =
   | 'markdown-link'
   | 'plain-url'
   | 'plain-path'
+  | 'changed-file'
 
 export type AssistantOutputTarget = {
   id: string
@@ -58,6 +62,7 @@ type CandidateTarget = {
 type MarkdownLinkMatch = {
   title: string
   href: string
+  isImage: boolean
   start: number
   end: number
 }
@@ -79,8 +84,6 @@ type DirectoryTreeFileMatch = {
 // shared trimTrailingPunctuation, which knows the full CJK terminator set.
 const localhostUrlPattern =
   /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s`"'<>，。；、）\])}]*)?/gi
-const previewablePathPattern =
-  /(^|[\s("'`[])((?:\.{1,2}\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:html?|md|markdown|png|jpe?g|gif|webp|svg|mp4|webm|mov|m4v))(?![\w/-])/gi
 
 export function extractAssistantOutputTargets(
   content: string,
@@ -106,7 +109,7 @@ export function extractAssistantOutputTargets(
   }
 
   for (const match of markdownLinks) {
-    const title = match.title
+    const authoredTitle = match.title
     const href = match.href
     const localhostTarget = toLocalhostTarget(href)
     const fileTarget = toWorkspaceFileTarget(href, workDir)
@@ -115,7 +118,7 @@ export function extractAssistantOutputTargets(
       continue
     }
 
-    if (!title) {
+    if (!authoredTitle && !(match.isImage && fileTarget?.kind === 'image')) {
       continue
     }
 
@@ -123,7 +126,7 @@ export function extractAssistantOutputTargets(
       queueTarget({
         id: createId(localhostTarget.kind, localhostTarget.href),
         kind: localhostTarget.kind,
-        title,
+        title: authoredTitle,
         href: localhostTarget.href,
         confidence: 'high',
         source: 'markdown-link',
@@ -134,6 +137,8 @@ export function extractAssistantOutputTargets(
     if (!fileTarget) {
       continue
     }
+
+    const title = authoredTitle || getBasename(fileTarget.normalizedPath)
 
     queueTarget({
       id: createId(fileTarget.kind, fileTarget.normalizedPath),
@@ -193,8 +198,14 @@ export function extractAssistantOutputTargets(
     }, createFileKey(fileTarget), treeMatch.position)
   }
 
-  for (const match of content.matchAll(previewablePathPattern)) {
-    const position = match.index ?? 0
+  let plainTextPosition = 0
+  for (const segment of splitTextByFilePaths(content)) {
+    const position = plainTextPosition
+    plainTextPosition += segment.value.length
+
+    if (segment.type !== 'path') {
+      continue
+    }
 
     if (isInMarkdownLink(position, markdownLinks)) {
       continue
@@ -204,7 +215,7 @@ export function extractAssistantOutputTargets(
       continue
     }
 
-    const href = trimTrailingPunctuation(match[2] ?? '')
+    const href = segment.ref.path
     const fileTarget = toWorkspaceFileTarget(href, workDir)
 
     if (!fileTarget) {
@@ -299,6 +310,34 @@ function reconcileTargetsWithChangedFiles(
       subtitle: corrected,
     })
     if (out.length >= limit) break
+  }
+
+  // A generated document is still a deliverable when the assistant forgets to
+  // repeat its path in the final prose. The checkpoint is upstream identity:
+  // unlike text extraction, it tells us which path this turn actually wrote.
+  for (const changedFile of changedFiles) {
+    if (out.length >= limit) break
+    if (!isGeneratedArtifactFile(changedFile)) continue
+
+    const resolved = resolveFilePath(changedFile)
+    const corrected = workDir && isWithinWorkDir(resolved, workDir)
+      ? relativeFilePath(workDir, resolved)
+      : toPosixPath(changedFile)
+    const kind = classifyFileTarget(corrected) ?? 'file'
+    const key = `${kind}:${corrected}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    out.push({
+      id: createId(kind, corrected),
+      kind,
+      title: getBasename(corrected),
+      subtitle: corrected,
+      href: corrected,
+      normalizedPath: corrected,
+      confidence: 'high',
+      source: 'changed-file',
+    })
   }
 
   return out
@@ -406,6 +445,10 @@ function classifyFileTarget(candidate: string): FileTargetMatch['kind'] | null {
     return 'video'
   }
 
+  if (isLinkableFilePath(candidate) && isOutputResourceFile(candidate)) {
+    return 'file'
+  }
+
   return null
 }
 
@@ -462,11 +505,13 @@ function extractMarkdownLinks(content: string): MarkdownLinkMatch[] {
     const title = content.slice(index + 1, labelEnd).trim()
     const rawDestination = content.slice(labelEnd + 2, destinationEnd)
     const href = normalizeMarkdownDestination(rawDestination)
+    const isImage = content[index - 1] === '!'
 
     matches.push({
       title,
       href,
-      start: index,
+      isImage,
+      start: isImage ? index - 1 : index,
       end: destinationEnd + 1,
     })
 
@@ -502,6 +547,12 @@ function findMarkdownDestinationEnd(content: string, start: number): number {
 
 function normalizeMarkdownDestination(destination: string): string {
   let normalized = destination.trim()
+  const titleMatch = normalized.match(
+    /^(.*\S)\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))\s*$/,
+  )
+  if (titleMatch?.[1]) {
+    normalized = titleMatch[1].trim()
+  }
 
   if (normalized.startsWith('<') && normalized.endsWith('>')) {
     normalized = normalized.slice(1, -1).trim()

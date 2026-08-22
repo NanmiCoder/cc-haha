@@ -343,8 +343,13 @@ function enhanceMarkdownHtml(
     return cleanHtml
   }
 
-  const container = document.createElement('div')
-  container.innerHTML = cleanHtml
+  // A detached div is not inert: assigning innerHTML can start image requests
+  // before the loop below has a chance to reject unsafe sources. Template
+  // contents stay inert until inserted into a live document, so filtering here
+  // really does preserve the no-request boundary for assistant Markdown.
+  const template = document.createElement('template')
+  template.innerHTML = cleanHtml
+  const container = template.content
   const mathById = new Map(mathBlocks.map((block) => [block.id, block]))
 
   container.querySelectorAll<HTMLImageElement | HTMLSourceElement>('img, source').forEach((image) => {
@@ -355,9 +360,17 @@ function enhanceMarkdownHtml(
       // so raw HTML <img> tags get the same treatment as Markdown images.
       const resolved = src ? resolveImageSrc(src) : null
       if (resolved) image.setAttribute('src', resolved)
-      else image.removeAttribute('src')
+      else {
+        image.remove()
+        return
+      }
     } else if (!isSafeMarkdownImageSource(src)) {
-      image.removeAttribute('src')
+      // A source-less <img> still paints a broken placeholder/alt label and can
+      // duplicate the sandboxed InlineImageGallery that owns assistant paths.
+      // Removing the node keeps the no-request security boundary and leaves one
+      // visual owner for the image.
+      image.remove()
+      return
     }
     // srcset can trigger several independent fetches and is never needed for
     // assistant Markdown. Keep it absent even when an img has a safe src.
@@ -389,10 +402,10 @@ function enhanceMarkdownHtml(
 
   // Last, so it only ever sees text that is not already inside an anchor — and
   // so the `target="_blank"` pass above cannot reach the file links it creates.
-  if (wantsFilePathLinks) linkifyFilePaths(container)
-  else if (wantsFileLinkStripping) unwrapFileLinks(container)
+  if (wantsFilePathLinks) linkifyFilePaths(container as unknown as HTMLElement)
+  else if (wantsFileLinkStripping) unwrapFileLinks(container as unknown as HTMLElement)
 
-  return container.innerHTML
+  return template.innerHTML
 }
 
 function parseMarkdown(content: string): { html: string; codeBlocks: CodeBlock[]; mathBlocks: MathBlock[] } {

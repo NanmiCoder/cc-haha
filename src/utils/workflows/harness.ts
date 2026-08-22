@@ -1,6 +1,7 @@
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { logForDebugging } from '../debug.js'
+import { agentWorktreeUnavailableReason } from '../worktree.js'
 import { describeThrown, thrownName } from './errors.js'
 import {
   WORKFLOW_AGENT_CAP_MESSAGE,
@@ -141,6 +142,7 @@ export function createWorkflowHarness(
   let currentPhase: string | undefined
   let capReported = false
   let budgetReported = false
+  let isolationDegradeReported = false
   /** Journal replay stops permanently at the first cache miss (see resume docs). */
   let cacheExhausted = false
   let previousCacheKey = ''
@@ -210,6 +212,22 @@ export function createWorkflowHarness(
       )
     }
 
+    // A workspace with no git repository and no WorktreeCreate hook cannot
+    // provision a worktree. That is not a reason to fail the agent — it runs
+    // in the workspace directory instead — but the run must say so once, and
+    // the progress row must not claim an isolation the agent never got.
+    const isolationUnavailable =
+      opts.isolation === 'worktree' ? agentWorktreeUnavailableReason() : null
+    if (isolationUnavailable && !isolationDegradeReported) {
+      isolationDegradeReported = true
+      emit({
+        type: 'workflow_log',
+        message:
+          `worktree isolation unavailable (${isolationUnavailable}) — agents run in the workspace directory. ` +
+          'Run `git init` there, or configure WorktreeCreate/WorktreeRemove hooks, for isolated runs.',
+      })
+    }
+
     const cacheKey = journal
       ? workflowCacheKey(prompt, opts, previousCacheKey)
       : undefined
@@ -257,7 +275,9 @@ export function createWorkflowHarness(
       lastProgressAt: queuedAt,
       promptPreview,
       ...(opts.agentType ? { agentType: opts.agentType } : {}),
-      ...(opts.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+      ...(opts.isolation === 'worktree' && !isolationUnavailable
+        ? { isolation: 'worktree' as const }
+        : {}),
     }
     emit(baseEvent)
 

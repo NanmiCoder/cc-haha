@@ -27,6 +27,20 @@ describe('openWithContextForHref', () => {
     expect(result).toEqual({ kind: 'file', absolutePath: '/w/docs/a.md', relPath: 'docs/a.md', previewable: true })
   })
 
+  it('relative office document with workDir → actionable but not workspace-previewable', () => {
+    const result = openWithContextForHref('reports/brief.docx', {
+      sessionId: SESSION,
+      serverBaseUrl: BASE,
+      workDir: '/w',
+    })
+    expect(result).toEqual({
+      kind: 'file',
+      absolutePath: '/w/reports/brief.docx',
+      relPath: 'reports/brief.docx',
+      previewable: false,
+    })
+  })
+
   it('absolute path in browser-file → inAppBrowserUrl via localFileUrl ($HOME-sandboxed route)', () => {
     const result = openWithContextForHref('/x/p.html', { sessionId: SESSION, serverBaseUrl: BASE })
     expect(result).toEqual({

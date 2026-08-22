@@ -20,6 +20,12 @@ describe('classifyPreviewLink', () => {
     // surface would just dump the source as plain text.
     expect(classifyPreviewLink('/Users/x/app.ts').kind).toBe('file-preview')
   })
+  it('routes office and archive files to their system application instead of the code preview', () => {
+    expect(classifyPreviewLink('reports/brief.docx')).toMatchObject({ kind: 'system-file', path: 'reports/brief.docx' })
+    expect(classifyPreviewLink('reports/budget.xlsx').kind).toBe('system-file')
+    expect(classifyPreviewLink('reports/launch.pptx').kind).toBe('system-file')
+    expect(classifyPreviewLink('exports/archive.zip').kind).toBe('system-file')
+  })
   it('reads the line suffix the system prompt asks the model to write', () => {
     expect(classifyPreviewLink('src/app.ts:42')).toMatchObject({ kind: 'file-preview', path: 'src/app.ts', line: 42 })
     expect(classifyPreviewLink('src/app.ts:42:8')).toMatchObject({ path: 'src/app.ts', line: 42, column: 8 })

@@ -676,6 +676,9 @@ export const handleWebSocket = {
             turnState: hasLiveUserTurnForClient(ws.data.sessionId)
               ? 'running'
               : 'idle',
+            activeBackgroundTaskIds: [
+              ...(activeBackgroundTaskIds.get(ws.data.sessionId) ?? []),
+            ],
           })
           break
 

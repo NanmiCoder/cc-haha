@@ -477,20 +477,6 @@ function getTurnMessageRange(
   return { start, end: nextUserIndex >= 0 ? nextUserIndex : activeMessages.length }
 }
 
-function hasCompletedTurn(
-  activeMessages: Awaited<ReturnType<typeof sessionService.getSessionMessages>>,
-  targetUserMessageId: string,
-): boolean {
-  const range = getTurnMessageRange(activeMessages, targetUserMessageId)
-  if (!range) return false
-  return activeMessages.slice(range.start + 1, range.end).some((message) =>
-    message.type === 'assistant' ||
-    message.type === 'tool_use' ||
-    message.type === 'tool_result' ||
-    message.type === 'error',
-  )
-}
-
 function getNextUserMessageId(
   userMessages: Awaited<ReturnType<typeof sessionService.getSessionMessages>>,
   userMessageIndex: number,
@@ -799,6 +785,62 @@ function getToolUseIds(messages: MessageEntry[]): Set<string> {
   return ids
 }
 
+type IndexedTranscriptMessage = {
+  index: number
+  message: MessageEntry
+}
+
+type TranscriptTurnContext = {
+  activeMessageIndex: number
+  completed: boolean
+  messages: MessageEntry[]
+  userMessage: MessageEntry
+  userMessageIndex: number
+}
+
+function buildChildMessagesByParentToolUseId(
+  activeMessages: MessageEntry[],
+): Map<string, IndexedTranscriptMessage[]> {
+  // SubAgent entries sit outside the root turn slice. Index their ownership once
+  // so listing every turn does not rescan the complete transcript for each one.
+  const childMessagesByParentToolUseId = new Map<string, IndexedTranscriptMessage[]>()
+  for (const [index, message] of activeMessages.entries()) {
+    if (!message.parentToolUseId) continue
+    const existing = childMessagesByParentToolUseId.get(message.parentToolUseId)
+    const indexedMessage = { index, message }
+    if (existing) existing.push(indexedMessage)
+    else childMessagesByParentToolUseId.set(message.parentToolUseId, [indexedMessage])
+  }
+  return childMessagesByParentToolUseId
+}
+
+function collectReachableTranscriptMessages(
+  parentTurnMessages: MessageEntry[],
+  childMessagesByParentToolUseId: Map<string, IndexedTranscriptMessage[]>,
+): MessageEntry[] {
+  const pendingToolUseIds = [...getToolUseIds(parentTurnMessages)]
+  if (pendingToolUseIds.length === 0) return parentTurnMessages
+
+  const expandedToolUseIds = new Set<string>()
+  const includedMessageIds = new Set(parentTurnMessages.map((message) => message.id))
+  const childMessages: IndexedTranscriptMessage[] = []
+  for (let cursor = 0; cursor < pendingToolUseIds.length; cursor += 1) {
+    const toolUseId = pendingToolUseIds[cursor]!
+    if (expandedToolUseIds.has(toolUseId)) continue
+    expandedToolUseIds.add(toolUseId)
+
+    for (const indexedMessage of childMessagesByParentToolUseId.get(toolUseId) ?? []) {
+      if (includedMessageIds.has(indexedMessage.message.id)) continue
+      includedMessageIds.add(indexedMessage.message.id)
+      childMessages.push(indexedMessage)
+      pendingToolUseIds.push(...getToolUseIds([indexedMessage.message]))
+    }
+  }
+
+  childMessages.sort((left, right) => left.index - right.index)
+  return [...parentTurnMessages, ...childMessages.map(({ message }) => message)]
+}
+
 function getTranscriptTurnMessages(
   activeMessages: MessageEntry[],
   targetUserMessageId: string,
@@ -808,41 +850,45 @@ function getTranscriptTurnMessages(
 
   const rawTurnMessages = activeMessages.slice(range.start + 1, range.end)
   const parentTurnMessages = rawTurnMessages.filter((message) => !message.parentToolUseId)
-  const reachableToolUseIds = getToolUseIds(parentTurnMessages)
-  if (reachableToolUseIds.size === 0) return parentTurnMessages
-
-  const turnMessages = [...parentTurnMessages]
-  const includedIds = new Set(parentTurnMessages.map((message) => message.id))
-  let foundChildMessage = true
-  while (foundChildMessage) {
-    foundChildMessage = false
-    for (const message of activeMessages) {
-      if (
-        includedIds.has(message.id) ||
-        !message.parentToolUseId ||
-        !reachableToolUseIds.has(message.parentToolUseId)
-      ) {
-        continue
-      }
-
-      turnMessages.push(message)
-      includedIds.add(message.id)
-      for (const toolUseId of getToolUseIds([message])) {
-        reachableToolUseIds.add(toolUseId)
-      }
-      foundChildMessage = true
-    }
-  }
-
-  return turnMessages
+  return collectReachableTranscriptMessages(
+    parentTurnMessages,
+    buildChildMessagesByParentToolUseId(activeMessages),
+  )
 }
 
-function collectTranscriptTurnFileChanges(
+function buildTranscriptTurnContexts(
   activeMessages: MessageEntry[],
-  targetUserMessageId: string,
+): TranscriptTurnContext[] {
+  const userMessages = activeMessages.flatMap((message, activeMessageIndex) =>
+    message.type === 'user' ? [{ activeMessageIndex, message }] : [])
+  const childMessagesByParentToolUseId = buildChildMessagesByParentToolUseId(activeMessages)
+
+  return userMessages.map(({ activeMessageIndex, message: userMessage }, userMessageIndex) => {
+    const end = userMessages[userMessageIndex + 1]?.activeMessageIndex ?? activeMessages.length
+    const rawTurnMessages = activeMessages.slice(activeMessageIndex + 1, end)
+    const parentTurnMessages = rawTurnMessages.filter((message) => !message.parentToolUseId)
+    return {
+      activeMessageIndex,
+      completed: rawTurnMessages.some((message) =>
+        message.type === 'assistant' ||
+        message.type === 'tool_use' ||
+        message.type === 'tool_result' ||
+        message.type === 'error'
+      ),
+      messages: collectReachableTranscriptMessages(
+        parentTurnMessages,
+        childMessagesByParentToolUseId,
+      ),
+      userMessage,
+      userMessageIndex,
+    }
+  })
+}
+
+function collectTranscriptFileChanges(
+  turnMessages: MessageEntry[],
   baseDir: string,
 ): TranscriptTurnFileEvidence {
-  const turnMessages = getTranscriptTurnMessages(activeMessages, targetUserMessageId)
   if (turnMessages.length === 0) {
     return { confirmedChanges: [], uncertainChanges: [], unverifiedChangeSources: [] }
   }
@@ -913,6 +959,17 @@ function collectTranscriptTurnFileChanges(
     uncertainChanges: sortChanges(uncertainChanges),
     unverifiedChangeSources: normalizeUnverifiedChangeSources(unverifiedChangeSources),
   }
+}
+
+function collectTranscriptTurnFileChanges(
+  activeMessages: MessageEntry[],
+  targetUserMessageId: string,
+  baseDir: string,
+): TranscriptTurnFileEvidence {
+  return collectTranscriptFileChanges(
+    getTranscriptTurnMessages(activeMessages, targetUserMessageId),
+    baseDir,
+  )
 }
 
 function buildTranscriptTurnCodePreview(
@@ -1112,6 +1169,7 @@ async function buildTurnCodePreview(
   checkpointBaseDir: string,
   targetSnapshot: FileHistorySnapshot,
   nextSnapshot: FileHistorySnapshot | null,
+  signal?: AbortSignal,
 ): Promise<SnapshotTurnCodePreview> {
   const trackedPaths = Object.keys(targetSnapshot.trackedFileBackups)
   const coveredPathIdentities = new Set<string>()
@@ -1125,6 +1183,7 @@ async function buildTurnCodePreview(
   let restoreAvailable = true
 
   for (const trackingPath of trackedPaths) {
+    signal?.throwIfAborted()
     const identityPath = toFileIdentityPath(
       expandTrackingPath(checkpointBaseDir, trackingPath),
     )
@@ -1158,6 +1217,7 @@ async function buildTurnCodePreview(
         nextSnapshot,
       )
     const safeTrackedPath = await isSafeTrackedPath(checkpointBaseDir, trackingPath)
+    signal?.throwIfAborted()
     if (restorePointAvailable && safeTrackedPath) {
       restorablePathIdentities.add(identityPath)
     }
@@ -1550,12 +1610,40 @@ async function buildTurnCheckpointState(
   const nextSnapshot = nextUserMessageId && snapshots
     ? findTargetSnapshot(snapshots, nextUserMessageId)
     : null
+  return await buildTurnCheckpointStateFromContext(
+    sessionId,
+    transcriptEvidenceComplete,
+    target,
+    checkpointBaseDir,
+    targetSnapshot,
+    nextSnapshot,
+    getTranscriptTurnMessages(activeMessages, target.targetUserMessageId),
+  )
+}
+
+async function buildTurnCheckpointStateFromContext(
+  sessionId: string,
+  transcriptEvidenceComplete: boolean,
+  target: RewindTarget,
+  checkpointBaseDir: string,
+  targetSnapshot: FileHistorySnapshot | null,
+  nextSnapshot: FileHistorySnapshot | null,
+  turnMessages: MessageEntry[],
+  signal?: AbortSignal,
+): Promise<SessionTurnCheckpointPreview> {
+  signal?.throwIfAborted()
   const snapshotPreview = targetSnapshot
-    ? await buildTurnCodePreview(sessionId, checkpointBaseDir, targetSnapshot, nextSnapshot)
+    ? await buildTurnCodePreview(
+      sessionId,
+      checkpointBaseDir,
+      targetSnapshot,
+      nextSnapshot,
+      signal,
+    )
     : null
-  const transcriptEvidence = collectTranscriptTurnFileChanges(
-    activeMessages,
-    target.targetUserMessageId,
+  signal?.throwIfAborted()
+  const transcriptEvidence = collectTranscriptFileChanges(
+    turnMessages,
     checkpointBaseDir,
   )
   const { preview, restoreAvailable, unverifiedChangeSources } = mergeTurnCodePreviews(
@@ -1706,40 +1794,49 @@ export async function previewSessionRewind(
 
 export async function listSessionTurnCheckpoints(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<SessionTurnCheckpointPreview[]> {
   const {
     messages: activeMessages,
     transcriptEvidenceComplete,
   } = await sessionService.getSessionMessagesWithEvidence(sessionId)
-  const userMessages = activeMessages.filter((message) => message.type === 'user')
-  if (userMessages.length === 0) {
+  signal?.throwIfAborted()
+  const turns = buildTranscriptTurnContexts(activeMessages)
+  if (turns.length === 0) {
     return []
   }
 
   const workDir = await resolveSessionWorkDir(sessionId)
   const snapshots = await loadFileHistorySnapshots(sessionId)
+  signal?.throwIfAborted()
+  const snapshotByMessageId = new Map<string, FileHistorySnapshot>()
+  for (const snapshot of snapshots ?? []) {
+    snapshotByMessageId.set(snapshot.messageId, snapshot)
+  }
   const checkpoints: SessionTurnCheckpointPreview[] = []
 
-  for (const [userMessageIndex, userMessage] of userMessages.entries()) {
-    const activeMessageIndex = activeMessages.findIndex(
-      (message) => message.id === userMessage.id,
-    )
-    if (activeMessageIndex < 0) continue
-    if (!hasCompletedTurn(activeMessages, userMessage.id)) continue
+  for (const turn of turns) {
+    signal?.throwIfAborted()
+    if (!turn.completed) continue
 
     const target: RewindTarget = {
-      targetUserMessageId: userMessage.id,
-      userMessageIndex,
-      userMessageCount: userMessages.length,
-      messagesRemoved: activeMessages.length - activeMessageIndex,
+      targetUserMessageId: turn.userMessage.id,
+      userMessageIndex: turn.userMessageIndex,
+      userMessageCount: turns.length,
+      messagesRemoved: activeMessages.length - turn.activeMessageIndex,
     }
-    const checkpoint = await buildTurnCheckpointState(
+    const nextUserMessageId = turns[turn.userMessageIndex + 1]?.userMessage.id
+    // `getSessionMessagesWithEvidence` already preserved this entry's cwd. Using
+    // it here avoids reading and parsing the complete JSONL again for every turn.
+    const checkpoint = await buildTurnCheckpointStateFromContext(
       sessionId,
-      activeMessages,
       transcriptEvidenceComplete,
-      snapshots,
-      workDir,
       target,
+      turn.userMessage.cwd ?? workDir,
+      snapshotByMessageId.get(turn.userMessage.id) ?? null,
+      nextUserMessageId ? snapshotByMessageId.get(nextUserMessageId) ?? null : null,
+      turn.messages,
+      signal,
     )
 
     if (!checkpoint.code.available) continue

@@ -1496,9 +1496,10 @@ const VIRTUAL_DEFAULT_VIEWPORT_HEIGHT = 720
  *  ResizeObserver's reading too, so no amount of measuring corrects it. */
 const VIRTUAL_MIN_ITEM_HEIGHT = 24
 const VIRTUAL_MAX_ITEM_HEIGHT = 24_000
-// Chromium on Windows can report up to 2px oscillations for live chat content;
-// don't convert those into bottom-scroll corrections.
-const CONTENT_RESIZE_FOLLOW_JITTER_MAX_DELTA_PX = 2
+// Chromium on Windows can report up to 2px ResizeObserver oscillations at
+// fractional DPI. Keep the last accepted value as the baseline so cumulative
+// real growth still crosses the band; only the back-and-forth noise is dropped.
+const RESIZE_OBSERVER_JITTER_MAX_DELTA_PX = 2
 // Native scroll anchoring and fractional DPI can leave the WebView a few CSS
 // pixels shy of its computed bottom. Rewriting that correction on every live
 // delta makes the two owners fight and turns the rounding into visible bounce.
@@ -2147,7 +2148,12 @@ const MeasuredRenderItem = memo(function MeasuredRenderItem({
       // environments that stub ResizeObserver with `contentRect` alone.
       const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
       if (Number.isFinite(height) && height > 0) {
-        onHeightChange(itemKey, Math.ceil(height))
+        // Keep the layout engine's fractional CSS-pixel measurement. Rounding
+        // each sample upward creates a discontinuity at every integer boundary:
+        // at fractional Windows DPI a stable row reported as 117.99/118.01px
+        // then becomes 118/119px, bypasses the sub-pixel guard below, and makes
+        // the virtual window repaint forever (#1223).
+        onHeightChange(itemKey, height)
       }
     })
     observer.observe(node)
@@ -2453,7 +2459,10 @@ export function MessageList({
   const handleVirtualItemHeightChange = useCallback((itemKey: string, height: number) => {
     const measuredHeight = clampNumber(height, VIRTUAL_MIN_ITEM_HEIGHT, VIRTUAL_MAX_ITEM_HEIGHT)
     const previousHeight = virtualItemHeightsRef.current.get(itemKey)
-    if (previousHeight !== undefined && Math.abs(previousHeight - measuredHeight) < 1) return
+    if (
+      previousHeight !== undefined &&
+      Math.abs(previousHeight - measuredHeight) <= RESIZE_OBSERVER_JITTER_MAX_DELTA_PX
+    ) return
 
     virtualItemHeightsRef.current.set(itemKey, measuredHeight)
     if (hasPendingPermissionCard && shouldAutoScrollRef.current) {
@@ -2701,7 +2710,7 @@ export function MessageList({
         const previousFollowHeight = lastContentResizeFollowHeightRef.current
         if (
           previousFollowHeight !== null &&
-          Math.abs(nextHeight - previousFollowHeight) <= CONTENT_RESIZE_FOLLOW_JITTER_MAX_DELTA_PX
+          Math.abs(nextHeight - previousFollowHeight) <= RESIZE_OBSERVER_JITTER_MAX_DELTA_PX
         ) {
           return
         }
@@ -2949,11 +2958,12 @@ export function MessageList({
     }
 
     let cancelled = false
+    const controller = new AbortController()
     setIsLoadingTurnChangeCards(true)
     setTurnChangeLoadError(null)
 
     Promise.all([
-      sessionsApi.getTurnCheckpoints(resolvedSessionId),
+      sessionsApi.getTurnCheckpoints(resolvedSessionId, { signal: controller.signal }),
       sessionsApi.getWorkspaceStatus(resolvedSessionId).catch(() => null),
     ])
       .then(([checkpointResponse, workspaceStatus]) => {
@@ -2995,6 +3005,7 @@ export function MessageList({
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [chatState, completedTurnTargets, hasRunningBackgroundTasks, historyMutationEpoch, isDirectAgentSession, latestCompletedTurnId, resolvedSessionId])
 

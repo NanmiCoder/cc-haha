@@ -15,6 +15,7 @@ type OpenTargetState = {
   fetchedAt: number
   ensureTargets: () => Promise<void>
   refreshTargets: () => Promise<void>
+  getTargetsForPath: (path: string) => Promise<OpenTarget[]>
   openTarget: (targetId: string, path: string) => Promise<void>
 }
 
@@ -63,6 +64,11 @@ export const useOpenTargetStore = create<OpenTargetState>((set, get) => ({
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  },
+
+  getTargetsForPath: async (path) => {
+    const result = await openTargetsApi.listForPath(path)
+    return result.targets
   },
 
   openTarget: async (targetId, path) => {

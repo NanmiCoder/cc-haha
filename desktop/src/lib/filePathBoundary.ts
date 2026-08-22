@@ -36,7 +36,10 @@ export const LINKABLE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
   'json', 'jsonc', 'json5', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf',
   'xml', 'plist', 'entitlements', 'properties', 'lock', 'csv', 'tsv',
   // docs
-  'md', 'markdown', 'mdx', 'txt', 'rst', 'adoc', 'tex', 'log',
+  'md', 'markdown', 'mdx', 'txt', 'rst', 'adoc', 'tex', 'log', 'pdf',
+  'doc', 'docx', 'docm', 'odt', 'rtf', 'pages',
+  'xls', 'xlsx', 'xlsm', 'ods', 'numbers',
+  'ppt', 'pptx', 'pptm', 'odp', 'key',
   // scripts
   'sh', 'bash', 'zsh', 'fish', 'ps1', 'psm1', 'bat', 'cmd',
   // languages
@@ -47,7 +50,10 @@ export const LINKABLE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
   'c', 'cc', 'cpp', 'cxx', 'h', 'hh', 'hpp', 'm', 'mm', 's',
   // assets
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'ico',
-  'mp4', 'webm', 'mov', 'm4v', 'pdf',
+  'mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'opus',
+  'mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi',
+  // archives
+  'zip', '7z', 'rar', 'tar', 'gz', 'tgz', 'bz2', 'xz',
   // vcs / build artifacts worth opening
   'patch', 'diff', 'snap', 'map',
 ])

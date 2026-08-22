@@ -129,6 +129,85 @@ describe('persistent storage upgrade migrations', () => {
     expect(migrated.providers[0]?.futureField).toEqual({ preserved: true })
   })
 
+  test('turns legacy default Tool Search on into a safe opt-out during upgrade', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    await fs.writeFile(
+      path.join(ccHahaDir, 'providers.json'),
+      JSON.stringify({
+        schemaVersion: 3,
+        activeId: 'provider-v3',
+        providers: [{
+          id: 'provider-v3',
+          presetId: 'custom',
+          name: 'Version 3 Provider',
+          apiKey: 'chat-token',
+          baseUrl: 'https://v3.example.test',
+          apiFormat: 'anthropic',
+          toolSearchEnabled: true,
+          models: {
+            main: 'chat-model',
+            haiku: 'chat-model',
+            sonnet: 'chat-model',
+            opus: 'chat-model',
+          },
+          futureField: { preserved: true },
+        }],
+        providerOrder: ['provider-v3', 'claude-official', 'openai-official', 'grok-official'],
+      }, null, 2),
+      'utf-8',
+    )
+
+    const report = await ensurePersistentStorageUpgraded()
+
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).toContain('cc-haha/providers.json')
+    const migrated = JSON.parse(
+      await fs.readFile(path.join(ccHahaDir, 'providers.json'), 'utf-8'),
+    ) as { schemaVersion: number; providers: Array<Record<string, unknown>> }
+    expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    expect(migrated.providers[0]?.toolSearchEnabled).toBe(false)
+    expect(migrated.providers[0]?.futureField).toEqual({ preserved: true })
+  })
+
+  test('preserves Tool Search after explicit opt-in on the current provider schema', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    await fs.writeFile(
+      path.join(ccHahaDir, 'providers.json'),
+      JSON.stringify({
+        schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
+        activeId: 'provider-current',
+        providers: [{
+          id: 'provider-current',
+          presetId: 'custom',
+          name: 'Current Provider',
+          apiKey: 'chat-token',
+          baseUrl: 'https://current.example.test',
+          apiFormat: 'anthropic',
+          toolSearchEnabled: true,
+          models: {
+            main: 'chat-model',
+            haiku: 'chat-model',
+            sonnet: 'chat-model',
+            opus: 'chat-model',
+          },
+        }],
+        providerOrder: ['provider-current', 'claude-official', 'openai-official', 'grok-official'],
+      }, null, 2),
+      'utf-8',
+    )
+
+    const report = await ensurePersistentStorageUpgraded()
+
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).not.toContain('cc-haha/providers.json')
+    const current = JSON.parse(
+      await fs.readFile(path.join(ccHahaDir, 'providers.json'), 'utf-8'),
+    ) as { providers: Array<Record<string, unknown>> }
+    expect(current.providers[0]?.toolSearchEnabled).toBe(true)
+  })
+
   test('imports legacy root providers config into cc-haha storage without deleting the source', async () => {
     await fs.writeFile(
       path.join(tempDir, 'providers.json'),

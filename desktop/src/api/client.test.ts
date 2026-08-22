@@ -7,13 +7,110 @@ import {
   setAuthToken,
   setBaseUrl,
 } from './client'
+import { browserHost } from '../lib/desktopHost/browserHost'
 
 describe('api diagnostics reporting', () => {
   afterEach(() => {
     vi.useRealTimers()
     setAuthToken(null)
     setBaseUrl(getDefaultBaseUrl())
+    Reflect.deleteProperty(window, 'desktopHost')
     vi.restoreAllMocks()
+  })
+
+  it('recovers a desktop GET after the sidecar restarts on a new port', async () => {
+    const firstUrl = 'http://127.0.0.1:49231'
+    const recoveredUrl = 'http://127.0.0.1:49232'
+    const getServerUrl = vi.fn().mockResolvedValue(recoveredUrl)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+      },
+    }
+    setBaseUrl(firstUrl)
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url === `${firstUrl}/api/sessions/session-1/messages`) {
+        return Promise.reject(new TypeError('Failed to fetch'))
+      }
+      if (url === `${recoveredUrl}/api/sessions/session-1/messages`) {
+        return Promise.resolve(Response.json({ messages: [] }))
+      }
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+
+    await expect(api.get('/api/sessions/session-1/messages')).resolves.toEqual({ messages: [] })
+
+    expect(getServerUrl).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `${firstUrl}/api/sessions/session-1/messages`,
+      `${recoveredUrl}/api/sessions/session-1/messages`,
+    ])
+  })
+
+  it('does not replay a desktop mutation after a transport failure', async () => {
+    const getServerUrl = vi.fn().mockResolvedValue('http://127.0.0.1:49232')
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+      },
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input).endsWith('/api/providers/test')) {
+        return Promise.reject(new TypeError('Failed to fetch'))
+      }
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+
+    await expect(api.post('/api/providers/test', { value: 'once' })).rejects.toThrow('Failed to fetch')
+
+    expect(getServerUrl).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/providers/test')))
+      .toHaveLength(1)
+  })
+
+  it('coalesces recovery when concurrent desktop GETs observe the same sidecar exit', async () => {
+    const firstUrl = 'http://127.0.0.1:49241'
+    const recoveredUrl = 'http://127.0.0.1:49242'
+    let releaseRecovery!: (url: string) => void
+    const getServerUrl = vi.fn(() => new Promise<string>(resolve => {
+      releaseRecovery = resolve
+    }))
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+      },
+    }
+    setBaseUrl(firstUrl)
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.startsWith(firstUrl)) return Promise.reject(new TypeError('Failed to fetch'))
+      return Promise.resolve(Response.json({ url }))
+    })
+
+    const firstRequest = api.get<{ url: string }>('/api/sessions/session-1/messages')
+    const secondRequest = api.get<{ url: string }>('/api/sessions/session-2/messages')
+    await vi.waitFor(() => expect(getServerUrl).toHaveBeenCalledTimes(1))
+    releaseRecovery(recoveredUrl)
+
+    await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([
+      { url: `${recoveredUrl}/api/sessions/session-1/messages` },
+      { url: `${recoveredUrl}/api/sessions/session-2/messages` },
+    ])
+    expect(getServerUrl).toHaveBeenCalledTimes(1)
   })
 
   it('does not send Authorization for default local requests', async () => {
@@ -117,6 +214,16 @@ describe('api diagnostics reporting', () => {
 
   it('propagates caller cancellation without reporting an API failure', async () => {
     const controller = new AbortController()
+    const getServerUrl = vi.fn().mockResolvedValue('http://127.0.0.1:49252')
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+      },
+    }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock.mockImplementation((_url, init) => new Promise<Response>((_, reject) => {
       init?.signal?.addEventListener('abort', () => {
@@ -131,6 +238,7 @@ describe('api diagnostics reporting', () => {
 
     await expect(request).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(getServerUrl).not.toHaveBeenCalled()
   })
 
   it('defaults local API requests to a 120 second timeout', async () => {

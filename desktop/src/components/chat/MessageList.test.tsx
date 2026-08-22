@@ -14,7 +14,11 @@ import {
   trailingStreamingRailPosition,
 } from './MessageList'
 import type { ConversationNavigationItem } from './ConversationNavigator'
-import type { VirtualRenderItemMetric } from './virtualHeightCache'
+import {
+  dropSession,
+  getHeightsForSession,
+  type VirtualRenderItemMetric,
+} from './virtualHeightCache'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
 import { sessionsApi } from '../../api/sessions'
 import { teamsApi } from '../../api/teams'
@@ -360,6 +364,141 @@ describe('MessageList nested tool calls', () => {
     for (const item of container.querySelectorAll('[data-virtual-message-item]')) {
       expect((item as HTMLElement).className).not.toContain('chat-render-item--cv')
     }
+  })
+
+  it('renders a single optimistic image attachment at readable size through the real send transition', () => {
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+
+    act(() => {
+      useChatStore.getState().sendMessage(ACTIVE_TAB, '', [{
+        type: 'image',
+        name: 'single.png',
+        data: 'data:image/png;base64,AAAA',
+        mimeType: 'image/png',
+      }])
+    })
+
+    const className = screen.getByRole('img', { name: 'single.png' }).className
+    expect(className).toContain('max-h-[340px]')
+    expect(className).toContain('max-w-[360px]')
+  })
+
+  it('keeps the ImageGen result as the only image owner when final Markdown repeats its managed path', () => {
+    const generatedPath = '/Users/me/.claude/cc-haha/generated-images/session/result.png'
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+    const store = useChatStore.getState()
+
+    act(() => {
+      store.sendMessage(ACTIVE_TAB, 'Generate an image')
+      store.handleServerMessage(ACTIVE_TAB, {
+        type: 'content_start',
+        blockType: 'tool_use',
+        toolName: 'ImageGen',
+        toolUseId: 'imagegen-1',
+      })
+      store.handleServerMessage(ACTIVE_TAB, {
+        type: 'tool_use_complete',
+        toolName: 'ImageGen',
+        toolUseId: 'imagegen-1',
+        input: { prompt: 'A paper-cut fox', count: 1 },
+      })
+      store.handleServerMessage(ACTIVE_TAB, {
+        type: 'tool_result',
+        toolUseId: 'imagegen-1',
+        content: JSON.stringify({
+          type: 'image_generation_result',
+          operation: 'generate',
+          inputImageCount: 0,
+          providerId: 'openai-official',
+          providerKind: 'openai_oauth',
+          model: 'gpt-image-2',
+          prompt: 'A paper-cut fox',
+          images: [{ path: generatedPath, mimeType: 'image/png' }],
+          durationMs: 1200,
+        }),
+        isError: false,
+      })
+      store.handleServerMessage(ACTIVE_TAB, { type: 'content_start', blockType: 'text' })
+      store.handleServerMessage(ACTIVE_TAB, {
+        type: 'content_delta',
+        text: `Created ![result](${generatedPath})`,
+      })
+      store.handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' })
+    })
+
+    const images = screen.getAllByRole('img')
+    expect(images).toHaveLength(1)
+    expect(images[0]?.getAttribute('src')).toContain(encodeURIComponent(generatedPath))
+    expect(document.querySelector('img:not([src])')).toBeNull()
+  })
+
+  it('keeps fractional border-box jitter from invalidating a settled virtual row', async () => {
+    const sessionId = 'virtual-row-measurement-jitter'
+    const observers: Array<{
+      callback: ResizeObserverCallback
+      targets: Element[]
+    }> = []
+    class TestResizeObserver {
+      targets: Element[] = []
+      observe = vi.fn((target: Element) => {
+        this.targets.push(target)
+      })
+      unobserve = vi.fn()
+      disconnect = vi.fn()
+
+      constructor(callback: ResizeObserverCallback) {
+        observers.push({ callback, targets: this.targets })
+      }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    dropSession(sessionId)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: makeSessionState({
+          messages: Array.from({ length: 220 }, (_, index) => ({
+            id: `fractional-assistant-${index}`,
+            type: 'assistant_text' as const,
+            content: `fractional transcript line ${index}`,
+            timestamp: index,
+          })),
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const item = container.querySelector<HTMLElement>('[data-virtual-message-item]')
+    expect(item).toBeTruthy()
+    const itemKey = item!.dataset.virtualMessageItem!
+    const itemObserver = observers.find(({ targets }) => targets.includes(item!))
+    expect(itemObserver).toBeTruthy()
+
+    const reportHeight = async (height: number) => {
+      act(() => {
+        itemObserver?.callback([{
+          target: item!,
+          borderBoxSize: [{ blockSize: height, inlineSize: 800 }],
+          contentRect: { height: height - 8 },
+        } as unknown as ResizeObserverEntry], {} as ResizeObserver)
+      })
+      await waitForProgrammaticScrollReset()
+    }
+
+    // Windows fractional DPI can place a stable border box on opposite sides
+    // of an integer boundary. Ceil turned this sub-pixel noise into an endless
+    // 1px cache update and MessageList repaint (#1223).
+    await reportHeight(117.99)
+    expect(getHeightsForSession(sessionId).get(itemKey)).toBeCloseTo(117.99)
+
+    await reportHeight(118.01)
+    expect(getHeightsForSession(sessionId).get(itemKey)).toBeCloseTo(117.99)
+
+    await reportHeight(119.99)
+    expect(getHeightsForSession(sessionId).get(itemKey)).toBeCloseTo(117.99)
+
+    // A real layout change still has to update the virtual offsets.
+    await reportHeight(121.25)
+    expect(getHeightsForSession(sessionId).get(itemKey)).toBeCloseTo(121.25)
+    dropSession(sessionId)
   })
 
   it('finds, mounts, navigates, and highlights matches outside a 120-item virtual window', async () => {
@@ -5977,6 +6116,41 @@ describe('MessageList nested tool calls', () => {
 
     expect(await screen.findByText('App.jsx')).toBeTruthy()
     expect(getTurnCheckpoints).toHaveBeenCalledTimes(2)
+  })
+
+  it('aborts the stale turn checkpoint request when the viewed session changes', async () => {
+    const requests: Array<{ sessionId: string; signal?: AbortSignal }> = []
+    vi.mocked(sessionsApi.getTurnCheckpoints).mockImplementation((sessionId, options) => {
+      requests.push({ sessionId, signal: options?.signal })
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(options.signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+        }, { once: true })
+      })
+    })
+
+    const completedMessages: UIMessage[] = [
+      { id: 'user-1', type: 'user_text', content: 'Generate a file', timestamp: 1 },
+      { id: 'assistant-1', type: 'assistant_text', content: 'Done', timestamp: 2 },
+    ]
+    useChatStore.setState({
+      sessions: {
+        'session-one': makeSessionState({ messages: completedMessages }),
+        'session-two': makeSessionState({ messages: completedMessages }),
+      },
+    })
+
+    const { rerender } = render(<MessageList sessionId="session-one" />)
+    await waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]).toMatchObject({ sessionId: 'session-one' })
+    expect(requests[0]?.signal?.aborted).toBe(false)
+
+    rerender(<MessageList sessionId="session-two" />)
+
+    await waitFor(() => expect(requests).toHaveLength(2))
+    expect(requests[0]?.signal?.aborted).toBe(true)
+    expect(requests[1]).toMatchObject({ sessionId: 'session-two' })
+    expect(requests[1]?.signal?.aborted).toBe(false)
   })
 
   it('rewinds a live turn with the authoritative checkpoint id when the local UI id differs', async () => {

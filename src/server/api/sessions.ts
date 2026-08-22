@@ -193,7 +193,7 @@ export async function handleSessionsApi(
       }
       return segments[4] === 'diff'
         ? await getTurnCheckpointDiff(sessionId, url)
-        : await getTurnCheckpoints(sessionId)
+        : await getTurnCheckpoints(req, sessionId)
     }
 
     if (subResource === 'slash-commands') {
@@ -1136,8 +1136,8 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   }
 }
 
-async function getTurnCheckpoints(sessionId: string): Promise<Response> {
-  const checkpoints = await listSessionTurnCheckpoints(sessionId)
+async function getTurnCheckpoints(req: Request, sessionId: string): Promise<Response> {
+  const checkpoints = await listSessionTurnCheckpoints(sessionId, req.signal)
   // Make this turn's real changed files previewable even when they live outside
   // the session workdir (e.g. the user told the model to write to an absolute
   // path on another drive). Writing them was authorized, so previewing is too.

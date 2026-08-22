@@ -6170,6 +6170,65 @@ describe('Sessions API', () => {
     ])
   })
 
+  it('GET /api/sessions/:id/turn-checkpoints should reuse the loaded transcript cwd for every turn', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000021'
+    const projectDir = '-tmp-long-turn-checkpoint-session'
+    const workDir = path.join(tmpDir, 'long-turn-checkpoint-session')
+    const turnCount = 200
+    const entries: Record<string, unknown>[] = [makeSessionMetaEntry(workDir)]
+
+    await fs.mkdir(workDir, { recursive: true })
+    for (let index = 0; index < turnCount; index += 1) {
+      const userId = crypto.randomUUID()
+      const toolUseId = `Write:long-turn-${index}`
+      entries.push(
+        {
+          ...makeUserEntry(`write turn ${index}`, userId),
+          cwd: workDir,
+          sessionId,
+        },
+        {
+          ...makeAssistantToolUseEntry([{
+            id: toolUseId,
+            name: 'Write',
+            input: {
+              file_path: path.join(workDir, `turn-${index}.ts`),
+              content: `export const turn = ${index}\n`,
+            },
+          }], userId),
+          cwd: workDir,
+          sessionId,
+        },
+        {
+          ...makeToolResultUserEntry(
+            toolUseId,
+            'Written successfully.',
+            undefined,
+            undefined,
+            sessionId,
+          ),
+          cwd: workDir,
+        },
+      )
+    }
+    await writeSessionFile(projectDir, sessionId, entries)
+
+    const messagesSpy = spyOn(sessionService, 'getSessionMessagesWithEvidence')
+    const messageCwdSpy = spyOn(sessionService, 'getSessionMessageCwd')
+    try {
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+      expect(res.status).toBe(200)
+      const body = await res.json() as { checkpoints: unknown[] }
+
+      expect(body.checkpoints).toHaveLength(turnCount)
+      expect(messagesSpy).toHaveBeenCalledTimes(1)
+      expect(messageCwdSpy).not.toHaveBeenCalled()
+    } finally {
+      messagesSpy.mockRestore()
+      messageCwdSpy.mockRestore()
+    }
+  })
+
   it('GET /api/sessions/:id/turn-checkpoints should keep an available empty preview for an unchanged snapshot-backed turn', async () => {
     const sessionId = '99999999-bbbb-cccc-dddd-000000000005'
     const workDir = path.join(tmpDir, 'unchanged-snapshot-session')

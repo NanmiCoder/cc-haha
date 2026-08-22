@@ -43,8 +43,10 @@ type ServerRuntimeOptions = {
 
 type ServerRuntimeDeps = {
   appendHostDiagnostic: typeof appendHostDiagnostic
+  now: () => number
   preferredServerPorts: typeof preferredServerPorts
   reserveServerPort: typeof reserveServerPort
+  sleep: (delayMs: number) => Promise<void>
   spawnSidecar: typeof spawnSidecar
   waitForServer: typeof waitForServer
   writeLastServerPort: typeof writeLastServerPort
@@ -53,13 +55,20 @@ type ServerRuntimeDeps = {
 
 const DEFAULT_SERVER_RUNTIME_DEPS: ServerRuntimeDeps = {
   appendHostDiagnostic,
+  now: Date.now,
   preferredServerPorts,
   reserveServerPort,
+  sleep: delayMs => new Promise(resolve => setTimeout(resolve, delayMs)),
   spawnSidecar,
   waitForServer,
   writeLastServerPort,
   createSystemProxyBridge: resolveSystemProxy => new SystemProxyBridge(resolveSystemProxy),
 }
+
+const AUTOMATIC_RESTART_LIMIT = 3
+const AUTOMATIC_RESTART_STABLE_MS = 60_000
+const AUTOMATIC_RESTART_COOLDOWN_MS = 60_000
+const AUTOMATIC_RESTART_BACKOFF_MS = [0, 250, 1_000] as const
 
 type ServerStartState = {
   child: SidecarChild
@@ -74,6 +83,7 @@ type ActiveServer = {
   url: string
   child: SidecarChild
   adapterChildren: SidecarChild[]
+  startedAt: number
 }
 
 function createServerStartState(child: SidecarChild): ServerStartState {
@@ -114,6 +124,9 @@ export class ElectronServerRuntime {
   private adapters: SidecarChild[] = []
   private startupError: string | null = null
   private restartAfterExit = false
+  private automaticRestartAttempts = 0
+  private restartBlockedUntil = 0
+  private restartNotBefore = 0
   private startPromise: Promise<string> | null = null
   private lifecycleGeneration = 0
   private startingServer: ServerStartState | null = null
@@ -132,10 +145,12 @@ export class ElectronServerRuntime {
   async startServer(): Promise<string> {
     if (this.server) return this.server.url
     if (this.startPromise) return this.startPromise
+    this.assertRestartCircuitAllowsStart()
 
     this.restartAfterExit = false
     const generation = this.lifecycleGeneration
-    this.startPromise = this.startServerOnce(generation)
+    const restartDelayMs = Math.max(0, this.restartNotBefore - this.deps.now())
+    this.startPromise = this.startServerAfterDelay(generation, restartDelayMs)
     try {
       return await this.startPromise
     } finally {
@@ -146,6 +161,7 @@ export class ElectronServerRuntime {
   async getServerUrl(): Promise<string> {
     if (this.server) return this.server.url
     if (this.startPromise) return await this.startServer()
+    this.assertRestartCircuitAllowsStart()
     if (this.startupError && !this.restartAfterExit) throw new Error(this.startupError)
     return await this.startServer()
   }
@@ -182,6 +198,7 @@ export class ElectronServerRuntime {
 
   stopAll(sync = false) {
     ++this.lifecycleGeneration
+    this.restartNotBefore = 0
     const starting = this.startingServer
     if (starting) {
       this.startingServer = null
@@ -199,6 +216,12 @@ export class ElectronServerRuntime {
       this.server = null
     }
     this.stopSystemProxyBridge()
+  }
+
+  private async startServerAfterDelay(generation: number, delayMs: number): Promise<string> {
+    if (delayMs > 0) await this.deps.sleep(delayMs)
+    this.assertCurrentGeneration(generation)
+    return await this.startServerOnce(generation)
   }
 
   private async startServerOnce(generation: number): Promise<string> {
@@ -238,7 +261,12 @@ export class ElectronServerRuntime {
       ])
       if (startState.failure) throw startState.failure
       this.deps.writeLastServerPort(port, this.baseEnv)
-      this.server = { url, child, adapterChildren: startState.adapterChildren }
+      this.server = {
+        url,
+        child,
+        adapterChildren: startState.adapterChildren,
+        startedAt: this.deps.now(),
+      }
       const activeServer = this.server
       this.startupError = null
       this.stopAdaptersSidecars()
@@ -418,6 +446,7 @@ export class ElectronServerRuntime {
     const active = this.server?.child === child
     const starting = this.startingServer?.child === child
     if (!active && !starting) return
+    const failedServer = active ? this.server : null
     if (active) {
       const adapterChildren = this.server!.adapterChildren
       this.server = null
@@ -426,6 +455,52 @@ export class ElectronServerRuntime {
     this.restartAfterExit = true
     this.startupError = formatStartupError(message, logs)
     if (starting) this.startingServer?.fail(new Error(message))
+    if (failedServer && !starting) {
+      const now = this.deps.now()
+      if (now - failedServer.startedAt >= AUTOMATIC_RESTART_STABLE_MS) {
+        this.automaticRestartAttempts = 0
+      }
+      if (this.automaticRestartAttempts >= AUTOMATIC_RESTART_LIMIT) {
+        this.openAutomaticRestartCircuit(message, logs, now)
+        return
+      }
+      const attempt = ++this.automaticRestartAttempts
+      const backoffMs = AUTOMATIC_RESTART_BACKOFF_MS[attempt - 1] ?? 0
+      this.restartNotBefore = now + backoffMs
+      const restartGeneration = this.lifecycleGeneration
+      void this.startServer().catch((error) => {
+        if (this.lifecycleGeneration === restartGeneration) {
+          // Keep a later renderer recovery request eligible to retry if this
+          // immediate restart lost a port-release race or failed transiently.
+          this.restartAfterExit = true
+        }
+        const detail = sanitizeHostDiagnostic(error instanceof Error ? error.message : String(error))
+        console.error(`[desktop] failed to restart server sidecar after exit: ${detail}`)
+      })
+    }
+  }
+
+  private openAutomaticRestartCircuit(message: string, logs: string[], now: number) {
+    this.restartAfterExit = false
+    this.restartNotBefore = 0
+    this.restartBlockedUntil = now + AUTOMATIC_RESTART_COOLDOWN_MS
+    const circuitMessage = `automatic restart paused after ${AUTOMATIC_RESTART_LIMIT} consecutive crashes; retry in ${AUTOMATIC_RESTART_COOLDOWN_MS / 1_000} seconds`
+    this.startupError = formatStartupError(`${message}; ${circuitMessage}`, logs)
+    this.deps.appendHostDiagnostic(
+      this.diagnosticsFile,
+      `[claude-server] [restart-circuit-open] ${circuitMessage}`,
+    )
+    console.error(`[desktop] ${circuitMessage}`)
+  }
+
+  private assertRestartCircuitAllowsStart() {
+    if (this.restartBlockedUntil === 0) return
+    if (this.deps.now() < this.restartBlockedUntil) {
+      throw new Error(this.startupError ?? 'automatic restart paused')
+    }
+    this.restartBlockedUntil = 0
+    this.automaticRestartAttempts = 0
+    this.restartAfterExit = true
   }
 
   private stopAdapterChildren(children: SidecarChild[], sync = false) {

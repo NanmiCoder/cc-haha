@@ -10,6 +10,7 @@ import { z } from 'zod'
 export const CLAUDE_OFFICIAL_PROVIDER_ID = 'claude-official'
 export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
 export const GROK_OFFICIAL_PROVIDER_ID = 'grok-official'
+export const PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION = 4
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,

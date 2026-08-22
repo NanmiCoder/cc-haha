@@ -83,6 +83,19 @@ type SessionScrollAnchor = {
   topOffset: number
 }
 
+function openInFileManagerKey(platform: string | null): TranslationKey {
+  switch (platform) {
+    case 'darwin':
+      return 'sidebar.openInFileManager.darwin'
+    case 'win32':
+      return 'sidebar.openInFileManager.win32'
+    case 'linux':
+      return 'sidebar.openInFileManager.linux'
+    default:
+      return 'sidebar.openInFileManager.default'
+  }
+}
+
 export function Sidebar({
   isMobile = false,
   onRequestClose,
@@ -116,6 +129,10 @@ export function Sidebar({
   const chatSessions = useChatStore((s) => s.sessions)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
+  const fileManagerPlatform = useOpenTargetStore((s) => (
+    s.platform ?? s.targets.find((target) => target.kind === 'file_manager')?.platform ?? null
+  ))
+  const ensureOpenTargets = useOpenTargetStore((s) => s.ensureTargets)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
@@ -194,6 +211,11 @@ export function Sidebar({
     if (!sidebarOpen) setContextMenu(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidebarOpen])
+
+  useEffect(() => {
+    if (!projectContextMenu) return
+    void ensureOpenTargets()
+  }, [ensureOpenTargets, projectContextMenu])
 
   const closeAllSidebarMenus = useCallback(() => {
     setContextMenu(null)
@@ -665,11 +687,11 @@ export function Sidebar({
     })
   }, [addToast, hiddenProjectKeys, persistSidebarProjectPreferences, pinnedProjectKeys, projectOrder, projectOrganization, projectSortBy, t])
 
-  const openProjectInFinder = useCallback(async (project: ProjectGroup) => {
+  const openProjectInFileManager = useCallback(async (project: ProjectGroup) => {
     setProjectContextMenu(null)
     try {
       if (!project.workDir) {
-        throw new Error(t('sidebar.openInFinderUnavailable'))
+        throw new Error(t('sidebar.openInFileManagerUnavailable'))
       }
       const store = useOpenTargetStore.getState()
       await store.ensureTargets()
@@ -677,13 +699,13 @@ export function Sidebar({
       const target = latest.targets.find((item) => item.id === 'finder')
         ?? latest.targets.find((item) => item.kind === 'file_manager')
       if (!target) {
-        throw new Error(t('sidebar.openInFinderUnavailable'))
+        throw new Error(t('sidebar.openInFileManagerUnavailable'))
       }
       await latest.openTarget(target.id, project.workDir)
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.openInFinderFailed'),
+        message: error instanceof Error ? error.message : t('sidebar.openInFileManagerFailed'),
       })
     }
   }, [addToast, t])
@@ -1413,9 +1435,9 @@ export function Sidebar({
             </ProjectMenuItem>
             <ProjectMenuItem
               icon={<FolderOpen size={18} aria-hidden="true" />}
-              onClick={() => void openProjectInFinder(project)}
+              onClick={() => void openProjectInFileManager(project)}
             >
-              {t('sidebar.openInFinder')}
+              {t(openInFileManagerKey(fileManagerPlatform))}
             </ProjectMenuItem>
             <ProjectMenuItem
               icon={hidden ? <RotateCcw size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}

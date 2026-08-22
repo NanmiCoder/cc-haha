@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMocks = vi.hoisted(() => ({
   list: vi.fn(),
+  listForPath: vi.fn(),
   open: vi.fn(),
 }))
 
@@ -13,6 +14,7 @@ describe('openTargetStore', () => {
   beforeEach(async () => {
     vi.resetModules()
     apiMocks.list.mockReset()
+    apiMocks.listForPath.mockReset()
     apiMocks.open.mockReset()
   })
 
@@ -48,5 +50,16 @@ describe('openTargetStore', () => {
     await useOpenTargetStore.getState().openTarget('vscode', '/repo')
 
     expect(useOpenTargetStore.getState().lastSuccessfulTargetId).toBe('vscode')
+  })
+
+  it('queries targets for the concrete path without replacing project targets', async () => {
+    const { useOpenTargetStore } = await import('./openTargetStore')
+    apiMocks.listForPath.mockResolvedValue({
+      targets: [{ id: 'application:pages', kind: 'application', label: 'Pages', icon: 'application', platform: 'darwin' }],
+    })
+
+    await expect(useOpenTargetStore.getState().getTargetsForPath('/tmp/brief.docx'))
+      .resolves.toMatchObject([{ kind: 'application', label: 'Pages' }])
+    expect(apiMocks.listForPath).toHaveBeenCalledWith('/tmp/brief.docx')
   })
 })

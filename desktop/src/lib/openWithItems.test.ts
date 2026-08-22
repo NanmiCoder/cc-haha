@@ -101,6 +101,8 @@ function makeDeps(overrides?: Partial<OpenWithDeps>): OpenWithDeps {
 
 const ideTarget: OpenTarget = { id: 'code', kind: 'ide', label: 'VS Code', icon: 'vscode', platform: 'darwin' }
 const fmTarget: OpenTarget = { id: 'finder', kind: 'file_manager', label: 'Finder', icon: 'finder', platform: 'darwin' }
+const appTarget: OpenTarget = { id: 'application:pages', kind: 'application', label: 'Pages', icon: 'application', platform: 'darwin', isDefault: true }
+const systemTarget: OpenTarget = { id: 'system-default', kind: 'system_default', label: 'System default', icon: 'system', platform: 'darwin' }
 
 describe('buildOpenWithItems – url context', () => {
   it('returns exactly [in-app, system] for a url context', () => {
@@ -130,11 +132,11 @@ describe('buildOpenWithItems – url context', () => {
 })
 
 describe('buildOpenWithItems – file context with targets', () => {
-  it('returns preview/open targets without a system-default fallback', () => {
+  it('keeps system-default opening available immediately after workspace preview', () => {
     const deps = makeDeps()
     const ctx: OpenWithContext = { kind: 'file', absolutePath: '/w/a.md', relPath: 'a.md', previewable: true }
     const items = buildOpenWithItems(ctx, [ideTarget, fmTarget], deps)
-    expect(items.map((i) => i.id)).toEqual(['preview', 'ide:code', 'fm:finder'])
+    expect(items.map((i) => i.id)).toEqual(['preview', 'system', 'ide:code', 'fm:finder'])
   })
 
   it('preview calls openWorkspacePreview with relPath', () => {
@@ -155,12 +157,29 @@ describe('buildOpenWithItems – file context with targets', () => {
     expect(deps.openTarget).toHaveBeenCalledWith('code', '/w/a.md')
   })
 
-  it('does not include a system-default item for files', () => {
+  it('system-default calls the safe system opener when no backend system target is loaded', () => {
     const deps = makeDeps()
     const ctx: OpenWithContext = { kind: 'file', absolutePath: '/w/a.md', relPath: 'a.md', previewable: true }
     const items = buildOpenWithItems(ctx, [ideTarget, fmTarget], deps)
-    expect(items.some((i) => i.id === 'system')).toBe(false)
-    expect(deps.openSystem).not.toHaveBeenCalled()
+    const system = items.find((i) => i.id === 'system')!
+    system.onSelect()
+    expect(deps.openSystem).toHaveBeenCalledWith('/w/a.md')
+  })
+
+  it('offers path-specific native applications before system default for a binary document', () => {
+    const deps = makeDeps()
+    const ctx: OpenWithContext = { kind: 'file', absolutePath: '/w/brief.docx', previewable: false }
+
+    const items = buildOpenWithItems(ctx, [appTarget, systemTarget, ideTarget, fmTarget], deps)
+
+    expect(items.map((item) => item.id)).toEqual([
+      'app:application:pages',
+      'system',
+      'ide:code',
+      'fm:finder',
+    ])
+    items[0]!.onSelect()
+    expect(deps.openTarget).toHaveBeenCalledWith('application:pages', '/w/brief.docx')
   })
 
   it('ide item carries the target object', () => {
@@ -181,7 +200,7 @@ describe('buildOpenWithItems – file context with inAppBrowserUrl (no previewab
       inAppBrowserUrl: 'http://127.0.0.1:4321/preview-fs/s1/page.html',
     }
     const items = buildOpenWithItems(ctx, [], deps)
-    expect(items.map((i) => i.id)).toEqual(['in-app'])
+    expect(items.map((i) => i.id)).toEqual(['in-app', 'system'])
   })
 
   it('in-app calls openInAppBrowser with inAppBrowserUrl', () => {

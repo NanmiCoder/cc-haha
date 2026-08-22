@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Copy, ExternalLink } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
@@ -7,6 +7,7 @@ import { buildOpenWithMenuItems } from '../../lib/openWithMenuItems'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { openWithContextForWorkspaceFile } from '../../lib/openWithContextForHref'
 import { TargetIcon } from '@/components/composite/TargetIcon'
+import type { OpenTarget } from '../../api/openTargets'
 
 export function WorkspaceFileOpenWith({
   absolutePath,
@@ -20,12 +21,26 @@ export function WorkspaceFileOpenWith({
   onAfterSelect?: () => void
 }) {
   const t = useTranslation()
-  const targets = useOpenTargetStore((s) => s.targets)
-  const ensureTargets = useOpenTargetStore((s) => s.ensureTargets)
+  const globalTargets = useOpenTargetStore((s) => s.targets)
+  const getTargetsForPath = useOpenTargetStore((s) => s.getTargetsForPath)
+  const [pathTargets, setPathTargets] = useState<OpenTarget[] | null>(null)
 
   useEffect(() => {
-    void ensureTargets()
-  }, [ensureTargets])
+    let active = true
+    setPathTargets(null)
+    void getTargetsForPath(absolutePath)
+      .then((targets) => {
+        if (active) setPathTargets(targets)
+      })
+      .catch(() => {
+        if (active) setPathTargets([])
+      })
+    return () => {
+      active = false
+    }
+  }, [absolutePath, getTargetsForPath])
+
+  const targets = pathTargets ?? globalTargets
 
   const items: OpenWithItem[] = buildOpenWithMenuItems(
     sessionId && workspacePath

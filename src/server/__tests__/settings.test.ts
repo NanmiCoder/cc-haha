@@ -1186,7 +1186,7 @@ describe('Models API', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.level).toBe('max')
-    expect(body.available).toEqual(['low', 'medium', 'high', 'max'])
+    expect(body.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('GET /api/effort should fall back when stored effort is stale', async () => {
@@ -1199,17 +1199,17 @@ describe('Models API', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.level).toBe('max')
-    expect(body.available).toEqual(['low', 'medium', 'high', 'max'])
+    expect(body.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('PUT /api/effort should set effort level', async () => {
-    const { req, url, segments } = makeRequest('PUT', '/api/effort', { level: 'high' })
+    const { req, url, segments } = makeRequest('PUT', '/api/effort', { level: 'xhigh' })
     const res = await handleModelsApi(req, url, segments)
 
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.ok).toBe(true)
-    expect(body.level).toBe('high')
+    expect(body.level).toBe('xhigh')
   })
 
   it('PUT /api/effort should reject invalid level', async () => {

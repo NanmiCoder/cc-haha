@@ -103,6 +103,9 @@ export function normalizeAskUserQuestionToolResult(content: unknown, toolUseResu
 }
 
 export function classifyRuntimeErrorCode(message: string, fallbackCode: string): string {
+  if (/Tool input generation exceeded/i.test(message)) {
+    return 'STREAM_TOOL_INPUT_DURATION'
+  }
   if (/Stream max duration exceeded/i.test(message)) {
     return 'STREAM_MAX_DURATION'
   }

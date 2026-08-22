@@ -58,6 +58,17 @@ const localhostTarget: AssistantOutputTarget = {
   source: 'plain-url',
 }
 
+const documentTarget: AssistantOutputTarget = {
+  id: 'file:outputs/brief.docx',
+  kind: 'file',
+  title: 'brief.docx',
+  subtitle: 'outputs/brief.docx',
+  href: 'outputs/brief.docx',
+  normalizedPath: 'outputs/brief.docx',
+  confidence: 'high',
+  source: 'changed-file',
+}
+
 afterEach(() => {
   openBrowser.mockReset()
   ensureTargets.mockReset().mockResolvedValue(undefined)
@@ -79,6 +90,13 @@ describe('AssistantOutputTargetCard', () => {
     // subtitle equals the title for localhost, so the URL renders exactly once.
     expect(screen.getAllByText('http://localhost:5173/')).toHaveLength(1)
     expect(screen.getByText('assistantOutputs.kind.localhost')).toBeInTheDocument()
+  })
+
+  it('renders an Office artifact with its concrete document type', () => {
+    render(<AssistantOutputTargetCard target={documentTarget} sessionId="s1" />)
+    expect(screen.getByText('brief.docx')).toBeInTheDocument()
+    expect(screen.getByText('openWith.fileType.document')).toBeInTheDocument()
+    expect(screen.getByText('outputs/brief.docx')).toBeInTheDocument()
   })
 
   it('routes Open to workspace preview for a markdown target', () => {

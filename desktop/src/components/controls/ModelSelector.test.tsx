@@ -801,6 +801,46 @@ describe('ModelSelector', () => {
     expect(screen.getAllByTestId('reasoning-effort-stop')).toHaveLength(5)
   })
 
+  it('does not offer an effort control that a direct provider has explicitly disabled', () => {
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: [],
+      currentModel: null,
+      activeProviderName: 'Direct GPT Gateway',
+      effortLevel: 'high',
+    })
+    useProviderStore.setState({
+      providers: [{
+        id: 'direct-gpt-provider',
+        presetId: 'custom',
+        name: 'Direct GPT Gateway',
+        apiKey: '***',
+        baseUrl: 'https://api.example.com',
+        apiFormat: 'anthropic',
+        disableExperimentalBetas: true,
+        models: {
+          main: 'gpt-5.6-sol',
+          haiku: 'gpt-5.6-sol',
+          sonnet: 'gpt-5.6-sol',
+          opus: 'gpt-5.6-sol',
+        },
+      }],
+      activeId: 'direct-gpt-provider',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSessionRuntimeStore.getState().setSelection('session-direct-disabled-effort', {
+      providerId: 'direct-gpt-provider',
+      modelId: 'gpt-5.6-sol',
+      effortLevel: 'xhigh',
+    })
+
+    render(<ModelSelector runtimeKey="session-direct-disabled-effort" />)
+
+    expect(screen.getByRole('button', { name: 'gpt-5.6-sol, Direct GPT Gateway' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Effort:/ })).not.toBeInTheDocument()
+  })
+
   it('uses the ChatGPT Official catalog when that built-in provider is active', async () => {
     const openAIModels: ModelInfo[] = [
       {

@@ -38,6 +38,7 @@ import { resolveClaudeOfficialRuntimeModel } from '../services/claudeOfficialRun
 import { getPresetDefaultEnv } from '../services/providerRuntimeEnv.js'
 import {
   getModelReasoningCapabilityOverride,
+  MODEL_REASONING_EFFORTS,
   resolveModelReasoningProfile,
   type ModelReasoningApiFormat,
 } from '../../shared/modelReasoning.js'
@@ -75,7 +76,7 @@ const DEFAULT_MODELS = [
   },
 ] as const
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'max'] as const
+const EFFORT_LEVELS = MODEL_REASONING_EFFORTS
 
 const DEFAULT_MODEL = 'claude-opus-4-8'
 const DEFAULT_EFFORT = 'max'

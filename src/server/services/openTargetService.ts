@@ -10,7 +10,7 @@ const DEFAULT_TTL_MS = 30_000
 
 export type OpenTargetPlatform = NodeJS.Platform
 
-export type OpenTargetKind = 'ide' | 'file_manager'
+export type OpenTargetKind = 'application' | 'system_default' | 'ide' | 'file_manager'
 
 export type OpenTarget = {
   id: string
@@ -19,6 +19,9 @@ export type OpenTarget = {
   icon: string
   iconUrl?: string
   platform: OpenTargetPlatform
+  appPath?: string
+  bundleId?: string | null
+  isDefault?: boolean
 }
 
 export type OpenTargetList = {
@@ -40,6 +43,18 @@ export type OpenTargetIconResult = {
   data: Uint8Array
 }
 
+export type NativeApplication = {
+  appPath: string
+  bundleId: string | null
+  displayName: string
+  isDefault: boolean
+}
+
+export type NativeApplicationList = {
+  defaultApplicationPath: string | null
+  applications: NativeApplication[]
+}
+
 type Runtime = {
   platform: OpenTargetPlatform
   ttlMs: number
@@ -52,6 +67,7 @@ type Runtime = {
   readTextFile: (targetPath: string) => Promise<string | null>
   readPlistValue: (plistPath: string, key: string) => Promise<string | null>
   convertIconToPng: (iconPath: string, size: number) => Promise<Uint8Array>
+  listApplicationsForFile: (targetPath: string) => Promise<NativeApplicationList>
 }
 
 type LaunchPlan = {
@@ -62,6 +78,7 @@ type LaunchPlan = {
 type ResolvedOpenPath = {
   path: string
   isDirectory: boolean
+  isExecutable: boolean
 }
 
 type TargetDefinition = {
@@ -202,6 +219,37 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     fallback: true,
   },
 ]
+
+const SYSTEM_DEFAULT_TARGET_ID = 'system-default'
+const APPLICATION_TARGET_PREFIX = 'application:'
+const BLOCKED_SYSTEM_OPEN_EXTENSIONS = new Set([
+  '.app', '.bat', '.cmd', '.com', '.exe', '.msi', '.ps1', '.scr', '.sh',
+])
+
+const DARWIN_APPLICATION_QUERY_SCRIPT = `
+ObjC.import('AppKit')
+const args = $.NSProcessInfo.processInfo.arguments
+const filePath = ObjC.unwrap(args.objectAtIndex(args.count - 1))
+const fileURL = $.NSURL.fileURLWithPath(filePath)
+const workspace = $.NSWorkspace.sharedWorkspace
+const fileManager = $.NSFileManager.defaultManager
+const defaultURL = workspace.URLForApplicationToOpenURL(fileURL)
+const applicationURLs = workspace.URLsForApplicationsToOpenURL(fileURL)
+const defaultApplicationPath = defaultURL ? ObjC.unwrap(defaultURL.path) : null
+const applications = []
+for (let index = 0; index < applicationURLs.count; index += 1) {
+  const applicationURL = applicationURLs.objectAtIndex(index)
+  const appPath = ObjC.unwrap(applicationURL.path)
+  const bundle = $.NSBundle.bundleWithURL(applicationURL)
+  applications.push({
+    appPath,
+    bundleId: bundle ? ObjC.unwrap(bundle.bundleIdentifier) : null,
+    displayName: ObjC.unwrap(fileManager.displayNameAtPath(appPath)),
+    isDefault: appPath === defaultApplicationPath,
+  })
+}
+JSON.stringify({ defaultApplicationPath, applications })
+`
 
 const LINUX_APPLICATION_DIRS = [
   '/usr/share/applications',
@@ -403,6 +451,53 @@ async function defaultReadPlistValue(plistPath: string, key: string): Promise<st
   }
 }
 
+export function parseDarwinApplicationListOutput(output: string): NativeApplicationList {
+  try {
+    const parsed = JSON.parse(output) as Partial<NativeApplicationList>
+    const applications = Array.isArray(parsed.applications)
+      ? parsed.applications.filter((application): application is NativeApplication => (
+          Boolean(application)
+          && typeof application.appPath === 'string'
+          && application.appPath.startsWith('/')
+          && typeof application.displayName === 'string'
+          && (application.bundleId === null || typeof application.bundleId === 'string')
+          && typeof application.isDefault === 'boolean'
+        ))
+      : []
+    return {
+      defaultApplicationPath: typeof parsed.defaultApplicationPath === 'string'
+        ? parsed.defaultApplicationPath
+        : null,
+      applications,
+    }
+  } catch {
+    return { defaultApplicationPath: null, applications: [] }
+  }
+}
+
+async function defaultListApplicationsForFile(targetPath: string): Promise<NativeApplicationList> {
+  if (process.platform !== 'darwin') {
+    return { defaultApplicationPath: null, applications: [] }
+  }
+
+  try {
+    const { stdout } = await execFile('/usr/bin/osascript', [
+      '-l',
+      'JavaScript',
+      '-e',
+      DARWIN_APPLICATION_QUERY_SCRIPT,
+      targetPath,
+    ], {
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    })
+    return parseDarwinApplicationListOutput(String(stdout ?? ''))
+  } catch {
+    return { defaultApplicationPath: null, applications: [] }
+  }
+}
+
 async function defaultConvertIconToPng(iconPath: string, size: number): Promise<Uint8Array> {
   const extension = extname(iconPath).toLowerCase()
   if (extension === '.png') {
@@ -520,6 +615,95 @@ function buildOpenTarget(definition: TargetDefinition, platform: OpenTargetPlatf
     iconUrl: `/api/open-targets/icons/${encodeURIComponent(definition.id)}`,
     platform,
   }
+}
+
+function nativeApplicationTargetId(application: NativeApplication): string {
+  const identity = application.bundleId || application.appPath
+  return `${APPLICATION_TARGET_PREFIX}${Buffer.from(identity).toString('base64url')}`
+}
+
+function buildNativeApplicationTarget(
+  application: NativeApplication,
+  platform: OpenTargetPlatform,
+): OpenTarget {
+  return {
+    id: nativeApplicationTargetId(application),
+    kind: 'application',
+    label: application.displayName,
+    icon: 'application',
+    platform,
+    appPath: application.appPath,
+    bundleId: application.bundleId,
+    isDefault: application.isDefault,
+  }
+}
+
+function buildSystemDefaultTarget(platform: OpenTargetPlatform): OpenTarget {
+  return {
+    id: SYSTEM_DEFAULT_TARGET_ID,
+    kind: 'system_default',
+    label: 'System default',
+    icon: 'system',
+    platform,
+  }
+}
+
+function canOpenWithSystemDefault(runtime: Runtime): Promise<boolean> | boolean {
+  if (runtime.platform === 'linux') return runtime.commandExists('xdg-open')
+  return runtime.platform === 'darwin' || runtime.platform === 'win32'
+}
+
+function buildSystemDefaultLaunchPlan(
+  target: ResolvedOpenPath,
+  platform: OpenTargetPlatform,
+): LaunchPlan | null {
+  switch (platform) {
+    case 'darwin':
+      return { command: 'open', args: [target.path] }
+    case 'win32':
+      return { command: 'explorer.exe', args: [target.path] }
+    case 'linux':
+      return { command: 'xdg-open', args: [target.path] }
+    default:
+      return null
+  }
+}
+
+function assertSafeSystemOpen(target: ResolvedOpenPath): void {
+  const extension = extname(target.path).toLowerCase()
+  if (BLOCKED_SYSTEM_OPEN_EXTENSIONS.has(extension) || (!target.isDirectory && target.isExecutable)) {
+    throw openTargetError(
+      400,
+      `System-default opening is blocked for executable paths: ${target.path}`,
+      'OPEN_TARGET_PATH_EXECUTABLE',
+    )
+  }
+}
+
+async function discoverNativeApplications(
+  target: ResolvedOpenPath,
+  runtime: Runtime,
+): Promise<NativeApplication[]> {
+  if (runtime.platform !== 'darwin' || target.isDirectory) return []
+
+  const result = await runtime.listApplicationsForFile(target.path)
+  const staticAppPaths = new Set(
+    TARGET_DEFINITIONS.flatMap((definition) => definition.appPaths?.darwin ?? []),
+  )
+  const seen = new Set<string>()
+  return result.applications
+    .map((application) => ({
+      ...application,
+      isDefault: application.isDefault || application.appPath === result.defaultApplicationPath,
+    }))
+    .filter((application) => {
+      if (application.bundleId === 'com.claude-code-haha.desktop') return false
+      if (staticAppPaths.has(application.appPath)) return false
+      if (seen.has(application.appPath)) return false
+      seen.add(application.appPath)
+      return true
+    })
+    .sort((left, right) => Number(right.isDefault) - Number(left.isDefault))
 }
 
 function isSupportedOnPlatform(definition: TargetDefinition, platform: OpenTargetPlatform): boolean {
@@ -662,7 +846,14 @@ async function validateOpenPath(
   return {
     path: resolvedPath,
     isDirectory: entry.isDirectory(),
+    isExecutable: runtimePlatformSupportsExecutableBits(platform)
+      ? (entry.mode & 0o111) !== 0
+      : false,
   }
+}
+
+function runtimePlatformSupportsExecutableBits(platform: OpenTargetPlatform): boolean {
+  return platform !== 'win32'
 }
 
 function normalizeIconFileName(iconFile: string): string {
@@ -952,6 +1143,7 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
     readTextFile: overrides.readTextFile ?? defaultReadTextFile,
     readPlistValue: overrides.readPlistValue ?? defaultReadPlistValue,
     convertIconToPng: overrides.convertIconToPng ?? defaultConvertIconToPng,
+    listApplicationsForFile: overrides.listApplicationsForFile ?? defaultListApplicationsForFile,
   }
 
   let cache: OpenTargetList | null = null
@@ -980,9 +1172,38 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
     return cache
   }
 
+  async function listTargetsForPath(targetPath: string): Promise<OpenTargetList> {
+    const resolvedPath = await validateOpenPath(targetPath, runtime.platform)
+    const globalTargets = await listTargets()
+    const nativeApplications = await discoverNativeApplications(resolvedPath, runtime)
+    const applicationTargets = nativeApplications.map((application) => (
+      buildNativeApplicationTarget(application, runtime.platform)
+    ))
+    const systemTargets = await canOpenWithSystemDefault(runtime)
+      ? [buildSystemDefaultTarget(runtime.platform)]
+      : []
+    const targets = [
+      ...applicationTargets,
+      ...systemTargets,
+      ...globalTargets.targets.filter((target) => target.kind === 'ide'),
+      ...globalTargets.targets.filter((target) => target.kind === 'file_manager'),
+    ]
+    const defaultApplication = applicationTargets.find((target) => target.isDefault)
+
+    return {
+      platform: runtime.platform,
+      targets,
+      primaryTargetId: defaultApplication?.id ?? systemTargets[0]?.id ?? targets[0]?.id ?? null,
+      cachedAt: runtime.now(),
+      ttlMs: runtime.ttlMs,
+    }
+  }
+
   async function openTarget(input: { targetId: string; path: string }) {
     const definition = TARGET_DEFINITIONS.find((candidate) => candidate.id === input.targetId)
-    if (!definition) {
+    const isSystemDefault = input.targetId === SYSTEM_DEFAULT_TARGET_ID
+    const isNativeApplication = input.targetId.startsWith(APPLICATION_TARGET_PREFIX)
+    if (!definition && !isSystemDefault && !isNativeApplication) {
       throw openTargetError(
         400,
         `Unknown open target: ${input.targetId}`,
@@ -990,8 +1211,32 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
       )
     }
 
-    const targets = await listTargets()
-    const target = targets.targets.find((candidate) => candidate.id === input.targetId)
+    const resolvedPath = await validateOpenPath(input.path, runtime.platform)
+    let target: OpenTarget | undefined
+    let launchPlan: LaunchPlan | null = null
+
+    if (isSystemDefault) {
+      if (!(await canOpenWithSystemDefault(runtime))) {
+        throw openTargetError(400, 'System-default opening is unavailable', 'OPEN_TARGET_UNAVAILABLE')
+      }
+      assertSafeSystemOpen(resolvedPath)
+      target = buildSystemDefaultTarget(runtime.platform)
+      launchPlan = buildSystemDefaultLaunchPlan(resolvedPath, runtime.platform)
+    } else if (isNativeApplication) {
+      const applications = await discoverNativeApplications(resolvedPath, runtime)
+      const application = applications.find((candidate) => (
+        nativeApplicationTargetId(candidate) === input.targetId
+      ))
+      if (application) {
+        target = buildNativeApplicationTarget(application, runtime.platform)
+        launchPlan = { command: 'open', args: ['-a', application.appPath, resolvedPath.path] }
+      }
+    } else if (definition) {
+      const targets = await listTargets()
+      target = targets.targets.find((candidate) => candidate.id === input.targetId)
+      if (target) launchPlan = await resolveLaunchPlan(definition, runtime, resolvedPath)
+    }
+
     if (!target) {
       throw openTargetError(
         400,
@@ -999,9 +1244,6 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
         'OPEN_TARGET_UNAVAILABLE',
       )
     }
-
-    const resolvedPath = await validateOpenPath(input.path, runtime.platform)
-    const launchPlan = await resolveLaunchPlan(definition, runtime, resolvedPath)
     if (!launchPlan) {
       throw openTargetError(
         400,
@@ -1065,6 +1307,7 @@ export function createOpenTargetService(overrides: Partial<Runtime> = {}) {
 
   return {
     listTargets,
+    listTargetsForPath,
     openTarget,
     getTargetIcon,
   }

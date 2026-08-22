@@ -2756,8 +2756,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
 
       case 'session_state': {
-        const session = get().sessions[sessionId]
+        let session = get().sessions[sessionId]
         if (!session) break
+
+        let settledInactiveBackgroundTasks = false
+        if (msg.activeBackgroundTaskIds !== undefined) {
+          const reconciled = reconcileBackgroundAgentTasksWithActiveSnapshot(
+            session.backgroundAgentTasks ?? {},
+            msg.activeBackgroundTaskIds,
+            Date.now(),
+          )
+          settledInactiveBackgroundTasks = reconciled.changed
+          if (reconciled.changed) {
+            update(() => ({ backgroundAgentTasks: reconciled.tasks }))
+            session = { ...session, backgroundAgentTasks: reconciled.tasks }
+          }
+        }
 
         if (msg.turnState === 'running') {
           // Raw deltas are not replayable across a socket gap. Discard the
@@ -2807,7 +2821,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
 
         if (session.chatState === 'idle') {
+          if (settledInactiveBackgroundTasks) {
+            useTabStore.getState().updateTabStatus(
+              sessionId,
+              hasRunningBackgroundTasks(session.backgroundAgentTasks) ? 'running' : 'idle',
+            )
+          }
           if (
+            settledInactiveBackgroundTasks ||
             hasRunningSubagentTasks(session.backgroundAgentTasks) ||
             session.stopAllSubagentsRequested
           ) {
@@ -4521,6 +4542,27 @@ function upsertBackgroundAgentTask(
       updatedAt: now,
     },
   }
+}
+
+function reconcileBackgroundAgentTasksWithActiveSnapshot(
+  current: Record<string, BackgroundAgentTask>,
+  activeTaskIds: string[],
+  now: number,
+): { tasks: Record<string, BackgroundAgentTask>; changed: boolean } {
+  const active = new Set(activeTaskIds)
+  let changed = false
+  const tasks = Object.fromEntries(
+    Object.entries(current).map(([key, task]) => {
+      const remainsActive = active.has(task.taskId) ||
+        Boolean(task.toolUseId && active.has(task.toolUseId))
+      if (task.status !== 'running' || remainsActive) return [key, task]
+      changed = true
+      // The snapshot proves only that the task settled. History reconciliation
+      // below replaces this fallback with failed/stopped when that bookend exists.
+      return [key, { ...task, status: 'completed' as const, updatedAt: now }]
+    }),
+  )
+  return { tasks: changed ? tasks : current, changed }
 }
 
 function hasTerminalTaskPayloadChanged(

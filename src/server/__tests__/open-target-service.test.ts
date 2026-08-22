@@ -2,7 +2,10 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { createOpenTargetService } from '../services/openTargetService.js'
+import {
+  createOpenTargetService,
+  parseDarwinApplicationListOutput,
+} from '../services/openTargetService.js'
 
 async function makeDir(prefix = 'cc-haha-open-target-') {
   return mkdtemp(join(tmpdir(), prefix))
@@ -21,6 +24,10 @@ function createService(
     iconData?: Uint8Array
     ttlMs?: number
     now?: { value: number }
+    nativeApplications?: {
+      defaultApplicationPath: string | null
+      applications: Array<{ appPath: string; bundleId: string | null; displayName: string; isDefault: boolean }>
+    }
   } = {},
 ) {
   const launched: Array<{ command: string; args: string[] }> = []
@@ -57,6 +64,10 @@ function createService(
       convertedIcons.push({ iconPath, size })
       return options.iconData ?? new Uint8Array([1, 2, 3])
     },
+    listApplicationsForFile: async () => options.nativeApplications ?? {
+      defaultApplicationPath: null,
+      applications: [],
+    },
   })
 
   return {
@@ -74,6 +85,27 @@ function createService(
 }
 
 describe('openTargetService', () => {
+  it('parses only valid macOS application records from the native query', () => {
+    expect(parseDarwinApplicationListOutput(JSON.stringify({
+      defaultApplicationPath: '/Applications/Pages.app',
+      applications: [
+        { appPath: '/Applications/Pages.app', bundleId: 'com.apple.iWork.Pages', displayName: 'Pages', isDefault: true },
+        { appPath: 'relative/Word.app', bundleId: 'com.microsoft.Word', displayName: 'Word', isDefault: false },
+        { appPath: '/Applications/Broken.app', bundleId: 42, displayName: 'Broken', isDefault: false },
+        null,
+      ],
+    }))).toEqual({
+      defaultApplicationPath: '/Applications/Pages.app',
+      applications: [
+        { appPath: '/Applications/Pages.app', bundleId: 'com.apple.iWork.Pages', displayName: 'Pages', isDefault: true },
+      ],
+    })
+    expect(parseDarwinApplicationListOutput('not json')).toEqual({
+      defaultApplicationPath: null,
+      applications: [],
+    })
+  })
+
   it('returns only detected IDE targets plus Finder on macOS', async () => {
     const { service } = createService('darwin', {
       paths: {
@@ -182,6 +214,152 @@ describe('openTargetService', () => {
     now.value = 5_000
     await state.service.listTargets()
     expect(state.commandProbes).toBeGreaterThan(initialProbes)
+  })
+
+  it('discovers native macOS applications for the concrete document path', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const { service } = createService('darwin', {
+      nativeApplications: {
+        defaultApplicationPath: '/Applications/Pages.app',
+        applications: [
+          { appPath: '/Applications/Pages.app', bundleId: 'com.apple.iWork.Pages', displayName: 'Pages', isDefault: true },
+          { appPath: '/Applications/Word.app', bundleId: 'com.microsoft.Word', displayName: 'Word', isDefault: false },
+        ],
+      },
+    })
+
+    try {
+      const result = await service.listTargetsForPath(file)
+
+      expect(result.targets.map((target) => target.kind)).toEqual([
+        'application',
+        'application',
+        'system_default',
+        'file_manager',
+      ])
+      expect(result.targets[0]).toMatchObject({ label: 'Pages', isDefault: true })
+      expect(result.primaryTargetId).toBe(result.targets[0]!.id)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('filters this desktop app, static IDE duplicates, and duplicate native applications', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const { service } = createService('darwin', {
+      nativeApplications: {
+        defaultApplicationPath: '/Applications/Word.app',
+        applications: [
+          { appPath: '/Applications/Chat Haha.app', bundleId: 'com.claude-code-haha.desktop', displayName: 'Chat Haha', isDefault: false },
+          { appPath: '/Applications/Visual Studio Code.app', bundleId: 'com.microsoft.VSCode', displayName: 'Visual Studio Code', isDefault: false },
+          { appPath: '/Applications/Word.app', bundleId: 'com.microsoft.Word', displayName: 'Word', isDefault: false },
+          { appPath: '/Applications/Word.app', bundleId: 'com.microsoft.Word', displayName: 'Word duplicate', isDefault: false },
+        ],
+      },
+    })
+
+    try {
+      const result = await service.listTargetsForPath(file)
+      expect(result.targets.filter((target) => target.kind === 'application')).toEqual([
+        expect.objectContaining({ label: 'Word', isDefault: true }),
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('opens a discovered native application only after rediscovering it for that file', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const state = createService('darwin', {
+      nativeApplications: {
+        defaultApplicationPath: '/Applications/Pages.app',
+        applications: [
+          { appPath: '/Applications/Pages.app', bundleId: 'com.apple.iWork.Pages', displayName: 'Pages', isDefault: true },
+        ],
+      },
+    })
+
+    try {
+      const listed = await state.service.listTargetsForPath(file)
+      const app = listed.targets.find((target) => target.kind === 'application')!
+      await state.service.openTarget({ targetId: app.id, path: file })
+
+      expect(state.launched).toEqual([{ command: 'open', args: ['-a', '/Applications/Pages.app', file] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('opens a regular document with the system default application', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const state = createService('darwin')
+
+    try {
+      await state.service.openTarget({ targetId: 'system-default', path: file })
+      expect(state.launched).toEqual([{ command: 'open', args: [file] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses the platform system-default opener on Windows and Linux', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const windows = createService('win32')
+    const linux = createService('linux', { commands: { 'xdg-open': true } })
+
+    try {
+      await windows.service.openTarget({ targetId: 'system-default', path: file })
+      await linux.service.openTarget({ targetId: 'system-default', path: file })
+
+      expect(windows.launched).toEqual([{ command: 'explorer.exe', args: [file] }])
+      expect(linux.launched).toEqual([{ command: 'xdg-open', args: [file] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an unavailable system opener and a stale native application target', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'brief.docx')
+    await writeFile(file, 'document')
+    const linux = createService('linux')
+    const mac = createService('darwin')
+
+    try {
+      await expect(linux.service.openTarget({ targetId: 'system-default', path: file }))
+        .rejects.toMatchObject({ code: 'OPEN_TARGET_UNAVAILABLE' })
+      await expect(mac.service.openTarget({ targetId: 'application:c3RhbGU', path: file }))
+        .rejects.toMatchObject({ code: 'OPEN_TARGET_UNAVAILABLE' })
+      expect(linux.launched).toEqual([])
+      expect(mac.launched).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks executable scripts from the system-default target', async () => {
+    const dir = await makeDir()
+    const file = join(dir, 'run.sh')
+    await writeFile(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const state = createService('darwin')
+
+    try {
+      await expect(state.service.openTarget({ targetId: 'system-default', path: file }))
+        .rejects.toMatchObject({ code: 'OPEN_TARGET_PATH_EXECUTABLE' })
+      expect(state.launched).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('rejects unknown targets', async () => {

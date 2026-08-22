@@ -10,8 +10,9 @@ import { SettingsPill, SettingsSection } from '@/components/settings/SettingsSec
 import { Dropdown } from '@/components/ui/Dropdown'
 import { Switch } from '@/components/ui/Switch'
 import { PermissionModeSelector } from '../../components/controls/PermissionModeSelector'
+import { ReasoningEffortPopover } from '../../components/controls/ReasoningEffortPopover'
 import { isDarkThemeMode, isLightThemeMode } from '../../types/settings'
-import type { ThemeMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource } from '../../types/settings'
+import type { ThemeMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource, ReasoningEffortLevel } from '../../types/settings'
 import type { Locale } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -19,6 +20,7 @@ import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { getDesktopNotificationPermission, notifyDesktop, getDesktopNotificationPlatform, openDesktopNotificationSettings, requestDesktopNotificationPermission, type DesktopNotificationPermission } from '../../lib/desktopNotifications'
 import { SETTINGS_CHECKBOX_INPUT_CLASS, SettingsCheckboxMark, isValidHttpProxyUrl } from '../settings/shared'
+import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -50,6 +52,9 @@ const BUILT_IN_OUTPUT_STYLE_TRANSLATION_KEYS = {
 
 export function GeneralSettings() {
   const {
+    currentModel,
+    effortLevel,
+    setEffort,
     thinkingEnabled,
     setThinkingEnabled,
     workflowKeywordTriggerEnabled,
@@ -88,6 +93,7 @@ export function GeneralSettings() {
     setAppMode: setAppModeAction,
     uiZoom,
     setUiZoom,
+    proxyManagedSettingsWarning,
   } = useSettingsStore()
   // Read the theme from the store that owns it. settingsStore keeps a copy for
   // its own consumers, but that copy is only refreshed on an explicit setTheme
@@ -118,7 +124,9 @@ export function GeneralSettings() {
   const [modeError, setModeError] = useState<string | null>(null)
   const [uiZoomDraft, setUiZoomDraft] = useState(uiZoom)
   const [isUiZoomDragging, setIsUiZoomDragging] = useState(false)
+  const [effortOpen, setEffortOpen] = useState(false)
   const isUiZoomDraggingRef = useRef(false)
+  const effortButtonRef = useRef<HTMLButtonElement>(null)
   const addToast = useUIStore((s) => s.addToast)
   const webSearchDirty = JSON.stringify(webSearchDraft) !== JSON.stringify(webSearch)
   const uiZoomPercent = Math.round(uiZoomDraft * 100)
@@ -279,6 +287,29 @@ export function GeneralSettings() {
       description: t('settings.general.chatSendBehaviorModifierDescription'),
     },
   ]
+
+  const effortLabels: Record<ReasoningEffortLevel, string> = {
+    low: t('settings.general.effort.low'),
+    medium: t('settings.general.effort.medium'),
+    high: t('settings.general.effort.high'),
+    xhigh: t('settings.general.effort.xhigh'),
+    max: t('settings.general.effort.max'),
+  }
+  const supportedReasoningEfforts = currentModel?.supportedReasoningEfforts
+  const effortOptions = !currentModel
+    ? []
+    : supportedReasoningEfforts === undefined
+      // Match the new-session selector's compatibility fallback for models
+      // that predate explicit capability metadata. xhigh is opt-in; the other
+      // Claude Code levels remain available until the provider declares it.
+      ? MODEL_REASONING_EFFORTS.filter((level) => level !== 'xhigh')
+      : MODEL_REASONING_EFFORTS.filter((level) => supportedReasoningEfforts.includes(level))
+  const modelDefaultEffort = currentModel?.defaultReasoningEffort
+  const selectedEffort = effortOptions.includes(effortLevel)
+    ? effortLevel
+    : modelDefaultEffort && effortOptions.includes(modelDefaultEffort)
+      ? modelDefaultEffort
+      : effortOptions[0]
 
   const notificationStatusLabel: Record<DesktopNotificationPermission, string> = {
     granted: t('settings.general.notificationsStatusGranted'),
@@ -616,6 +647,14 @@ export function GeneralSettings() {
 
   return (
     <div className="max-w-xl">
+      {proxyManagedSettingsWarning && (
+        <div
+          role="alert"
+          className="mb-5 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]"
+        >
+          {t('settings.general.proxyManagedSettingsWarning')}
+        </div>
+      )}
       {/* No page header here on purpose: the only title it could carry is the nav
           label verbatim, with no description to add. The pane opens on its first
           section instead. */}
@@ -810,6 +849,59 @@ export function GeneralSettings() {
             />
           </div>
         </Card>
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.effortTitle')}</h2>
+        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.effortDescription')}</p>
+        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                {t('settings.general.effortDefaultLabel')}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                {currentModel
+                  ? t('settings.general.effortModelHint', { model: currentModel.name || currentModel.id })
+                  : t('settings.general.effortNoModelHint')}
+              </div>
+            </div>
+            <Button
+              ref={effortButtonRef}
+              variant="secondary"
+              size="base"
+              disabled={!selectedEffort}
+              aria-label={selectedEffort
+                ? t('settings.general.effortSelectLabel', { level: effortLabels[selectedEffort] })
+                : t('settings.general.effortUnavailable')}
+              aria-expanded={selectedEffort ? effortOpen : undefined}
+              onClick={() => setEffortOpen((open) => !open)}
+              icon={(
+                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                  neurology
+                </span>
+              )}
+              iconPosition="start"
+            >
+              {selectedEffort ? effortLabels[selectedEffort] : t('settings.general.effortUnavailable')}
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                expand_more
+              </span>
+            </Button>
+          </div>
+        </Card>
+        {selectedEffort && (
+          <ReasoningEffortPopover
+            open={effortOpen}
+            anchorRef={effortButtonRef}
+            options={effortOptions}
+            value={selectedEffort}
+            labels={effortLabels}
+            ariaLabel={t('settings.general.effortDefaultLabel')}
+            onChange={(level) => void setEffort(level)}
+            onClose={() => setEffortOpen(false)}
+          />
+        )}
       </div>
 
       <div className="mt-8">
