@@ -47,6 +47,7 @@ import {
   loadNetworkSettings,
   type NetworkSettings,
 } from './networkSettings.js'
+import { modelRequiresThinkingParam } from '../../shared/modelReasoning.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import type {
   SavedProvider,
@@ -807,6 +808,11 @@ function buildDirectTestRequest(
     }
   }
   // anthropic
+  // "Always-reason" models (e.g. GLM-5.3) reject requests that omit or disable
+  // thinking. Include an explicit enabled thinking block so the probe mirrors
+  // what the chat path sends and the upstream API does not treat it as a
+  // disabled-thinking request.
+  const requiresThinking = modelRequiresThinkingParam(modelId, 'anthropic')
   return {
     url: `${base}/v1/messages`,
     headers: {
@@ -814,7 +820,12 @@ function buildDirectTestRequest(
       'anthropic-version': '2023-06-01',
       ...buildAnthropicAuthHeaders(apiKey, authStrategy),
     },
-    body: { model: modelId, max_tokens: 16, messages: [{ role: 'user', content: prompt }] },
+    body: {
+      model: modelId,
+      max_tokens: requiresThinking ? 64 : 16,
+      ...(requiresThinking ? { thinking: { type: 'enabled', budget_tokens: 32 } } : {}),
+      messages: [{ role: 'user', content: prompt }],
+    },
   }
 }
 

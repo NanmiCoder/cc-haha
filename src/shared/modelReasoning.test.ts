@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   getClaudeCodeModelCapabilities,
   getModelReasoningCapabilityOverride,
+  modelRequiresThinkingParam,
   normalizeModelReasoningEffort,
   resolveModelReasoningProfile,
 } from './modelReasoning.js'
@@ -15,6 +16,7 @@ describe('model reasoning capability pass-through', () => {
       'kimi-k2.7-code',
       'glm-4.7',
       'glm-5.2[1m]',
+      'glm-5.3[1m]',
       'MiniMax-M3[1m]',
       'mimo-v2.5-pro[1m]',
       'future-model',
@@ -41,6 +43,17 @@ describe('model reasoning capability pass-through', () => {
     expect(getClaudeCodeModelCapabilities('gpt-5.6-sol', 'openai_responses')).toBe(
       'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
     )
+  })
+
+  test('marks GLM-5.3 as required-thinking without adaptive thinking', () => {
+    expect(getClaudeCodeModelCapabilities('glm-5.3', 'anthropic')).toBe(
+      'required_thinking,thinking,effort,max_effort',
+    )
+    expect(modelRequiresThinkingParam('glm-5.3', 'anthropic')).toBe(true)
+    // GLM-5.2 still supports disabled thinking — its probe must stay unchanged.
+    expect(modelRequiresThinkingParam('glm-5.2', 'anthropic')).toBe(false)
+    // Generic/unmatched models are not forced into required-thinking requests.
+    expect(modelRequiresThinkingParam('mimo-v2.5-pro', 'anthropic')).toBe(false)
   })
 
   test('applies explicit slot capabilities before model profiles', () => {

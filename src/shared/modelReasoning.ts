@@ -40,6 +40,7 @@ export type ModelReasoningProfile = {
     | 'kimi-k3'
     | 'kimi-coding'
     | 'glm-5.2'
+    | 'glm-5.3'
     | 'glm-legacy'
     | 'minimax'
   apiFormats: readonly ModelReasoningApiFormat[]
@@ -105,6 +106,17 @@ const MODEL_REASONING_CAPABILITY_REGISTRY: readonly ModelReasoningCapabilityEntr
     apiFormats: ['anthropic', 'openai_chat'],
     claudeCodeCapabilities: 'thinking,effort,xhigh_effort,max_effort',
     matches: modelId => modelId === 'glm-5.2' || modelId.startsWith('glm-5.2-'),
+  },
+  {
+    // GLM-5.3 always reasons and rejects requests that omit or disable
+    // thinking. Mark it required_thinking so the connectivity probe and the
+    // request builder send an explicit enabled thinking block instead of
+    // falling through to the generic profile (which would add adaptive
+    // thinking and break the request).
+    family: 'glm-5.3',
+    apiFormats: ['anthropic', 'openai_chat'],
+    claudeCodeCapabilities: 'required_thinking,thinking,effort,max_effort',
+    matches: modelId => modelId === 'glm-5.3' || modelId.startsWith('glm-5.3-'),
   },
   {
     family: 'glm-legacy',
@@ -235,4 +247,20 @@ export function getClaudeCodeModelCapabilities(
     apiFormat,
     capabilitiesOverride,
   )?.claudeCodeCapabilities ?? 'none'
+}
+
+/**
+ * Whether a model rejects requests that omit or disable thinking (e.g.
+ * "always-reason" models such as GLM-5.3). The connectivity probe uses this to
+ * include an explicit enabled thinking block instead of sending a bare request
+ * the upstream API treats as thinking disabled.
+ */
+export function modelRequiresThinkingParam(
+  modelId: string,
+  apiFormat?: ModelReasoningApiFormat,
+): boolean {
+  return getClaudeCodeModelCapabilities(modelId, apiFormat)
+    .split(',')
+    .map(capability => capability.trim())
+    .includes('required_thinking')
 }

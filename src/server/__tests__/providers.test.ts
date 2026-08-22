@@ -2059,6 +2059,77 @@ describe('ProviderService', () => {
       }
     })
 
+    test('sends explicit enabled thinking for required-thinking Anthropic models', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({
+          type: 'message',
+          model: 'glm-5.3',
+          content: [{ type: 'thinking', thinking: 'ok' }, { type: 'text', text: 'ok' }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const result = await svc.testProviderConfig({
+          baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+          apiKey: 'sk-api',
+          modelId: 'glm-5.3',
+          authStrategy: 'auth_token',
+          apiFormat: 'anthropic',
+        })
+
+        expect(result.connectivity.success).toBe(true)
+        expect(calls[0].body).toMatchObject({
+          model: 'glm-5.3',
+          max_tokens: 64,
+          thinking: { type: 'enabled', budget_tokens: 32 },
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('keeps Anthropic connectivity tests thinking-free for non-required models', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({
+          type: 'message',
+          model: 'glm-5.2',
+          content: [],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        await svc.testProviderConfig({
+          baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+          apiKey: 'sk-api',
+          modelId: 'glm-5.2',
+          authStrategy: 'auth_token',
+          apiFormat: 'anthropic',
+        })
+
+        expect(calls[0].body).toEqual({
+          model: 'glm-5.2',
+          max_tokens: 16,
+          messages: [{ role: 'user', content: 'Say "ok" and nothing else.' }],
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('normalizes context-window suffixes for provider proxy pipeline tests', async () => {
       const originalFetch = globalThis.fetch
       const calls: Array<{ body: Record<string, unknown> }> = []
