@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { getConfiguredWorkDir, loadConfig, resolveAllowedProjectRoots } from '../config.js'
+import {
+  ADAPTER_PLATFORMS,
+  getConfiguredWorkDir,
+  hasWhatsAppCreds,
+  isAdapterConfigured,
+  loadConfig,
+  resolveAllowedProjectRoots,
+} from '../config.js'
 
 describe('adapter config defaults', () => {
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -309,6 +316,133 @@ describe('resolveAllowedProjectRoots', () => {
     } finally {
       fs.rmSync(envRoot, { recursive: true, force: true })
       fs.rmSync(fileRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('isAdapterConfigured', () => {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+  afterEach(() => {
+    restoreEnv('CLAUDE_CONFIG_DIR', originalConfigDir)
+  })
+
+  function withConfigDir(
+    file: Record<string, unknown>,
+    run: (configDir: string) => void,
+  ): void {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-configured-'))
+    try {
+      fs.writeFileSync(path.join(configDir, 'adapters.json'), JSON.stringify(file))
+      run(configDir)
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  }
+
+  it('requires every credential an adapter needs, not just the first', () => {
+    withConfigDir(
+      {
+        telegram: { botToken: 'token' },
+        feishu: { appId: 'id' },
+        wechat: { accountId: 'account' },
+        dingtalk: { clientId: 'client' },
+      },
+      (configDir) => {
+        const config = loadConfig({ configDir })
+        expect(isAdapterConfigured(config, 'telegram')).toBe(true)
+        // appSecret / botToken / clientSecret are missing
+        expect(isAdapterConfigured(config, 'feishu')).toBe(false)
+        expect(isAdapterConfigured(config, 'wechat')).toBe(false)
+        expect(isAdapterConfigured(config, 'dingtalk')).toBe(false)
+      },
+    )
+  })
+
+  it('treats a fully credentialed config as configured across platforms', () => {
+    withConfigDir(
+      {
+        telegram: { botToken: 'token' },
+        feishu: { appId: 'id', appSecret: 'secret' },
+        wechat: { accountId: 'account', botToken: 'token' },
+        dingtalk: { clientId: 'client', clientSecret: 'secret' },
+      },
+      (configDir) => {
+        const config = loadConfig({ configDir })
+        for (const platform of ['telegram', 'feishu', 'wechat', 'dingtalk'] as const) {
+          expect(isAdapterConfigured(config, platform)).toBe(true)
+        }
+      },
+    )
+  })
+
+  it('reports nothing configured for an empty config', () => {
+    withConfigDir({}, (configDir) => {
+      const config = loadConfig({ configDir })
+      const configured = ADAPTER_PLATFORMS.filter((platform) =>
+        isAdapterConfigured(config, platform))
+      expect(configured).toEqual([])
+    })
+  })
+
+  it('detects WhatsApp only once QR-linked creds exist on disk', () => {
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-wa-auth-'))
+    try {
+      withConfigDir({ whatsapp: { authDir } }, (configDir) => {
+        expect(isAdapterConfigured(loadConfig({ configDir }), 'whatsapp')).toBe(false)
+        expect(hasWhatsAppCreds(authDir)).toBe(false)
+
+        fs.writeFileSync(path.join(authDir, 'creds.json'), '{}')
+        expect(isAdapterConfigured(loadConfig({ configDir }), 'whatsapp')).toBe(true)
+        expect(hasWhatsAppCreds(authDir)).toBe(true)
+      })
+    } finally {
+      fs.rmSync(authDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads the explicit configDir instead of the ambient CLAUDE_CONFIG_DIR', () => {
+    withConfigDir({ telegram: { botToken: 'from-explicit-dir' } }, (explicitDir) => {
+      withConfigDir({}, (ambientDir) => {
+        process.env.CLAUDE_CONFIG_DIR = ambientDir
+        expect(isAdapterConfigured(loadConfig({ configDir: explicitDir }), 'telegram')).toBe(true)
+        // Without the override the ambient (empty) dir wins.
+        expect(isAdapterConfigured(loadConfig(), 'telegram')).toBe(false)
+      })
+    })
+  })
+
+  it('treats a blank authDir as unconfigured rather than resolving to cwd', () => {
+    expect(hasWhatsAppCreds('')).toBe(false)
+  })
+
+  it('distinguishes a malformed config from an empty one only in strict mode', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-malformed-'))
+    try {
+      fs.writeFileSync(path.join(configDir, 'adapters.json'), 'not json at all')
+
+      // Lenient (the sidecar's path) keeps working off defaults.
+      expect(() => loadConfig({ configDir })).not.toThrow()
+      expect(isAdapterConfigured(loadConfig({ configDir }), 'telegram')).toBe(false)
+
+      // Strict lets a caller tell "cannot read" apart from "nothing
+      // configured" — otherwise a typo is indistinguishable from an empty
+      // config and would silently disable every working adapter.
+      expect(() => loadConfig({ configDir, strict: true })).toThrow()
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a missing config file as empty even in strict mode', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-missing-'))
+    try {
+      expect(() => loadConfig({ configDir, strict: true })).not.toThrow()
+      const configured = ADAPTER_PLATFORMS.filter((platform) =>
+        isAdapterConfigured(loadConfig({ configDir, strict: true }), platform))
+      expect(configured).toEqual([])
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
     }
   })
 })

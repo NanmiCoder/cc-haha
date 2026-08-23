@@ -90,24 +90,89 @@ export type AdapterPlatformConfig =
   | DingtalkConfig
   | WhatsAppConfig
 
-function getConfigPath(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-  return path.join(configDir, 'adapters.json')
+export type AdapterPlatform = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp'
+
+export const ADAPTER_PLATFORMS: readonly AdapterPlatform[] = [
+  'feishu',
+  'telegram',
+  'wechat',
+  'dingtalk',
+  'whatsapp',
+]
+
+const WHATSAPP_CREDS_FILE = 'creds.json'
+
+/**
+ * Whether a QR-linked WhatsApp account exists on disk.
+ *
+ * Lives here rather than in adapters/whatsapp/session.ts so callers that only
+ * need the check (the Electron host, the sidecar arg gate) do not pull in the
+ * Baileys runtime. session.ts re-exports it as hasWhatsAppAuth.
+ */
+export function hasWhatsAppCreds(authDir: string): boolean {
+  if (!authDir) return false
+  return fs.existsSync(path.join(path.resolve(authDir), WHATSAPP_CREDS_FILE))
 }
 
-function loadFile(): Record<string, any> {
+/**
+ * Whether an adapter has enough credentials to actually start.
+ *
+ * Mirrors the per-adapter guards in desktop/sidecars/claude-sidecar.ts. The
+ * sidecar still enforces these at import time; this lets callers ask the same
+ * question before spawning a process that would only exit(1).
+ */
+export function isAdapterConfigured(config: AdapterConfig, platform: AdapterPlatform): boolean {
+  switch (platform) {
+    case 'telegram':
+      return Boolean(config.telegram.botToken)
+    case 'feishu':
+      return Boolean(config.feishu.appId && config.feishu.appSecret)
+    case 'wechat':
+      return Boolean(config.wechat.accountId && config.wechat.botToken)
+    case 'dingtalk':
+      return Boolean(config.dingtalk.clientId && config.dingtalk.clientSecret)
+    case 'whatsapp':
+      return hasWhatsAppCreds(config.whatsapp.authDir)
+  }
+}
+
+function getConfigPath(configDir?: string): string {
+  const dir = configDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+  return path.join(dir, 'adapters.json')
+}
+
+function loadFile(configDir?: string, strict = false): Record<string, any> {
   try {
-    return JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    return JSON.parse(fs.readFileSync(getConfigPath(configDir), 'utf-8'))
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      console.warn(`[Config] Failed to parse ${getConfigPath()}, using defaults`)
-    }
+    // A missing file is a valid state — nothing is configured yet — and stays
+    // silent in both modes. A malformed file is a real error, which strict
+    // callers need to tell apart from "no adapters configured" before acting
+    // on the difference.
+    if (err?.code === 'ENOENT') return {}
+    if (strict) throw err
+    console.warn(`[Config] Failed to parse ${getConfigPath(configDir)}, using defaults`)
     return {}
   }
 }
 
-export function loadConfig(): AdapterConfig {
-  const file = loadFile()
+export type LoadConfigOptions = {
+  /**
+   * Config root to read adapters.json from. Defaults to CLAUDE_CONFIG_DIR in
+   * the ambient process env. Callers that carry their own env (the Electron
+   * host injects one) should pass it explicitly rather than rely on
+   * process.env matching.
+   */
+  configDir?: string
+  /**
+   * Throw instead of falling back to defaults when adapters.json exists but
+   * cannot be parsed. A missing file is still an empty config, not an error.
+   */
+  strict?: boolean
+}
+
+export function loadConfig(options?: LoadConfigOptions): AdapterConfig {
+  const file = loadFile(options?.configDir, options?.strict)
   const tg = file.telegram ?? {}
   const fs_ = file.feishu ?? {}
   const wc = file.wechat ?? {}
