@@ -42,7 +42,8 @@ export function planTelegramStreamingUpdate(
   limit: number,
 ): TelegramStreamingUpdate {
   const fullText = currentText + deltaText
-  if (formatTelegramOutboundText(fullText).length <= limit) {
+  // Reserve 2 chars for the streaming cursor "▍" appended by formatTelegramStreamingText
+  if (formatTelegramOutboundText(fullText).length + 2 <= limit) {
     return { sealedChunks: [], activeChunk: fullText }
   }
 

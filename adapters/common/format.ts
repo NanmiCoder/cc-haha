@@ -54,6 +54,12 @@ export function splitMessage(text: string, limit: number): string[] {
     if (splitAt <= 0) splitAt = remaining.lastIndexOf(' ', limit)
     if (splitAt <= 0) splitAt = limit
 
+    // Avoid splitting inside a UTF-16 surrogate pair (e.g. emoji)
+    if (splitAt > 0 && splitAt < remaining.length) {
+      const code = remaining.charCodeAt(splitAt)
+      if (code >= 0xDC00 && code <= 0xDFFF) splitAt -= 1
+    }
+
     // Include the delimiter for paragraph/sentence breaks
     if (remaining[splitAt] === '\n' || remaining[splitAt] === '.') splitAt += 1
 

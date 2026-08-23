@@ -8,20 +8,16 @@
 import { Bot, InlineKeyboard, type Context } from 'grammy'
 import * as path from 'node:path'
 import { WsBridge, type ServerMessage } from '../common/ws-bridge.js'
-import { MessageBuffer } from '../common/message-buffer.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { enqueue } from '../common/chat-queue.js'
-import { loadConfig } from '../common/config.js'
+import { getConfiguredWorkDir, loadConfig } from '../common/config.js'
 import {
   formatImStatus,
   formatPermissionRequest,
   splitMessage,
 } from '../common/format.js'
 import {
-  buildTelegramThinkingUpdate,
   formatTelegramOutboundText,
-  formatTelegramStreamingText,
-  planTelegramStreamingUpdate,
 } from './format.js'
 import {
   formatPermissionDecisionStatus,
@@ -31,7 +27,7 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { createAdapterClient } from '../common/adapter-client.js'
+import { AdapterHttpClient } from '../common/http-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { TelegramMediaService } from './media.js'
@@ -43,9 +39,9 @@ import type { PendingUpload } from '../common/attachment/attachment-types.js'
 import { sendSafeOutboundImage } from '../common/attachment/outbound-image.js'
 import { syncTelegramBotCommands } from './menu.js'
 import { createTelegramRuntimeCommandController, registerAuthorizedTelegramCommand, registerTelegramExtendedCommands, shouldProcessTelegramMessage, tryHandleTelegramSelectionCallback } from './commands.js'
+import { TelegramTypingController } from './typing.js'
 
 const TELEGRAM_TEXT_LIMIT = 4000 // leave margin below 4096
-const TELEGRAM_STREAMING_TEXT_LIMIT = TELEGRAM_TEXT_LIMIT - 2 // reserve room for cursor
 
 // ---------- init ----------
 
@@ -59,20 +55,17 @@ const bot = new Bot(config.telegram.botToken)
 const bridge = new WsBridge(config.serverUrl, 'tg')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.telegram)
+const defaultWorkDir = getConfiguredWorkDir(config, config.telegram)
+const httpClient = new AdapterHttpClient(config.serverUrl, { allowedProjectRoots: [defaultWorkDir] })
 const attachmentStore = new AttachmentStore()
 const media = new TelegramMediaService(bot, attachmentStore)
+const typingController = new TelegramTypingController((chatId, action) => bot.api.sendChatAction(chatId, action))
 attachmentStore.gc().catch((err) => {
   console.warn('[Telegram] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
 })
 
-// Track placeholder messages for streaming updates
-const placeholders = new Map<string, { chatId: string; messageId: number }>()
-// Track accumulated text per chat for streaming
+// Track pending reply text per chat (delivered as one message on completion)
 const accumulatedText = new Map<string, string>()
-const accumulatedThinkingText = new Map<string, string>()
-// Message buffers per chat
-const buffers = new Map<string, MessageBuffer>()
 // Track chats waiting for project selection
 const pendingProjectSelection = new Map<string, boolean>()
 const runtimeStates = new Map<string, ChatRuntimeState>()
@@ -100,17 +93,6 @@ const commandController = createTelegramRuntimeCommandController({ botApi: bot.a
 
 // ---------- helpers ----------
 
-function getBuffer(chatId: string): MessageBuffer {
-  let buf = buffers.get(chatId)
-  if (!buf) {
-    buf = new MessageBuffer(async (text, isComplete) => {
-      await flushToTelegram(chatId, text, isComplete)
-    })
-    buffers.set(chatId, buf)
-  }
-  return buf
-}
-
 function getRuntimeState(chatId: string): ChatRuntimeState {
   let state = runtimeStates.get(chatId)
   if (!state) {
@@ -121,10 +103,8 @@ function getRuntimeState(chatId: string): ChatRuntimeState {
 }
 
 function clearTransientChatState(chatId: string): void {
-  placeholders.delete(chatId)
   accumulatedText.delete(chatId)
-  accumulatedThinkingText.delete(chatId)
-  buffers.get(chatId)?.reset()
+  typingController.stop(chatId)
   const runtime = getRuntimeState(chatId)
   runtime.state = 'idle'
   runtime.verb = undefined
@@ -215,69 +195,45 @@ async function buildStatusText(chatId: string): Promise<string> {
   })
 }
 
-async function flushToTelegram(chatId: string, newText: string, isComplete: boolean): Promise<void> {
-  const numericChatId = Number(chatId)
-  const prev = accumulatedText.get(chatId) ?? ''
-
-  const placeholder = placeholders.get(chatId)
-
-  if (placeholder) {
-    if (isComplete) {
-      const fullText = prev + newText
-      accumulatedText.set(chatId, fullText)
-      const chunks = splitMessage(formatTelegramOutboundText(fullText), TELEGRAM_TEXT_LIMIT)
-      try {
-        await bot.api.editMessageText(numericChatId, placeholder.messageId, chunks[0]!)
-      } catch { /* ignore */ }
-      for (let i = 1; i < chunks.length; i++) {
-        await bot.api.sendMessage(numericChatId, chunks[i]!)
-      }
-    } else {
-      const { sealedChunks, activeChunk } = planTelegramStreamingUpdate(
-        prev,
-        newText,
-        TELEGRAM_STREAMING_TEXT_LIMIT,
-      )
-      accumulatedText.set(chatId, activeChunk)
-      try {
-        const firstSealedChunk = sealedChunks.shift()
-        if (firstSealedChunk) {
-          const firstSealedFormattedChunks = splitMessage(
-            formatTelegramOutboundText(firstSealedChunk),
-            TELEGRAM_TEXT_LIMIT,
-          )
-          await bot.api.editMessageText(numericChatId, placeholder.messageId, firstSealedFormattedChunks[0]!)
-          for (let i = 1; i < firstSealedFormattedChunks.length; i++) {
-            await bot.api.sendMessage(numericChatId, firstSealedFormattedChunks[i]!)
-          }
-          for (const chunk of sealedChunks) {
-            const formattedChunks = splitMessage(formatTelegramOutboundText(chunk), TELEGRAM_TEXT_LIMIT)
-            for (const formattedChunk of formattedChunks) {
-              await bot.api.sendMessage(numericChatId, formattedChunk)
-            }
-          }
-          const sent = await bot.api.sendMessage(numericChatId, formatTelegramStreamingText(activeChunk))
-          placeholders.set(chatId, { chatId, messageId: sent.message_id })
-        } else {
-          await bot.api.editMessageText(numericChatId, placeholder.messageId, formatTelegramStreamingText(activeChunk))
-        }
-      } catch { /* ignore */ }
+function getFloodRetryAfter(err: unknown): number | null {
+  if (err && typeof err === 'object') {
+    const e = err as { error_code?: number; parameters?: { retry_after?: number } }
+    if (e.error_code === 429 && typeof e.parameters?.retry_after === 'number') {
+      return e.parameters.retry_after
     }
-  } else if (isComplete && (prev + newText).trim()) {
-    const fullText = prev + newText
-    accumulatedText.set(chatId, fullText)
-    const chunks = splitMessage(formatTelegramOutboundText(fullText), TELEGRAM_TEXT_LIMIT)
-    for (const chunk of chunks) {
-      await bot.api.sendMessage(numericChatId, chunk)
-    }
-  } else {
-    accumulatedText.set(chatId, prev + newText)
   }
+  return null
+}
 
-  if (isComplete) {
-    placeholders.delete(chatId)
-    accumulatedText.delete(chatId)
-    buffers.get(chatId)?.reset()
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Send with Telegram flood-control (429) backoff so replies always arrive. */
+async function sendWithFloodRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const retryAfter = getFloodRetryAfter(err)
+      if (retryAfter != null && retryAfter > 0 && attempt < maxAttempts - 1) {
+        console.warn(`[Telegram] 429 flood control, waiting ${retryAfter}s then retrying`)
+        await sleep(Math.min(retryAfter, 120) * 1000)
+        continue
+      }
+      throw err
+    }
+  }
+}
+
+/** Send a reply message, splitting at the Telegram length limit. */
+async function sendTextToTelegram(chatId: string, text: string): Promise<void> {
+  const trimmed = text.trim()
+  if (!trimmed) return
+  const numericChatId = Number(chatId)
+  const chunks = splitMessage(formatTelegramOutboundText(trimmed), TELEGRAM_TEXT_LIMIT)
+  for (const chunk of chunks) {
+    await sendWithFloodRetry(() => bot.api.sendMessage(numericChatId, chunk))
   }
 }
 
@@ -299,11 +255,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
   const numericChatId = Number(chatId)
   try {
-    // Always tear down any stale WS connection before creating a new session.
-    // Without this, bridge.connectSession() below would short-circuit when an
-    // old OPEN connection still exists, leaving messages routed to the old session.
     bridge.resetSession(chatId)
-
     const sessionId = await httpClient.createSession(workDir)
     sessionStore.set(chatId, sessionId, workDir)
     bridge.connectSession(chatId, sessionId)
@@ -345,9 +297,6 @@ async function showProjectPicker(chatId: string): Promise<void> {
 
 // ---------- outbound media dispatch ----------
 
-/** Upload a PendingUpload found in streaming output and send it via
- *  bot.api.sendPhoto as an independent message. Runs fire-and-forget
- *  from the stream handler so streaming text isn't blocked. */
 async function dispatchOutboundMedia(chatId: string, pending: PendingUpload): Promise<void> {
   const numericChatId = Number(chatId)
   try {
@@ -365,7 +314,6 @@ async function dispatchOutboundMedia(chatId: string, pending: PendingUpload): Pr
 
 async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<void> {
   const numericChatId = Number(chatId)
-  const buf = getBuffer(chatId)
   const runtime = getRuntimeState(chatId)
 
   switch (msg.type) {
@@ -375,49 +323,30 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'status':
       runtime.state = msg.state
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
-      if (msg.state === 'thinking' && !placeholders.has(chatId)) {
-        const sent = await bot.api.sendMessage(numericChatId, '💭 思考中...')
-        placeholders.set(chatId, { chatId, messageId: sent.message_id })
-        accumulatedText.set(chatId, '')
-        accumulatedThinkingText.set(chatId, '')
+      if (msg.state === 'thinking') {
+        typingController.start(chatId)
+      } else if (msg.state === 'idle') {
+        typingController.stop(chatId)
       }
       break
 
     case 'content_start':
       if (msg.blockType === 'text') {
-        accumulatedThinkingText.delete(chatId)
-        if (!placeholders.has(chatId)) {
-          const sent = await bot.api.sendMessage(numericChatId, '▍')
-          placeholders.set(chatId, { chatId, messageId: sent.message_id })
-          accumulatedText.set(chatId, '')
-        }
+        typingController.start(chatId)
       } else if (msg.blockType === 'tool_use') {
-        // Finalize current text placeholder before tool calls,
-        // so text after tools gets a fresh message
-        await buf.complete()
-        // If placeholder still exists (buffer was already empty), clean up directly
-        if (placeholders.has(chatId)) {
-          const text = accumulatedText.get(chatId)
-          if (text?.trim()) {
-            try {
-              await bot.api.editMessageText(
-                numericChatId,
-                placeholders.get(chatId)!.messageId,
-                formatTelegramOutboundText(text),
-              )
-            } catch { /* ignore */ }
-          }
-          placeholders.delete(chatId)
-          accumulatedText.delete(chatId)
-          buffers.get(chatId)?.reset()
+        const pending = accumulatedText.get(chatId) ?? ''
+        accumulatedText.set(chatId, '')
+        if (pending.trim()) {
+          await sendTextToTelegram(chatId, pending).catch((err) => {
+            console.error('[Telegram] send failed:', err instanceof Error ? err.message : String(err))
+          })
         }
       }
       break
 
     case 'content_delta':
       if (msg.text) {
-        accumulatedThinkingText.delete(chatId)
-        buf.append(msg.text)
+        accumulatedText.set(chatId, (accumulatedText.get(chatId) ?? '') + msg.text)
         const newUploads = getTgWatcher(chatId).feed(msg.text)
         for (const pending of newUploads) {
           void dispatchOutboundMedia(chatId, pending)
@@ -426,29 +355,13 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
 
     case 'thinking':
-      if (placeholders.has(chatId)) {
-        const update = buildTelegramThinkingUpdate(
-          accumulatedThinkingText.get(chatId) ?? '',
-          msg.text,
-        )
-        accumulatedThinkingText.set(chatId, update.fullText)
-        try {
-          await bot.api.editMessageText(
-            numericChatId,
-            placeholders.get(chatId)!.messageId,
-            update.messageText,
-          )
-        } catch { /* ignore */ }
-      }
+      // Live feedback is handled by the typing indicator; thinking text is noise.
       break
 
     case 'tool_use_complete':
-      // Tool details are noise for IM users; visible in Desktop if needed.
       break
 
     case 'tool_result':
-      // Tool errors are handled internally by the AI (retries etc.)
-      // No need to notify the user for every failed attempt.
       break
 
     case 'permission_request': {
@@ -467,35 +380,25 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
     }
 
-    case 'message_complete':
+    case 'message_complete': {
       runtime.state = 'idle'
       runtime.verb = undefined
-      await buf.complete()
-      // Ensure placeholder is always cleaned up even if buffer was already empty
-      if (placeholders.has(chatId)) {
-        const text = accumulatedText.get(chatId)
-        if (text?.trim()) {
-          try {
-            const chunks = splitMessage(formatTelegramOutboundText(text), TELEGRAM_TEXT_LIMIT)
-            await bot.api.editMessageText(numericChatId, placeholders.get(chatId)!.messageId, chunks[0]!)
-            for (let i = 1; i < chunks.length; i++) {
-              await bot.api.sendMessage(numericChatId, chunks[i]!)
-            }
-          } catch { /* ignore */ }
-        }
-        placeholders.delete(chatId)
-        accumulatedText.delete(chatId)
-        accumulatedThinkingText.delete(chatId)
-        buffers.get(chatId)?.reset()
+      typingController.stop(chatId)
+      const finalText = accumulatedText.get(chatId) ?? ''
+      accumulatedText.delete(chatId)
+      if (finalText.trim()) {
+        await sendTextToTelegram(chatId, finalText).catch((err) => {
+          console.error('[Telegram] send failed:', err instanceof Error ? err.message : String(err))
+        })
       }
       break
+    }
 
     case 'error':
       runtime.state = 'idle'
       runtime.verb = undefined
-      accumulatedThinkingText.delete(chatId)
-      // Auto-recover from stale thinking block signatures by creating a fresh session.
-      // This happens when the API key or provider changed since the session was created.
+      typingController.stop(chatId)
+      accumulatedText.delete(chatId)
       if (msg.message && /Invalid.*signature.*thinking/i.test(msg.message)) {
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
@@ -533,18 +436,13 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
 
 registerTelegramExtendedCommands(bot, commandController)
 
-/** Reset session state and start a new session for chatId.
- *  If `query` is provided, match a project by index or name;
- *  otherwise use the configured/default work directory. */
 async function startNewSession(chatId: string, query?: string): Promise<void> {
   const numericChatId = Number(chatId)
 
   bridge.resetSession(chatId)
   sessionStore.delete(chatId)
-  placeholders.delete(chatId)
   accumulatedText.delete(chatId)
-  buffers.get(chatId)?.reset()
-  buffers.delete(chatId)
+  typingController.stop(chatId)
   pendingProjectSelection.delete(chatId)
   commandController.clearPendingSelections(chatId)
   pendingPermissions.delete(chatId)
@@ -640,9 +538,6 @@ for (const command of ['allow', 'always', 'allow-always', 'deny'] as const) {
   })
 }
 
-/** Shared per-user-message pipeline: dedup, pairing check, project-pick
- *  routing, enqueue, ensureSession, sendUserMessage with attachments.
- *  Caller has already extracted text and attachments from the context. */
 async function routeUserMessage(
   ctx: Context,
   text: string,
@@ -686,13 +581,12 @@ async function routeUserMessage(
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
     if (!sent) {
       await bot.api.sendMessage(Number(chatId), '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+    } else {
+      typingController.start(chatId)
     }
   })
 }
 
-/** Scan ctx.message for photo/document/video/audio/voice, download
- *  each via TelegramMediaService, apply size/mime limits, and produce
- *  a ready-to-send AttachmentRef[] plus any rejection hints. */
 async function collectAttachmentsFromCtx(
   ctx: Context,
 ): Promise<{ attachments: AttachmentRef[]; rejections: string[] }> {
@@ -735,7 +629,6 @@ async function collectAttachmentsFromCtx(
     }
   }
 
-  // Photos: grammY exposes an array of sizes, largest last.
   if (msg.photo && msg.photo.length > 0) {
     const largest = msg.photo[msg.photo.length - 1]!
     await runOne(largest.file_id, `photo-${largest.file_unique_id}.jpg`, 'image/jpeg')
@@ -805,6 +698,7 @@ process.on('SIGINT', () => {
   console.log('[Telegram] Shutting down...')
   bot.stop()
   bridge.destroy()
+  typingController.destroy()
   dedup.destroy()
   process.exit(0)
 })
