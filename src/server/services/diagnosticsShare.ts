@@ -47,11 +47,27 @@ const SAFE_SCALAR_KEYS = new Set([
   'is_error',
   'isapierrormessage',
   'iserror',
+  'method',
   'name',
   'sdkType'.toLowerCase(),
   'status',
   'subtype',
 ])
+
+// `path` carries the failing API route, which is what makes an API failure
+// actionable. It cannot go through SAFE_SCALAR_KEYS because it starts with
+// "/" and would be rejected by SAFE_METADATA_VALUE_RE, so it gets a dedicated
+// projection that keeps the route shape and drops everything identifying.
+//
+// Only in-app API routes are echoed back. Anchoring on the "/api/" prefix is
+// what keeps filesystem paths (/Users/..., /home/...) out: their segments are
+// otherwise indistinguishable from route segments.
+const API_PATH_KEYS = new Set(['path'])
+const API_PATH_PREFIX = '/api/'
+const API_PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/
+const API_PATH_ID_RE =
+  /^(?:[0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[A-Za-z0-9_-]{24,})$/i
+const MAX_API_PATH_SEGMENTS = 12
 
 const SAFE_METADATA_VALUE_RE = /^[a-z0-9][a-z0-9_.:/ -]{0,127}$/i
 const MAX_SHARED_IDENTIFIER_LENGTH = 256
@@ -230,9 +246,46 @@ function projectDetails(
       projected[key] = projectSafeMetadataScalar(entry)
       continue
     }
+    if (API_PATH_KEYS.has(normalizedKey) && typeof entry === 'string') {
+      const apiPath = projectApiPath(entry)
+      if (apiPath !== null) {
+        projected[key] = apiPath
+        continue
+      }
+    }
     omittedFields.push(entryPath)
   }
   return Object.keys(projected).length > 0 ? projected : undefined
+}
+
+/**
+ * Project an API request path down to its route shape.
+ *
+ * Keeps `/api/sessions/:id/messages` so a maintainer can tell which endpoint
+ * returned 4xx, while dropping query strings, fragments, credentials and any
+ * segment that looks like an identifier. Returns null when the value is not an
+ * in-app API route, in which case the caller omits the field entirely.
+ */
+function projectApiPath(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith(API_PATH_PREFIX)) return null
+
+  const withoutQuery = trimmed.split(/[?#]/, 1)[0] ?? ''
+  if (withoutQuery.length === 0 || withoutQuery.length > MAX_SHARED_METADATA_LENGTH) return null
+
+  const segments = withoutQuery.split('/').filter((segment) => segment.length > 0)
+  if (segments.length > MAX_API_PATH_SEGMENTS) return null
+
+  const projectedSegments: string[] = []
+  for (const segment of segments) {
+    // Anything outside a conservative charset (encoded bytes, spaces, dots
+    // traversal, unicode) means this is not a route we can safely echo back.
+    if (!API_PATH_SEGMENT_RE.test(segment)) return null
+    if (segment === '.' || segment === '..') return null
+    projectedSegments.push(API_PATH_ID_RE.test(segment) ? ':id' : segment)
+  }
+
+  return `/${projectedSegments.join('/')}`
 }
 
 function projectError(error: Error): Record<string, string> {
