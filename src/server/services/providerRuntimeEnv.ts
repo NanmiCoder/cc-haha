@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { userInfo } from 'node:os'
 import * as fs from 'fs'
 import * as path from 'path'
 
@@ -71,6 +73,50 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
 
 const AUTH_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
 const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
+
+export const MACOS_KEYCHAIN_API_KEY_PREFIX = 'macos-keychain://'
+export type ApiKeyReader = (service: string) => string
+
+function readMacOsKeychain(service: string): string {
+  const username = process.env.USER || userInfo().username
+  const value = execFileSync(
+    '/usr/bin/security',
+    ['find-generic-password', '-a', username, '-s', service, '-w'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+  ).trim()
+  if (!value) {
+    throw new Error(`macOS Keychain entry is empty: ${service}`)
+  }
+  return value
+}
+
+export function resolveProviderApiKey(
+  value: string,
+  readKeychain: ApiKeyReader = readMacOsKeychain,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith(MACOS_KEYCHAIN_API_KEY_PREFIX)) return value
+  if (platform !== 'darwin') {
+    throw new Error('macos-keychain API key references require macOS')
+  }
+
+  const encodedService = trimmed.slice(MACOS_KEYCHAIN_API_KEY_PREFIX.length)
+  if (!encodedService) {
+    throw new Error('macos-keychain API key reference is missing a service name')
+  }
+
+  let service: string
+  try {
+    service = decodeURIComponent(encodedService)
+  } catch {
+    throw new Error('macos-keychain API key reference has invalid encoding')
+  }
+  if (!service || service.includes('\0')) {
+    throw new Error('macos-keychain API key reference has an invalid service name')
+  }
+  return readKeychain(service)
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -239,7 +285,9 @@ function buildImageGenerationManagedEnv(
     [IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY]: 'openai_images',
     [IMAGE_GENERATION_PROVIDER_ID_ENV_KEY]: provider.id,
     [IMAGE_GENERATION_BASE_URL_ENV_KEY]: imageGeneration.baseUrl ?? provider.baseUrl,
-    [IMAGE_GENERATION_API_KEY_ENV_KEY]: imageGeneration.apiKey ?? provider.apiKey,
+    [IMAGE_GENERATION_API_KEY_ENV_KEY]: resolveProviderApiKey(
+      imageGeneration.apiKey ?? provider.apiKey,
+    ),
     [IMAGE_GENERATION_MODEL_ENV_KEY]: imageGeneration.model,
   }
 }
@@ -367,7 +415,8 @@ export function buildProviderAuthEnv(
   }
 
   const strategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
-  const key = provider.apiKey || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN || presetDefaultEnv.ANTHROPIC_API_KEY || ''
+  const rawKey = provider.apiKey || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN || presetDefaultEnv.ANTHROPIC_API_KEY || ''
+  const key = strategy === 'dual_dummy' ? '' : resolveProviderApiKey(rawKey)
 
   switch (strategy) {
     case 'api_key':
