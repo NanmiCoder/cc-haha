@@ -270,7 +270,7 @@ async function handleOpenaiChat(
   const transformed = anthropicToOpenaiChat(body, {
     roundTripReasoningContent: deepSeekCompatible,
     passThinkingToggle: deepSeekCompatible,
-    imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl) ? 'text_only' : 'vision',
+    imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl, body.model) ? 'text_only' : 'vision',
   })
   const url = `${baseUrl}/v1/chat/completions`
   const upstreamRequestHeaders = {
@@ -427,8 +427,27 @@ function shouldUseDeepSeekReasoningCompat(baseUrl: string): boolean {
   )
 }
 
-function shouldUseTextOnlyOpenAIChatContent(baseUrl: string): boolean {
-  return shouldUseDeepSeekReasoningCompat(baseUrl)
+function shouldUseTextOnlyOpenAIChatContent(
+  baseUrl: string,
+  model?: string,
+): boolean {
+  // Classic DeepSeek API endpoints are text-only regardless of model.
+  if (/(^|[./-])deepseek([./-]|$)/i.test(baseUrl)) return true
+
+  // opencode.ai/zen is a multi-model gateway: some models see, some don't.
+  // Strip images only when the requested model isn't a known vision model, so a
+  // text-only model on the same gateway never receives image_url content.
+  if (/(^|[./-])opencode\.ai([:/]|$)/i.test(baseUrl)) {
+    return !isVisionModelName(model)
+  }
+
+  return false
+}
+
+function isVisionModelName(model?: string): boolean {
+  if (!model) return false
+  // Heuristic markers commonly used for vision-capable multimodal models.
+  return /(vision|visual|omni|4o|gemini|clip|\bvl\b)/i.test(model)
 }
 
 async function handleOpenaiResponses(

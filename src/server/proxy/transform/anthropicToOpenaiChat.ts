@@ -173,16 +173,13 @@ function convertUserMessage(
         contentParts.push({ type: 'image_url', image_url: { url } })
       }
     } else if (block.type === 'tool_result') {
-      // tool_result → separate tool message
-      const resultContent = typeof block.content === 'string'
-        ? block.content
-        : Array.isArray(block.content)
-          ? block.content.filter((b): b is Extract<AnthropicContentBlock, { type: 'text' }> => b.type === 'text').map((b) => b.text).join('\n')
-          : ''
+      // tool_result → separate tool message. Preserve image blocks (e.g. the
+      // screenshot tool returns them here); only filtering for `text` would
+      // silently drop them. Mirrors anthropicToOpenaiResponses.
       output.push({
         role: 'tool',
         tool_call_id: block.tool_use_id,
-        content: resultContent,
+        content: convertToolResultContent(block.content, imageContentMode),
       })
     }
   }
@@ -203,6 +200,42 @@ function convertUserMessage(
         : contentParts,
     })
   }
+}
+
+function convertToolResultContent(
+  content: string | AnthropicContentBlock[],
+  imageContentMode: OpenAIChatImageContentMode,
+): string | OpenAIChatContentPart[] {
+  if (typeof content === 'string') return content
+
+  const textParts: string[] = []
+  const parts: OpenAIChatContentPart[] = []
+
+  for (const block of content) {
+    if (block.type === 'text') {
+      textParts.push(block.text)
+    } else if (block.type === 'image') {
+      if (imageContentMode === 'text_only') {
+        textParts.push(OMITTED_IMAGE_TEXT)
+      } else {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` },
+        })
+      }
+    }
+  }
+
+  // Plain text (or a single text block, or text_only images) stays a string so
+  // existing text-only tool results are byte-for-byte unchanged.
+  const text = textParts.join('\n')
+  if (text) {
+    parts.unshift({ type: 'text', text })
+  }
+
+  if (parts.length === 0) return ''
+  if (parts.length === 1 && parts[0].type === 'text') return parts[0].text
+  return parts
 }
 
 function convertAssistantMessage(
