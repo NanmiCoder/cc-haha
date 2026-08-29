@@ -169,6 +169,7 @@ export type UserSettings = {
   }
   language?: string
   desktopTerminal?: Partial<DesktopTerminalSettings>
+  attribution?: { commit?: string; pr?: string }
   [key: string]: unknown
 }
 

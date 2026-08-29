@@ -133,6 +133,10 @@ See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/inde
 
 ---
 
+## Configuration
+
+cc-haha adds a `Co-Authored-By` trailer to the git commits it creates. To disable it globally, set `attribution.commit` to an empty string in your settings — either via the desktop **Settings → Commit attribution** toggle, or by running `/config set attribution.commit ""` (or editing `settings.json`). For pull-request bodies, use `attribution.pr`.
+
 ## Desktop Highlights
 
 - **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place, with a resizable sidebar.

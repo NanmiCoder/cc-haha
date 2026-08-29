@@ -133,6 +133,10 @@ cp .env.example .env
 
 ---
 
+## 配置
+
+cc-haha 会在其创建的 git 提交中追加 `Co-Authored-By` 署名行。如需全局禁用，可在设置中将 `attribution.commit` 设为空字符串：通过桌面端「设置 → 提交署名」开关，或运行 `/config set attribution.commit ""`（也可直接编辑 `settings.json`）。对 Pull Request 正文使用 `attribution.pr`。
+
 ## 桌面端亮点
 
 - **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理，侧边栏宽度可拖拽。

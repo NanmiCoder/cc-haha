@@ -110,6 +110,16 @@ export const SUPPORTED_SETTINGS: Record<string, SettingConfig> = {
     description: 'Enable extended thinking (false to disable)',
     appStateKey: 'thinkingEnabled',
   },
+  'attribution.commit': {
+    source: 'settings',
+    type: 'string',
+    description: 'Trailer added to git commits, e.g. "Co-Authored-By: …". Set to an empty string to disable it globally.',
+  },
+  'attribution.pr': {
+    source: 'settings',
+    type: 'string',
+    description: 'Attribution line added to pull request bodies. Set to an empty string to disable it.',
+  },
   'permissions.defaultMode': {
     source: 'settings',
     type: 'string',
