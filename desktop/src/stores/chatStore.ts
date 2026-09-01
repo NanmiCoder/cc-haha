@@ -118,6 +118,8 @@ export type PerSessionState = {
   /** True after the server's authoritative reconnect snapshot has arrived. */
   connectionSnapshotReady?: boolean
   historyStatus?: 'idle' | 'loading' | 'ready' | 'error'
+  /** True once durable transcript history has been applied for this lifecycle. */
+  historyHydrated?: boolean
   historyError?: string | null
   streamingText: string
   streamingToolInput: string
@@ -161,12 +163,17 @@ export type PerSessionState = {
   stoppingBackgroundTaskIds?: Record<string, boolean>
   pendingBackgroundTaskStopFailures?: Record<string, string>
   stopAllSubagentsRequested?: boolean
+  awaitingReconnectSync?: boolean
+  /** A socket gap started before this history lifecycle finished hydration. */
+  preHydrationSocketGapPending?: boolean
+  historyBootstrapDisabled?: boolean
   historyMutationEpoch?: number
   /** Changes when a directed child stream starts or settles. */
   agentStreamRevision?: number
   suppressNextTaskNotificationResponse?: boolean
   replaceHistoryOnCompletion?: boolean
   activeGoal?: ActiveGoalState | null
+  activeGoalRevision?: number
   elapsedTimer: ReturnType<typeof setInterval> | null
   composerPrefill?: {
     text: string
@@ -187,6 +194,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   connectionState: 'disconnected',
   connectionSnapshotReady: false,
   historyStatus: 'idle',
+  historyHydrated: false,
   historyError: null,
   streamingText: '',
   streamingToolInput: '',
@@ -211,11 +219,15 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   stoppingBackgroundTaskIds: {},
   pendingBackgroundTaskStopFailures: {},
   stopAllSubagentsRequested: false,
+  awaitingReconnectSync: false,
+  preHydrationSocketGapPending: false,
+  historyBootstrapDisabled: false,
   historyMutationEpoch: 0,
   agentStreamRevision: 0,
   suppressNextTaskNotificationResponse: false,
   replaceHistoryOnCompletion: false,
   activeGoal: null,
+  activeGoalRevision: 0,
   elapsedTimer: null,
   composerPrefill: null,
   composerInsertion: null,
@@ -339,7 +351,10 @@ type ChatStore = {
   setSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void
   stopGeneration: (sessionId: string) => void
   stopBackgroundTask: (sessionId: string, taskId: string) => void
-  loadHistory: (sessionId: string) => Promise<void>
+  loadHistory: (
+    sessionId: string,
+    options?: { mode?: 'terminal-reconnect' },
+  ) => Promise<void>
   reloadHistory: (
     sessionId: string,
     guard?: {
@@ -1507,6 +1522,323 @@ function mergeRestoredHistoryIntoLiveMessages(
   )
 }
 
+function nonEmptyHistoryIdentityPart(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function strongHistoryMessageIdentities(message: UIMessage): string[] {
+  const identities: string[] = []
+  const messageId = nonEmptyHistoryIdentityPart(message.id)
+  if (messageId) identities.push(JSON.stringify(['ui', message.type, messageId]))
+
+  if (
+    (message.type === 'user_text' || message.type === 'assistant_text') &&
+    nonEmptyHistoryIdentityPart(message.transcriptMessageId)
+  ) {
+    identities.push(JSON.stringify([
+      'transcript',
+      message.type,
+      message.transcriptMessageId!.trim(),
+      message.content.trim(),
+    ]))
+  }
+
+  if (message.type === 'tool_use' || message.type === 'tool_result') {
+    const toolUseId = nonEmptyHistoryIdentityPart(message.originalToolUseId) ??
+      nonEmptyHistoryIdentityPart(message.toolUseId)
+    if (toolUseId) {
+      identities.push(JSON.stringify([
+        'tool',
+        message.type,
+        nonEmptyHistoryIdentityPart(message.parentToolUseId) ?? null,
+        toolUseId,
+      ]))
+    }
+  }
+
+  if (message.type === 'background_task') {
+    const taskId = nonEmptyHistoryIdentityPart(message.task.taskId)
+    if (taskId) identities.push(`background-task:${taskId}`)
+  }
+
+  if (message.type === 'permission_request') {
+    const requestId = nonEmptyHistoryIdentityPart(message.requestId)
+    if (requestId) identities.push(`permission-request:${requestId}`)
+  }
+
+  return identities
+}
+
+function didToolFieldChangeAfterRestoredBaseline<K extends keyof ToolCall>(
+  liveMessage: ToolCall,
+  previousRestoredMessage: ToolCall | undefined,
+  field: K,
+): boolean {
+  return !previousRestoredMessage ||
+    !Object.is(liveMessage[field], previousRestoredMessage[field])
+}
+
+function mergePendingToolInputDelta(
+  restoredInput: unknown,
+  previousRestoredInput: unknown,
+  liveInput: unknown,
+): unknown {
+  if (
+    !isRecord(restoredInput) ||
+    !isRecord(previousRestoredInput) ||
+    !isRecord(liveInput)
+  ) {
+    return liveInput === undefined ? restoredInput : liveInput
+  }
+
+  const merged = { ...restoredInput }
+  const keys = new Set([
+    ...Object.keys(previousRestoredInput),
+    ...Object.keys(liveInput),
+  ])
+  for (const key of keys) {
+    if (Object.is(previousRestoredInput[key], liveInput[key])) continue
+    if (Object.prototype.hasOwnProperty.call(liveInput, key)) {
+      merged[key] = liveInput[key]
+    } else {
+      delete merged[key]
+    }
+  }
+  return merged
+}
+
+function mergeToolInputAfterRestoredBaseline(
+  restoredMessage: ToolCall,
+  liveMessage: ToolCall,
+  previousRestoredMessage: ToolCall | undefined,
+  liveInputChanged: boolean,
+  livePartialInputChanged: boolean,
+): unknown {
+  if (!previousRestoredMessage) {
+    if (
+      liveMessage.isPending &&
+      isRecord(restoredMessage.input) &&
+      isRecord(liveMessage.input)
+    ) {
+      return { ...restoredMessage.input, ...liveMessage.input }
+    }
+    return liveMessage.input === undefined
+      ? restoredMessage.input
+      : liveMessage.input
+  }
+
+  // A non-stopped terminal row came from an authoritative complete/permission
+  // event. Its input is newer even if the producer inherited a stale preview.
+  if (
+    liveMessage.isPending === false &&
+    liveMessage.status !== 'stopped' &&
+    liveInputChanged &&
+    liveMessage.input !== undefined
+  ) {
+    return liveMessage.input
+  }
+
+  // A partial preview copies untouched keys from L1. Rebuild it over L2 so
+  // only fields present in the live JSON fragment can outrank newer durable
+  // values; an empty content_start preview carries no payload delta at all.
+  if (livePartialInputChanged && liveMessage.partialInput !== undefined) {
+    return liveMessage.partialInput.trim()
+      ? buildPartialToolInputPreview(liveMessage.partialInput, restoredMessage.input)
+      : restoredMessage.input
+  }
+  if (!liveInputChanged) return restoredMessage.input
+  if (liveMessage.input === undefined) return restoredMessage.input
+  return liveMessage.isPending
+    ? mergePendingToolInputDelta(
+        restoredMessage.input,
+        previousRestoredMessage.input,
+        liveMessage.input,
+      )
+    : liveMessage.input
+}
+
+function overlayLiveHistoryMessage(
+  restoredMessage: UIMessage,
+  liveMessage: UIMessage,
+  previousRestoredMessage?: UIMessage,
+): UIMessage {
+  if (restoredMessage.type === 'tool_use' && liveMessage.type === 'tool_use') {
+    const previousRestoredTool = previousRestoredMessage?.type === 'tool_use'
+      ? previousRestoredMessage
+      : undefined
+    const liveToolNameChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'toolName',
+    )
+    const liveToolName = liveToolNameChanged ? liveMessage.toolName.trim() : ''
+    const liveInputChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'input',
+    )
+    const livePartialInputChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'partialInput',
+    )
+    const input = mergeToolInputAfterRestoredBaseline(
+      restoredMessage,
+      liveMessage,
+      previousRestoredTool,
+      liveInputChanged,
+      livePartialInputChanged,
+    )
+    const isPendingChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'isPending',
+    )
+    const statusChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'status',
+    )
+    const mergedIsPending = previousRestoredTool && !isPendingChanged
+      ? restoredMessage.isPending
+      : liveMessage.isPending ?? restoredMessage.isPending
+    const status = previousRestoredTool
+      ? statusChanged
+        ? liveMessage.status
+        : restoredMessage.status
+      : liveMessage.status ?? restoredMessage.status
+    const isPending = status === 'stopped' ? false : mergedIsPending
+    const partialInput = isPending === false || status === 'stopped'
+      ? undefined
+      : previousRestoredTool && !livePartialInputChanged
+        ? restoredMessage.partialInput
+        : previousRestoredTool
+          ? liveMessage.partialInput
+          : liveMessage.partialInput ?? restoredMessage.partialInput
+    const originalToolUseIdChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'originalToolUseId',
+    )
+    const parentToolUseIdChanged = didToolFieldChangeAfterRestoredBaseline(
+      liveMessage,
+      previousRestoredTool,
+      'parentToolUseId',
+    )
+    return {
+      ...restoredMessage,
+      toolName: liveToolName && liveToolName !== 'unknown'
+        ? liveMessage.toolName
+        : restoredMessage.toolName,
+      toolUseId: nonEmptyHistoryIdentityPart(liveMessage.toolUseId)
+        ? liveMessage.toolUseId
+        : restoredMessage.toolUseId,
+      originalToolUseId:
+        originalToolUseIdChanged &&
+        nonEmptyHistoryIdentityPart(liveMessage.originalToolUseId)
+          ? liveMessage.originalToolUseId
+          : restoredMessage.originalToolUseId,
+      parentToolUseId:
+        parentToolUseIdChanged &&
+        nonEmptyHistoryIdentityPart(liveMessage.parentToolUseId)
+          ? liveMessage.parentToolUseId
+          : restoredMessage.parentToolUseId,
+      input,
+      isPending,
+      status,
+      partialInput,
+      id: restoredMessage.id,
+      timestamp: restoredMessage.timestamp,
+    }
+  }
+  if (restoredMessage.type === 'tool_result' && liveMessage.type === 'tool_result') {
+    return {
+      ...restoredMessage,
+      toolUseId: nonEmptyHistoryIdentityPart(liveMessage.toolUseId)
+        ? liveMessage.toolUseId
+        : restoredMessage.toolUseId,
+      originalToolUseId:
+        liveMessage.originalToolUseId ?? restoredMessage.originalToolUseId,
+      parentToolUseId: liveMessage.parentToolUseId ?? restoredMessage.parentToolUseId,
+      content: liveMessage.content === undefined
+        ? restoredMessage.content
+        : liveMessage.content,
+      isError: liveMessage.isError,
+      id: restoredMessage.id,
+      timestamp: restoredMessage.timestamp,
+    }
+  }
+  return restoredMessage
+}
+
+function mergeColdRestoredHistoryIntoLiveMessages(
+  restoredMessages: UIMessage[],
+  liveMessages: UIMessage[],
+  previousRestoredMessagesById?: ReadonlyMap<string, UIMessage>,
+): UIMessage[] {
+  // A live event can arrive after loadHistory starts but before its fetch
+  // resolves. Use durable history as the ordered base and only coalesce rows
+  // with stable identities. Equal id-less prose may be a genuine newer turn,
+  // so a temporary duplicate is safer than dropping user-visible output.
+  const merged = [...restoredMessages]
+  const messageIndexesByIdentity = new Map<string, number | null>()
+  const recordIdentity = (identity: string, index: number) => {
+    if (!messageIndexesByIdentity.has(identity)) {
+      messageIndexesByIdentity.set(identity, index)
+      return
+    }
+    if (messageIndexesByIdentity.get(identity) !== index) {
+      messageIndexesByIdentity.set(identity, null)
+    }
+  }
+
+  for (const [index, message] of merged.entries()) {
+    for (const identity of strongHistoryMessageIdentities(message)) {
+      recordIdentity(identity, index)
+    }
+  }
+
+  for (const liveMessage of liveMessages) {
+    const identities = strongHistoryMessageIdentities(liveMessage)
+    const identityTargets = identities.reduce<Array<number | null>>((targets, identity) => {
+      const target = messageIndexesByIdentity.get(identity)
+      if (target !== undefined) targets.push(target)
+      return targets
+    }, [])
+    const matchedIndexes = new Set(identityTargets.filter(
+      (index): index is number => index !== null,
+    ))
+    const matchedIndex = !identityTargets.includes(null) && matchedIndexes.size === 1
+      ? matchedIndexes.values().next().value
+      : undefined
+
+    if (matchedIndex === undefined) {
+      const appendedIndex = merged.push(liveMessage) - 1
+      for (const identity of identities) {
+        recordIdentity(identity, appendedIndex)
+      }
+      continue
+    }
+
+    const overlaidMessage = overlayLiveHistoryMessage(
+      merged[matchedIndex]!,
+      liveMessage,
+      previousRestoredMessagesById?.get(liveMessage.id),
+    )
+    merged[matchedIndex] = overlaidMessage
+    const overlaidIdentities = new Set([
+      ...identities,
+      ...strongHistoryMessageIdentities(overlaidMessage),
+    ])
+    for (const identity of overlaidIdentities) {
+      recordIdentity(identity, matchedIndex)
+    }
+  }
+
+  return merged
+}
+
 function needsTranscriptIdHydrationRetry(session: PerSessionState | undefined): boolean {
   if (!session || session.chatState !== 'idle') return false
 
@@ -1532,10 +1864,23 @@ function refreshCompletedTranscriptHistory(
   get: () => ChatStore,
   sessionId: string,
 ): void {
+  const lifecycleGeneration = currentHistoryLifecycle(sessionId)
   void get().loadHistory(sessionId).then(() => {
-    if (!needsTranscriptIdHydrationRetry(get().sessions[sessionId])) return
+    const session = get().sessions[sessionId]
+    if (
+      !isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) ||
+      session?.historyBootstrapDisabled === true ||
+      session?.awaitingReconnectSync === true ||
+      !needsTranscriptIdHydrationRetry(session)
+    ) return
     setTimeout(() => {
-      if (!needsTranscriptIdHydrationRetry(get().sessions[sessionId])) return
+      const retrySession = get().sessions[sessionId]
+      if (
+        !isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) ||
+        retrySession?.historyBootstrapDisabled === true ||
+        retrySession?.awaitingReconnectSync === true ||
+        !needsTranscriptIdHydrationRetry(retrySession)
+      ) return
       void get().loadHistory(sessionId)
     }, 750)
   })
@@ -1546,13 +1891,18 @@ function reconcileCompletedTranscriptHistory(
   sessionId: string,
   replaceHistory: boolean,
 ): void {
+  const session = get().sessions[sessionId]
+  if (
+    !session ||
+    session.historyBootstrapDisabled === true ||
+    session.awaitingReconnectSync === true
+  ) return
+
   if (!replaceHistory) {
     refreshCompletedTranscriptHistory(get, sessionId)
     return
   }
 
-  const session = get().sessions[sessionId]
-  if (!session) return
   void get().reloadHistory(sessionId, {
     messages: session.messages,
     backgroundAgentTasks: session.backgroundAgentTasks,
@@ -1764,10 +2114,12 @@ async function fetchAndMapSessionHistory(
     rootRunMessages,
     rootRunNotifications,
   )
+  const restoredGoalState = deriveActiveGoalStateFromMessages(uiMessages)
   return {
     rawMessages: messages,
     uiMessages,
-    activeGoal: deriveActiveGoalFromMessages(uiMessages),
+    activeGoal: restoredGoalState.activeGoal,
+    hasRestoredGoalState: restoredGoalState.hasStateEvidence,
     restoredNotifications: restoredActivity.agentTaskNotifications,
     restoredBackgroundTasks: restoredActivity.backgroundAgentTasks,
     lastTodos: extractLastTodoWriteFromHistory(messages),
@@ -1776,28 +2128,392 @@ async function fetchAndMapSessionHistory(
   }
 }
 
-const historyLoadsInFlight = new Map<string, Promise<void>>()
+type HistoryLoadInFlight = {
+  lifecycleGeneration: number
+  promise: Promise<void>
+}
+
+type TerminalReconnectHistoryBoundary = {
+  lifecycleGeneration: number
+  preHydrationGap: boolean
+  activated: boolean
+  latestTerminalBoundaryCaptured: boolean
+  baselineMessagesById: Map<string, UIMessage>
+  latestTerminalBaselineMessagesById: Map<string, UIMessage>
+  /** Durable rows applied by L1 after a pre-hydration gap began. */
+  preHydrationRestoredMessagesById: Map<string, UIMessage>
+  baselineBackgroundAgentTasks: Record<string, BackgroundAgentTask>
+  baselineAgentTaskNotifications: Record<string, AgentTaskNotification>
+  snapshotActiveBackgroundTaskIds: Set<string> | null
+  snapshotSettledBackgroundAgentTasks: Record<string, BackgroundAgentTask>
+  requestedTokenUsage: TokenUsage | undefined
+  requestedActiveGoalRevision: number
+  requestedTaskStoreSessionId: string | null
+  requestedTasks: ReturnType<typeof useCLITaskStore.getState>['tasks']
+  requestedReloadCompletionGeneration: number
+  latestReconnectTokenUsage: TokenUsage | undefined
+  latestReconnectActiveGoalRevision: number
+  latestReconnectTaskStoreSessionId: string | null
+  latestReconnectTasks: ReturnType<typeof useCLITaskStore.getState>['tasks']
+  latestReconnectReloadCompletionGeneration: number
+}
+
+const historyLoadsInFlight = new Map<string, HistoryLoadInFlight>()
 const historyReloadGenerations = new Map<string, number>()
+const historyReloadCompletionGenerations = new Map<string, number>()
+const historyLifecycleGenerations = new Map<string, number>()
+const terminalReconnectHistoryBoundaries = new Map<
+  string,
+  TerminalReconnectHistoryBoundary
+>()
 
-const HISTORY_LOAD_ABORT_RETRY_DELAY_MS = 150
-const HISTORY_LOAD_ABORT_MAX_RETRIES = 5
-const historyLoadAbortRetries = new Map<string, number>()
+function currentHistoryLifecycle(sessionId: string): number {
+  return historyLifecycleGenerations.get(sessionId) ?? 0
+}
 
-// A history load aborted by a concurrent task mutation (epoch bump) used to be
-// silently dropped, leaving the session empty until the next mount/connect.
-// Retry while the session still has no messages, bounded so a stream of task
-// events cannot spin the fetch loop forever.
-function scheduleAbortedHistoryLoadRetry(get: () => ChatStore, sessionId: string): void {
-  const session = get().sessions[sessionId]
-  if (!session || session.messages.length > 0) return
-  const attempts = (historyLoadAbortRetries.get(sessionId) ?? 0) + 1
-  if (attempts > HISTORY_LOAD_ABORT_MAX_RETRIES) return
-  historyLoadAbortRetries.set(sessionId, attempts)
-  setTimeout(() => {
-    const current = get().sessions[sessionId]
-    if (!current || current.messages.length > 0 || current.historyStatus === 'loading') return
-    void get().loadHistory(sessionId)
-  }, HISTORY_LOAD_ABORT_RETRY_DELAY_MS)
+function advanceHistoryLifecycle(sessionId: string): number {
+  const nextGeneration = currentHistoryLifecycle(sessionId) + 1
+  historyLifecycleGenerations.set(sessionId, nextGeneration)
+  historyLoadsInFlight.delete(sessionId)
+  terminalReconnectHistoryBoundaries.delete(sessionId)
+  return nextGeneration
+}
+
+function isCurrentHistoryLifecycle(sessionId: string, generation: number): boolean {
+  return currentHistoryLifecycle(sessionId) === generation
+}
+
+function isReconnectDiscardableForegroundMessage(message: UIMessage): boolean {
+  return message.type === 'assistant_text' ||
+    message.type === 'thinking' ||
+    message.type === 'tool_use' ||
+    message.type === 'tool_result'
+}
+
+function liveBackgroundTasksAfterBoundary(
+  current: Record<string, BackgroundAgentTask>,
+  boundary: TerminalReconnectHistoryBoundary,
+): Record<string, BackgroundAgentTask> {
+  return Object.fromEntries(Object.entries(current).filter(([key, task]) => {
+    const confirmedActive = boundary.snapshotActiveBackgroundTaskIds?.has(task.taskId) ||
+      Boolean(
+        task.toolUseId &&
+        boundary.snapshotActiveBackgroundTaskIds?.has(task.toolUseId),
+      )
+    const wasSettledBySnapshot =
+      boundary.snapshotSettledBackgroundAgentTasks[key] === task
+    return confirmedActive || (
+      !wasSettledBySnapshot && boundary.baselineBackgroundAgentTasks[key] !== task
+    )
+  }))
+}
+
+function liveAgentTaskNotificationsAfterBoundary(
+  current: Record<string, AgentTaskNotification>,
+  boundary: TerminalReconnectHistoryBoundary,
+): Record<string, AgentTaskNotification> {
+  return Object.fromEntries(Object.entries(current).filter(([toolUseId, notification]) =>
+    boundary.baselineAgentTaskNotifications[toolUseId] !== notification))
+}
+
+function restoredAgentTaskNotificationsAfterBoundary(
+  restored: Record<string, AgentTaskNotification>,
+  current: Record<string, AgentTaskNotification>,
+  liveBackgroundTasks: Record<string, BackgroundAgentTask>,
+  boundary: TerminalReconnectHistoryBoundary,
+): Record<string, AgentTaskNotification> {
+  const deletedIds = new Set([
+    ...Object.keys(boundary.baselineAgentTaskNotifications)
+      .filter((toolUseId) => !(toolUseId in current)),
+  ])
+  return Object.fromEntries(Object.entries(restored).filter(([toolUseId, notification]) => {
+    if (deletedIds.has(toolUseId)) return false
+    const snapshotSaysActive = boundary.snapshotActiveBackgroundTaskIds?.has(toolUseId) ||
+      boundary.snapshotActiveBackgroundTaskIds?.has(notification.taskId)
+    const liveTaskSaysRunning = Object.values(liveBackgroundTasks).some((task) =>
+      task.status === 'running' && (
+        task.taskId === notification.taskId ||
+        task.toolUseId === toolUseId
+      ))
+    return !snapshotSaysActive && !liveTaskSaysRunning
+  }))
+}
+
+function restartBackgroundTaskFromSnapshot(
+  task: BackgroundAgentTask,
+  now: number,
+): BackgroundAgentTask {
+  const restarted = { ...task }
+  delete restarted.summary
+  delete restarted.result
+  delete restarted.lastToolName
+  delete restarted.outputFile
+  delete restarted.usage
+  return {
+    ...restarted,
+    status: 'running',
+    startedAt: now,
+    updatedAt: now,
+  }
+}
+
+function applyReconnectActiveTaskSnapshot(
+  tasks: Record<string, BackgroundAgentTask>,
+  activeTaskIds: Set<string> | null,
+): Record<string, BackgroundAgentTask> {
+  if (!activeTaskIds) return tasks
+  let changed = false
+  const settled = Object.fromEntries(Object.entries(tasks).map(([key, task]) => {
+    const isActive = activeTaskIds.has(task.taskId) ||
+      Boolean(task.toolUseId && activeTaskIds.has(task.toolUseId))
+    if (isActive) {
+      if (task.status === 'running') return [key, task]
+      changed = true
+      return [key, restartBackgroundTaskFromSnapshot(task, Date.now())]
+    }
+    if (task.status !== 'running') return [key, task]
+    changed = true
+    return [key, { ...task, status: 'completed' as const, updatedAt: Date.now() }]
+  }))
+  return changed ? settled : tasks
+}
+
+function ensureTerminalReconnectHistoryBoundary(
+  sessionId: string,
+  session: PerSessionState | undefined,
+  options?: { activated?: boolean; preHydrationGap?: boolean },
+): TerminalReconnectHistoryBoundary | undefined {
+  const lifecycleGeneration = currentHistoryLifecycle(sessionId)
+  const existing = terminalReconnectHistoryBoundaries.get(sessionId)
+  if (existing?.lifecycleGeneration === lifecycleGeneration) {
+    if (
+      (options?.activated ?? true) &&
+      (!existing.activated || !existing.latestTerminalBoundaryCaptured)
+    ) {
+      const latestTerminalBaselineMessagesById = new Map(
+        existing.latestTerminalBaselineMessagesById,
+      )
+      for (const message of session?.messages ?? []) {
+        if (isReconnectDiscardableForegroundMessage(message)) {
+          latestTerminalBaselineMessagesById.set(message.id, message)
+        }
+      }
+      const activatedBoundary = {
+        ...existing,
+        activated: true,
+        latestTerminalBoundaryCaptured: true,
+        // Once a terminal request starts, its newest boundary becomes the
+        // retry baseline as well. If that request fails and a later reconnect
+        // is running, its cold backfill must not compare live revisions with
+        // values captured before an older socket gap.
+        baselineMessagesById: latestTerminalBaselineMessagesById,
+        latestTerminalBaselineMessagesById,
+        requestedTokenUsage: existing.latestReconnectTokenUsage,
+        requestedActiveGoalRevision: existing.latestReconnectActiveGoalRevision,
+        requestedTaskStoreSessionId: existing.latestReconnectTaskStoreSessionId,
+        requestedTasks: existing.latestReconnectTasks,
+        requestedReloadCompletionGeneration:
+          existing.latestReconnectReloadCompletionGeneration,
+      }
+      terminalReconnectHistoryBoundaries.set(sessionId, activatedBoundary)
+      return activatedBoundary
+    }
+    return existing
+  }
+  if (existing) terminalReconnectHistoryBoundaries.delete(sessionId)
+  if (!session) return undefined
+
+  const taskStore = useCLITaskStore.getState()
+  const boundary: TerminalReconnectHistoryBoundary = {
+    lifecycleGeneration,
+    preHydrationGap: options?.preHydrationGap ?? false,
+    activated: options?.activated ?? true,
+    latestTerminalBoundaryCaptured: options?.activated ?? true,
+    baselineMessagesById: new Map(
+      session.messages.map((message) => [message.id, message]),
+    ),
+    latestTerminalBaselineMessagesById: new Map(
+      session.messages.map((message) => [message.id, message]),
+    ),
+    preHydrationRestoredMessagesById: new Map(),
+    baselineBackgroundAgentTasks: session.backgroundAgentTasks ?? {},
+    baselineAgentTaskNotifications: session.agentTaskNotifications,
+    snapshotActiveBackgroundTaskIds: null,
+    snapshotSettledBackgroundAgentTasks: {},
+    requestedTokenUsage: session.tokenUsage,
+    requestedActiveGoalRevision: session.activeGoalRevision ?? 0,
+    requestedTaskStoreSessionId: taskStore.sessionId,
+    requestedTasks: taskStore.tasks,
+    requestedReloadCompletionGeneration:
+      historyReloadCompletionGenerations.get(sessionId) ?? 0,
+    latestReconnectTokenUsage: session.tokenUsage,
+    latestReconnectActiveGoalRevision: session.activeGoalRevision ?? 0,
+    latestReconnectTaskStoreSessionId: taskStore.sessionId,
+    latestReconnectTasks: taskStore.tasks,
+    latestReconnectReloadCompletionGeneration:
+      historyReloadCompletionGenerations.get(sessionId) ?? 0,
+  }
+  terminalReconnectHistoryBoundaries.set(sessionId, boundary)
+  return boundary
+}
+
+function rebaseReferenceRecord<T>(
+  baseline: Record<string, T>,
+  before: Record<string, T>,
+  after: Record<string, T>,
+): Record<string, T> {
+  const rebased = { ...baseline }
+  const keys = new Set([
+    ...Object.keys(baseline),
+    ...Object.keys(before),
+    ...Object.keys(after),
+  ])
+  for (const key of keys) {
+    // A changed reference (including deletion) is a post-gap live mutation.
+    // Leave its older baseline untouched so the next backfill preserves it.
+    if (baseline[key] !== before[key]) continue
+    const afterValue = after[key]
+    if (afterValue === undefined) delete rebased[key]
+    else rebased[key] = afterValue
+  }
+  return rebased
+}
+
+function rebasePreHydrationBoundaryAfterHistoryApply(
+  sessionId: string,
+  before: Pick<
+    PerSessionState,
+    'messages' | 'tokenUsage' | 'backgroundAgentTasks' | 'agentTaskNotifications'
+  >,
+  after: Pick<
+    PerSessionState,
+    'messages' | 'tokenUsage' | 'backgroundAgentTasks' | 'agentTaskNotifications'
+  >,
+): void {
+  const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+  if (
+    !boundary?.preHydrationGap ||
+    boundary.lifecycleGeneration !== currentHistoryLifecycle(sessionId)
+  ) return
+
+  const postGapMessages = before.messages.filter((message) =>
+    boundary.baselineMessagesById.get(message.id) !== message)
+  const postGapMessageRefs = new Set(postGapMessages)
+  const postGapMessageIds = new Set(postGapMessages.map((message) => message.id))
+  const postGapMessageIdentities = new Set(
+    postGapMessages.flatMap(strongHistoryMessageIdentities),
+  )
+  const isPostGapLiveMessage = (message: UIMessage) =>
+    postGapMessageRefs.has(message) ||
+    postGapMessageIds.has(message.id) ||
+    strongHistoryMessageIdentities(message).some((identity) =>
+      postGapMessageIdentities.has(identity))
+
+  const baselineMessagesById = new Map(boundary.baselineMessagesById)
+  const latestTerminalBaselineMessagesById = new Map(
+    boundary.latestTerminalBaselineMessagesById,
+  )
+  const preHydrationRestoredMessagesById = new Map(
+    boundary.preHydrationRestoredMessagesById,
+  )
+  for (const message of after.messages) {
+    if (isPostGapLiveMessage(message)) continue
+    // The apply output is made only from the REST rows and the current live
+    // array. Anything that is not traceable to a post-gap live row is L1
+    // durable state (or an unchanged pre-gap row) and may become baseline.
+    baselineMessagesById.set(message.id, message)
+    latestTerminalBaselineMessagesById.set(message.id, message)
+    if (boundary.baselineMessagesById.get(message.id) !== message) {
+      preHydrationRestoredMessagesById.set(message.id, message)
+    }
+  }
+
+  const tokenUsageWasUnchanged =
+    before.tokenUsage === boundary.requestedTokenUsage
+  const rebasedBoundary: TerminalReconnectHistoryBoundary = {
+    ...boundary,
+    baselineMessagesById,
+    latestTerminalBaselineMessagesById,
+    preHydrationRestoredMessagesById,
+    baselineBackgroundAgentTasks: rebaseReferenceRecord(
+      boundary.baselineBackgroundAgentTasks,
+      before.backgroundAgentTasks ?? {},
+      after.backgroundAgentTasks ?? {},
+    ),
+    baselineAgentTaskNotifications: rebaseReferenceRecord(
+      boundary.baselineAgentTaskNotifications,
+      before.agentTaskNotifications,
+      after.agentTaskNotifications,
+    ),
+    ...(tokenUsageWasUnchanged
+      ? {
+          requestedTokenUsage: after.tokenUsage,
+          latestReconnectTokenUsage: after.tokenUsage,
+        }
+      : {}),
+  }
+  terminalReconnectHistoryBoundaries.set(sessionId, rebasedBoundary)
+}
+
+function rebasePreHydrationBoundaryAfterTaskHistoryApply(
+  sessionId: string,
+  beforeSessionId: string | null,
+  beforeTasks: ReturnType<typeof useCLITaskStore.getState>['tasks'],
+): void {
+  const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+  if (
+    !boundary?.preHydrationGap ||
+    boundary.lifecycleGeneration !== currentHistoryLifecycle(sessionId) ||
+    boundary.requestedTaskStoreSessionId !== beforeSessionId ||
+    boundary.requestedTasks !== beforeTasks
+  ) return
+  const currentTaskStore = useCLITaskStore.getState()
+  terminalReconnectHistoryBoundaries.set(sessionId, {
+    ...boundary,
+    requestedTaskStoreSessionId: currentTaskStore.sessionId,
+    requestedTasks: currentTaskStore.tasks,
+    latestReconnectTaskStoreSessionId: currentTaskStore.sessionId,
+    latestReconnectTasks: currentTaskStore.tasks,
+  })
+}
+
+function recordReconnectBackgroundTaskSnapshot(
+  sessionId: string,
+  before: Record<string, BackgroundAgentTask>,
+  after: Record<string, BackgroundAgentTask>,
+  activeTaskIds: string[],
+): void {
+  const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+  if (boundary?.lifecycleGeneration !== currentHistoryLifecycle(sessionId)) return
+
+  const snapshotActiveBackgroundTaskIds = new Set(activeTaskIds)
+  const snapshotSettledBackgroundAgentTasks = {
+    ...boundary.snapshotSettledBackgroundAgentTasks,
+  }
+  for (const [key, task] of Object.entries(before)) {
+    const settledTask = after[key]
+    if (task.status !== 'running' || settledTask?.status === 'running') continue
+    if (settledTask) snapshotSettledBackgroundAgentTasks[key] = settledTask
+  }
+  terminalReconnectHistoryBoundaries.set(sessionId, {
+    ...boundary,
+    snapshotActiveBackgroundTaskIds,
+    snapshotSettledBackgroundAgentTasks,
+  })
+}
+
+function activeGoalAfterHistoryLoad(
+  session: PerSessionState,
+  requestedRevision: number,
+  restoredActiveGoal: ActiveGoalState | null,
+  hasRestoredGoalState: boolean,
+  authoritative: boolean,
+): ActiveGoalState | null {
+  if ((session.activeGoalRevision ?? 0) !== requestedRevision) {
+    return session.activeGoal ?? null
+  }
+  if (authoritative || hasRestoredGoalState) return restoredActiveGoal
+  return session.activeGoal ?? null
 }
 
 function shouldPrewarmSession(sessionId: string): boolean {
@@ -1817,15 +2533,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const existing = get().sessions[sessionId]
     if (existing && existing.connectionState !== 'disconnected') {
+      const enableHistoryBootstrap =
+        existing.historyBootstrapDisabled === true &&
+        options?.minimalBootstrap !== true
+      if (enableHistoryBootstrap) {
+        set((state) => ({
+          sessions: updateSessionIn(state.sessions, sessionId, () => ({
+            historyBootstrapDisabled: false,
+          })),
+        }))
+      }
+      // Automatic reconnect owns history selection until sync_state arrives.
+      // A sidebar/navigation re-entry in this window must not start a second,
+      // pre-snapshot request.
       if (
-        existing.messages.length === 0 &&
+        existing.awaitingReconnectSync === true &&
+        existing.preHydrationSocketGapPending !== true
+      ) return
+      if (
+        existing.historyHydrated !== true &&
         (existing.historyStatus === 'idle' || existing.historyStatus === 'error') &&
+        (enableHistoryBootstrap || existing.historyBootstrapDisabled !== true) &&
         !options?.minimalBootstrap
       ) {
         void get().loadHistory(sessionId)
       }
       return
     }
+
+    advanceHistoryLifecycle(sessionId)
 
     set((s) => ({
       sessions: {
@@ -1835,6 +2571,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           connectionState: 'connecting',
           connectionSnapshotReady: false,
           messages: existing?.messages ?? [],
+          // A new connection lifecycle may have durable transcript rows that
+          // were persisted while this renderer was offline. Keep the visible
+          // cache, but require one lossless durable backfill for this lifecycle.
+          historyHydrated: false,
+          awaitingReconnectSync: false,
+          preHydrationSocketGapPending: false,
+          historyBootstrapDisabled: options?.minimalBootstrap === true,
           activeGoal: existing?.activeGoal ?? null,
           composerDraft: existing?.composerDraft ?? null,
           repositoryLaunchDraft: existing?.repositoryLaunchDraft ?? null,
@@ -1848,11 +2591,134 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     wsManager.clearHandlers(sessionId)
     wsManager.connect(sessionId)
     wsManager.onConnectionState(sessionId, (connectionState) => {
-      if (!get().sessions[sessionId]) return
+      const currentSession = get().sessions[sessionId]
+      if (!currentSession) return
+      const currentBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
+      const hasCurrentReconnectBoundary =
+        currentBoundary?.lifecycleGeneration === currentHistoryLifecycle(sessionId)
+      const reconnectSnapshotGapContinued =
+        connectionState === 'reconnecting' &&
+        currentSession.connectionState === 'connected' &&
+        currentSession.awaitingReconnectSync === true
+      const preHydrationSocketGapStarted =
+        connectionState === 'reconnecting' &&
+        (
+          currentSession.connectionState === 'connecting' ||
+          currentSession.connectionState === 'connected'
+        ) &&
+        currentSession.awaitingReconnectSync !== true &&
+        currentSession.historyHydrated !== true &&
+        !hasCurrentReconnectBoundary
+      const automaticReconnectStarted =
+        connectionState === 'reconnecting' &&
+        currentSession.connectionState === 'connected' &&
+        !reconnectSnapshotGapContinued &&
+        !preHydrationSocketGapStarted
+      if (preHydrationSocketGapStarted) {
+        // Freeze the pre-gap cache immediately, before connected clients can
+        // enqueue user/error rows while sync_state is still in flight. Keep
+        // the current lifecycle alive so its first cold REST remains useful.
+        ensureTerminalReconnectHistoryBoundary(sessionId, currentSession, {
+          activated: false,
+          preHydrationGap: true,
+        })
+      }
+      if (automaticReconnectStarted) {
+        const pendingTerminalBoundary = hasCurrentReconnectBoundary
+          ? currentBoundary
+          : undefined
+        const nextLifecycleGeneration = advanceHistoryLifecycle(sessionId)
+        if (pendingTerminalBoundary) {
+          const taskStoreAtReconnect = useCLITaskStore.getState()
+          terminalReconnectHistoryBoundaries.set(sessionId, {
+            ...pendingTerminalBoundary,
+            lifecycleGeneration: nextLifecycleGeneration,
+            latestTerminalBoundaryCaptured: false,
+            // Foreground transcript rows produced since an earlier failed
+            // reconnect are now pre-disconnect state too. A later terminal
+            // snapshot may replace them from durable history, while user,
+            // error, goal, and background rows remain losslessly preserved.
+            baselineMessagesById: new Map([
+              ...pendingTerminalBoundary.baselineMessagesById,
+              ...currentSession.messages
+                .filter(isReconnectDiscardableForegroundMessage)
+                .map((message) => [message.id, message] as const),
+            ]),
+            latestTerminalBaselineMessagesById: new Map([
+              ...pendingTerminalBoundary.latestTerminalBaselineMessagesById,
+              ...currentSession.messages
+                .filter((message) =>
+                  isReconnectDiscardableForegroundMessage(message) ||
+                  message.type === 'goal_event')
+                .map((message) => [message.id, message] as const),
+            ]),
+            // Background activity present before this newest gap is no longer
+            // a live overlay for the next durable snapshot. Only activity that
+            // mutates after this reconnect boundary may win per record.
+            baselineBackgroundAgentTasks: currentSession.backgroundAgentTasks ?? {},
+            baselineAgentTaskNotifications: currentSession.agentTaskNotifications,
+            snapshotActiveBackgroundTaskIds: null,
+            snapshotSettledBackgroundAgentTasks: {},
+            latestReconnectTokenUsage: currentSession.tokenUsage,
+            latestReconnectActiveGoalRevision:
+              currentSession.activeGoalRevision ?? 0,
+            latestReconnectTaskStoreSessionId: taskStoreAtReconnect.sessionId,
+            latestReconnectTasks: taskStoreAtReconnect.tasks,
+            latestReconnectReloadCompletionGeneration:
+              historyReloadCompletionGenerations.get(sessionId) ?? 0,
+          })
+        } else {
+          // Freeze the pre-disconnect cache before any messages from the new
+          // socket can arrive. The subsequent durable backfill may replace
+          // these rows, but must preserve user/error/progress rows received
+          // between reconnecting and sync_state.
+          ensureTerminalReconnectHistoryBoundary(sessionId, currentSession, {
+            activated: false,
+          })
+        }
+      }
+      if (
+        automaticReconnectStarted ||
+        preHydrationSocketGapStarted ||
+        reconnectSnapshotGapContinued
+      ) {
+        // Raw streaming buffers cannot be replayed safely across a socket gap.
+        // Durable history restores completed output after sync_state. A first
+        // handshake failure does not advance the history lifecycle here: its
+        // normal cold REST remains useful even while the socket is unavailable.
+        clearPendingDelta(sessionId)
+        clearPendingToolInputDelta(sessionId)
+        clearPendingTaskToolUseIds(sessionId)
+        clearPendingToolParentUseIds(sessionId)
+      }
       set((s) => ({
         sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
           connectionState,
           connectionSnapshotReady: false,
+          ...(automaticReconnectStarted
+            ? {
+                historyStatus: 'idle' as const,
+                historyHydrated: false,
+                historyError: null,
+                awaitingReconnectSync: true,
+                preHydrationSocketGapPending: false,
+                streamingText: '',
+                streamingToolInput: '',
+              }
+            : preHydrationSocketGapStarted
+              ? {
+                  awaitingReconnectSync: true,
+                  preHydrationSocketGapPending: true,
+                }
+              : reconnectSnapshotGapContinued
+                ? {
+                    // This socket also died before its authoritative snapshot.
+                    // Do not concatenate already-flushed partials with a
+                    // replay from the next transport attempt.
+                    streamingText: '',
+                    streamingToolInput: '',
+                  }
+                : {}),
           stoppingBackgroundTaskIds:
             connectionState === 'connected' || session.stopAllSubagentsRequested
               ? session.stoppingBackgroundTaskIds
@@ -1909,6 +2775,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
+    advanceHistoryLifecycle(sessionId)
     wsManager.disconnect(sessionId)
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions
@@ -2224,20 +3091,87 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     wsManager.send(sessionId, { type: 'stop_background_task', taskId })
   },
 
-  loadHistory: async (sessionId) => {
+  loadHistory: async (sessionId, options) => {
+    const lifecycleGeneration = currentHistoryLifecycle(sessionId)
     const existingLoad = historyLoadsInFlight.get(sessionId)
-    if (existingLoad) return existingLoad
+    if (existingLoad?.lifecycleGeneration === lifecycleGeneration) {
+      return existingLoad.promise
+    }
+    if (existingLoad) historyLoadsInFlight.delete(sessionId)
 
     // Workflow runs are rebuilt from disk alongside the transcript. Without
     // this, reopening a session that ran a workflow showed no trace of it —
     // the progress stream that populates the panel is live-only.
     void useWorkflowStore.getState().hydrateSession(sessionId)
 
-    const requestedMutationEpoch = get().sessions[sessionId]?.historyMutationEpoch ?? 0
+    const sessionAtLoadStart = get().sessions[sessionId]
+    const taskStoreAtLoadStart = useCLITaskStore.getState()
+    let terminalReconnectBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
+    if (
+      terminalReconnectBoundary?.lifecycleGeneration !== lifecycleGeneration
+    ) {
+      terminalReconnectHistoryBoundaries.delete(sessionId)
+      terminalReconnectBoundary = undefined
+    }
+    if (options?.mode === 'terminal-reconnect') {
+      terminalReconnectBoundary = ensureTerminalReconnectHistoryBoundary(
+        sessionId,
+        sessionAtLoadStart,
+        { activated: true },
+      )
+    }
+    // A dormant reconnect boundary still supplies pre-reconnect revision and
+    // reference guards. Only an idle/terminal snapshot authorizes discarding
+    // its cached message ids.
+    const discardBaselineMessages = terminalReconnectBoundary?.activated === true
+    const shouldBackfillColdHistory = discardBaselineMessages ||
+      sessionAtLoadStart?.historyHydrated !== true
+    const reconcileReconnectBackgroundActivity = Boolean(
+      terminalReconnectBoundary && shouldBackfillColdHistory,
+    )
+    const useLatestReconnectBaselines = Boolean(
+      terminalReconnectBoundary &&
+      (
+        options?.mode === 'terminal-reconnect' ||
+        (terminalReconnectBoundary.activated && sessionAtLoadStart?.chatState === 'idle')
+      ),
+    )
+    const discardedBaselineMessagesById = useLatestReconnectBaselines &&
+      terminalReconnectBoundary
+      ? terminalReconnectBoundary.latestTerminalBaselineMessagesById
+      : terminalReconnectBoundary?.baselineMessagesById
+    const requestedMutationEpoch = sessionAtLoadStart?.historyMutationEpoch ?? 0
+    const requestedMessages = sessionAtLoadStart?.messages
+    const requestedTokenUsage = terminalReconnectBoundary
+      ? useLatestReconnectBaselines
+        ? terminalReconnectBoundary.latestReconnectTokenUsage
+        : terminalReconnectBoundary.requestedTokenUsage
+      : sessionAtLoadStart?.tokenUsage
+    const requestedActiveGoalRevision = terminalReconnectBoundary
+      ? useLatestReconnectBaselines
+        ? terminalReconnectBoundary.latestReconnectActiveGoalRevision
+        : terminalReconnectBoundary.requestedActiveGoalRevision
+      : sessionAtLoadStart?.activeGoalRevision ?? 0
+    const requestedTaskStoreSessionId = terminalReconnectBoundary
+      ? useLatestReconnectBaselines
+        ? terminalReconnectBoundary.latestReconnectTaskStoreSessionId
+        : terminalReconnectBoundary.requestedTaskStoreSessionId
+      : taskStoreAtLoadStart.sessionId
+    const requestedTasks = terminalReconnectBoundary
+      ? useLatestReconnectBaselines
+        ? terminalReconnectBoundary.latestReconnectTasks
+        : terminalReconnectBoundary.requestedTasks
+      : taskStoreAtLoadStart.tasks
+    const requestedReloadCompletionGeneration = terminalReconnectBoundary
+      ? useLatestReconnectBaselines
+        ? terminalReconnectBoundary.latestReconnectReloadCompletionGeneration
+        : terminalReconnectBoundary.requestedReloadCompletionGeneration
+      : historyReloadCompletionGenerations.get(sessionId) ?? 0
     let load!: Promise<void>
     load = (async () => {
       try {
         set((state) => {
+          if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
           const session = state.sessions[sessionId]
           if (!session) return state
           return {
@@ -2250,6 +3184,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const {
           uiMessages,
           activeGoal,
+          hasRestoredGoalState,
           restoredNotifications,
           restoredBackgroundTasks,
           lastTodos,
@@ -2261,9 +3196,32 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         )
         let historyApplied = false
         set((state) => {
+          if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
           const session = state.sessions[sessionId]
           if (!session) return state
-          if ((session.historyMutationEpoch ?? 0) !== requestedMutationEpoch) {
+          const currentPreHydrationBoundary =
+            terminalReconnectHistoryBoundaries.get(sessionId)
+          const activityReconnectBoundary = terminalReconnectBoundary ?? (
+            currentPreHydrationBoundary?.preHydrationGap === true &&
+            currentPreHydrationBoundary.lifecycleGeneration === lifecycleGeneration
+              ? currentPreHydrationBoundary
+              : undefined
+          )
+          // The first cold request can predate the socket gap that it overlaps.
+          // Re-read that dormant boundary at apply time so background task and
+          // notification mutations received after the gap still overlay its
+          // stale REST snapshot (including explicit notification deletion).
+          const reconcileBackgroundActivityAtApply =
+            reconcileReconnectBackgroundActivity || Boolean(
+              activityReconnectBoundary && shouldBackfillColdHistory,
+            )
+          const reloadCompletionGenerationChanged =
+            (historyReloadCompletionGenerations.get(sessionId) ?? 0) !==
+              requestedReloadCompletionGeneration
+          if (
+            !shouldBackfillColdHistory &&
+            (session.historyMutationEpoch ?? 0) !== requestedMutationEpoch
+          ) {
             const abortedLoadUpdate = buildAbortedHistoryLoadUpdate(session)
             return Object.keys(abortedLoadUpdate).length > 0
               ? {
@@ -2275,28 +3233,119 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 }
               : state
           }
+          if (reloadCompletionGenerationChanged) {
+            return state
+          }
+          const tokenUsageChangedWhileLoading = shouldBackfillColdHistory &&
+            session.tokenUsage !== requestedTokenUsage
+          const restoredTokenUsage = discardBaselineMessages && tokenUsage === null
+            ? { input_tokens: 0, output_tokens: 0 }
+            : tokenUsage
           historyApplied = true
           if (session.messages.length > 0) {
             return { sessions: updateSessionIn(state.sessions, sessionId, (s) => {
-              const backgroundAgentTasks = mergeBackgroundAgentTaskRecords(
-                s.backgroundAgentTasks ?? {},
-                restoredBackgroundTasks,
+              const currentBackgroundAgentTasks = reconcileBackgroundActivityAtApply &&
+                activityReconnectBoundary
+                ? liveBackgroundTasksAfterBoundary(
+                    s.backgroundAgentTasks ?? {},
+                    activityReconnectBoundary,
+                  )
+                : s.backgroundAgentTasks ?? {}
+              const currentAgentTaskNotifications =
+                reconcileBackgroundActivityAtApply && activityReconnectBoundary
+                  ? liveAgentTaskNotificationsAfterBoundary(
+                      s.agentTaskNotifications,
+                      activityReconnectBoundary,
+                    )
+                  : s.agentTaskNotifications
+              const applicableRestoredNotifications =
+                reconcileBackgroundActivityAtApply && activityReconnectBoundary
+                  ? restoredAgentTaskNotificationsAfterBoundary(
+                      restoredNotifications,
+                      s.agentTaskNotifications,
+                      currentBackgroundAgentTasks,
+                      activityReconnectBoundary,
+                    )
+                  : restoredNotifications
+              const backgroundAgentTasks = reconcileBackgroundActivityAtApply &&
+                activityReconnectBoundary
+                ? mergeBackgroundAgentTaskRecords(
+                    applyReconnectActiveTaskSnapshot(
+                      restoredBackgroundTasks,
+                      activityReconnectBoundary.snapshotActiveBackgroundTaskIds,
+                    ),
+                    currentBackgroundAgentTasks,
+                  )
+                : mergeBackgroundAgentTaskRecords(
+                    currentBackgroundAgentTasks,
+                    restoredBackgroundTasks,
+                  )
+              const currentLiveMessages = discardBaselineMessages
+                ? s.messages.filter((message) =>
+                    discardedBaselineMessagesById?.get(message.id) !== message)
+                : terminalReconnectBoundary
+                  ? s.messages.filter((message) =>
+                      terminalReconnectBoundary
+                        .preHydrationRestoredMessagesById.get(message.id) !== message &&
+                      (
+                        !hasRestoredGoalState ||
+                        message.type !== 'goal_event' ||
+                        discardedBaselineMessagesById?.get(message.id) !== message
+                      ))
+                : s.messages
+              const liveMessages = !discardBaselineMessages &&
+                shouldBackfillColdHistory &&
+                s.chatState === 'idle' &&
+                s.messages === requestedMessages
+                ? dropDuplicateTranscriptTextMessages(
+                    mergeRestoredTranscriptMessageIds(s.messages, uiMessages),
+                  )
+                : currentLiveMessages
+              const messages = shouldBackfillColdHistory
+                ? mergeBackgroundTaskMessages(
+                    mergeColdRestoredHistoryIntoLiveMessages(
+                      uiMessages,
+                      liveMessages,
+                      terminalReconnectBoundary?.preHydrationRestoredMessagesById,
+                    ),
+                    backgroundAgentTasks,
+                  )
+                : mergeRestoredHistoryIntoLiveMessages(
+                    mergeBackgroundTaskMessages(s.messages, backgroundAgentTasks),
+                    uiMessages,
+                  )
+              const agentTaskNotifications = mergeAgentTaskNotificationRecords(
+                currentAgentTaskNotifications,
+                applicableRestoredNotifications,
+                backgroundAgentTasks,
               )
-              const messages = mergeRestoredHistoryIntoLiveMessages(
-                mergeBackgroundTaskMessages(s.messages, backgroundAgentTasks),
-                uiMessages,
+              const nextTokenUsage = tokenUsageChangedWhileLoading
+                ? s.tokenUsage
+                : restoredTokenUsage ?? s.tokenUsage
+              rebasePreHydrationBoundaryAfterHistoryApply(
+                sessionId,
+                s,
+                {
+                  messages,
+                  tokenUsage: nextTokenUsage,
+                  backgroundAgentTasks,
+                  agentTaskNotifications,
+                },
               )
               return {
                 historyStatus: 'ready',
+                historyHydrated: true,
                 historyError: null,
-                activeGoal: activeGoal ?? s.activeGoal ?? null,
-                agentTaskNotifications: mergeAgentTaskNotificationRecords(
-                  s.agentTaskNotifications,
-                  restoredNotifications,
-                  backgroundAgentTasks,
+                activeGoal: activeGoalAfterHistoryLoad(
+                  s,
+                  requestedActiveGoalRevision,
+                  activeGoal,
+                  hasRestoredGoalState,
+                  discardBaselineMessages,
                 ),
+                agentTaskNotifications,
                 backgroundAgentTasks,
-                tokenUsage: tokenUsage ?? s.tokenUsage,
+                tokenUsage: nextTokenUsage,
                 ...reconcilePendingBackgroundTaskStopFailures(
                   s,
                   backgroundAgentTasks,
@@ -2306,22 +3355,75 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }) }
           }
           return { sessions: updateSessionIn(state.sessions, sessionId, (s) => {
-            const backgroundAgentTasks = mergeBackgroundAgentTaskRecords(
-              s.backgroundAgentTasks ?? {},
-              restoredBackgroundTasks,
-            )
+            const currentBackgroundAgentTasks = reconcileBackgroundActivityAtApply &&
+              activityReconnectBoundary
+              ? liveBackgroundTasksAfterBoundary(
+                  s.backgroundAgentTasks ?? {},
+                  activityReconnectBoundary,
+                )
+              : s.backgroundAgentTasks ?? {}
+            const currentAgentTaskNotifications =
+              reconcileBackgroundActivityAtApply && activityReconnectBoundary
+                ? liveAgentTaskNotificationsAfterBoundary(
+                    s.agentTaskNotifications,
+                    activityReconnectBoundary,
+                  )
+                : s.agentTaskNotifications
+            const applicableRestoredNotifications =
+              reconcileBackgroundActivityAtApply && activityReconnectBoundary
+                ? restoredAgentTaskNotificationsAfterBoundary(
+                    restoredNotifications,
+                    s.agentTaskNotifications,
+                    currentBackgroundAgentTasks,
+                    activityReconnectBoundary,
+                  )
+                : restoredNotifications
+            const backgroundAgentTasks = reconcileBackgroundActivityAtApply &&
+              activityReconnectBoundary
+              ? mergeBackgroundAgentTaskRecords(
+                  applyReconnectActiveTaskSnapshot(
+                    restoredBackgroundTasks,
+                    activityReconnectBoundary.snapshotActiveBackgroundTaskIds,
+                  ),
+                  currentBackgroundAgentTasks,
+                )
+              : mergeBackgroundAgentTaskRecords(
+                  currentBackgroundAgentTasks,
+                  restoredBackgroundTasks,
+                )
             const messages = mergeBackgroundTaskMessages(uiMessages, backgroundAgentTasks)
+            const agentTaskNotifications = mergeAgentTaskNotificationRecords(
+              currentAgentTaskNotifications,
+              applicableRestoredNotifications,
+              backgroundAgentTasks,
+            )
+            const nextTokenUsage = tokenUsageChangedWhileLoading
+              ? s.tokenUsage
+              : restoredTokenUsage ?? s.tokenUsage
+            rebasePreHydrationBoundaryAfterHistoryApply(
+              sessionId,
+              s,
+              {
+                messages,
+                tokenUsage: nextTokenUsage,
+                backgroundAgentTasks,
+                agentTaskNotifications,
+              },
+            )
             return {
               historyStatus: 'ready',
+              historyHydrated: true,
               historyError: null,
-              activeGoal,
-              agentTaskNotifications: mergeAgentTaskNotificationRecords(
-                s.agentTaskNotifications,
-                restoredNotifications,
-                backgroundAgentTasks,
+              activeGoal: activeGoalAfterHistoryLoad(
+                s,
+                requestedActiveGoalRevision,
+                activeGoal,
+                hasRestoredGoalState,
+                discardBaselineMessages,
               ),
+              agentTaskNotifications,
               backgroundAgentTasks,
-              tokenUsage: tokenUsage ?? s.tokenUsage,
+              tokenUsage: nextTokenUsage,
               ...reconcilePendingBackgroundTaskStopFailures(
                 s,
                 backgroundAgentTasks,
@@ -2330,28 +3432,55 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }
           }) }
         })
-        if (!historyApplied) {
-          scheduleAbortedHistoryLoadRetry(get, sessionId)
-          return
+        if (!historyApplied) return
+        if (
+          terminalReconnectBoundary &&
+          !terminalReconnectBoundary.preHydrationGap &&
+          terminalReconnectHistoryBoundaries.get(sessionId) === terminalReconnectBoundary
+        ) {
+          terminalReconnectHistoryBoundaries.delete(sessionId)
         }
-        historyLoadAbortRetries.delete(sessionId)
-        if (lastTodos && lastTodos.length > 0) {
-          const taskStore = useCLITaskStore.getState()
-          if (taskStore.sessionId === sessionId && taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos, sessionId)
-        } else {
-          useCLITaskStore.getState().setTasksFromTodos([], sessionId)
-        }
-        if (hasMessagesAfterTaskCompletion) {
-          useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
+        const currentTaskStore = useCLITaskStore.getState()
+        const taskStoreChangedWhileLoading =
+          currentTaskStore.sessionId !== requestedTaskStoreSessionId ||
+          currentTaskStore.tasks !== requestedTasks
+        if (!taskStoreChangedWhileLoading) {
+          if (lastTodos && lastTodos.length > 0) {
+            if (
+              currentTaskStore.sessionId === sessionId &&
+              (
+                discardBaselineMessages ||
+                terminalReconnectBoundary !== undefined ||
+                currentTaskStore.tasks.length === 0
+              )
+            ) {
+              currentTaskStore.setTasksFromTodos(lastTodos, sessionId)
+            }
+          } else {
+            currentTaskStore.setTasksFromTodos([], sessionId)
+          }
+          if (hasMessagesAfterTaskCompletion) {
+            currentTaskStore.markCompletedAndDismissed(sessionId)
+          }
+          rebasePreHydrationBoundaryAfterTaskHistoryApply(
+            sessionId,
+            requestedTaskStoreSessionId,
+            requestedTasks,
+          )
         }
       } catch (error) {
         // Session may not have messages yet
-        let loadAborted = false
         set((state) => {
+          if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
           const session = state.sessions[sessionId]
           if (!session) return state
-          if ((session.historyMutationEpoch ?? 0) !== requestedMutationEpoch) {
-            loadAborted = true
+          const reloadCompletionGenerationChanged =
+            (historyReloadCompletionGenerations.get(sessionId) ?? 0) !==
+              requestedReloadCompletionGeneration
+          if (
+            !shouldBackfillColdHistory &&
+            (session.historyMutationEpoch ?? 0) !== requestedMutationEpoch
+          ) {
             const abortedLoadUpdate = buildAbortedHistoryLoadUpdate(session)
             return Object.keys(abortedLoadUpdate).length > 0
               ? {
@@ -2362,6 +3491,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   ),
                 }
               : state
+          }
+          if (reloadCompletionGenerationChanged) {
+            return state
           }
           const pendingFailureUpdate = reconcilePendingBackgroundTaskStopFailures(
             session,
@@ -2376,25 +3508,48 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             })),
           }
         })
-        if (loadAborted) scheduleAbortedHistoryLoadRetry(get, sessionId)
       } finally {
-        if (historyLoadsInFlight.get(sessionId) === load) {
+        const currentLoad = historyLoadsInFlight.get(sessionId)
+        if (
+          currentLoad?.promise === load &&
+          currentLoad.lifecycleGeneration === lifecycleGeneration
+        ) {
           historyLoadsInFlight.delete(sessionId)
         }
       }
     })()
 
-    historyLoadsInFlight.set(sessionId, load)
+    historyLoadsInFlight.set(sessionId, { lifecycleGeneration, promise: load })
     return load
   },
 
   reloadHistory: async (sessionId, guard) => {
+    const lifecycleGeneration = currentHistoryLifecycle(sessionId)
     const reloadGeneration = (historyReloadGenerations.get(sessionId) ?? 0) + 1
     historyReloadGenerations.set(sessionId, reloadGeneration)
     try {
-      const requestedMutationEpoch = get().sessions[sessionId]?.historyMutationEpoch ?? 0
+      const sessionAtReloadStart = get().sessions[sessionId]
+      const requestedMutationEpoch = sessionAtReloadStart?.historyMutationEpoch ?? 0
       const pendingLoad = historyLoadsInFlight.get(sessionId)
-      if (pendingLoad) await pendingLoad
+      if (pendingLoad?.lifecycleGeneration === lifecycleGeneration) {
+        await pendingLoad.promise
+      }
+      if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return
+      // A reload can queue behind a cold load. Capture snapshot baselines only
+      // after that load settles so its REST state is not mistaken for a live
+      // mutation that should override the newer reload response.
+      const sessionAtFetchStart = get().sessions[sessionId]
+      const taskStoreAtFetchStart = useCLITaskStore.getState()
+      const requestedTokenUsage = sessionAtFetchStart?.tokenUsage
+      const requestedActiveGoalRevision =
+        sessionAtFetchStart?.activeGoalRevision ?? 0
+      const requestedTaskStoreSessionId = taskStoreAtFetchStart.sessionId
+      const requestedTasks = taskStoreAtFetchStart.tasks
+      const requestedGoalEventIds = new Set(
+        (sessionAtFetchStart?.messages ?? [])
+          .filter((message) => message.type === 'goal_event')
+          .map((message) => message.id),
+      )
       const {
         uiMessages,
         activeGoal,
@@ -2408,7 +3563,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         sessionOwnedActivityToolUseIds(get().sessions[sessionId]),
       )
 
-      if (historyReloadGenerations.get(sessionId) !== reloadGeneration) return
+      if (
+        !isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) ||
+        historyReloadGenerations.get(sessionId) !== reloadGeneration
+      ) return
 
       if (guard) {
         const current = get().sessions[sessionId]
@@ -2423,6 +3581,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       let historyApplied = false
       set((state) => {
+        if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
         const session = state.sessions[sessionId]
         if (!session) return state
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
@@ -2430,20 +3589,57 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           session.backgroundAgentTasks ?? {},
           restoredBackgroundTasks,
         )
-        const messages = mergeBackgroundTaskMessages(uiMessages, backgroundAgentTasks)
+        const activeGoalChangedWhileLoading =
+          (session.activeGoalRevision ?? 0) !== requestedActiveGoalRevision
+        // Keep only goal events that arrived after this authoritative reload
+        // started. Reusing the full live array would also retain stale partial
+        // output, while dropping these rows would make the timeline disagree
+        // with the guarded activeGoal state (especially after a live clear).
+        const liveGoalEventsWhileLoading = session.messages.filter((message) =>
+          message.type === 'goal_event' &&
+          !requestedGoalEventIds.has(message.id))
+        const tokenUsageChangedWhileLoading =
+          session.tokenUsage !== requestedTokenUsage
+        const reloadedMessages = liveGoalEventsWhileLoading.length > 0
+          ? mergeColdRestoredHistoryIntoLiveMessages(
+              uiMessages,
+              liveGoalEventsWhileLoading,
+            )
+          : uiMessages
+        const messages = mergeBackgroundTaskMessages(
+          reloadedMessages,
+          backgroundAgentTasks,
+        )
+        const agentTaskNotifications = mergeAgentTaskNotificationRecords(
+          session.agentTaskNotifications,
+          restoredNotifications,
+          backgroundAgentTasks,
+        )
+        const nextTokenUsage = tokenUsageChangedWhileLoading
+          ? session.tokenUsage
+          : tokenUsage ?? session.tokenUsage
+        rebasePreHydrationBoundaryAfterHistoryApply(
+          sessionId,
+          session,
+          {
+            messages,
+            tokenUsage: nextTokenUsage,
+            backgroundAgentTasks,
+            agentTaskNotifications,
+          },
+        )
         historyApplied = true
         return {
           sessions: updateSessionIn(state.sessions, sessionId, () => ({
             historyStatus: 'ready',
+            historyHydrated: true,
             historyError: null,
-            activeGoal,
-            agentTaskNotifications: mergeAgentTaskNotificationRecords(
-              session.agentTaskNotifications,
-              restoredNotifications,
-              backgroundAgentTasks,
-            ),
+            activeGoal: activeGoalChangedWhileLoading
+              ? session.activeGoal ?? null
+              : activeGoal,
+            agentTaskNotifications,
             backgroundAgentTasks,
-            tokenUsage: tokenUsage ?? session.tokenUsage,
+            tokenUsage: nextTokenUsage,
             chatState: 'idle',
             activeThinkingId: null,
             activeToolUseId: null,
@@ -2467,31 +3663,78 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       })
 
-      if (historyApplied) {
-        const reloadedSession = get().sessions[sessionId]
-        if (reloadedSession) {
-          const isRunning = reloadedSession.chatState !== 'idle' ||
-            hasRunningBackgroundTasks(reloadedSession.backgroundAgentTasks)
-          useTabStore.getState().updateTabStatus(
-            sessionId,
-            isRunning ? 'running' : 'idle',
-          )
+      if (!historyApplied) return
+      const terminalReconnectBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
+      if (
+        terminalReconnectBoundary?.lifecycleGeneration === lifecycleGeneration &&
+        !terminalReconnectBoundary.preHydrationGap
+      ) {
+        terminalReconnectHistoryBoundaries.delete(sessionId)
+      }
+      if (
+        isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) &&
+        historyReloadGenerations.get(sessionId) === reloadGeneration
+      ) {
+        const nextReloadCompletionGeneration =
+          (historyReloadCompletionGenerations.get(sessionId) ?? 0) + 1
+        historyReloadCompletionGenerations.set(
+          sessionId,
+          nextReloadCompletionGeneration,
+        )
+        const preHydrationBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
+        if (
+          preHydrationBoundary?.preHydrationGap === true &&
+          preHydrationBoundary.lifecycleGeneration === lifecycleGeneration
+        ) {
+          // The recovered-socket load belongs after this successful reload.
+          // Rebase its completion guard as well as its transcript/reference
+          // baselines, otherwise it will reject itself as older than the
+          // authoritative reload that completed during the socket gap.
+          terminalReconnectHistoryBoundaries.set(sessionId, {
+            ...preHydrationBoundary,
+            requestedReloadCompletionGeneration: nextReloadCompletionGeneration,
+            latestReconnectReloadCompletionGeneration: nextReloadCompletionGeneration,
+          })
         }
       }
-
-      if (lastTodos && lastTodos.length > 0) {
-        useCLITaskStore.getState().setTasksFromTodos(lastTodos, sessionId)
-      } else {
-        useCLITaskStore.getState().setTasksFromTodos([], sessionId)
+      const reloadedSession = get().sessions[sessionId]
+      if (reloadedSession) {
+        const isRunning = reloadedSession.chatState !== 'idle' ||
+          hasRunningBackgroundTasks(reloadedSession.backgroundAgentTasks)
+        useTabStore.getState().updateTabStatus(
+          sessionId,
+          isRunning ? 'running' : 'idle',
+        )
       }
-      if (hasMessagesAfterTaskCompletion) {
-        useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
+
+      const currentTaskStore = useCLITaskStore.getState()
+      const taskStoreChangedWhileReloading =
+        currentTaskStore.sessionId !== requestedTaskStoreSessionId ||
+        currentTaskStore.tasks !== requestedTasks
+      if (!taskStoreChangedWhileReloading) {
+        if (lastTodos && lastTodos.length > 0) {
+          currentTaskStore.setTasksFromTodos(lastTodos, sessionId)
+        } else {
+          currentTaskStore.setTasksFromTodos([], sessionId)
+        }
+        if (hasMessagesAfterTaskCompletion) {
+          currentTaskStore.markCompletedAndDismissed(sessionId)
+        }
+        rebasePreHydrationBoundaryAfterTaskHistoryApply(
+          sessionId,
+          requestedTaskStoreSessionId,
+          requestedTasks,
+        )
       }
     } catch {
       // A stop failure can arrive before the task history that identifies it.
       // If that history request fails, surface the failure instead of leaving it
       // cached forever waiting for a reconciliation that may never happen.
       set((state) => {
+        if (
+          !isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) ||
+          historyReloadGenerations.get(sessionId) !== reloadGeneration
+        ) return state
         const session = state.sessions[sessionId]
         if (!session || Object.keys(session.pendingBackgroundTaskStopFailures ?? {}).length === 0) {
           return state
@@ -2698,6 +3941,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearMessages: (sessionId) => {
+    advanceHistoryLifecycle(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     clearPendingToolInputDelta(sessionId)
@@ -2710,6 +3954,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       activeGoal: null,
       streamingText: '',
       chatState: 'idle',
+      historyStatus: 'ready',
+      historyHydrated: true,
+      historyError: null,
+      awaitingReconnectSync: false,
+      preHydrationSocketGapPending: false,
       apiRetry: null,
       streamingFallback: null,
       suppressNextTaskNotificationResponse: false,
@@ -2758,18 +4007,94 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       case 'session_state': {
         let session = get().sessions[sessionId]
         if (!session) break
+        const automaticReconnectSnapshot = session.awaitingReconnectSync === true
+        const recoveredPreHydrationSocketGap =
+          automaticReconnectSnapshot &&
+          session.preHydrationSocketGapPending === true
+        if (recoveredPreHydrationSocketGap) {
+          // Keep the first cold REST useful while the transport is unavailable.
+          // Once sync_state arrives, move the boundary captured at gap start to
+          // a fresh lifecycle. Do not rebuild it from the now-visible cache:
+          // user/error rows received before sync are post-boundary live state.
+          const previousLifecycleGeneration = currentHistoryLifecycle(sessionId)
+          const preHydrationBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
+          const nextLifecycleGeneration = advanceHistoryLifecycle(sessionId)
+          if (
+            preHydrationBoundary?.preHydrationGap === true &&
+            preHydrationBoundary.lifecycleGeneration === previousLifecycleGeneration
+          ) {
+            terminalReconnectHistoryBoundaries.set(sessionId, {
+              ...preHydrationBoundary,
+              lifecycleGeneration: nextLifecycleGeneration,
+              preHydrationGap: false,
+            })
+          } else {
+            // Defensive fallback for legacy/incomplete state. New gaps always
+            // install their dormant boundary in the connection-state callback.
+            ensureTerminalReconnectHistoryBoundary(sessionId, session, {
+              activated: false,
+            })
+          }
+          session = {
+            ...session,
+            historyStatus: 'idle',
+            historyHydrated: false,
+            historyError: null,
+            preHydrationSocketGapPending: false,
+          }
+          update(() => ({
+            historyStatus: 'idle',
+            historyHydrated: false,
+            historyError: null,
+            preHydrationSocketGapPending: false,
+          }))
+        }
+        const shouldBackfillSessionHistory = session.historyHydrated !== true
+        const historyBootstrapDisabled = session.historyBootstrapDisabled === true
+        if (automaticReconnectSnapshot) {
+          update(() => ({
+            awaitingReconnectSync: false,
+            preHydrationSocketGapPending: false,
+          }))
+          session = {
+            ...session,
+            awaitingReconnectSync: false,
+            preHydrationSocketGapPending: false,
+          }
+        }
 
-        let settledInactiveBackgroundTasks = false
+        let reconciledBackgroundTaskSnapshot = false
         if (msg.activeBackgroundTaskIds !== undefined) {
           const reconciled = reconcileBackgroundAgentTasksWithActiveSnapshot(
             session.backgroundAgentTasks ?? {},
             msg.activeBackgroundTaskIds,
             Date.now(),
           )
-          settledInactiveBackgroundTasks = reconciled.changed
-          if (reconciled.changed) {
-            update(() => ({ backgroundAgentTasks: reconciled.tasks }))
-            session = { ...session, backgroundAgentTasks: reconciled.tasks }
+          const reconciledNotifications =
+            clearAgentTaskNotificationsForActiveSnapshot(
+              session.agentTaskNotifications,
+              msg.activeBackgroundTaskIds,
+            )
+          reconciledBackgroundTaskSnapshot = reconciled.changed
+          recordReconnectBackgroundTaskSnapshot(
+            sessionId,
+            session.backgroundAgentTasks ?? {},
+            reconciled.tasks,
+            msg.activeBackgroundTaskIds,
+          )
+          if (
+            reconciled.changed ||
+            reconciledNotifications !== session.agentTaskNotifications
+          ) {
+            update(() => ({
+              backgroundAgentTasks: reconciled.tasks,
+              agentTaskNotifications: reconciledNotifications,
+            }))
+            session = {
+              ...session,
+              backgroundAgentTasks: reconciled.tasks,
+              agentTaskNotifications: reconciledNotifications,
+            }
           }
         }
 
@@ -2816,21 +4141,36 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
           useTabStore.getState().updateTabStatus(sessionId, 'running')
           ensureElapsedTimer()
-          void get().loadHistory(sessionId)
+          // A fresh running snapshot keeps the dormant reconnect boundary as
+          // revision/reference guards, but does not discard its message ids.
+          // An already-activated boundary (a failed terminal backfill followed
+          // by a new turn) remains authoritative across this retry as well.
+          if (!historyBootstrapDisabled) void get().loadHistory(sessionId)
           break
         }
 
         if (session.chatState === 'idle') {
-          if (settledInactiveBackgroundTasks) {
+          if (reconciledBackgroundTaskSnapshot) {
             useTabStore.getState().updateTabStatus(
               sessionId,
               hasRunningBackgroundTasks(session.backgroundAgentTasks) ? 'running' : 'idle',
             )
           }
-          if (
-            settledInactiveBackgroundTasks ||
+          if (automaticReconnectSnapshot) {
+            // An idle reconnect snapshot is authoritative for everything that
+            // predates it. Preserve only rows that arrive after the REST
+            // request starts, including concurrent SubAgent progress.
+            ensureTerminalReconnectHistoryBoundary(sessionId, session)
+            if (!historyBootstrapDisabled) {
+              void get().loadHistory(sessionId, { mode: 'terminal-reconnect' })
+            }
+          } else if (
+            !historyBootstrapDisabled &&
+            (
+            reconciledBackgroundTaskSnapshot ||
             hasRunningSubagentTasks(session.backgroundAgentTasks) ||
             session.stopAllSubagentsRequested
+            )
           ) {
             // A terminal task event may have been persisted while this renderer
             // was offline. Reconcile it without overwriting a newly started turn.
@@ -2838,6 +4178,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               messages: session.messages,
               backgroundAgentTasks: session.backgroundAgentTasks,
             })
+          } else if (!historyBootstrapDisabled && shouldBackfillSessionHistory) {
+            // The connection-state callback advances the lifecycle on an
+            // automatic reconnect. Wait for sync_state before choosing the
+            // history path so running and idle snapshots cannot race two
+            // separate REST requests.
+            void get().loadHistory(sessionId)
           }
           break
         }
@@ -2874,8 +4220,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           hasRunningBackgroundAgents ? 'running' : 'idle',
         )
         // The terminal event may have arrived while this renderer was offline.
-        // Replace optimistic/partial state with the persisted transcript.
-        if (reconciledSession) {
+        // Drop the stale baseline for the completed foreground turn, then merge
+        // durable history with only rows that arrive after this request starts.
+        // This keeps concurrent SubAgent progress or a newly started turn.
+        if (reconciledSession && automaticReconnectSnapshot) {
+          ensureTerminalReconnectHistoryBoundary(sessionId, reconciledSession)
+          if (!reconciledSession.historyBootstrapDisabled) {
+            void get().loadHistory(sessionId, { mode: 'terminal-reconnect' })
+          }
+        } else if (reconciledSession && !reconciledSession.historyBootstrapDisabled) {
           void get().reloadHistory(sessionId, {
             messages: reconciledSession.messages,
             backgroundAgentTasks: reconciledSession.backgroundAgentTasks,
@@ -3321,7 +4674,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           }
           return {
             messages,
-            ...(stoppedTask ? { backgroundAgentTasks } : {}),
+            ...(stoppedTask
+              ? {
+                  backgroundAgentTasks,
+                }
+              : {}),
             chatState: parentToolUseId
               ? s.chatState
               : hasPendingPermissionRequests(s)
@@ -3382,7 +4739,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     timestamp: existing?.timestamp ?? Date.now(),
                     parentToolUseId: existing?.parentToolUseId,
                     isPending: false,
-                    partialInput: existing?.partialInput,
+                    partialInput: undefined,
                   }))
                 : isAskUserQuestion || hasPermissionMessage
                   ? s.messages
@@ -3759,6 +5116,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         if (msg.subtype === 'session_cleared') {
           pendingOwnedTaskEvents.delete(sessionId)
+          advanceHistoryLifecycle(sessionId)
           const session = get().sessions[sessionId]
           if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
           update(() => ({
@@ -3787,9 +5145,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             agentTaskNotifications: {},
             pendingBackgroundTaskStopFailures: {},
             stopAllSubagentsRequested: false,
+            awaitingReconnectSync: false,
+            preHydrationSocketGapPending: false,
             queuedUserMessages: [],
             historyMutationEpoch: (session?.historyMutationEpoch ?? 0) + 1,
             historyStatus: 'ready',
+            historyHydrated: true,
             historyError: null,
           }))
           clearPendingDelta(sessionId)
@@ -3862,6 +5223,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (goalEvent) {
             update((session) => ({
               activeGoal: applyGoalEventToActiveGoal(session.activeGoal ?? null, goalEvent, Date.now()),
+              activeGoalRevision: (session.activeGoalRevision ?? 0) +
+                (goalEvent.action === 'message' ? 0 : 1),
+              historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
               stopAllSubagentsRequested: false,
               messages: [
                 ...session.messages,
@@ -4555,7 +5919,12 @@ function reconcileBackgroundAgentTasksWithActiveSnapshot(
     Object.entries(current).map(([key, task]) => {
       const remainsActive = active.has(task.taskId) ||
         Boolean(task.toolUseId && active.has(task.toolUseId))
-      if (task.status !== 'running' || remainsActive) return [key, task]
+      if (remainsActive) {
+        if (task.status === 'running') return [key, task]
+        changed = true
+        return [key, restartBackgroundTaskFromSnapshot(task, now)]
+      }
+      if (task.status !== 'running') return [key, task]
       changed = true
       // The snapshot proves only that the task settled. History reconciliation
       // below replaces this fallback with failed/stopped when that bookend exists.
@@ -4563,6 +5932,24 @@ function reconcileBackgroundAgentTasksWithActiveSnapshot(
     }),
   )
   return { tasks: changed ? tasks : current, changed }
+}
+
+function clearAgentTaskNotificationsForActiveSnapshot(
+  current: Record<string, AgentTaskNotification>,
+  activeTaskIds: string[],
+): Record<string, AgentTaskNotification> {
+  const active = new Set(activeTaskIds)
+  let changed = false
+  const notifications = Object.fromEntries(
+    Object.entries(current).filter(([toolUseId, notification]) => {
+      const keep = !active.has(toolUseId) &&
+        !active.has(notification.toolUseId) &&
+        !active.has(notification.taskId)
+      if (!keep) changed = true
+      return keep
+    }),
+  )
+  return changed ? notifications : current
 }
 
 function hasTerminalTaskPayloadChanged(
@@ -4640,11 +6027,23 @@ function applyGoalEventToActiveGoal(
   }
 }
 
-function deriveActiveGoalFromMessages(messages: UIMessage[]): ActiveGoalState | null {
-  return messages.reduce<ActiveGoalState | null>((activeGoal, message) => {
-    if (message.type !== 'goal_event') return activeGoal
-    return applyGoalEventToActiveGoal(activeGoal, message, message.timestamp)
-  }, null)
+function deriveActiveGoalStateFromMessages(messages: UIMessage[]): {
+  activeGoal: ActiveGoalState | null
+  hasStateEvidence: boolean
+} {
+  let activeGoal: ActiveGoalState | null = null
+  let hasStateEvidence = false
+  for (const message of messages) {
+    if (message.type !== 'goal_event') continue
+    const explicitlyHasNoActiveGoal = message.action === 'message' &&
+      Boolean(message.message && /no (active )?goal/i.test(message.message))
+    if (message.action === 'message' && !explicitlyHasNoActiveGoal) continue
+    hasStateEvidence = true
+    activeGoal = explicitlyHasNoActiveGoal
+      ? null
+      : applyGoalEventToActiveGoal(activeGoal, message, message.timestamp)
+  }
+  return { activeGoal, hasStateEvidence }
 }
 
 function extractLocalCommandText(content: unknown): string | null {
