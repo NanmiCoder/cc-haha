@@ -48,6 +48,7 @@ import {
   type NetworkSettings,
 } from './networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import { buildOpenAIEndpointUrl } from '../proxy/upstreamUrl.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -733,10 +734,10 @@ export class ProviderService {
       let transformedBody: unknown
       if (format === 'openai_chat') {
         transformedBody = anthropicToOpenaiChat(anthropicReq)
-        upstreamUrl = `${base}/v1/chat/completions`
+        upstreamUrl = buildOpenAIEndpointUrl(base, 'chat/completions')
       } else {
         transformedBody = anthropicToOpenaiResponses(anthropicReq)
-        upstreamUrl = `${base}/v1/responses`
+        upstreamUrl = buildOpenAIEndpointUrl(base, 'responses')
       }
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, upstreamUrl)
 
@@ -794,14 +795,14 @@ function buildDirectTestRequest(
 
   if (format === 'openai_chat') {
     return {
-      url: `${base}/v1/chat/completions`,
+      url: buildOpenAIEndpointUrl(base, 'chat/completions'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, max_tokens: 16, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {
     return {
-      url: `${base}/v1/responses`,
+      url: buildOpenAIEndpointUrl(base, 'responses'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, max_output_tokens: 16, input: [{ type: 'message', role: 'user', content: prompt }] },
     }
