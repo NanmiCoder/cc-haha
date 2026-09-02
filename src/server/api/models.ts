@@ -51,6 +51,14 @@ import {
 
 const DEFAULT_MODELS = [
   {
+    id: 'claude-fable-5-1',
+    name: 'Fable 5.1',
+    description: 'Highest capability for long-running tasks',
+    context: '1m',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-fable-5',
     name: 'Fable 5',
     description: 'Highest capability for long-running tasks',
