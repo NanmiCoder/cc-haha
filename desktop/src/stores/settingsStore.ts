@@ -78,7 +78,8 @@ type SettingsStore = {
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
-  traceCapture: TraceCaptureSettings
+  traceCapture: TraceCaptureSettings,
+  attributionCommitDisabled: boolean
   h5Access: H5AccessSettings
   h5AccessDiagnostics: H5AccessDiagnostics | null
   h5AccessError: string | null
@@ -111,7 +112,8 @@ type SettingsStore = {
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
-  setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
+  setTraceCaptureEnabled: (enabled: boolean) => Promise<void>,
+  setAttributionCommitDisabled: (disabled: boolean) => Promise<void>,
   enableH5Access: () => Promise<string>
   disableH5Access: () => Promise<void>
   regenerateH5AccessToken: () => Promise<string>
@@ -205,6 +207,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
+  attributionCommitDisabled: false,
   h5Access: DEFAULT_H5_ACCESS_SETTINGS,
   h5AccessDiagnostics: null,
   h5AccessError: null,
@@ -268,6 +271,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         outputStyle: normalizeOutputStyle(userSettings.outputStyle),
         skipWebFetchPreflight: userSettings.skipWebFetchPreflight !== false,
         desktopNotificationsEnabled: userSettings.desktopNotificationsEnabled === true,
+        attributionCommitDisabled: userSettings.attribution?.commit === '',
         desktopTerminal,
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
@@ -541,6 +545,15 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     } catch (error) {
       set({ traceCapture: prev })
       throw error
+    }
+  },
+  setAttributionCommitDisabled: async (disabled) => {
+    const prev = get().attributionCommitDisabled
+    set({ attributionCommitDisabled: disabled })
+    try {
+      await settingsApi.updateUser({ attribution: { commit: disabled ? '' : undefined } })
+    } catch {
+      set({ attributionCommitDisabled: prev })
     }
   },
 

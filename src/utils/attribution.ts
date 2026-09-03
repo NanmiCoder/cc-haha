@@ -315,8 +315,9 @@ export async function getEnhancedPRAttribution(
 
   const settings = getInitialSettings()
 
-  // If user has custom PR attribution, use that
-  if (settings.attribution?.pr) {
+  // Honor an explicit PR attribution, including an empty string that hides it.
+  // (getAttributionTexts already uses ?? for this; keep this branch consistent.)
+  if (settings.attribution && settings.attribution.pr !== undefined) {
     return settings.attribution.pr
   }
 

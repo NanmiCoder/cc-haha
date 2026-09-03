@@ -95,6 +95,8 @@ export function GeneralSettings() {
     uiZoom,
     setUiZoom,
     proxyManagedSettingsWarning,
+    attributionCommitDisabled,
+    setAttributionCommitDisabled,
   } = useSettingsStore()
   // Read the theme from the store that owns it. settingsStore keeps a copy for
   // its own consumers, but that copy is only refreshed on an explicit setTheme
@@ -751,6 +753,21 @@ export function GeneralSettings() {
               {label}
             </SettingsPill>
           ))}
+        </div>
+      </SettingsSection>
+
+      {/* Commit attribution (issue #1274) */}
+      <SettingsSection
+        title={t('settings.general.attribution.title')}
+        description={t('settings.general.attribution.description')}
+      >
+        <div className="mb-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+          <Switch
+            checked={attributionCommitDisabled}
+            onChange={setAttributionCommitDisabled}
+            label={t('settings.general.attribution.disableCoAuthoredBy')}
+            description={t('settings.general.attribution.disableCoAuthoredByHint')}
+          />
         </div>
       </SettingsSection>
 
