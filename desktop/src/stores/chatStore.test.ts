@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentTaskNotification } from '../types/chat'
 import type { MessageEntry } from '../types/session'
 import {
   buildMainSessionActivityModel,
@@ -180,6 +181,7 @@ function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState 
     chatState: 'streaming',
     connectionState: 'connected',
     historyStatus: 'idle',
+    historyHydrated: false,
     historyError: null,
     streamingText: '',
     streamingToolInput: '',
@@ -1408,6 +1410,7 @@ describe('chatStore history mapping', () => {
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
           messages: [{ id: 'visible-message', type: 'assistant_text', content: 'already rendered', timestamp: 1 }],
           activeGoal: {
             action: 'created',
@@ -1678,6 +1681,7 @@ describe('chatStore history mapping', () => {
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
           messages: [
             {
               id: 'live-agent',
@@ -1767,6 +1771,1117 @@ describe('chatStore history mapping', () => {
       message.type === 'tool_use' && message.parentToolUseId === 'agent-parent')).toHaveLength(1)
     expect(messages.filter((message) =>
       message.type === 'tool_result' && message.parentToolUseId === 'agent-parent')).toHaveLength(1)
+  })
+
+  it('keeps restored history when live output arrives during the initial history load', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'streaming' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID)
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'thinking',
+      text: 'live progress while old messages are loading',
+      complete: true,
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-user',
+          type: 'user',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'restored-assistant',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: [{ type: 'text', text: 'old answer' }],
+        },
+      ],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { type: 'user_text', content: 'old prompt' },
+      { type: 'assistant_text', content: 'old answer' },
+      { type: 'thinking', content: 'live progress while old messages are loading' },
+    ])
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('treats the first history load as cold when a live task arrived before it started', async () => {
+    const sessionId = 'cold-live-before-load'
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+
+    useChatStore.getState().connectToSession(sessionId, {
+      minimalBootstrap: true,
+      prewarm: false,
+    })
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      data: {
+        task_id: 'task-before-history',
+        tool_use_id: 'tool-before-history',
+        task_type: 'local_bash',
+        description: 'Started before the transcript was hydrated',
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(sessionId)
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-before-live-task-user',
+          type: 'user',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: 'durable prompt before the live task',
+        },
+        {
+          id: 'restored-before-live-task-assistant',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: 'durable reply before the live task',
+        },
+      ],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'user_text',
+          content: 'durable prompt before the live task',
+        }),
+        expect.objectContaining({
+          type: 'assistant_text',
+          content: 'durable reply before the live task',
+        }),
+        expect.objectContaining({
+          type: 'background_task',
+          task: expect.objectContaining({ taskId: 'task-before-history' }),
+        }),
+      ]),
+    )
+  })
+
+  it('starts a fresh history request after disconnecting and recreating the same session id', async () => {
+    const sessionId = 'disconnect-recreate-load'
+    const historyResolvers: Array<(value: { messages: MessageEntry[] }) => void> = []
+    vi.mocked(sessionsApi.getMessages).mockImplementation(
+      () => new Promise((resolve) => { historyResolvers.push(resolve) }),
+    )
+
+    useChatStore.getState().connectToSession(sessionId, { prewarm: false })
+    expect(historyResolvers).toHaveLength(1)
+
+    useChatStore.getState().disconnectSession(sessionId)
+    useChatStore.getState().connectToSession(sessionId, { prewarm: false })
+    expect(historyResolvers).toHaveLength(2)
+
+    historyResolvers[1]!({
+      messages: [{
+        id: 'fresh-lifecycle-history',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:01.000Z',
+        content: 'fresh lifecycle history',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[sessionId]?.historyStatus).toBe('ready')
+    })
+
+    historyResolvers[0]!({
+      messages: [{
+        id: 'stale-lifecycle-history',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: 'stale lifecycle history',
+      }],
+    })
+    await vi.waitFor(() => {
+      const assistantText = (useChatStore.getState().sessions[sessionId]?.messages ?? [])
+        .filter((message) => message.type === 'assistant_text')
+        .map((message) => message.content)
+      expect(assistantText).toEqual(['fresh lifecycle history'])
+    })
+  })
+
+  it('backfills transcript rows persisted while a hydrated session was disconnected', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'persisted-before-disconnect',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: [{ type: 'text', text: 'already hydrated' }],
+        },
+        {
+          id: 'persisted-while-disconnected',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: [{ type: 'text', text: 'persisted while disconnected' }],
+        },
+      ],
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          connectionState: 'disconnected',
+          historyStatus: 'ready',
+          historyHydrated: true,
+          messages: [{
+            id: 'persisted-before-disconnect',
+            type: 'assistant_text',
+            content: 'already hydrated',
+            transcriptMessageId: 'persisted-before-disconnect',
+            timestamp: 1,
+          }],
+        }),
+      },
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages.filter((message) => (
+      message.type === 'assistant_text' && message.content === 'already hydrated'
+    ))).toHaveLength(1)
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'persisted while disconnected',
+    }))
+  })
+
+  it('ignores an old reload after disconnecting and recreating the same session id', async () => {
+    const sessionId = 'disconnect-recreate-reload'
+    const historyResolvers: Array<(value: { messages: MessageEntry[] }) => void> = []
+    vi.mocked(sessionsApi.getMessages).mockImplementation(
+      () => new Promise((resolve) => { historyResolvers.push(resolve) }),
+    )
+
+    useChatStore.getState().connectToSession(sessionId, {
+      minimalBootstrap: true,
+      prewarm: false,
+    })
+    const staleReload = useChatStore.getState().reloadHistory(sessionId)
+    expect(historyResolvers).toHaveLength(1)
+
+    useChatStore.getState().disconnectSession(sessionId)
+    useChatStore.getState().connectToSession(sessionId, { prewarm: false })
+    expect(historyResolvers).toHaveLength(2)
+
+    historyResolvers[1]!({
+      messages: [{
+        id: 'fresh-after-reload-lifecycle',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:01.000Z',
+        content: 'fresh history after reconnect',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[sessionId]?.historyStatus).toBe('ready')
+    })
+
+    historyResolvers[0]!({
+      messages: [{
+        id: 'stale-reload-lifecycle',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: 'stale reload from old lifecycle',
+      }],
+    })
+    await staleReload
+
+    const assistantText = (useChatStore.getState().sessions[sessionId]?.messages ?? [])
+      .filter((message) => message.type === 'assistant_text')
+      .map((message) => message.content)
+    expect(assistantText).toEqual(['fresh history after reconnect'])
+  })
+
+  it('does not mistake an identical reply in a newer live turn for restored history', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'streaming' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_start', blockType: 'text' })
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_delta', text: 'Done.' })
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'thinking',
+      text: 'live work after the repeated reply',
+      complete: true,
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-old-user',
+          type: 'user',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'restored-old-assistant',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: 'Done.',
+        },
+      ],
+    })
+    await historyLoad
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    const repeatedReplies = messages.filter((message) =>
+      message.type === 'assistant_text' && message.content === 'Done.')
+    expect(repeatedReplies).toHaveLength(2)
+    expect(repeatedReplies[0]).toMatchObject({
+      transcriptMessageId: 'restored-old-assistant',
+    })
+    expect(repeatedReplies[1]).not.toHaveProperty('transcriptMessageId')
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'thinking',
+      content: 'live work after the repeated reply',
+    }))
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('does not mistake an identical completed reply for cold history loaded in parallel', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'idle' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_start', blockType: 'text' })
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_delta', text: 'Done.' })
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.chatState).toBe('idle')
+
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-old-user',
+          type: 'user',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'restored-old-assistant',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: 'Done.',
+        },
+      ],
+    })
+    await historyLoad
+
+    const repeatedReplies = (
+      useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    ).filter((message) => message.type === 'assistant_text' && message.content === 'Done.')
+    expect(repeatedReplies).toHaveLength(2)
+    expect(repeatedReplies[0]).toMatchObject({
+      transcriptMessageId: 'restored-old-assistant',
+    })
+    expect(repeatedReplies[1]).not.toHaveProperty('transcriptMessageId')
+  })
+
+  it('does not mistake an identical stopped reply for cold history loaded in parallel', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'idle' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_start', blockType: 'text' })
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'content_delta', text: 'Done.' })
+    store.stopGeneration(TEST_SESSION_ID)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.chatState).toBe('idle')
+
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-old-user',
+          type: 'user',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: 'old prompt',
+        },
+        {
+          id: 'restored-old-assistant',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: 'Done.',
+        },
+      ],
+    })
+    await historyLoad
+
+    const repeatedReplies = (
+      useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    ).filter((message) => message.type === 'assistant_text' && message.content === 'Done.')
+    expect(repeatedReplies).toHaveLength(2)
+    expect(repeatedReplies[0]).toMatchObject({
+      transcriptMessageId: 'restored-old-assistant',
+    })
+    expect(repeatedReplies[1]).not.toHaveProperty('transcriptMessageId')
+  })
+
+  it('keeps newer live tool fields when cold history contains the same tool call', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'tool_executing' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'Read',
+      toolUseId: 'tool-1',
+    })
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'Read',
+      toolUseId: 'tool-1',
+      input: { path: 'new-path.ts' },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'restored-tool',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'tool-1',
+          name: 'Read',
+          input: { path: 'old-path.ts' },
+        }],
+      }],
+    })
+    await historyLoad
+
+    const tools = (useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? [])
+      .filter((message) => message.type === 'tool_use')
+    expect(tools).toHaveLength(1)
+    expect(tools[0]).toMatchObject({
+      toolUseId: 'tool-1',
+      input: { path: 'new-path.ts' },
+      isPending: false,
+    })
+  })
+
+  it('keeps durable tool details when the live row is only a pending placeholder', async () => {
+    const sessionId = 'cold-pending-tool-overlay'
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.getState().connectToSession(sessionId, {
+      minimalBootstrap: true,
+      prewarm: false,
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(sessionId)
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolUseId: 'tool-pending-placeholder',
+    })
+    resolveHistory({
+      messages: [{
+        id: 'restored-pending-tool',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'tool-pending-placeholder',
+          name: 'Read',
+          input: { path: 'durable.ts', offset: 12 },
+        }],
+      }],
+    })
+    await historyLoad
+
+    const tools = (useChatStore.getState().sessions[sessionId]?.messages ?? [])
+      .filter((message) => message.type === 'tool_use')
+    expect(tools).toHaveLength(1)
+    expect(tools[0]).toMatchObject({
+      toolName: 'Read',
+      toolUseId: 'tool-pending-placeholder',
+      input: { path: 'durable.ts', offset: 12 },
+      isPending: true,
+    })
+  })
+
+  it('keeps every tool row when tool ids are empty', async () => {
+    const sessionId = 'cold-empty-tool-identities'
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.getState().connectToSession(sessionId, {
+      minimalBootstrap: true,
+      prewarm: false,
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(sessionId)
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'tool_use_complete',
+      toolName: 'Bash',
+      toolUseId: '',
+      input: { command: 'live' },
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-empty-tool-a',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: [{ type: 'tool_use', name: 'Read', input: { path: 'a.ts' } }],
+        },
+        {
+          id: 'restored-empty-tool-b',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: [{ type: 'tool_use', name: 'Read', input: { path: 'b.ts' } }],
+        },
+      ],
+    })
+    await historyLoad
+
+    const inputs = (useChatStore.getState().sessions[sessionId]?.messages ?? [])
+      .filter((message) => message.type === 'tool_use')
+      .map((message) => message.input)
+    expect(inputs).toEqual([
+      { path: 'a.ts' },
+      { path: 'b.ts' },
+      { command: 'live' },
+    ])
+  })
+
+  it('does not overlay a live tool row onto an ambiguous restored identity', async () => {
+    const sessionId = 'cold-ambiguous-tool-identities'
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.getState().connectToSession(sessionId, {
+      minimalBootstrap: true,
+      prewarm: false,
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(sessionId)
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'tool_use_complete',
+      toolName: 'Read',
+      toolUseId: 'shared-tool-id',
+      input: { source: 'live' },
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-shared-tool-a',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: [{
+            type: 'tool_use',
+            id: 'shared-tool-id',
+            name: 'Read',
+            input: { source: 'history-a' },
+          }],
+        },
+        {
+          id: 'restored-shared-tool-b',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: [{
+            type: 'tool_use',
+            id: 'shared-tool-id',
+            name: 'Read',
+            input: { source: 'history-b' },
+          }],
+        },
+      ],
+    })
+    await historyLoad
+
+    const sources = (useChatStore.getState().sessions[sessionId]?.messages ?? [])
+      .filter((message) => message.type === 'tool_use')
+      .map((message) => (message.input as { source: string }).source)
+    expect(sources).toEqual(['history-a', 'history-b', 'live'])
+  })
+
+  it('keeps a live goal event when cold history arrives', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'streaming' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal set: ship the smoke test',
+      data: {
+        action: 'created',
+        status: 'active',
+        objective: 'ship the smoke test',
+        budget: '500 / 2,000 tokens',
+        continuations: '1',
+      },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'restored-goal',
+        type: 'system',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: '<local-command-stdout>Goal set: ship the smoke test</local-command-stdout>',
+      }],
+    })
+    await historyLoad
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages.filter((message) => message.type === 'goal_event')).toHaveLength(2)
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'created',
+      objective: 'ship the smoke test',
+      budget: '500 / 2,000 tokens',
+      continuations: '1',
+    }))
+    expect(session?.activeGoal).toMatchObject({
+      action: 'created',
+      status: 'active',
+      objective: 'ship the smoke test',
+      budget: '500 / 2,000 tokens',
+      continuations: '1',
+    })
+  })
+
+  it('does not revive a stale REST goal after a live goal clear during cold load', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [],
+          chatState: 'streaming',
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'ship the smoke test',
+            updatedAt: 1,
+          },
+        }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.activeGoal).toBeNull()
+    resolveHistory({
+      messages: [{
+        id: 'restored-stale-goal',
+        type: 'system',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: '<local-command-stdout>Goal set: ship the smoke test</local-command-stdout>',
+      }],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.activeGoal).toBeNull()
+  })
+
+  it('keeps a live goal clear and its event when a stale reload returns', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
+          messages: [],
+          chatState: 'idle',
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'ship the smoke test',
+            updatedAt: 1,
+          },
+        }),
+      },
+    })
+
+    const historyReload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'restored-stale-reload-goal',
+        type: 'system',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: '<local-command-stdout>Goal set: ship the smoke test</local-command-stdout>',
+      }],
+    })
+    await historyReload
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+  })
+
+  it('keeps a live goal message when a stale reload returns', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
+          messages: [],
+          chatState: 'idle',
+        }),
+      },
+    })
+
+    const historyReload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'No active goal.',
+      data: { action: 'message' },
+    })
+    resolveHistory({ messages: [] })
+    await historyReload
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'goal_event',
+        action: 'message',
+        message: 'No active goal.',
+      }),
+    )
+  })
+
+  it('discards a stale warm history response after a live goal mutation', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
+          messages: [],
+          chatState: 'idle',
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'old objective',
+            updatedAt: 1,
+          },
+        }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal replaced: new objective',
+      data: {
+        action: 'replaced',
+        status: 'active',
+        objective: 'new objective',
+      },
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'restored-old-goal',
+          type: 'system',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: '<local-command-stdout>Goal set: old objective</local-command-stdout>',
+        },
+        {
+          id: 'restored-old-goal-complete',
+          type: 'system',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: '<local-command-stdout>Goal marked complete.</local-command-stdout>',
+        },
+      ],
+    })
+    await historyLoad
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.historyStatus).toBe('idle')
+    expect(session?.activeGoal).toMatchObject({
+      action: 'replaced',
+      objective: 'new objective',
+    })
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'completed',
+    }))
+  })
+
+  it('applies restored history while task activity keeps mutating a cold load', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    const restoredHistory = {
+      messages: [{
+        id: 'restored-before-task',
+        type: 'assistant' as const,
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{ type: 'text', text: 'persisted before the task update' }],
+      }],
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'idle' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      data: {
+        task_id: 'task-started-during-history',
+        tool_use_id: 'tool-started-during-history',
+        task_type: 'local_bash',
+        description: 'Review the history race',
+      },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_progress',
+      data: {
+        task_id: 'task-started-during-history',
+        tool_use_id: 'tool-started-during-history',
+        summary: 'Still working while history returns',
+      },
+    })
+    resolveHistory(restoredHistory)
+    await historyLoad
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.historyStatus).toBe('ready')
+    expect(session?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'persisted before the task update',
+      }),
+      expect.objectContaining({
+        type: 'background_task',
+        task: expect.objectContaining({
+          taskId: 'task-started-during-history',
+          summary: 'Still working while history returns',
+        }),
+      }),
+    ]))
+  })
+
+  it('does not replace newer live token usage with a stale cold snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'streaming' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 500, output_tokens: 80 },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'stale-usage-history',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{ type: 'text', text: 'older completed turn' }],
+        usage: { input_tokens: 10, output_tokens: 2 },
+      } as never],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 500,
+      output_tokens: 80,
+    })
+  })
+
+  it('does not replace equal-valued live token usage with a stale cold snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [],
+          chatState: 'streaming',
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 500, output_tokens: 80 },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'stale-equal-usage-history',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{ type: 'text', text: 'older completed turn' }],
+        usage: { input_tokens: 10, output_tokens: 2 },
+      } as never],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 500,
+      output_tokens: 80,
+    })
+  })
+
+  it('does not replace equal-valued live token usage with a stale reload snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
+          messages: [],
+          chatState: 'streaming',
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        }),
+      },
+    })
+
+    const historyReload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          // Production message_complete writes a new usage object even when
+          // its counters happen to equal the previous turn (the ABA case).
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    resolveHistory({
+      messages: [{
+        id: 'stale-equal-usage-reload',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{ type: 'text', text: 'older completed turn' }],
+        usage: { input_tokens: 10, output_tokens: 2 },
+      } as never],
+    })
+    await historyReload
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 500,
+      output_tokens: 80,
+    })
+  })
+
+  it('does not clear a newer live todo list with a stale cold snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementationOnce((todos) => {
+      cliTaskStoreSnapshot.tasks = (todos as Array<{ content: string; status: string }>).map(
+        (todo, index) => ({
+          id: String(index + 1),
+          subject: todo.content,
+          status: todo.status,
+        }),
+      )
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'tool_executing' }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'todo-live-during-cold-load',
+      input: {
+        todos: [{ content: 'keep the live task', status: 'in_progress' }],
+      },
+    })
+    resolveHistory({ messages: [] })
+    await historyLoad
+
+    expect(setTasksFromTodosMock).toHaveBeenCalledTimes(1)
+    expect(setTasksFromTodosMock).toHaveBeenCalledWith(
+      [{ content: 'keep the live task', status: 'in_progress' }],
+      TEST_SESSION_ID,
+    )
+    expect(cliTaskStoreSnapshot.tasks).toEqual([
+      expect.objectContaining({ subject: 'keep the live task', status: 'in_progress' }),
+    ])
+  })
+
+  it('does not clear a newer live todo list with a stale reload snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementation((todos, targetSessionId) => {
+      cliTaskStoreSnapshot.sessionId = targetSessionId ?? null
+      cliTaskStoreSnapshot.tasks = (
+        todos as Array<{ content: string; status: string }>
+      ).map((todo, index) => ({
+        id: String(index + 1),
+        subject: todo.content,
+        status: todo.status,
+      }))
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
+          messages: [],
+          chatState: 'idle',
+        }),
+      },
+    })
+
+    const historyReload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'todo-live-during-reload',
+      input: {
+        todos: [{ content: 'keep the live reload task', status: 'in_progress' }],
+      },
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'stale-reload-task',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: [{
+            type: 'tool_use',
+            name: 'TaskCreate',
+            id: 'stale-reload-task-create',
+            input: { subject: 'stale completed task' },
+          }],
+        },
+        {
+          id: 'stale-reload-user-after-task',
+          type: 'user',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          content: 'continue after stale task',
+        },
+      ],
+    })
+    await historyReload
+
+    expect(setTasksFromTodosMock).toHaveBeenCalledTimes(1)
+    expect(markCompletedAndDismissedMock).not.toHaveBeenCalled()
+    expect(cliTaskStoreSnapshot.tasks).toEqual([
+      expect.objectContaining({
+        subject: 'keep the live reload task',
+        status: 'in_progress',
+      }),
+    ])
   })
 
   it('hydrates transcript ids for a just-completed live turn', async () => {
@@ -2071,6 +3186,7 @@ describe('chatStore history mapping', () => {
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
+          historyHydrated: true,
           messages: [
             {
               id: 'live-user',
@@ -3894,9 +5010,1566 @@ describe('chatStore history mapping', () => {
     expect(fetchSessionTasksMock).not.toHaveBeenCalled()
     expect(sessionsApi.getMessages).not.toHaveBeenCalled()
     expect(sessionsApi.getSlashCommands).not.toHaveBeenCalled()
+
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
   })
 
-  it('blocks sends across reconnects until a fresh authoritative snapshot arrives', () => {
+  it('uses terminal backfill when a reconnected minimal client is promoted', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [{
+        id: 'durable-after-minimal-promotion',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'durable after minimal promotion',
+      }],
+    })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+      minimalBootstrap: true,
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          messages: [{
+            id: 'stale-minimal-reconnect-row',
+            type: 'assistant_text',
+            content: 'stale minimal reconnect row',
+            timestamp: 1,
+          }],
+          streamingText: 'stale minimal reconnect partial',
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'durable after minimal promotion',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale minimal reconnect partial',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale minimal reconnect row',
+    }))
+  })
+
+  it('keeps initial cold history when the first socket attempt fails and backfills the gap after sync', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('loading')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    expect(onConnectionState).toBeTypeOf('function')
+
+    // The socket has never reached connected. Its first handshake failure must
+    // not invalidate the normal cold REST request that is already in flight.
+    onConnectionState?.('reconnecting')
+    resolveInitialHistory({
+      messages: [{
+        id: 'durable-before-first-ws-open',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'history must still hydrate',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({ content: 'history must still hydrate' }),
+    )
+
+    // The recovered transport still sends sync_state. That snapshot must start
+    // a second lossless request for rows persisted during the socket gap.
+    onConnectionState?.('connected')
+    // It can close again before the queued sync_state is delivered. The first
+    // gap marker must still win over this later connected -> reconnecting edge.
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_progress',
+      data: {
+        task_id: 'task-after-initial-gap',
+        tool_use_id: 'tool-after-initial-gap',
+        summary: 'live progress after the initial gap',
+      },
+    })
+    resolveReconnectHistory({
+      messages: [{
+        id: 'durable-during-initial-socket-gap',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: 'persisted while the first socket was unavailable',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      content: 'persisted while the first socket was unavailable',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'background_task',
+      task: expect.objectContaining({
+        taskId: 'task-after-initial-gap',
+        summary: 'live progress after the initial gap',
+      }),
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('keeps initial cold REST after the socket connects and drops before hydration', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('loading')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    resolveHistory({
+      messages: [{
+        id: 'durable-before-early-drop',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'cold REST must remain useful',
+      }],
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({ content: 'cold REST must remain useful' }),
+    )
+  })
+
+  it('keeps user and error rows received before pre-hydration gap sync_state', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('reconnecting')
+    resolveInitialHistory({ messages: [] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, '/clear foo')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      code: 'INVALID_COMMAND',
+      message: 'Usage: /clear',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReconnectHistory({ messages: [] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'user_text',
+      content: '/clear foo',
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'error',
+      message: 'Usage: /clear',
+    }))
+  })
+
+  it('rebases an applied cold snapshot before the pre-hydration running backfill', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    const initialTodos = [{ content: 'old durable task', status: 'pending' }]
+    const latestTodos = [{ content: 'latest durable task', status: 'in_progress' }]
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementation((todos, targetSessionId) => {
+      cliTaskStoreSnapshot.sessionId = targetSessionId ?? null
+      cliTaskStoreSnapshot.tasks = (
+        todos as Array<{ content: string; status: string }>
+      ).map((todo, index) => ({
+        id: String(index + 1),
+        subject: todo.content,
+        status: todo.status,
+      }))
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    resolveInitialHistory({
+      messages: [
+        {
+          id: 'pre-hydration-old-tools',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          usage: { input_tokens: 10, output_tokens: 2 },
+          content: [
+            {
+              type: 'tool_use',
+              id: 'pre-hydration-read',
+              name: 'Read',
+              input: { file_path: 'old.ts' },
+            },
+            {
+              type: 'tool_use',
+              id: 'pre-hydration-todo',
+              name: 'TodoWrite',
+              input: { todos: initialTodos },
+            },
+          ],
+        },
+        {
+          id: 'pre-hydration-old-results',
+          type: 'user',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'pre-hydration-read',
+              content: 'old result',
+              is_error: false,
+            },
+            {
+              type: 'tool_result',
+              tool_use_id: 'pre-hydration-todo',
+              content: 'old todo result',
+              is_error: false,
+            },
+          ],
+        },
+      ],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(cliTaskStoreSnapshot.tasks).toContainEqual(expect.objectContaining({
+      subject: 'old durable task',
+    }))
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReconnectHistory({
+      messages: [
+        {
+          id: 'pre-hydration-latest-tools',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:02.000Z',
+          usage: { input_tokens: 20, output_tokens: 3 },
+          content: [
+            {
+              type: 'tool_use',
+              id: 'pre-hydration-read',
+              name: 'Read',
+              input: { file_path: 'latest.ts' },
+            },
+            {
+              type: 'tool_use',
+              id: 'pre-hydration-todo',
+              name: 'TodoWrite',
+              input: { todos: latestTodos },
+            },
+          ],
+        },
+        {
+          id: 'pre-hydration-latest-results',
+          type: 'user',
+          timestamp: '2026-09-02T00:00:03.000Z',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'pre-hydration-read',
+              content: 'latest result',
+              is_error: false,
+            },
+            {
+              type: 'tool_result',
+              tool_use_id: 'pre-hydration-todo',
+              content: 'latest todo result',
+              is_error: false,
+            },
+          ],
+        },
+      ],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const readTool = session?.messages.find((message) =>
+      message.type === 'tool_use' && message.toolUseId === 'pre-hydration-read')
+    expect(readTool).toMatchObject({
+      input: { file_path: 'latest.ts' },
+    })
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_result',
+      toolUseId: 'pre-hydration-read',
+      content: 'latest result',
+    }))
+    expect(session?.tokenUsage).toEqual({ input_tokens: 20, output_tokens: 3 })
+    expect(cliTaskStoreSnapshot.tasks).toContainEqual(expect.objectContaining({
+      subject: 'latest durable task',
+      status: 'in_progress',
+    }))
+    expect(cliTaskStoreSnapshot.tasks).not.toContainEqual(expect.objectContaining({
+      subject: 'old durable task',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('keeps L2 tool payload when Stop only mutates an L1-restored tool status', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+
+    // Deliberately omit tool_result so Stop copy-on-writes this L1 row while
+    // retaining the payload object that came from the older REST response.
+    resolveInitialHistory({
+      messages: [{
+        id: 'shared-tool-message',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        parentToolUseId: 'parent-old',
+        content: [{
+          type: 'tool_use',
+          id: 'tool-1',
+          original_tool_use_id: 'original-old',
+          name: 'unknown',
+          input: { file_path: 'old.ts' },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    useChatStore.getState().stopGeneration(TEST_SESSION_ID)
+    resolveReconnectHistory({
+      messages: [{
+        id: 'shared-tool-message',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        parentToolUseId: 'parent-latest',
+        content: [{
+          type: 'tool_use',
+          id: 'tool-1',
+          original_tool_use_id: 'original-latest',
+          name: 'Read',
+          input: { file_path: 'latest.ts' },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const tool = useChatStore
+      .getState()
+      .sessions[TEST_SESSION_ID]
+      ?.messages.find((message) =>
+        message.type === 'tool_use' && message.toolUseId === 'tool-1')
+    expect(tool).toMatchObject({
+      toolName: 'Read',
+      originalToolUseId: 'original-latest',
+      parentToolUseId: 'parent-latest',
+      input: { file_path: 'latest.ts' },
+      isPending: false,
+      status: 'stopped',
+    })
+  })
+
+  it('separates inherited pending payload from an authoritative live completion over L2', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    resolveInitialHistory({
+      messages: [{
+        id: 'l1-content-start-tool',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'content-start-tool',
+          name: 'Read',
+          input: { file_path: 'old.ts' },
+        }, {
+          type: 'tool_use',
+          id: 'complete-tool',
+          name: 'Write',
+          input: { file_path: 'old-complete.ts' },
+        }, {
+          type: 'tool_use',
+          id: 'ask-tool',
+          name: 'AskUserQuestion',
+          input: { questions: [{ question: 'old question' }] },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'Read',
+      toolUseId: 'content-start-tool',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'Write',
+      toolUseId: 'complete-tool',
+      input: { file_path: 'live-complete.ts' },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'AskUserQuestion',
+      toolUseId: 'ask-tool',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      toolInput: '{"placeholder":"streamed before permission"',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore
+        .getState()
+        .sessions[TEST_SESSION_ID]
+        ?.messages.find((message) =>
+          message.type === 'tool_use' && message.toolUseId === 'ask-tool'))
+        .toMatchObject({
+          partialInput: '{"placeholder":"streamed before permission"',
+        })
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_request',
+      requestId: 'ask-permission',
+      toolName: 'AskUserQuestion',
+      toolUseId: 'ask-tool',
+      input: { questions: [{ question: 'live question' }] },
+    })
+
+    resolveReconnectHistory({
+      messages: [{
+        id: 'l2-content-start-tool',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'content-start-tool',
+          name: 'Read',
+          input: { file_path: 'latest.ts' },
+        }, {
+          type: 'tool_use',
+          id: 'complete-tool',
+          name: 'Write',
+          input: { file_path: 'latest-complete.ts' },
+        }, {
+          type: 'tool_use',
+          id: 'ask-tool',
+          name: 'AskUserQuestion',
+          input: { questions: [{ question: 'durable question' }] },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_use',
+      toolUseId: 'content-start-tool',
+      input: { file_path: 'latest.ts' },
+      isPending: true,
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_use',
+      toolUseId: 'complete-tool',
+      input: { file_path: 'live-complete.ts' },
+      isPending: false,
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_use',
+      toolUseId: 'ask-tool',
+      input: { questions: [{ question: 'live question' }] },
+      isPending: false,
+      partialInput: undefined,
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('applies only a live partial tool-input delta over the L2 durable payload', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    resolveInitialHistory({
+      messages: [{
+        id: 'l1-partial-tool',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'partial-tool',
+          name: 'Read',
+          input: { file_path: 'old.ts', limit: 1 },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'tool_use',
+      toolName: 'Read',
+      toolUseId: 'partial-tool',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      toolInput: '{"file_path":"live.ts"',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore
+        .getState()
+        .sessions[TEST_SESSION_ID]
+        ?.messages.find((message) =>
+          message.type === 'tool_use' && message.toolUseId === 'partial-tool'))
+        .toMatchObject({ input: { file_path: 'live.ts', limit: 1 } })
+    })
+
+    resolveReconnectHistory({
+      messages: [{
+        id: 'l2-partial-tool',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'partial-tool',
+          name: 'Read',
+          input: { file_path: 'latest.ts', limit: 2 },
+        }],
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_use',
+      toolUseId: 'partial-tool',
+      input: { file_path: 'live.ts', limit: 2 },
+      isPending: true,
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('does not let a pre-gap reload completion cancel the recovered socket backfill', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReloadHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReloadHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+
+    resolveInitialHistory({
+      messages: [{
+        id: 'pre-gap-cold-row',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'initial cold row',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReloadHistory({
+      messages: [{
+        id: 'pre-gap-reload-row',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: 'reload completed during the socket gap',
+      }],
+    })
+    await reload
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(3)
+    })
+    resolveReconnectHistory({
+      messages: [{
+        id: 'recovered-gap-row',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:02.000Z',
+        content: 'authoritative history after socket recovery',
+      }],
+    })
+
+    await vi.waitFor(() => {
+      const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+      expect(session?.historyStatus).toBe('ready')
+      expect(session?.historyHydrated).toBe(true)
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        content: 'authoritative history after socket recovery',
+      }),
+    )
+  })
+
+  it('keeps post-gap live state through a queued reload and recovered backfill', async () => {
+    let resolveInitialHistory!: (value: {
+      messages: MessageEntry[]
+      taskNotifications: AgentTaskNotification[]
+    }) => void
+    let resolveReloadHistory!: (value: {
+      messages: MessageEntry[]
+      taskNotifications: AgentTaskNotification[]
+    }) => void
+    let resolveReconnectHistory!: (value: {
+      messages: MessageEntry[]
+      taskNotifications: AgentTaskNotification[]
+    }) => void
+    const staleTodos = [{ content: 'stale queued-reload task', status: 'pending' }]
+    const liveTodos = [{ content: 'live queued-reload task', status: 'in_progress' }]
+    const staleNotification: AgentTaskNotification = {
+      taskId: 'queued-reload-agent-task',
+      toolUseId: 'queued-reload-agent-tool',
+      workflowRunId: 'queued-reload-workflow',
+      status: 'completed',
+      summary: 'stale completed attempt',
+    }
+    const staleSnapshot = {
+      messages: [
+        {
+          id: 'queued-reload-stale-goal',
+          type: 'system' as const,
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: '<local-command-stdout>Goal set: stale queued goal</local-command-stdout>',
+        },
+        {
+          id: 'queued-reload-stale-state',
+          type: 'assistant' as const,
+          timestamp: '2026-09-02T00:00:01.000Z',
+          usage: { input_tokens: 10, output_tokens: 2 },
+          content: [{
+            type: 'tool_use' as const,
+            id: 'queued-reload-live-todo',
+            name: 'TodoWrite',
+            input: { todos: staleTodos },
+          }],
+        },
+      ],
+      taskNotifications: [staleNotification],
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReloadHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementation((todos, targetSessionId) => {
+      cliTaskStoreSnapshot.sessionId = targetSessionId ?? null
+      cliTaskStoreSnapshot.tasks = (
+        todos as Array<{ content: string; status: string }>
+      ).map((todo, index) => ({
+        id: String(index + 1),
+        subject: todo.content,
+        status: todo.status,
+      }))
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          backgroundAgentTasks: {
+            [staleNotification.taskId]: {
+              ...staleNotification,
+              taskType: 'local_agent',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+          agentTaskNotifications: {
+            [staleNotification.toolUseId]: staleNotification,
+          },
+        },
+      },
+    }))
+    const sessionBeforeReload = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID, {
+      messages: sessionBeforeReload.messages,
+      backgroundAgentTasks: sessionBeforeReload.backgroundAgentTasks,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'queued-reload-live-todo',
+      input: { todos: liveTodos },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      data: {
+        task_id: staleNotification.taskId,
+        tool_use_id: staleNotification.toolUseId,
+        workflow_run_id: staleNotification.workflowRunId,
+        task_type: 'local_agent',
+        summary: 'live restarted attempt',
+      },
+    })
+
+    resolveInitialHistory(staleSnapshot)
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReloadHistory(staleSnapshot)
+    await reload
+
+    let session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+    expect(session?.tokenUsage).toEqual({ input_tokens: 500, output_tokens: 80 })
+    expect(cliTaskStoreSnapshot.tasks).toContainEqual(expect.objectContaining({
+      subject: 'live queued-reload task',
+      status: 'in_progress',
+    }))
+    expect(session?.backgroundAgentTasks?.[staleNotification.taskId]).toMatchObject({
+      status: 'running',
+      summary: 'live restarted attempt',
+    })
+    expect(session?.agentTaskNotifications?.[staleNotification.toolUseId]).toBeUndefined()
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(3)
+    })
+    resolveReconnectHistory(staleSnapshot)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+    expect(session?.tokenUsage).toEqual({ input_tokens: 500, output_tokens: 80 })
+    expect(cliTaskStoreSnapshot.tasks).toContainEqual(expect.objectContaining({
+      subject: 'live queued-reload task',
+      status: 'in_progress',
+    }))
+    expect(session?.backgroundAgentTasks?.[staleNotification.taskId]).toMatchObject({
+      status: 'running',
+      summary: 'live restarted attempt',
+    })
+    expect(session?.agentTaskNotifications?.[staleNotification.toolUseId]).toBeUndefined()
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('does not revive a terminal notification removed during a pre-hydration gap', async () => {
+    let resolveInitialHistory!: (value: {
+      messages: MessageEntry[]
+      taskNotifications: AgentTaskNotification[]
+    }) => void
+    let resolveReconnectHistory!: (value: {
+      messages: MessageEntry[]
+      taskNotifications: AgentTaskNotification[]
+    }) => void
+    const staleNotification: AgentTaskNotification = {
+      taskId: 'pre-gap-restarted-task',
+      toolUseId: 'pre-gap-restarted-tool',
+      workflowRunId: 'pre-gap-restarted-workflow',
+      status: 'completed',
+      summary: 'stale completed attempt',
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          backgroundAgentTasks: {
+            [staleNotification.taskId]: {
+              ...staleNotification,
+              taskType: 'local_agent',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+          agentTaskNotifications: {
+            [staleNotification.toolUseId]: staleNotification,
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      data: {
+        task_id: staleNotification.taskId,
+        tool_use_id: staleNotification.toolUseId,
+        workflow_run_id: staleNotification.workflowRunId,
+        task_type: 'local_agent',
+        summary: 'live restarted attempt',
+      },
+    })
+
+    resolveInitialHistory({ messages: [], taskNotifications: [staleNotification] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    let session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.backgroundAgentTasks?.[staleNotification.taskId]).toMatchObject({
+      status: 'running',
+      summary: 'live restarted attempt',
+    })
+    expect(session?.agentTaskNotifications?.[staleNotification.toolUseId]).toBeUndefined()
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReconnectHistory({ messages: [], taskNotifications: [staleNotification] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.backgroundAgentTasks?.[staleNotification.taskId]).toMatchObject({
+      status: 'running',
+      summary: 'live restarted attempt',
+    })
+    expect(session?.agentTaskNotifications?.[staleNotification.toolUseId]).toBeUndefined()
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('does not reopen a task completed during a pre-hydration gap', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    const staleRunningHistory: MessageEntry[] = [
+      {
+        id: 'pre-gap-stale-shell-use',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          id: 'pre-gap-shell-tool',
+          name: 'Bash',
+          input: { command: 'sleep 10', run_in_background: true },
+        }],
+      },
+      {
+        id: 'pre-gap-stale-shell-result',
+        type: 'tool_result',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'pre-gap-shell-tool',
+          content: 'Command running in background with ID: pre-gap-shell-task',
+        }],
+      },
+    ]
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          backgroundAgentTasks: {
+            'pre-gap-shell-task': {
+              taskId: 'pre-gap-shell-task',
+              toolUseId: 'pre-gap-shell-tool',
+              status: 'running',
+              taskType: 'local_bash',
+              description: 'sleep 10',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: {
+        task_id: 'pre-gap-shell-task',
+        tool_use_id: 'pre-gap-shell-tool',
+        task_type: 'local_bash',
+        status: 'completed',
+        summary: 'live shell completion',
+      },
+    })
+
+    resolveInitialHistory({ messages: staleRunningHistory })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    let session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.backgroundAgentTasks?.['pre-gap-shell-task']).toMatchObject({
+      status: 'completed',
+      summary: 'live shell completion',
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReconnectHistory({ messages: staleRunningHistory })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.backgroundAgentTasks?.['pre-gap-shell-task']).toMatchObject({
+      status: 'completed',
+      summary: 'live shell completion',
+    })
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('keeps post-gap goal token and Todo mutations across both pre-hydration loads', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    const staleTodos = [{ content: 'stale durable task', status: 'pending' }]
+    const liveTodos = [{ content: 'keep the live task', status: 'in_progress' }]
+    const staleHistory: { messages: MessageEntry[] } = {
+      messages: [
+        {
+          id: 'stale-pre-hydration-goal',
+          type: 'system',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: '<local-command-stdout>Goal set: stale durable goal</local-command-stdout>',
+        },
+        {
+          id: 'stale-pre-hydration-state',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          usage: { input_tokens: 10, output_tokens: 2 },
+          content: [{
+            type: 'tool_use',
+            id: 'pre-hydration-live-todo',
+            name: 'TodoWrite',
+            input: { todos: staleTodos },
+          }],
+        },
+      ],
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementation((todos, targetSessionId) => {
+      cliTaskStoreSnapshot.sessionId = targetSessionId ?? null
+      cliTaskStoreSnapshot.tasks = (
+        todos as Array<{ content: string; status: string }>
+      ).map((todo, index) => ({
+        id: String(index + 1),
+        subject: todo.content,
+        status: todo.status,
+      }))
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          // Production usage events replace the object even for equal values.
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'pre-hydration-live-todo',
+      input: { todos: liveTodos },
+    })
+
+    resolveInitialHistory(staleHistory)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReconnectHistory(staleHistory)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+    expect(session?.tokenUsage).toEqual({ input_tokens: 500, output_tokens: 80 })
+    expect(cliTaskStoreSnapshot.tasks).toContainEqual(expect.objectContaining({
+      subject: 'keep the live task',
+      status: 'in_progress',
+    }))
+    expect(cliTaskStoreSnapshot.tasks).not.toContainEqual(expect.objectContaining({
+      subject: 'stale durable task',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('lets the sync backfill replace an older pre-hydration request still in flight', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    resolveInitialHistory({
+      messages: [{
+        id: 'obsolete-pre-hydration-response',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'obsolete response must not apply',
+      }],
+    })
+    await Promise.resolve()
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('loading')
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).not.toContainEqual(
+      expect.objectContaining({ content: 'obsolete response must not apply' }),
+    )
+
+    resolveReconnectHistory({
+      messages: [{
+        id: 'authoritative-pre-hydration-response',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: 'authoritative response applies',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      content: 'authoritative response applies',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      content: 'obsolete response must not apply',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('keeps a repeated normal reconnect gated until its pending sync arrives', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValue({ messages: [] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          streamingText: 'partial from the interrupted reconnect',
+          streamingToolInput: '{"stale":true}',
+        },
+      },
+    }))
+    onConnectionState?.('reconnecting')
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      streamingText: '',
+      streamingToolInput: '',
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('retries a failed cold REST while the first socket gap is still pending', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockRejectedValueOnce(new Error('initial REST failed'))
+      .mockResolvedValueOnce({
+        messages: [{
+          id: 'durable-after-rest-retry',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: 'REST retry works before websocket recovery',
+        }],
+      })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('reconnecting')
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({ content: 'REST retry works before websocket recovery' }),
+    )
+  })
+
+  it('still backfills the socket gap after a pre-hydration REST retry succeeds', async () => {
+    let resolveRetryHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveReconnectHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockRejectedValueOnce(new Error('initial REST failed'))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveRetryHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveReconnectHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('reconnecting')
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveRetryHistory({
+      messages: [{
+        id: 'durable-after-pre-hydration-retry',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'retry response remains useful',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(3)
+    })
+    resolveReconnectHistory({
+      messages: [{
+        id: 'durable-after-recovered-socket-gap',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: 'sync backfill still runs after retry',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({ content: 'sync backfill still runs after retry' }),
+    )
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('starts cold REST when a minimal client is promoted during its first socket gap', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [{
+        id: 'durable-after-minimal-gap-promotion',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'minimal client promoted before websocket recovery',
+      }],
+    })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+      minimalBootstrap: true,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('reconnecting')
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        content: 'minimal client promoted before websocket recovery',
+      }),
+    )
+  })
+
+  it('resets reconnect snapshot readiness until a fresh authoritative snapshot arrives', () => {
     useChatStore.getState().connectToSession(TEST_SESSION_ID, {
       prewarm: false,
       applyRuntimeSelection: false,
@@ -3941,6 +6614,1997 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
       connectionState: 'connected',
       connectionSnapshotReady: false,
+    })
+  })
+
+  it('losslessly backfills history after automatic reconnect while task progress continues', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    expect(onConnectionState).toBeTypeOf('function')
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          historyStatus: 'ready',
+          historyHydrated: true,
+          messages: [{
+            id: 'cached-before-reconnect',
+            type: 'assistant_text',
+            content: 'cached before reconnect',
+            transcriptMessageId: 'cached-before-reconnect',
+            timestamp: 1,
+          }, {
+            id: 'current-user-before-reconnect',
+            type: 'user_text',
+            content: 'current prompt not durable yet',
+            timestamp: 2,
+          }],
+        },
+      },
+    }))
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_progress',
+      data: {
+        task_id: 'running-task-after-reconnect',
+        tool_use_id: 'running-tool-after-reconnect',
+        summary: 'still running after reconnect',
+      },
+    })
+    resolveHistory({
+      messages: [{
+        id: 'persisted-while-websocket-offline',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'persisted while websocket was offline',
+      }],
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'persisted while websocket was offline',
+      }),
+    )
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'user_text',
+        content: 'current prompt not durable yet',
+      }),
+    )
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'cached before reconnect',
+      }),
+    )
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('accepts an explicit durable goal clear during a running reconnect', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          historyHydrated: true,
+          messages: [{
+            id: 'cached-old-goal-row',
+            type: 'goal_event',
+            action: 'created',
+            status: 'active',
+            objective: 'old goal',
+            timestamp: 1,
+          }],
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'old goal',
+            updatedAt: 1,
+          },
+          activeGoalRevision: 5,
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveHistory({
+      messages: [{
+        id: 'durable-old-goal-created',
+        type: 'system',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: '<local-command-stdout>Goal set: old goal</local-command-stdout>',
+      }, {
+        id: 'durable-old-goal-cleared',
+        type: 'system',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: '<local-command-stdout>Goal cleared.</local-command-stdout>',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'cached-old-goal-row',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('preserves the cached goal during a running reconnect with no durable goal evidence', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          historyHydrated: true,
+          messages: [],
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'cached goal without durable evidence',
+            updatedAt: 1,
+          },
+          activeGoalRevision: 5,
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveHistory({
+      messages: [{
+        id: 'durable-without-goal-state',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'ordinary durable transcript',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.activeGoal).toMatchObject({
+      action: 'created',
+      objective: 'cached goal without durable evidence',
+    })
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+  })
+
+  it('preserves live goal token and Todo mutations received before a running reconnect snapshot', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    const staleTodos = [{ content: 'stale REST todo', status: 'pending' }]
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = [{
+      id: 'before-reconnect',
+      subject: 'before reconnect',
+      status: 'in_progress',
+    }]
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          historyHydrated: true,
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'stale reconnect goal',
+            updatedAt: 1,
+          },
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 500, output_tokens: 80 },
+    })
+    cliTaskStoreSnapshot.tasks = [{
+      id: 'live-before-sync',
+      subject: 'live Todo before sync',
+      status: 'in_progress',
+    }]
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'stale-goal-before-running-sync',
+          type: 'system',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: '<local-command-stdout>Goal set: stale reconnect goal</local-command-stdout>',
+        },
+        {
+          id: 'stale-state-before-running-sync',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          usage: { input_tokens: 10, output_tokens: 2 },
+          content: [{
+            type: 'tool_use',
+            id: 'stale-todo-before-running-sync',
+            name: 'TodoWrite',
+            input: { todos: staleTodos },
+          }],
+        },
+      ],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.tokenUsage).toEqual({ input_tokens: 500, output_tokens: 80 })
+    expect(setTasksFromTodosMock).not.toHaveBeenCalledWith(staleTodos, TEST_SESSION_ID)
+    expect(cliTaskStoreSnapshot.tasks).toEqual([
+      expect.objectContaining({ subject: 'live Todo before sync' }),
+    ])
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('accepts an empty durable transcript after an automatic idle reconnect', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+          messages: [{
+            id: 'cached-before-offline-clear',
+            type: 'assistant_text',
+            content: 'cleared while the renderer was offline',
+            timestamp: 1,
+          }],
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+    })
+  })
+
+  it('clears stale background activity when an idle reconnect confirms an empty transcript', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const staleTask = {
+      taskId: 'stale-background-task',
+      toolUseId: 'stale-background-tool',
+      status: 'completed' as const,
+      summary: 'stale background result',
+      startedAt: 1,
+      updatedAt: 2,
+    }
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          messages: [{
+            id: 'stale-background-message',
+            type: 'background_task',
+            task: staleTask,
+            timestamp: 2,
+          }],
+          backgroundAgentTasks: { [staleTask.taskId]: staleTask },
+          agentTaskNotifications: {
+            [staleTask.toolUseId]: {
+              taskId: staleTask.taskId,
+              toolUseId: staleTask.toolUseId,
+              status: 'completed',
+              summary: staleTask.summary,
+            },
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toEqual([])
+    expect(session?.backgroundAgentTasks).toEqual({})
+    expect(session?.agentTaskNotifications).toEqual({})
+  })
+
+  it('keeps a cached background task that the reconnect snapshot confirms is active', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const activeTask = {
+      taskId: 'snapshot-active-task',
+      toolUseId: 'snapshot-active-tool',
+      status: 'running' as const,
+      taskType: 'local_agent',
+      summary: 'still active after reconnect',
+      startedAt: 1,
+      updatedAt: 2,
+    }
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          backgroundAgentTasks: { [activeTask.taskId]: activeTask },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [activeTask.taskId],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    expect(
+      useChatStore.getState().sessions[TEST_SESSION_ID]
+        ?.backgroundAgentTasks?.[activeTask.taskId],
+    ).toMatchObject({ status: 'running', summary: 'still active after reconnect' })
+  })
+
+  it('revives a cached terminal task when reconnect sync confirms it is active', async () => {
+    const staleNotification = {
+      taskId: 'snapshot-restarted-task',
+      toolUseId: 'snapshot-restarted-tool',
+      status: 'failed' as const,
+      summary: 'old lifecycle failed',
+      result: 'old terminal result',
+      outputFile: '/tmp/old-output.txt',
+      usage: { totalTokens: 123, toolUses: 4, durationMs: 5000 },
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [], taskNotifications: [staleNotification] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          backgroundAgentTasks: {
+            'snapshot-restarted-task': {
+              taskId: 'snapshot-restarted-task',
+              toolUseId: 'snapshot-restarted-tool',
+              status: 'failed',
+              description: 'review the reconnect path',
+              taskType: 'local_agent',
+              prompt: 'inspect the store',
+              summary: 'old lifecycle failed',
+              result: 'old terminal result',
+              lastToolName: 'Read',
+              outputFile: '/tmp/old-output.txt',
+              usage: { totalTokens: 123, toolUses: 4, durationMs: 5000 },
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+          agentTaskNotifications: {
+            'snapshot-restarted-tool': staleNotification,
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: ['snapshot-restarted-task'],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const restarted = session?.backgroundAgentTasks?.['snapshot-restarted-task']
+    expect(restarted).toMatchObject({
+      status: 'running',
+      description: 'review the reconnect path',
+      taskType: 'local_agent',
+      prompt: 'inspect the store',
+    })
+    expect(restarted?.startedAt).toBeGreaterThan(2)
+    expect(restarted?.summary).toBeUndefined()
+    expect(restarted?.result).toBeUndefined()
+    expect(restarted?.lastToolName).toBeUndefined()
+    expect(restarted?.outputFile).toBeUndefined()
+    expect(restarted?.usage).toBeUndefined()
+    expect(session?.agentTaskNotifications?.['snapshot-restarted-tool']).toBeUndefined()
+    expect(session?.messages.find((message) =>
+      message.type === 'background_task' &&
+      message.task.taskId === 'snapshot-restarted-task')).toBeUndefined()
+  })
+
+  it('does not let stale REST mark a snapshot-inactive background task running again', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'stale-running-shell-use',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: [{
+              type: 'tool_use',
+              id: 'stale-running-shell-tool',
+              name: 'Bash',
+              input: { command: 'sleep 10', run_in_background: true },
+            }],
+          },
+          {
+            id: 'stale-running-shell-result',
+            type: 'tool_result',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'stale-running-shell-tool',
+              content: 'Command running in background with ID: stale-running-shell-task',
+            }],
+          },
+        ],
+      })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          backgroundAgentTasks: {
+            'stale-running-shell-task': {
+              taskId: 'stale-running-shell-task',
+              toolUseId: 'stale-running-shell-tool',
+              status: 'running',
+              taskType: 'shell',
+              summary: 'cached running shell',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    expect(
+      useChatStore.getState().sessions[TEST_SESSION_ID]
+        ?.backgroundAgentTasks?.['stale-running-shell-task']?.status,
+    ).toBe('completed')
+  })
+
+  it('keeps an inactive background task settled during a running reconnect backfill', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'running-reconnect-stale-shell-use',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: [{
+              type: 'tool_use',
+              id: 'running-reconnect-stale-shell-tool',
+              name: 'Bash',
+              input: { command: 'sleep 10', run_in_background: true },
+            }],
+          },
+          {
+            id: 'running-reconnect-stale-shell-result',
+            type: 'tool_result',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'running-reconnect-stale-shell-tool',
+              content: 'Command running in background with ID: running-reconnect-stale-shell-task',
+            }],
+          },
+        ],
+      })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          historyHydrated: true,
+          backgroundAgentTasks: {
+            'running-reconnect-stale-shell-task': {
+              taskId: 'running-reconnect-stale-shell-task',
+              toolUseId: 'running-reconnect-stale-shell-tool',
+              status: 'running',
+              taskType: 'shell',
+              summary: 'cached running shell',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(
+      session?.backgroundAgentTasks?.['running-reconnect-stale-shell-task']?.status,
+    ).toBe('completed')
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('keeps only post-boundary background activity during an empty terminal backfill', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const staleTask = {
+      taskId: 'stale-before-live-progress',
+      toolUseId: 'stale-tool-before-live-progress',
+      status: 'completed' as const,
+      summary: 'stale task A',
+      startedAt: 1,
+      updatedAt: 2,
+    }
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          backgroundAgentTasks: { [staleTask.taskId]: staleTask },
+          agentTaskNotifications: {
+            [staleTask.toolUseId]: {
+              taskId: staleTask.taskId,
+              toolUseId: staleTask.toolUseId,
+              status: 'completed',
+              summary: staleTask.summary,
+            },
+          },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_progress',
+      data: {
+        task_id: 'live-task-after-boundary',
+        tool_use_id: 'live-tool-after-boundary',
+        summary: 'live task B after boundary',
+      },
+    })
+    resolveHistory({ messages: [] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const tasks = useChatStore.getState().sessions[TEST_SESSION_ID]?.backgroundAgentTasks
+    expect(tasks?.[staleTask.taskId]).toBeUndefined()
+    expect(tasks?.['live-task-after-boundary']).toMatchObject({
+      status: 'running',
+      summary: 'live task B after boundary',
+    })
+  })
+
+  it('does not revive a stale terminal notification for a restarted live task', async () => {
+    const staleNotification = {
+      taskId: 'restarted-task',
+      toolUseId: 'restarted-tool',
+      status: 'completed' as const,
+      summary: 'old lifecycle completed',
+    }
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [], taskNotifications: [staleNotification] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          backgroundAgentTasks: {
+            'restarted-task': {
+              taskId: 'restarted-task',
+              toolUseId: 'restarted-tool',
+              status: 'completed',
+              taskType: 'local_agent',
+              summary: 'old lifecycle completed',
+              startedAt: 1,
+              updatedAt: 2,
+            },
+          },
+          agentTaskNotifications: { 'restarted-tool': staleNotification },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      data: {
+        task_id: 'restarted-task',
+        tool_use_id: 'restarted-tool',
+        summary: 'new lifecycle running',
+      },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: ['restarted-task'],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.backgroundAgentTasks?.['restarted-task']).toMatchObject({
+      status: 'running',
+      summary: 'new lifecycle running',
+    })
+    expect(session?.agentTaskNotifications?.['restarted-tool']).toBeUndefined()
+  })
+
+  it('waits for the reconnect snapshot before reconciling a completed turn', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    // This case exercises a real automatic reconnect after the socket has
+    // opened once, rather than an initial connecting -> reconnecting failure.
+    onConnectionState?.('connected')
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          chatState: 'thinking',
+          replaceHistoryOnCompletion: true,
+        },
+      },
+    }))
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.awaitingReconnectSync).toBe(true)
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+  })
+
+  it('keeps user and error rows received between reconnect and sync_state', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          messages: [{
+            id: 'stale-before-reconnect',
+            type: 'assistant_text',
+            content: 'stale cached row before reconnect',
+            timestamp: 1,
+          }],
+          streamingText: 'stale buffer before reconnect',
+          historyHydrated: true,
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, '/clear foo')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      code: 'INVALID_COMMAND',
+      message: 'Usage: /clear',
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          messages: [
+            ...state.sessions[TEST_SESSION_ID]!.messages,
+            {
+              id: 'pre-sync-assistant-transient',
+              type: 'assistant_text',
+              content: 'pre-sync assistant transient',
+              timestamp: 2,
+            },
+            {
+              id: 'pre-sync-thinking-transient',
+              type: 'thinking',
+              content: 'pre-sync thinking transient',
+              timestamp: 3,
+            },
+            {
+              id: 'pre-sync-tool-transient',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'pre-sync-tool-transient',
+              input: {},
+              isPending: true,
+              timestamp: 4,
+            },
+          ],
+        },
+      },
+    }))
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveHistory({ messages: [] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'user_text',
+      content: '/clear foo',
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'error',
+      message: 'Usage: /clear',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale buffer before reconnect',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale cached row before reconnect',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      id: 'pre-sync-assistant-transient',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      id: 'pre-sync-thinking-transient',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      id: 'pre-sync-tool-transient',
+    }))
+  })
+
+  it('authoritatively reconciles a terminal automatic reconnect while SubAgent progress continues', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          streamingText: 'stale partial from before the disconnect',
+          streamAttemptStartIndex: 1,
+          historyStatus: 'ready',
+          historyHydrated: true,
+          messages: [
+            {
+              id: 'live-user-before-idle-reconnect',
+              type: 'user_text',
+              content: 'finish the foreground turn',
+              timestamp: 1,
+            },
+            {
+              id: 'stale-thinking-before-idle-reconnect',
+              type: 'thinking',
+              content: 'stale thought from before the disconnect',
+              timestamp: 2,
+            },
+            {
+              id: 'stale-tool-before-idle-reconnect',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'foreground-tool-during-reconnect',
+              input: {},
+              isPending: true,
+              timestamp: 3,
+            },
+          ],
+          activeThinkingId: 'stale-thinking-before-idle-reconnect',
+          activeToolUseId: 'foreground-tool-during-reconnect',
+          activeToolName: 'Read',
+          backgroundAgentTasks: {
+            'agent-tool-idle-reconnect': {
+              taskId: 'agent-task-idle-reconnect',
+              toolUseId: 'agent-tool-idle-reconnect',
+              status: 'running',
+              taskType: 'local_agent',
+              description: 'Continue reviewing while the socket reconnects',
+              startedAt: 1,
+              updatedAt: 1,
+            },
+          },
+        },
+      },
+    }))
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: ['agent-task-idle-reconnect'],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_progress',
+      data: {
+        task_id: 'agent-task-idle-reconnect',
+        tool_use_id: 'agent-tool-idle-reconnect',
+        summary: 'still working after the reconnect',
+      },
+    })
+    resolveHistory({
+      messages: [
+        {
+          id: 'persisted-during-idle-reconnect',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'foreground-tool-during-reconnect',
+              name: 'Read',
+              input: { file_path: 'README.md' },
+            },
+            { type: 'text', text: 'persisted while the idle foreground was offline' },
+          ],
+        },
+        {
+          id: 'persisted-tool-result-during-idle-reconnect',
+          type: 'user',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'foreground-tool-during-reconnect',
+            content: 'durable read result',
+            is_error: false,
+          }],
+        },
+      ],
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'persisted while the idle foreground was offline',
+      }),
+    )
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale partial from before the disconnect',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      id: 'stale-thinking-before-idle-reconnect',
+    }))
+    const restoredTool = messages.find((message) =>
+      message.type === 'tool_use' &&
+      message.toolUseId === 'foreground-tool-during-reconnect')
+    expect(restoredTool).toMatchObject({
+      type: 'tool_use',
+      toolName: 'Read',
+      input: { file_path: 'README.md' },
+    })
+    expect(restoredTool?.type === 'tool_use' ? restoredTool.isPending : true).not.toBe(true)
+    expect(restoredTool).not.toMatchObject({
+      status: 'stopped',
+    })
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'tool_result',
+      toolUseId: 'foreground-tool-during-reconnect',
+      content: 'durable read result',
+      isError: false,
+    }))
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      historyStatus: 'ready',
+      historyHydrated: true,
+      backgroundAgentTasks: {
+        'agent-task-idle-reconnect': expect.objectContaining({
+          status: 'running',
+          summary: 'still working after the reconnect',
+        }),
+      },
+    })
+  })
+
+  it('keeps a new foreground turn started during terminal reconnect backfill', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          streamingText: 'stale foreground partial',
+          historyStatus: 'ready',
+          historyHydrated: true,
+        },
+      },
+    }))
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'new turn after reconnect')
+    resolveHistory({
+      messages: [{
+        id: 'old-durable-reconnect-answer',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'old durable reconnect answer',
+      }],
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.chatState).toBe('thinking')
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'old durable reconnect answer',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'user_text',
+      content: 'new turn after reconnect',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale foreground partial',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('reuses the original terminal reconnect boundary after a failed request', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockRejectedValueOnce(new Error('temporary history failure'))
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'stale-goal-after-terminal-retry',
+            type: 'system',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: '<local-command-stdout>Goal set: stale retry goal</local-command-stdout>',
+          },
+          {
+            id: 'durable-after-terminal-retry',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            usage: { input_tokens: 10, output_tokens: 2 },
+            content: [
+              { type: 'text', text: 'durable after terminal retry' },
+              {
+                type: 'tool_use',
+                id: 'stale-retry-todos',
+                name: 'TodoWrite',
+                input: { todos: [{ content: 'stale retry task', status: 'pending' }] },
+              },
+            ],
+          },
+        ],
+      })
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [{
+            id: 'stale-terminal-baseline',
+            type: 'assistant_text',
+            content: 'stale terminal baseline',
+            timestamp: 1,
+          }],
+          chatState: 'idle',
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID, {
+      mode: 'terminal-reconnect',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          messages: [
+            ...state.sessions[TEST_SESSION_ID]!.messages,
+            {
+              id: 'new-user-after-terminal-failure',
+              type: 'user_text',
+              content: 'keep me across the retry',
+              timestamp: 2,
+            },
+          ],
+          chatState: 'thinking',
+          activeGoal: null,
+          activeGoalRevision: (state.sessions[TEST_SESSION_ID]!.activeGoalRevision ?? 0) + 1,
+          tokenUsage: { input_tokens: 900, output_tokens: 90 },
+        },
+      },
+    }))
+    cliTaskStoreSnapshot.tasks = [{
+      id: 'live-after-failure',
+      subject: 'live task after terminal failure',
+      status: 'in_progress',
+    }]
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'durable after terminal retry',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      id: 'new-user-after-terminal-failure',
+      content: 'keep me across the retry',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'stale-terminal-baseline',
+    }))
+    expect(session?.chatState).toBe('thinking')
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.tokenUsage).toEqual({ input_tokens: 900, output_tokens: 90 })
+    expect(setTasksFromTodosMock).not.toHaveBeenCalled()
+  })
+
+  it('carries an unresolved terminal boundary into a later running reconnect', async () => {
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockRejectedValueOnce(new Error('first terminal backfill failed'))
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'stale-goal-on-second-reconnect',
+            type: 'system',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: '<local-command-stdout>Goal set: stale second reconnect goal</local-command-stdout>',
+          },
+          {
+            id: 'durable-on-second-reconnect',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            usage: { input_tokens: 10, output_tokens: 2 },
+            content: [
+              { type: 'text', text: 'durable on second reconnect' },
+              {
+                type: 'tool_use',
+                id: 'live-tool-before-second-reconnect',
+                name: 'Read',
+                input: { file_path: 'README.md' },
+              },
+            ],
+          },
+          {
+            id: 'durable-result-on-second-reconnect',
+            type: 'user',
+            timestamp: '2026-09-02T00:00:02.000Z',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'live-tool-before-second-reconnect',
+              content: 'durable result after second reconnect',
+              is_error: false,
+            }],
+          },
+        ],
+      })
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          messages: [
+            {
+              id: 'stale-thinking-before-failed-terminal-backfill',
+              type: 'thinking',
+              content: 'stale thought before failed terminal backfill',
+              timestamp: 1,
+            },
+            {
+              id: 'stale-tool-before-failed-terminal-backfill',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'stale-tool-before-failed-terminal-backfill',
+              input: {},
+              isPending: true,
+              timestamp: 2,
+            },
+          ],
+          streamingText: 'stale before the failed reconnect',
+          historyHydrated: true,
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'cached goal before reconnect',
+            updatedAt: 1,
+          },
+          tokenUsage: { input_tokens: 100, output_tokens: 20 },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared.',
+      data: { action: 'cleared', status: 'cleared' },
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          tokenUsage: { input_tokens: 900, output_tokens: 90 },
+        },
+      },
+    }))
+    useChatStore.getState().sendMessage(
+      TEST_SESSION_ID,
+      'new turn after the failed terminal backfill',
+    )
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          messages: [
+            ...state.sessions[TEST_SESSION_ID]!.messages,
+            {
+              id: 'live-assistant-before-second-reconnect',
+              type: 'assistant_text',
+              content: 'stale live partial before second reconnect',
+              timestamp: 3,
+            },
+            {
+              id: 'live-thinking-before-second-reconnect',
+              type: 'thinking',
+              content: 'stale live thinking before second reconnect',
+              timestamp: 4,
+            },
+            {
+              id: 'live-tool-row-before-second-reconnect',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'live-tool-before-second-reconnect',
+              input: {},
+              isPending: true,
+              timestamp: 5,
+            },
+          ],
+          activeToolUseId: 'live-tool-before-second-reconnect',
+          activeToolName: 'Read',
+        },
+      },
+    }))
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(3)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.tokenUsage).toEqual({ input_tokens: 900, output_tokens: 90 })
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      action: 'cleared',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'durable on second reconnect',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'user_text',
+      content: 'new turn after the failed terminal backfill',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'stale-thinking-before-failed-terminal-backfill',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'stale-tool-before-failed-terminal-backfill',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'live-assistant-before-second-reconnect',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      id: 'live-thinking-before-second-reconnect',
+    }))
+    const restoredTool = session?.messages.find((message) =>
+      message.type === 'tool_use' &&
+      message.toolUseId === 'live-tool-before-second-reconnect')
+    expect(restoredTool).toMatchObject({
+      type: 'tool_use',
+      input: { file_path: 'README.md' },
+    })
+    expect(restoredTool?.type === 'tool_use' ? restoredTool.isPending : true).not.toBe(true)
+    expect(restoredTool).not.toMatchObject({ status: 'stopped' })
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'tool_result',
+      toolUseId: 'live-tool-before-second-reconnect',
+      content: 'durable result after second reconnect',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      content: 'stale before the failed reconnect',
+    }))
+    expect(session?.chatState).toBe('thinking')
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('uses the latest reconnect baseline for a later terminal snapshot', async () => {
+    const latestTodos = [{ content: 'latest durable todo', status: 'completed' }]
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockRejectedValueOnce(new Error('first terminal backfill failed'))
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'latest-durable-goal',
+            type: 'system',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: '<local-command-stdout>Goal set: latest durable goal</local-command-stdout>',
+          },
+          {
+            id: 'latest-durable-state',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            usage: { input_tokens: 20, output_tokens: 3 },
+            content: [{
+              type: 'tool_use',
+              id: 'latest-durable-todos',
+              name: 'TodoWrite',
+              input: { todos: latestTodos },
+            }],
+          },
+        ],
+      })
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          tokenUsage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal set: state from the first reconnect',
+      data: {
+        action: 'created',
+        status: 'active',
+        objective: 'state from the first reconnect',
+      },
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    cliTaskStoreSnapshot.tasks = [{
+      id: 'first-reconnect-todo',
+      subject: 'state from the first reconnect',
+      status: 'in_progress',
+    }]
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toMatchObject({
+      action: 'created',
+      objective: 'latest durable goal',
+    })
+    expect(session?.tokenUsage).toEqual({ input_tokens: 20, output_tokens: 3 })
+    expect(setTasksFromTodosMock).toHaveBeenCalledWith(latestTodos, TEST_SESSION_ID)
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      objective: 'state from the first reconnect',
+    }))
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      objective: 'latest durable goal',
+    }))
+  })
+
+  it('promotes a failed terminal boundary before a later running reconnect', async () => {
+    const durableTodos = [{ content: 'durable after two failures', status: 'completed' }]
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockRejectedValueOnce(new Error('first terminal backfill failed'))
+      .mockRejectedValueOnce(new Error('second terminal backfill failed'))
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'durable-goal-after-two-failures',
+            type: 'system',
+            timestamp: '2026-09-02T00:00:00.000Z',
+            content: '<local-command-stdout>Goal set: durable after two failures</local-command-stdout>',
+          },
+          {
+            id: 'durable-state-after-two-failures',
+            type: 'assistant',
+            timestamp: '2026-09-02T00:00:01.000Z',
+            usage: { input_tokens: 30, output_tokens: 4 },
+            content: [{
+              type: 'tool_use',
+              id: 'durable-todos-after-two-failures',
+              name: 'TodoWrite',
+              input: { todos: durableTodos },
+            }],
+          },
+        ],
+      })
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'idle',
+          historyHydrated: true,
+          tokenUsage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal set: state before the second terminal attempt',
+      data: {
+        action: 'created',
+        status: 'active',
+        objective: 'state before the second terminal attempt',
+      },
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        },
+      },
+    }))
+    cliTaskStoreSnapshot.tasks = [{
+      id: 'todo-before-second-terminal-attempt',
+      subject: 'state before the second terminal attempt',
+      status: 'in_progress',
+    }]
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(3)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('error')
+    })
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(4)
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.activeGoal).toMatchObject({
+      action: 'created',
+      objective: 'durable after two failures',
+    })
+    expect(session?.tokenUsage).toEqual({ input_tokens: 30, output_tokens: 4 })
+    expect(setTasksFromTodosMock).toHaveBeenCalledWith(durableTodos, TEST_SESSION_ID)
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      objective: 'state before the second terminal attempt',
+    }))
+    if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+  })
+
+  it('preserves a same-id tool completion received during terminal backfill', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveHistory = resolve
+      }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [TEST_SESSION_ID]: {
+          ...state.sessions[TEST_SESSION_ID]!,
+          connectionState: 'connected',
+          chatState: 'thinking',
+          historyHydrated: true,
+          messages: [{
+            id: 'baseline-tool-ui',
+            type: 'tool_use',
+            toolName: 'Read',
+            toolUseId: 'tool-1',
+            input: {},
+            isPending: true,
+            timestamp: 1,
+          }],
+          activeToolUseId: 'tool-1',
+          activeToolName: 'Read',
+        },
+      },
+    }))
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+
+    onConnectionState?.('reconnecting')
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'Read',
+      toolUseId: 'tool-1',
+      input: { file_path: 'new.ts' },
+    })
+    resolveHistory({ messages: [] })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const tool = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages.find(
+      (message) => message.id === 'baseline-tool-ui',
+    )
+    expect(tool).toMatchObject({
+      type: 'tool_use',
+      toolName: 'Read',
+      toolUseId: 'tool-1',
+      input: { file_path: 'new.ts' },
+      isPending: false,
+    })
+  })
+
+  it('uses terminal REST goal and Todo state when neither changed during backfill', async () => {
+    const restoredTodos = [{ content: 'offline task', status: 'completed' }]
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'durable-goal-cleared',
+          type: 'system',
+          timestamp: '2026-09-02T00:00:00.000Z',
+          content: '<local-command-stdout>Goal cleared.</local-command-stdout>',
+        },
+        {
+          id: 'durable-terminal-todos',
+          type: 'assistant',
+          timestamp: '2026-09-02T00:00:01.000Z',
+          content: [{
+            type: 'tool_use',
+            id: 'terminal-todo-write',
+            name: 'TodoWrite',
+            input: { todos: restoredTodos },
+          }],
+        },
+      ],
+    })
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = [{
+      id: '1',
+      subject: 'offline task',
+      status: 'in_progress',
+    }]
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [{
+            id: 'cached-goal-row',
+            type: 'goal_event',
+            action: 'created',
+            status: 'active',
+            objective: 'stale cached goal',
+            timestamp: 1,
+          }],
+          chatState: 'idle',
+          activeGoal: {
+            action: 'created',
+            status: 'active',
+            objective: 'stale cached goal',
+            updatedAt: 1,
+          },
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID, {
+      mode: 'terminal-reconnect',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.activeGoal).toBeNull()
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+    })
+    expect(setTasksFromTodosMock).toHaveBeenCalledWith(restoredTodos, TEST_SESSION_ID)
+  })
+
+  it('clears stale token usage when terminal REST confirms an empty transcript', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({ messages: [] })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [{
+            id: 'cached-before-offline-clear',
+            type: 'assistant_text',
+            content: 'cleared while offline',
+            timestamp: 1,
+          }],
+          chatState: 'idle',
+          tokenUsage: { input_tokens: 500, output_tokens: 80 },
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID, {
+      mode: 'terminal-reconnect',
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
     })
   })
 
@@ -6075,7 +10739,7 @@ describe('chatStore history mapping', () => {
     })
   })
 
-  it('does not leave history loading after a failed stale request', async () => {
+  it('surfaces a failed cold request without discarding a concurrent live turn', async () => {
     let rejectHistory!: (error: Error) => void
     vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((_resolve, reject) => {
       rejectHistory = reject
@@ -6097,8 +10761,8 @@ describe('chatStore history mapping', () => {
     await historyLoad
 
     const session = useChatStore.getState().sessions[TEST_SESSION_ID]
-    expect(session?.historyStatus).toBe('idle')
-    expect(session?.historyError).toBeNull()
+    expect(session?.historyStatus).toBe('error')
+    expect(session?.historyError).toBe('Stale history failed')
     expect(session?.messages).toContainEqual(expect.objectContaining({
       type: 'user_text',
       content: 'A newer externally started turn',
@@ -6163,7 +10827,7 @@ describe('chatStore history mapping', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const session = useChatStore.getState().sessions[TEST_SESSION_ID]
-    expect(session?.historyStatus).toBe('idle')
+    expect(session?.historyStatus).toBe('ready')
     expect(session?.pendingBackgroundTaskStopFailures).toEqual({})
     expect(session?.backgroundAgentTasks?.['agent-task-cold-order']?.status).toBe('running')
     expect(session?.messages.at(-1)).toMatchObject({
@@ -6321,6 +10985,56 @@ describe('chatStore history mapping', () => {
     expect(session?.backgroundAgentTasks).toEqual({})
     expect(session?.agentTaskNotifications).toEqual({})
     expect(session?.historyStatus).toBe('ready')
+  })
+
+  it('settles history state when clearMessages invalidates an in-flight load', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          historyStatus: 'idle',
+          historyHydrated: false,
+          historyError: 'old error',
+          messages: [{
+            id: 'message-before-local-clear',
+            type: 'assistant_text',
+            content: 'clear this message',
+            timestamp: 1,
+          }],
+        }),
+      },
+    })
+
+    const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('loading')
+    useChatStore.getState().clearMessages(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      messages: [],
+      historyStatus: 'ready',
+      historyHydrated: true,
+      historyError: null,
+    })
+
+    resolveHistory({
+      messages: [{
+        id: 'stale-after-local-clear',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'must not return after local clear',
+      }],
+    })
+    await historyLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      messages: [],
+      historyStatus: 'ready',
+      historyHydrated: true,
+      historyError: null,
+    })
   })
 
   it('clears local message state for only the requested session', () => {
@@ -10069,54 +14783,264 @@ describe('chatStore activity state survival across reload paths', () => {
     expect(session?.agentTaskNotifications).toEqual(notifications)
   })
 
-  it('retries a history load aborted by a concurrent task mutation when messages are empty', async () => {
-    vi.useFakeTimers()
-    try {
-      let resolveFirstFetch!: (value: { messages: MessageEntry[] }) => void
-      vi.mocked(sessionsApi.getMessages)
-        .mockImplementationOnce(
-          () => new Promise((resolve) => { resolveFirstFetch = resolve }),
-        )
-        .mockResolvedValueOnce({
-          messages: [
-            {
-              id: 'assistant-1',
-              type: 'assistant',
-              timestamp: '2026-04-06T00:00:00.000Z',
-              content: [{ type: 'text', text: '恢复的历史' }],
-            } as never,
-          ],
-        })
-      useChatStore.setState({
-        sessions: {
-          [TEST_SESSION_ID]: makeSession({ chatState: 'idle', messages: [] }),
-        },
-      })
+  it('applies a cold history response against the latest optimistic user turn', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle', messages: [] }),
+      },
+    })
 
-      const loadPromise = useChatStore.getState().loadHistory(TEST_SESSION_ID)
-      useChatStore.setState((state) => ({
-        sessions: {
-          ...state.sessions,
-          [TEST_SESSION_ID]: {
-            ...state.sessions[TEST_SESSION_ID],
-            historyMutationEpoch: 1,
-          } as never,
-        },
-      }))
-      resolveFirstFetch({ messages: [] })
-      await loadPromise
+    const loadPromise = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'new live prompt')
+    resolveHistory({
+      messages: [{
+        id: 'assistant-before-live-prompt',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: [{ type: 'text', text: 'restored before the new prompt' }],
+      } as never],
+    })
+    await loadPromise
 
-      // The stale fetch was discarded; the retry must repopulate on its own.
-      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toHaveLength(0)
-
-      await vi.advanceTimersByTimeAsync(200)
-      await vi.runAllTimersAsync()
-
-      const session = useChatStore.getState().sessions[TEST_SESSION_ID]
-      expect(session?.historyStatus).toBe('ready')
-      expect(session?.messages.some((message) => message.type === 'assistant_text')).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    expect(session?.historyStatus).toBe('ready')
+    expect(session?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'restored before the new prompt',
+      }),
+      expect.objectContaining({
+        type: 'user_text',
+        content: 'new live prompt',
+      }),
+    ]))
   })
+
+  it('keeps a pending cold load when a reload started behind it fails', async () => {
+    let resolveInitial!: (value: { messages: MessageEntry[] }) => void
+    let rejectReload!: (error: Error) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve }))
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectReload = reject }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle', messages: [] }),
+      },
+    })
+
+    const initialLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    resolveInitial({
+      messages: [{
+        id: 'pending-cold-history',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{ type: 'text', text: 'keep the successful pending load' }],
+      } as never],
+    })
+    await initialLoad
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    rejectReload(new Error('authoritative reload failed'))
+    await reload
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.historyStatus).toBe('ready')
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'keep the successful pending load',
+    }))
+  })
+
+  it('captures reload token and goal baselines after a pending cold load', async () => {
+    let resolveInitial!: (value: { messages: MessageEntry[] }) => void
+    let resolveReload!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveReload = resolve }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          messages: [],
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+        }),
+      },
+    })
+
+    const initialLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    resolveInitial({
+      messages: [
+        {
+          id: 'pending-cold-goal',
+          type: 'system',
+          timestamp: '2026-08-31T00:00:00.000Z',
+          content: '<local-command-stdout>Goal set: stale pending goal</local-command-stdout>',
+        },
+        {
+          id: 'pending-cold-usage',
+          type: 'assistant',
+          timestamp: '2026-08-31T00:00:01.000Z',
+          content: 'pending cold response',
+          usage: { input_tokens: 10, output_tokens: 2 },
+        },
+      ],
+    })
+    await initialLoad
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReload({
+      messages: [{
+        id: 'newer-reload-usage',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:02.000Z',
+        content: 'newer reload response',
+        usage: { input_tokens: 20, output_tokens: 4 },
+      }],
+    })
+    await reload
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.tokenUsage).toEqual({ input_tokens: 20, output_tokens: 4 })
+    expect(session?.activeGoal).toBeNull()
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      type: 'goal_event',
+      objective: 'stale pending goal',
+    }))
+  })
+
+  it('captures the reload Todo baseline after a pending cold load', async () => {
+    let resolveInitial!: (value: { messages: MessageEntry[] }) => void
+    let resolveReload!: (value: { messages: MessageEntry[] }) => void
+    const initialTodos = [{ content: 'Todo from pending cold load', status: 'pending' }]
+    const reloadedTodos = [{ content: 'Todo from queued reload', status: 'in_progress' }]
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveReload = resolve }))
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
+    setTasksFromTodosMock.mockImplementation((todos, targetSessionId) => {
+      if (targetSessionId !== cliTaskStoreSnapshot.sessionId) return
+      cliTaskStoreSnapshot.tasks = (
+        todos as Array<{ content: string; status: string }>
+      ).map((todo, index) => ({
+        id: String(index + 1),
+        subject: todo.content,
+        status: todo.status,
+      }))
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle', messages: [] }),
+      },
+    })
+
+    const initialLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    resolveInitial({
+      messages: [{
+        id: 'pending-cold-todo',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        content: [{
+          type: 'tool_use',
+          name: 'TodoWrite',
+          id: 'pending-cold-todo-write',
+          input: { todos: initialTodos },
+        }],
+      }],
+    })
+    await initialLoad
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    resolveReload({
+      messages: [{
+        id: 'queued-reload-todo',
+        type: 'assistant',
+        timestamp: '2026-08-31T00:00:01.000Z',
+        content: [{
+          type: 'tool_use',
+          name: 'TodoWrite',
+          id: 'queued-reload-todo-write',
+          input: { todos: reloadedTodos },
+        }],
+      }],
+    })
+    await reload
+
+    expect(setTasksFromTodosMock).toHaveBeenNthCalledWith(
+      1,
+      initialTodos,
+      TEST_SESSION_ID,
+    )
+    expect(setTasksFromTodosMock).toHaveBeenNthCalledWith(
+      2,
+      reloadedTodos,
+      TEST_SESSION_ID,
+    )
+    expect(cliTaskStoreSnapshot.tasks).toEqual([
+      expect.objectContaining({
+        subject: 'Todo from queued reload',
+        status: 'in_progress',
+      }),
+    ])
+  })
+
+  it('keeps a successful reload when an older cold snapshot returns later', async () => {
+    let resolveReload!: (value: { messages: MessageEntry[] }) => void
+    let resolveColdLoad!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveReload = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveColdLoad = resolve }))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ chatState: 'idle', messages: [] }),
+      },
+    })
+
+    const reload = useChatStore.getState().reloadHistory(TEST_SESSION_ID)
+    const coldLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+
+    resolveReload({
+      messages: [{
+        id: 'authoritative-reload',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: [{ type: 'text', text: 'authoritative reload' }],
+      } as never],
+    })
+    await reload
+
+    resolveColdLoad({
+      messages: [{
+        id: 'stale-cold-snapshot',
+        type: 'assistant',
+        timestamp: '2026-09-01T00:00:00.000Z',
+        content: [{ type: 'text', text: 'stale cold snapshot' }],
+      } as never],
+    })
+    await coldLoad
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.historyStatus).toBe('ready')
+    expect(session?.messages).toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'authoritative reload',
+    }))
+    expect(session?.messages).not.toContainEqual(expect.objectContaining({
+      type: 'assistant_text',
+      content: 'stale cold snapshot',
+    }))
+  })
+
 })
