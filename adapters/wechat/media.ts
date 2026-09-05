@@ -19,9 +19,10 @@ export function collectWechatMediaCandidates(items?: WechatMessageItem[]): Wecha
   for (const item of items ?? []) {
     if (item.type === 2 && item.image_item?.media) {
       const media = item.image_item.media
+      const messageId = String(item.msg_id ?? Date.now()).replaceAll(':', '_')
       candidates.push({
         kind: 'image',
-        name: `wechat-image-${item.msg_id ?? Date.now()}.jpg`,
+        name: `wechat-image-${messageId}.jpg`,
         mimeType: 'image/jpeg',
         url: media.full_url || item.image_item.url,
         encryptQueryParam: media.encrypt_query_param,
