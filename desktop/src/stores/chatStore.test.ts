@@ -7652,6 +7652,65 @@ describe('chatStore history mapping', () => {
     expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
   })
 
+  it('preserves the current user message when reconnect history only contains the reply', async () => {
+    vi.mocked(sessionsApi.getMessages).mockClear()
+    vi.mocked(sessionsApi.getMessages).mockResolvedValue({
+      messages: [
+        {
+          id: 'persisted-assistant',
+          type: 'assistant',
+          timestamp: '2026-07-11T00:00:01.000Z',
+          content: [{ type: 'text', text: 'Hello! Is this message visible now?' }],
+        },
+      ],
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'streaming',
+          messages: [{
+            id: 'optimistic-user',
+            type: 'user_text',
+            content: 'Hello',
+            timestamp: Date.parse('2026-07-11T00:00:00.000Z'),
+          }],
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'running',
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'thinking',
+      text: 'orphan reconnect thinking',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      text: 'Hello! Is this message visible now?',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 2, output_tokens: 4 },
+    })
+
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([
+      expect.objectContaining({ type: 'user_text', content: 'Hello' }),
+      expect.objectContaining({
+        type: 'assistant_text',
+        content: 'Hello! Is this message visible now?',
+      }),
+    ])
+  })
+
   it('keeps the tab running for background agents when reconnect reconciliation finds the foreground idle', () => {
     useChatStore.setState({
       sessions: {
