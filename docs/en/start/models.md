@@ -94,7 +94,7 @@ Presets pick the right one. If you're guessing, start with Bearer Token and swit
 
 **Disable experimental beta headers** — sets `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` for this provider. Some third-party gateways error out on beta-shaped API requests; checking this stops the headers being sent. **Try this first when you see a 400 or an "unsupported parameter" error.**
 
-**API Key** (required except for local models) — copied from the provider's console. Watch for leading or trailing whitespace when pasting. The key stays on your machine.
+**API Key** (required except for local models) — copied from the provider's console. Watch for leading or trailing whitespace when pasting. The key stays on your machine. On macOS, you can keep the secret in Keychain and enter a reference in this field instead: `macos-keychain://<URL-encoded-service-name>`. The app reads the item for the current macOS user at runtime; the reference itself is not sent as a credential. This reference format is currently macOS-only.
 
 **Model Mapping** — four slots, each taking a **model ID**, not a product name:
 

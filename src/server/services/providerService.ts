@@ -41,6 +41,7 @@ import {
   normalizeImageGeneration,
   normalizeModelMapping,
   normalizeProvidersIndex,
+  resolveProviderApiKey,
 } from './providerRuntimeEnv.js'
 import {
   getNetworkProxyFetchOptions,
@@ -577,7 +578,7 @@ export class ProviderService {
         id: provider.id,
         name: provider.name,
         baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
+        apiKey: resolveProviderApiKey(provider.apiKey),
         apiFormat: provider.apiFormat ?? 'anthropic',
       }
     }
@@ -593,7 +594,7 @@ export class ProviderService {
       id: provider.id,
       name: provider.name,
       baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
+      apiKey: resolveProviderApiKey(provider.apiKey),
       apiFormat: provider.apiFormat ?? 'anthropic',
     }
   }
@@ -618,10 +619,13 @@ export class ProviderService {
     const apiFormat = provider.apiFormat ?? 'anthropic'
     const authStrategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
     const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
-    const apiKey = provider.apiKey
+    const rawApiKey = provider.apiKey
       || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN
       || presetDefaultEnv.ANTHROPIC_API_KEY
-      || (authStrategy === 'dual_dummy' ? 'dummy' : '')
+      || ''
+    const apiKey = authStrategy === 'dual_dummy'
+      ? (rawApiKey || 'dummy')
+      : resolveProviderApiKey(rawApiKey)
 
     if (!baseUrl || !apiKey) {
       return { connectivity: { success: false, latencyMs: 0, error: 'Missing baseUrl or apiKey' } }

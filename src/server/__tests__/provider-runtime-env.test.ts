@@ -7,6 +7,7 @@ import {
   getManagedEnvKeys,
   mergeActiveProviderManagedEnv,
   readActiveProviderManagedEnv,
+  resolveProviderApiKey,
 } from '../services/providerRuntimeEnv.js'
 import { PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION } from '../types/provider.js'
 import { get3PModelCapabilityOverride } from '../../utils/model/modelSupportOverrides.js'
@@ -21,6 +22,33 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 describe('providerRuntimeEnv', () => {
+  test('keeps literal API keys unchanged', () => {
+    expect(resolveProviderApiKey('plain-provider-key')).toBe('plain-provider-key')
+  })
+
+  test('resolves URL-encoded macOS Keychain references', () => {
+    const services: string[] = []
+    const key = resolveProviderApiKey(
+      'macos-keychain://cc-haha%20provider',
+      service => {
+        services.push(service)
+        return 'resolved-provider-key'
+      },
+      'darwin',
+    )
+
+    expect(services).toEqual(['cc-haha provider'])
+    expect(key).toBe('resolved-provider-key')
+  })
+
+  test('rejects a macOS Keychain reference on other platforms', () => {
+    expect(() => resolveProviderApiKey(
+      'macos-keychain://cc-haha-provider',
+      () => 'resolved-provider-key',
+      'linux',
+    )).toThrow('require macOS')
+  })
+
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-runtime-env-'))
     originalConfigDir = process.env.CLAUDE_CONFIG_DIR
