@@ -70,6 +70,20 @@ export function isAllowlistedMainRendererMediaRequest(
     MAIN_RENDERER_MEDIA_PREFIXES.some((prefix) => pathname.startsWith(prefix))
 }
 
+/**
+ * The renderer adds its bearer token to normal API fetches. Chromium-generated
+ * CORS preflights cannot carry that header, so authorize only OPTIONS from the
+ * owning main renderer in addition to the existing read-only media allowlist.
+ */
+export function isAllowlistedMainRendererAuthRequest(
+  details: LocalServerRequestDetails,
+  mainRendererWebContentsId: number,
+): boolean {
+  if (isAllowlistedMainRendererMediaRequest(details, mainRendererWebContentsId)) return true
+  return details.webContentsId === mainRendererWebContentsId
+    && details.method?.toUpperCase() === 'OPTIONS'
+}
+
 export function configureLocalServerRequestAuth(
   webRequest: Pick<Session['webRequest'], 'onBeforeSendHeaders'>,
   resolveLocalAccess: () => PreviewLocalAccess | null,

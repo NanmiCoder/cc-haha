@@ -13,9 +13,19 @@ import {
   parseChangedLinesFromDiff,
   parseLcov,
   prefixRelativeLcovSourcePaths,
+  resolveCoverageCommand,
 } from './coverage'
 
 describe('coverage gate helpers', () => {
+  test('uses the running Bun executable when the sandbox PATH has no bun shim', () => {
+    expect(resolveCoverageCommand(['bun', '--no-env-file', 'test'], 'C:/tools/bun.exe')).toEqual([
+      'C:/tools/bun.exe',
+      '--no-env-file',
+      'test',
+    ])
+    expect(resolveCoverageCommand(['git', 'diff'], 'C:/tools/bun.exe')).toEqual(['git', 'diff'])
+  })
+
   test('collects root coverage with the transcript classifier build feature enabled', () => {
     expect(buildRootCoverageCommand('/tmp/coverage', ['src/example.test.ts'])).toEqual([
       'bun',
@@ -27,7 +37,7 @@ describe('coverage gate helpers', () => {
       '--coverage-reporter=lcov',
       '--coverage-reporter=text',
       '--coverage-dir',
-      '/tmp/coverage/root-server',
+      join('/tmp/coverage', 'root-server'),
       './src/example.test.ts',
     ])
   })

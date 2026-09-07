@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TraceSession } from './TraceSession'
@@ -484,9 +484,13 @@ describe('TraceSession', () => {
   })
 
   it('applies poll updates and short-circuits identical snapshots', async () => {
+    let releaseFirstPoll!: (revision: TraceSessionRevision) => void
+    const firstPoll = new Promise<TraceSessionRevision>((resolve) => {
+      releaseFirstPoll = resolve
+    })
     vi.mocked(tracesApi.getRevision)
       .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 1, changed: true, reset: false })
-      .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
+      .mockImplementationOnce(() => firstPoll)
       .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 3, changed: true, reset: false })
       .mockResolvedValue({ sessionId: SESSION_ID, revision: 4, changed: true, reset: false })
     vi.mocked(sessionsApi.getTrace)
@@ -507,6 +511,9 @@ describe('TraceSession', () => {
 
     fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
     await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      releaseFirstPoll({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
+    })
     await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(3))
 
     await screen.findByText('claude-sonnet-4-5 x2')

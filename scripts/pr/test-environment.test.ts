@@ -79,7 +79,7 @@ describe('offline test environment', () => {
     try {
       const proc = Bun.spawn(
         [
-          'bun',
+          process.execPath,
           '-e',
           'process.stdout.write(process.env.CC_HAHA_DESCENDANT_DOTENV_SENTINEL ?? "clean")',
         ],

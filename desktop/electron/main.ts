@@ -27,7 +27,7 @@ import {
   configureLocalServerRequestAuth,
   configurePreviewSessionPermissions,
   createPreviewSessionPartition,
-  isAllowlistedMainRendererMediaRequest,
+  isAllowlistedMainRendererAuthRequest,
   type PreviewLocalAccess,
 } from './services/previewSession'
 import {
@@ -708,7 +708,7 @@ async function createMainWindow() {
   configureLocalServerRequestAuth(
     mainWindow.webContents.session.webRequest,
     resolveMainRendererServerAccess,
-    details => isAllowlistedMainRendererMediaRequest(
+    details => isAllowlistedMainRendererAuthRequest(
       details,
       mainWindow!.webContents.id,
     ),

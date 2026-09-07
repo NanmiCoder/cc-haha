@@ -7043,7 +7043,9 @@ describe('MessageList nested tool calls', () => {
       store.handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' })
     })
 
-    expect(await screen.findByText('kept.ts')).toBeTruthy()
+    expect(
+      (await screen.findByRole('link', { name: /kept\.ts$/ })).getAttribute('data-file-path'),
+    ).toBe('src/kept.ts')
     const conversationUndo = await screen.findByRole('button', { name: 'Roll back conversation' })
     expect(screen.getByText('Provider request failed')).toBeTruthy()
     fireEvent.click(conversationUndo)
@@ -7068,7 +7070,9 @@ describe('MessageList nested tool calls', () => {
       expect(messages.some((message) => message.type === 'user_text' && message.content === 'continue')).toBe(false)
       expect(messages.some((message) => message.type === 'error')).toBe(false)
     })
-    expect(screen.getByText('kept.ts')).toBeTruthy()
+    expect(
+      screen.getByRole('link', { name: /kept\.ts$/ }).getAttribute('data-file-path'),
+    ).toBe('src/kept.ts')
     expect(useChatStore.getState().sessions[ACTIVE_TAB]?.composerPrefill).toMatchObject({
       text: 'continue',
     })

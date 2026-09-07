@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -71,7 +71,7 @@ describe('stock Tailwind palette', () => {
   const counts = new Map<string, number>()
   for (const file of collectSources(SRC)) {
     const hits = readFileSync(file, 'utf8').match(PALETTE_CLASS)?.length ?? 0
-    if (hits > 0) counts.set(file.replace(`${SRC}/`, ''), hits)
+    if (hits > 0) counts.set(relative(SRC, file).replaceAll('\\', '/'), hits)
   }
 
   it('is not used by any file outside the allowlist', () => {

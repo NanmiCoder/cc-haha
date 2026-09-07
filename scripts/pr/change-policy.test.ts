@@ -258,7 +258,7 @@ describe('evaluateChangePolicy', () => {
       writeFileSync(labelsPath, '')
 
       const proc = Bun.spawn([
-        'bun',
+        process.execPath,
         'run',
         'scripts/pr/change-policy.ts',
         '--files',
@@ -281,7 +281,7 @@ describe('evaluateChangePolicy', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 })
 
 describe('evaluateChangePolicy dependent-file widening', () => {

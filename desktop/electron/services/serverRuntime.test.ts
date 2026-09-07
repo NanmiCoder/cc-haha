@@ -6,7 +6,7 @@ import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SidecarChild, SidecarPlan } from './sidecarManager'
-import { SYSTEM_PROXY_ERROR_ENV } from './sidecarManager'
+import { reserveLocalPort, SYSTEM_PROXY_ERROR_ENV } from './sidecarManager'
 import { ElectronServerRuntime } from './serverRuntime'
 import type { SystemProxyBridgeLike } from './systemProxyBridge'
 
@@ -234,30 +234,25 @@ describe('ElectronServerRuntime', () => {
 
   it('waits for real server shutdown cleanup before the first restart attempt', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-electron-restart-'))
-    const activeTurn = path.join(root, 'active-turn')
+    const resourcePort = await reserveLocalPort('127.0.0.1')
     const children: ChildProcess[] = []
     const readyFiles: string[] = []
     let serverStarts = 0
     const fixture = String.raw`
       const fs = require('node:fs')
-      const activeTurn = process.argv[1]
+      const net = require('node:net')
+      const resourcePort = Number(process.argv[1])
       const readyFile = process.argv[2]
-      let owned = false
+      const server = net.createServer()
       process.on('SIGTERM', () => {
         setTimeout(() => {
-          if (owned) fs.rmSync(activeTurn, { force: true })
-          process.exit(0)
+          server.close(() => process.exit(0))
         }, 150)
       })
-      try {
-        const fd = fs.openSync(activeTurn, 'wx')
-        fs.closeSync(fd)
-        owned = true
+      server.once('error', () => process.exit(17))
+      server.listen(resourcePort, '127.0.0.1', () => {
         fs.writeFileSync(readyFile, 'ready')
-      } catch {
-        process.exit(17)
-      }
-      setInterval(() => {}, 1_000)
+      })
     `
 
     const runtime = new ElectronServerRuntime({
@@ -273,7 +268,7 @@ describe('ElectronServerRuntime', () => {
           }
           const readyFile = path.join(root, `ready-${++serverStarts}`)
           readyFiles.push(readyFile)
-          const child = spawn(process.execPath, ['-e', fixture, activeTurn, readyFile], {
+          const child = spawn(process.execPath, ['-e', fixture, String(resourcePort), readyFile], {
             stdio: ['ignore', 'pipe', 'pipe'],
           })
           children.push(child)
@@ -292,11 +287,11 @@ describe('ElectronServerRuntime', () => {
 
     try {
       await runtime.startServer()
-      expect(existsSync(activeTurn)).toBe(true)
+      expect(children[0]!.exitCode).toBeNull()
 
       await runtime.stopAllAndWait(2_000)
 
-      expect(existsSync(activeTurn)).toBe(false)
+      expect(children[0]!.exitCode).not.toBeNull()
       await runtime.startServer()
       expect(serverStarts).toBe(2)
       expect(children[1]!.exitCode).toBeNull()

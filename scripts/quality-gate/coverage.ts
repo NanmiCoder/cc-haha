@@ -448,11 +448,16 @@ export function hasUsableCoverageSummary(summary: CoverageSummary) {
   return Object.values(summary).some((coverage) => coverage.total > 0)
 }
 
+export function resolveCoverageCommand(command: string[], bunExecutable = process.execPath) {
+  return command[0] === 'bun' ? [bunExecutable, ...command.slice(1)] : command
+}
+
 async function runCommand(command: string[], cwd: string, logPath: string) {
   const started = Date.now()
   const sandboxHome = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-test-'))
   try {
-    const proc = Bun.spawn(command, {
+    const resolvedCommand = resolveCoverageCommand(command)
+    const proc = Bun.spawn(resolvedCommand, {
       cwd,
       env: createSandboxedTestEnvironment(sandboxHome),
       stdout: 'pipe',
@@ -464,7 +469,7 @@ async function runCommand(command: string[], cwd: string, logPath: string) {
       proc.exited,
     ])
     mkdirSync(dirname(logPath), { recursive: true })
-    writeFileSync(logPath, `$ ${command.join(' ')}\n${stdout}${stderr}`)
+    writeFileSync(logPath, `$ ${resolvedCommand.join(' ')}\n${stdout}${stderr}`)
     return {
       exitCode,
       durationMs: Date.now() - started,

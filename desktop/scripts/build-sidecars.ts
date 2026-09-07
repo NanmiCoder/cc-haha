@@ -40,7 +40,7 @@ const bunTarget = mapTargetTripleToBun(targetTriple)
 // 见 desktop/scripts/scan-missing-imports.ts。
 console.log('[build-sidecars] scanning for missing imports...')
 const scanProc = Bun.spawn(
-  ['bun', 'run', path.join(desktopRoot, 'scripts/scan-missing-imports.ts')],
+  [process.execPath, 'run', path.join(desktopRoot, 'scripts/scan-missing-imports.ts')],
   { cwd: repoRoot, stdout: 'inherit', stderr: 'inherit' },
 )
 const scanExit = await scanProc.exited
@@ -171,6 +171,12 @@ function mapTargetTripleToBun(triple: string) {
     case 'x86_64-pc-windows-msvc':
       // Prefer baseline on Windows x64 so older CPUs do not crash before the
       // desktop app can even start the local sidecar process.
+      // A developer whose machine supports AVX2 may opt into the regular target
+      // when diagnosing a local baseline-toolchain problem. Release builds keep
+      // the compatible default unless that override is explicit.
+      if (process.env.CC_HAHA_BUN_WINDOWS_X64_TARGET === 'bun-windows-x64') {
+        return 'bun-windows-x64'
+      }
       return 'bun-windows-x64-baseline'
     case 'aarch64-pc-windows-msvc':
       return 'bun-windows-arm64'

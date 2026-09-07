@@ -7,6 +7,10 @@ import { renderJUnitReport, renderMarkdownReport } from './reporter'
 import { runQualityGate, runQualityGateLanes } from './runner'
 import type { LaneDefinition, QualityGateReport } from './types'
 
+function printLinesCommand(lines: string[]): string[] {
+  return [process.execPath, '-e', `console.log(${JSON.stringify(lines.join('\n'))})`]
+}
+
 describe('quality gate modes', () => {
   test('pr mode includes existing path-aware PR checks', () => {
     const lanes = lanesForMode('pr').map((lane) => lane.id)
@@ -256,18 +260,17 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes selected local checks',
         kind: 'command',
-        command: ['bash', '-lc', [
-          'printf "%s\\n"',
-          '"# PR impact report"',
-          '""',
-          '"Changed files: 1"',
-          '"Areas: server"',
-          '"Labels: none"',
-          '"Blocked: no"',
-          '""',
-          '"## Required local checks"',
-          '"- bun run check:server"',
-        ].join(' ')],
+        command: printLinesCommand([
+          '# PR impact report',
+          '',
+          'Changed files: 1',
+          'Areas: server',
+          'Labels: none',
+          'Blocked: no',
+          '',
+          '## Required local checks',
+          '- bun run check:server',
+        ]),
         requiredForModes: ['pr'],
       },
       {
@@ -275,7 +278,7 @@ describe('runQualityGate', () => {
         title: 'Desktop checks',
         description: 'Should be skipped',
         kind: 'command',
-        command: ['bash', '-lc', 'exit 7'],
+        command: [process.execPath, '-e', 'process.exit(7)'],
         impactRequiredCheck: 'bun run check:desktop',
         requiredForModes: ['pr'],
       },
@@ -307,18 +310,17 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes selected local checks',
         kind: 'command',
-        command: ['bash', '-lc', [
-          'printf "%s\\n"',
-          '"# PR impact report"',
-          '""',
-          '"Changed files: 1"',
-          '"Areas: desktop"',
-          '"Labels: none"',
-          '"Blocked: no"',
-          '""',
-          '"## Required local checks"',
-          '"- bun run check:desktop"',
-        ].join(' ')],
+        command: printLinesCommand([
+          '# PR impact report',
+          '',
+          'Changed files: 1',
+          'Areas: desktop',
+          'Labels: none',
+          'Blocked: no',
+          '',
+          '## Required local checks',
+          '- bun run check:desktop',
+        ]),
         requiredForModes: ['pr'],
       },
       {
@@ -326,7 +328,7 @@ describe('runQualityGate', () => {
         title: 'Desktop checks',
         description: 'Should run',
         kind: 'command',
-        command: ['bash', '-lc', 'exit 0'],
+        command: [process.execPath, '-e', 'process.exit(0)'],
         impactRequiredCheck: 'bun run check:desktop',
         requiredForModes: ['pr'],
       },
@@ -453,20 +455,19 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes a blocked policy decision',
         kind: 'command',
-        command: ['bash', '-lc', [
-          'printf "%s\\n"',
-          '"# PR impact report"',
-          '""',
-          '"Changed files: 1"',
-          '"Areas: cli-core"',
-          '"Labels: none"',
-          '"Blocked: yes"',
-          '"Blocking reasons:"',
-          '"- CLI core changes require maintainer approval."',
-          '""',
-          '"## Required local checks"',
-          '"- bun run check:server"',
-        ].join(' ')],
+        command: printLinesCommand([
+          '# PR impact report',
+          '',
+          'Changed files: 1',
+          'Areas: cli-core',
+          'Labels: none',
+          'Blocked: yes',
+          'Blocking reasons:',
+          '- CLI core changes require maintainer approval.',
+          '',
+          '## Required local checks',
+          '- bun run check:server',
+        ]),
         requiredForModes: ['pr'],
       },
     ]

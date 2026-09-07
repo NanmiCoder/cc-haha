@@ -13,6 +13,7 @@ import {
 import { IMAGE_MAX_BYTES } from '../attachment-limits.js'
 
 const servers: Server[] = []
+const windowsBunTestRuntime = process.platform === 'win32'
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) =>
@@ -264,7 +265,10 @@ describe('loadSafeRemoteImage', () => {
     expect(receivedCookie).toBeUndefined()
   })
 
-  it('terminates a slow-drip pinned response at the total deadline', async () => {
+  // Bun 1.3.11 corrupts its native heap when this aborted Undici stream runs
+  // inside bun:test on Windows. The Node subprocess test below exercises the
+  // same production function and loopback behavior on the supported platform.
+  it.skipIf(windowsBunTestRuntime)('terminates a slow-drip pinned response at the total deadline', async () => {
     const server = createServer((_request, reply) => {
       reply.writeHead(200, { 'content-type': 'image/png' })
       const drip = setInterval(() => reply.write('x'), 10)
@@ -287,6 +291,41 @@ describe('loadSafeRemoteImage', () => {
       }
     })()).rejects.toThrow()
     expect(Date.now() - startedAt).toBeLessThan(500)
+  })
+
+  it.skipIf(!windowsBunTestRuntime)('terminates a slow-drip response in a Windows Node subprocess', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'adapter-safe-remote-node-'))
+    try {
+      await writeFile(join(root, 'package.json'), '{"type":"module"}\n')
+      const build = await Bun.build({
+        entrypoints: [join(import.meta.dir, 'fixtures', 'safe-remote-image-node-smoke.ts')],
+        outdir: root,
+        target: 'node',
+        format: 'esm',
+      })
+      expect(build.success).toBe(true)
+      const outputPath = build.outputs[0]?.path
+      const nodeExecutable = Bun.which('node')
+      expect(outputPath).toBeTruthy()
+      expect(nodeExecutable).toBeTruthy()
+      if (!outputPath || !nodeExecutable) return
+
+      const process = Bun.spawn([nodeExecutable, outputPath], {
+        cwd: root,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+      ])
+      expect(exitCode).toBe(0)
+      expect(stderr).toBe('')
+      expect(stdout.trim()).toBe('slow-drip timeout verified')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

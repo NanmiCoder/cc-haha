@@ -5,6 +5,7 @@ import {
   configureLocalServerRequestAuth,
   configurePreviewSessionPermissions,
   createPreviewSessionPartition,
+  isAllowlistedMainRendererAuthRequest,
   isAllowlistedMainRendererMediaRequest,
 } from './services/previewSession'
 
@@ -40,11 +41,32 @@ describe('Electron preview security boundary', () => {
     expect(mainSource).toContain('partition: createPreviewSessionPartition()')
   })
 
-  it('does not authenticate preview resources and only enables the main media allowlist', () => {
+  it('does not authenticate preview resources and enables only main media and CORS preflight requests', () => {
     expect(previewServiceSource).not.toContain('configureLocalServerRequestAuth')
     expect(previewServiceSource).not.toContain('resolveLocalServerAccess')
     expect(mainWindowSource).toContain('configureLocalServerRequestAuth')
-    expect(mainWindowSource).toContain('isAllowlistedMainRendererMediaRequest')
+    expect(mainWindowSource).toContain('isAllowlistedMainRendererAuthRequest')
+  })
+
+  it('allows main-renderer CORS preflight without authorizing privileged fetches', () => {
+    expect(isAllowlistedMainRendererAuthRequest({
+      method: 'OPTIONS',
+      resourceType: 'xhr',
+      url: 'http://127.0.0.1:49321/api/sessions',
+      webContentsId: 42,
+    }, 42)).toBe(true)
+    expect(isAllowlistedMainRendererAuthRequest({
+      method: 'GET',
+      resourceType: 'xhr',
+      url: 'http://127.0.0.1:49321/api/sessions',
+      webContentsId: 42,
+    }, 42)).toBe(false)
+    expect(isAllowlistedMainRendererAuthRequest({
+      method: 'OPTIONS',
+      resourceType: 'xhr',
+      url: 'http://127.0.0.1:49321/api/sessions',
+      webContentsId: 99,
+    }, 42)).toBe(false)
   })
 
   it.each([
