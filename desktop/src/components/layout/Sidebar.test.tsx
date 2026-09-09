@@ -19,6 +19,7 @@ vi.mock('../../api/desktopUiPreferences', () => ({
 const sessionsApiMock = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
+  listProjectHistory: vi.fn(),
   getGitInfo: vi.fn(),
   getRepositoryContext: vi.fn(),
   getRecentProjects: vi.fn(),
@@ -393,6 +394,12 @@ function projectGroupNames(): string[] {
 }
 
 describe('Sidebar', () => {
+  it('keeps history inside project groups without a global history entry or dialog', () => {
+    render(<Sidebar />)
+    expect(screen.queryByRole('button', { name: 'sessionHistory.title' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   const connectToSession = vi.fn()
   const disconnectSession = vi.fn()
   const fetchSessions = vi.fn()
@@ -420,6 +427,8 @@ describe('Sidebar', () => {
     repositoryContextMock.mockImplementation(async (workDir: string) => ({ repoRoot: null, workDir }))
     sessionsApiMock.create.mockReset()
     sessionsApiMock.list.mockReset()
+    sessionsApiMock.listProjectHistory.mockReset()
+    sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [], nextCursor: null })
     sessionsApiMock.getGitInfo.mockReset()
     sessionsApiMock.getRecentProjects.mockReset()
     sessionsApiMock.createRepositoryBranch.mockReset()
@@ -454,6 +463,10 @@ describe('Sidebar', () => {
     useTabStore.setState({ tabs: [], activeTabId: null })
     useSessionStore.setState({
       sessions: [],
+      projectHistory: {},
+      recentSessionIds: new Set(),
+      recentProjectBoundaries: {},
+      historicalSessionIds: new Set(),
       activeSessionId: null,
       isLoading: false,
       error: null,
@@ -712,6 +725,36 @@ describe('Sidebar', () => {
 
     expect(screen.getByTestId('sidebar-project-session-list-workspace-alpha')).toHaveClass('max-h-[420px]', 'overflow-y-auto')
     expect(screen.getByRole('button', { name: 'Collapse display' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('scrolls older sessions into their existing project and releases them on collapse', async () => {
+    const recent = Array.from({ length: 14 }, (_, index) => (
+      makeSession(`alpha-${index}`, `Alpha ${index}`, '/workspace/alpha', '2026-05-15T10:00:00.000Z')
+    ))
+    useSessionStore.setState({ sessions: recent, recentSessionIds: new Set(recent.map((session) => session.id)) })
+    const old = makeSession('alpha-old', 'An older project conversation', '/workspace/alpha', '2020-01-01T00:00:00.000Z')
+    sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [old], nextCursor: null })
+    render(<Sidebar />)
+    expect(sessionsApiMock.listProjectHistory).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand display' }))
+    const scroller = screen.getByTestId('sidebar-project-session-list-workspace-alpha')
+    const outer = screen.getByTestId('sidebar-session-scroll-area')
+    outer.getBoundingClientRect = () => ({ top: 0, bottom: 900 } as DOMRect)
+    scroller.getBoundingClientRect = () => ({ top: 100, bottom: 520 } as DOMRect)
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 420 },
+      scrollHeight: { configurable: true, value: 900 },
+    })
+    fireEvent.scroll(scroller, { target: { scrollTop: 480 } })
+    expect(await within(scroller).findByText('An older project conversation')).toBeInTheDocument()
+    expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ projectRoot: '/workspace/alpha', limit: 50 }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse display' }))
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(recent.map((session) => session.id))
+    expect(useSessionStore.getState().projectHistory['/workspace/alpha']).toBeUndefined()
   })
 
   it('creates a new session from the project group context', async () => {

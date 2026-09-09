@@ -31,6 +31,7 @@ const ProviderPresetSchema = z.object({
     'zhipu_coding_plan',
   ] satisfies readonly ModelReasoningProviderKind[]).optional(),
   defaultModels: ModelMappingSchema,
+  defaultImageGeneration: z.object({ model: z.string().min(1) }).optional(),
   needsApiKey: z.boolean(),
   websiteUrl: z.string(),
   apiKeyUrl: z.string().optional(),

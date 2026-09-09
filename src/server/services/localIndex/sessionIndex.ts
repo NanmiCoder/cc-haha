@@ -1,3 +1,4 @@
+import type { SessionProtocolState } from '../../../shared/sessionProtocol.js'
 import type { LocalIndexDatabase } from './database.js'
 import { createActivityIndex, type ActivityIndex } from './activityIndex.js'
 import type {
@@ -26,6 +27,7 @@ export type IndexedSessionRow = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  sessionApiFormat?: SessionProtocolState
   repository?: PersistedRepositorySession
   worktreeSession?: PersistedWorktreeSession | null
 }
@@ -134,6 +136,7 @@ type SessionRow = {
   runtime_provider_present: number
   runtime_model_id: string | null
   effort_level: string | null
+  session_api_format: SessionProtocolState | null
   repository_json: string | null
   worktree_session_json: string | null
 }
@@ -199,6 +202,7 @@ function sessionFromRow(row: SessionRow): IndexedSessionRow {
       : {}),
     ...(row.runtime_model_id ? { runtimeModelId: row.runtime_model_id } : {}),
     ...(row.effort_level ? { effortLevel: row.effort_level } : {}),
+    ...(row.session_api_format ? { sessionApiFormat: row.session_api_format } : {}),
     ...(repository ? { repository } : {}),
     ...(row.worktree_session_json !== null ? { worktreeSession } : {}),
   }
@@ -276,7 +280,7 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
               SELECT transcript_path, session_id, project_path, title, created_at,
                 modified_at, message_count, work_dir, permission_mode,
                 runtime_provider_id, runtime_provider_present,
-                runtime_model_id, effort_level,
+                runtime_model_id, effort_level, session_api_format,
                 repository_json, worktree_session_json
               FROM sessions
               ORDER BY modified_at_ms DESC, session_id ASC, transcript_path ASC
@@ -286,7 +290,7 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
               SELECT transcript_path, session_id, project_path, title, created_at,
                 modified_at, message_count, work_dir, permission_mode,
                 runtime_provider_id, runtime_provider_present,
-                runtime_model_id, effort_level,
+                runtime_model_id, effort_level, session_api_format,
                 repository_json, worktree_session_json
               FROM sessions
               WHERE project_path = ?
@@ -394,7 +398,7 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
             sessions.message_count, sessions.work_dir,
             sessions.permission_mode, sessions.runtime_provider_id,
             sessions.runtime_provider_present,
-            sessions.runtime_model_id, sessions.effort_level,
+            sessions.runtime_model_id, sessions.effort_level, sessions.session_api_format,
             sessions.repository_json, sessions.worktree_session_json,
             source_files.indexed_bytes, source_files.size_bytes
           FROM sessions
@@ -423,6 +427,7 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
               : {}),
             ...(row.runtime_model_id ? { runtimeModelId: row.runtime_model_id } : {}),
             ...(row.effort_level ? { effortLevel: row.effort_level } : {}),
+            ...(row.session_api_format ? { sessionApiFormat: row.session_api_format } : {}),
             ...(repository ? { repository } : {}),
             ...(row.worktree_session_json !== null
               ? { worktreeSession }

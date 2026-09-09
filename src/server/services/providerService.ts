@@ -10,6 +10,8 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { buildOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
+import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
@@ -749,15 +751,15 @@ export class ProviderService {
       let headers: Record<string, string>
       if (format === 'openai_chat') {
         transformedBody = anthropicToOpenaiChat(anthropicReq)
-        upstreamUrl = `${base}/v1/chat/completions`
+        upstreamUrl = buildOpenaiEndpoint(base, 'chat/completions')
         headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
       } else if (format === 'openai_responses') {
         transformedBody = anthropicToOpenaiResponses(anthropicReq)
-        upstreamUrl = `${base}/v1/responses`
+        upstreamUrl = buildOpenaiEndpoint(base, 'responses')
         headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
       } else {
         transformedBody = hoistToolResultMediaForCompatibility(anthropicReq)
-        upstreamUrl = `${base}/v1/messages`
+        upstreamUrl = `${normalizeAnthropicBaseUrl(base)}/v1/messages`
         headers = {
           'Content-Type': 'application/json',
           'anthropic-version': '2023-06-01',
@@ -822,21 +824,21 @@ function buildDirectTestRequest(
 
   if (format === 'openai_chat') {
     return {
-      url: `${base}/v1/chat/completions`,
+      url: buildOpenaiEndpoint(base, 'chat/completions'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, max_tokens: 16, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {
     return {
-      url: `${base}/v1/responses`,
+      url: buildOpenaiEndpoint(base, 'responses'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, max_output_tokens: 16, input: [{ type: 'message', role: 'user', content: prompt }] },
     }
   }
   // anthropic
   return {
-    url: `${base}/v1/messages`,
+    url: `${normalizeAnthropicBaseUrl(base)}/v1/messages`,
     headers: {
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',

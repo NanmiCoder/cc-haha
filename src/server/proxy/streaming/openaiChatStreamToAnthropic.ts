@@ -20,6 +20,7 @@
  *   - delta.reasoning          (GLM-5, Cerebras, Groq — mapped to reasoning_content)
  */
 
+import { getOpenAIPolicyError } from '../../../services/openaiAuth/policyError.js'
 import type { OpenAIChatStreamChunk } from '../transform/types.js'
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
 import { openaiUsageToAnthropic } from '../transform/usage.js'
@@ -104,6 +105,7 @@ export function openaiChatStreamToAnthropic(
     async start(controller) {
       const reader = upstream.getReader()
       let errored = false
+      let policyRejected = false
 
       try {
         while (true) {
@@ -134,6 +136,15 @@ export function openaiChatStreamToAnthropic(
               continue
             }
 
+            const policyError = getOpenAIPolicyError(chunk)
+            if (policyError) {
+              policyRejected = true
+              enqueue(state, 'error', { type: 'error', error: { type: 'permission_error', ...policyError } })
+              flushQueue(state, controller, encoder)
+              await reader.cancel().catch(() => {})
+              return
+            }
+
             processChunk(chunk, state)
             flushQueue(state, controller, encoder)
           }
@@ -143,7 +154,7 @@ export function openaiChatStreamToAnthropic(
         controller.error(err)
       } finally {
         if (!errored) {
-          finalizeStream(state)
+          if (!policyRejected) finalizeStream(state)
           flushQueue(state, controller, encoder)
           controller.close()
         }

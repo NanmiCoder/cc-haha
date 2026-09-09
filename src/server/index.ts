@@ -30,6 +30,7 @@ import { handleStaticH5Request } from './staticH5.js'
 import {
   classifyH5Request,
   isH5AccessControlPath,
+  isLocalCredentialOnlyPath,
   requiresLocalAccessCredential,
   shouldBlockDisabledH5Access,
   shouldRequireH5Token,
@@ -164,6 +165,16 @@ function h5AccessControlRejectedResponse(): Response {
   )
 }
 
+function localCredentialRejectedResponse(): Response {
+  return Response.json(
+    {
+      error: 'Forbidden',
+      message: 'This action can only be performed from the local desktop app.',
+    },
+    { status: 403 },
+  )
+}
+
 function h5AccessDisabledResponse(): Response {
   return Response.json(
     {
@@ -179,7 +190,10 @@ function isH5AccessControlRequest(
   url: URL,
   context: H5RequestContext,
 ): boolean {
-  if (!isH5AccessControlPath(url.pathname)) {
+  if (
+    !isH5AccessControlPath(url.pathname) &&
+    !isLocalCredentialOnlyPath(url.pathname)
+  ) {
     return false
   }
 
@@ -334,7 +348,9 @@ export function startServer(port = PORT, host = HOST) {
         const h5AccessControlBlocked = isH5AccessControlRequest(req, url, h5RequestContext)
 
         if (h5AccessControlBlocked) {
-          return h5AccessControlRejectedResponse()
+          return isLocalCredentialOnlyPath(url.pathname)
+            ? localCredentialRejectedResponse()
+            : h5AccessControlRejectedResponse()
         }
 
         if (h5AccessDisabledBlocked) {

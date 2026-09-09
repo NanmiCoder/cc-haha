@@ -185,7 +185,7 @@ describe('DELETE /api/haha-openai-oauth', () => {
       accountId: null,
     })
     const cachedModels = await getOpenAICodexModelCatalog({
-      accountKey: 'acct_logout',
+      tokens: { accessToken: 'a', accountId: 'acct_logout' },
       forceRefresh: true,
       tokenProvider: async () => ({ accessToken: 'a' }),
       fetchOverride: async () => Response.json({
@@ -204,7 +204,7 @@ describe('DELETE /api/haha-openai-oauth', () => {
     expect(await hahaOpenAIOAuthService.loadTokens()).toBeNull()
 
     const modelsAfterLogout = await getOpenAICodexModelCatalog({
-      accountKey: 'acct_logout',
+      tokens: { accessToken: 'a', accountId: 'acct_logout' },
       tokenProvider: async () => null,
     })
     expect(modelsAfterLogout).toEqual(OPENAI_CODEX_MODEL_CATALOG)

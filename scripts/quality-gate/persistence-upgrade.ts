@@ -13,6 +13,16 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/server/__tests__/persistence-upgrade.test.ts'],
   },
   {
+    title: 'Session protocol history and local index migrations',
+    command: [
+      'bun', 'test',
+      './src/server/__tests__/session-protocol.test.ts',
+      './src/server/services/sessionProtocolHistory.test.ts',
+      './src/server/services/localIndex/database.test.ts',
+      './src/server/services/localIndex/sessionProjector.test.ts',
+    ],
+  },
+  {
     title: 'Desktop UI preference migrations',
     command: [
       'bun',

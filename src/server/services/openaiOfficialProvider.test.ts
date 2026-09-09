@@ -10,12 +10,11 @@ afterEach(() => {
   clearOpenAICodexModelCatalogCache()
 })
 
-describe('OpenAI Official runtime environment', () => {
+describe('ChatGPT Official runtime environment', () => {
   test('includes context windows from the refreshed account catalog', async () => {
     await getOpenAICodexModelCatalog({
-      accountKey: 'acct_runtime',
+      tokens: { accessToken: 'test-token', accountId: 'acct_runtime' },
       forceRefresh: true,
-      tokenProvider: async () => ({ accessToken: 'test-token' }),
       fetchOverride: async () => Response.json({
         models: [{
           slug: 'gpt-account-model',
@@ -28,9 +27,18 @@ describe('OpenAI Official runtime environment', () => {
     })
 
     const env = buildOpenAIOfficialRuntimeEnv()
-    const contextWindows = JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]) as Record<string, number>
+    const contextWindows = JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
 
     expect(contextWindows['gpt-account-model']).toBe(360_000)
     expect(contextWindows['gpt-5.6-sol']).toBe(353_400)
+  })
+
+  test('includes the Astra effective context window without changing the default model', () => {
+    const env = buildOpenAIOfficialRuntimeEnv()
+    const windows = JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
+
+    expect(windows['gpt-6-astra']).toBe(997_500)
+    expect(windows['gpt-5.6-sol']).toBe(353_400)
+    expect(env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol')
   })
 })

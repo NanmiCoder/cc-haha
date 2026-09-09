@@ -690,10 +690,10 @@ public enum AXTree {
         }
     }
 
-    /// Map one AX window to a Window Server id using public information only.
-    /// PID is pre-filtered by `cgWindowCandidates`; the AX/CG frames must match,
-    /// and normalized titles must either agree on both sides or be absent on both
-    /// sides. Every accepted branch requires exactly one candidate.
+    /// Associate the AX root with its actual WindowServer ID, validated against
+    /// this PID's current candidates. Only when that API is unavailable do we
+    /// require the older frame/title evidence. Chrome's AX title includes app
+    /// and profile names that its CG title omits; title equality is not identity.
     private static func mappedWindowID(
         _ window: AXUIElement,
         candidates: [CGWindowCandidate]
@@ -711,7 +711,8 @@ public enum AXTree {
         }
         return SnapshotWindowIdentityEvidence.mappedWindowID(
             axTitle: axTitle,
-            candidates: evidence
+            candidates: evidence,
+            nativeWindowID: WindowGeometry.axWindowID(of: window)
         )
     }
 

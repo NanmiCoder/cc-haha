@@ -1,4 +1,5 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
+import { normalizeAnthropicBaseUrl } from './anthropicBaseUrl.js'
 import { randomUUID } from 'crypto'
 import type { GoogleAuth } from 'google-auth-library'
 import {
@@ -451,8 +452,8 @@ export async function getAnthropicClient({
     authToken: isClaudeSubscriber && !usingOpenAICodex && !usingGrok
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
-    // Set baseURL from OAuth config when using staging OAuth
-    ...(stagingOAuthBaseUrl ? { baseURL: stagingOAuthBaseUrl } : {}),
+    // The SDK appends /v1 to every API path, including messages and token counts.
+    ...(baseURL ? { baseURL: normalizeAnthropicBaseUrl(baseURL) } : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

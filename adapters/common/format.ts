@@ -28,6 +28,11 @@ type ImStatusSummary = {
 const IM_HELP_LINES = [
   '/new [项目] / 新会话 — 新建会话或切换项目',
   '/projects / 项目列表 — 查看最近项目',
+  '/sessions [项目] / 会话列表 — 查看当前项目的旧会话',
+  '/sessions projects — 选择其他项目的旧会话',
+  '/resume <编号> / 继续会话 <编号> — 恢复列表中的会话',
+  '/sessions next / /sessions prev — 翻页',
+  '/cancel / 取消选择 — 退出选择，保留当前会话',
   '/status / 状态 — 查看当前会话状态',
   '/clear / 清空 — 清空当前会话上下文',
   '/stop / 停止 — 停止当前生成',
@@ -316,7 +321,7 @@ export function formatImHelp(): string {
 
 export function formatImStatus(summary: ImStatusSummary | null): string {
   if (!summary?.sessionId) {
-    return '当前没有活动会话。\n\n发送 /new 新建会话，或发送 /projects 选择项目。'
+    return '当前没有活动会话。\n\n发送 /sessions 选择旧会话，/new 新建会话，或 /projects 选择项目。'
   }
 
   const lines = ['当前会话状态：']

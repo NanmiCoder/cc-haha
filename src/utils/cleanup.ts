@@ -20,14 +20,34 @@ import {
 import { TOOL_RESULTS_SUBDIR } from './toolResultStorage.js'
 import { cleanupStaleAgentWorktrees } from './worktree.js'
 
-const DEFAULT_CLEANUP_PERIOD_DAYS = 30
+/** Subagent transcripts live under `<projectsDir>/<project>/<sessionId>/subagents`. */
+const SUBAGENTS_SUBDIR = 'subagents'
 
-function getCutoffDate(): Date {
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+/**
+ * Transcripts default to a year: losing chat history to a background sweep was
+ * the single most reported complaint about the previous 30-day default.
+ */
+const DEFAULT_SESSION_RETENTION_DAYS = 365
+
+/**
+ * Everything else (plans, file-history, session-env, debug logs, pastes, stale
+ * agent worktrees) keeps the old 30-day window. Those are derived or
+ * regenerable, and a year of agent worktrees is real disk. Only transcripts
+ * follow `cleanupPeriodDays`; the setting is labelled accordingly in the UI.
+ */
+const GENERAL_CLEANUP_PERIOD_DAYS = 30
+
+function getSessionRetentionCutoffDate(): Date {
   const settings = getSettings_DEPRECATED() || {}
   const cleanupPeriodDays =
-    settings.cleanupPeriodDays ?? DEFAULT_CLEANUP_PERIOD_DAYS
-  const cleanupPeriodMs = cleanupPeriodDays * 24 * 60 * 60 * 1000
-  return new Date(Date.now() - cleanupPeriodMs)
+    settings.cleanupPeriodDays ?? DEFAULT_SESSION_RETENTION_DAYS
+  return new Date(Date.now() - cleanupPeriodDays * MS_PER_DAY)
+}
+
+function getGeneralCleanupCutoffDate(): Date {
+  return new Date(Date.now() - GENERAL_CLEANUP_PERIOD_DAYS * MS_PER_DAY)
 }
 
 export type CleanupResult = {
@@ -92,7 +112,7 @@ async function cleanupOldFilesInDirectory(
 
 export async function cleanupOldMessageFiles(): Promise<CleanupResult> {
   const fsImpl = getFsImplementation()
-  const cutoffDate = getCutoffDate()
+  const cutoffDate = getGeneralCleanupCutoffDate()
   const errorPath = CACHE_PATHS.errors()
   const baseCachePath = CACHE_PATHS.baseLogs()
 
@@ -135,10 +155,13 @@ async function unlinkIfOld(
   filePath: string,
   cutoffDate: Date,
   fsImpl: FsOperations,
+  dryRun = false,
 ): Promise<boolean> {
   const stats = await fsImpl.stat(filePath)
   if (stats.mtime < cutoffDate) {
-    await fsImpl.unlink(filePath)
+    if (!dryRun) {
+      await fsImpl.unlink(filePath)
+    }
     return true
   }
   return false
@@ -152,11 +175,91 @@ async function tryRmdir(dirPath: string, fsImpl: FsOperations): Promise<void> {
   }
 }
 
-export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
-  const cutoffDate = getCutoffDate()
+/**
+ * Delete transcripts (plus their tool-results and subagent transcripts) older
+ * than the cutoff.
+ *
+ * @param cutoffDateOverride Explicit cutoff. Callers that just changed the
+ *   retention setting should pass it rather than rely on the settings cache:
+ *   `SettingsService` does reset that cache, but the CLI also refreshes it
+ *   asynchronously from a file watcher, so reading it back can still race.
+ * @param options.dryRun Count matches without deleting anything (used by the
+ *   desktop confirmation dialog to preview the impact).
+ */
+export async function cleanupOldSessionFiles(
+  cutoffDateOverride?: Date,
+  options?: { dryRun?: boolean },
+): Promise<CleanupResult> {
+  const cutoffDate = cutoffDateOverride ?? getSessionRetentionCutoffDate()
+  const dryRun = options?.dryRun ?? false
   const result: CleanupResult = { messages: 0, errors: 0 }
   const projectsDir = getProjectsDir()
   const fsImpl = getFsImplementation()
+  const removeEmptyDir = async (dirPath: string): Promise<void> => {
+    if (!dryRun) {
+      await tryRmdir(dirPath, fsImpl)
+    }
+  }
+
+  /** Recursively unlink expired files under a nested session directory. */
+  const cleanupNestedDir = async (dirPath: string): Promise<void> => {
+    let entries
+    try {
+      entries = await fsImpl.readdir(dirPath)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const entryPath = join(dirPath, entry.name)
+      if (entry.isDirectory()) {
+        await cleanupNestedDir(entryPath)
+        await removeEmptyDir(entryPath)
+      } else if (entry.isFile()) {
+        try {
+          if (await unlinkIfOld(entryPath, cutoffDate, fsImpl, dryRun)) {
+            result.messages++
+          }
+        } catch {
+          result.errors++
+        }
+      }
+    }
+  }
+
+  /** `tool-results/<toolDir>/*` — a flat file or a directory per tool call. */
+  const cleanupToolResultsDir = async (
+    toolResultsDir: string,
+  ): Promise<void> => {
+    let toolDirs
+    try {
+      toolDirs = await fsImpl.readdir(toolResultsDir)
+    } catch {
+      return
+    }
+    for (const toolEntry of toolDirs) {
+      if (toolEntry.isFile()) {
+        try {
+          if (
+            await unlinkIfOld(
+              join(toolResultsDir, toolEntry.name),
+              cutoffDate,
+              fsImpl,
+              dryRun,
+            )
+          ) {
+            result.messages++
+          }
+        } catch {
+          result.errors++
+        }
+      } else if (toolEntry.isDirectory()) {
+        const toolDirPath = join(toolResultsDir, toolEntry.name)
+        await cleanupNestedDir(toolDirPath)
+        await removeEmptyDir(toolDirPath)
+      }
+    }
+    await removeEmptyDir(toolResultsDir)
+  }
 
   let projectDirents
   try {
@@ -185,7 +288,12 @@ export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
         }
         try {
           if (
-            await unlinkIfOld(join(projectDir, entry.name), cutoffDate, fsImpl)
+            await unlinkIfOld(
+              join(projectDir, entry.name),
+              cutoffDate,
+              fsImpl,
+              dryRun,
+            )
           ) {
             result.messages++
           }
@@ -193,65 +301,19 @@ export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
           result.errors++
         }
       } else if (entry.isDirectory()) {
-        // Session directory — clean up tool-results/<toolDir>/* beneath it
+        // Session directory — subagent transcripts and tool results live
+        // beneath it; both follow the same mtime rule so the reported count
+        // matches what disappears. Other session subdirectories (workflows,
+        // remote-agents, session-memory) are left alone and can keep the
+        // directory itself alive.
         const sessionDir = join(projectDir, entry.name)
-        const toolResultsDir = join(sessionDir, TOOL_RESULTS_SUBDIR)
-        let toolDirs
-        try {
-          toolDirs = await fsImpl.readdir(toolResultsDir)
-        } catch {
-          // No tool-results dir — still try to remove an empty session dir
-          await tryRmdir(sessionDir, fsImpl)
-          continue
-        }
-        for (const toolEntry of toolDirs) {
-          if (toolEntry.isFile()) {
-            try {
-              if (
-                await unlinkIfOld(
-                  join(toolResultsDir, toolEntry.name),
-                  cutoffDate,
-                  fsImpl,
-                )
-              ) {
-                result.messages++
-              }
-            } catch {
-              result.errors++
-            }
-          } else if (toolEntry.isDirectory()) {
-            const toolDirPath = join(toolResultsDir, toolEntry.name)
-            let toolFiles
-            try {
-              toolFiles = await fsImpl.readdir(toolDirPath)
-            } catch {
-              continue
-            }
-            for (const tf of toolFiles) {
-              if (!tf.isFile()) continue
-              try {
-                if (
-                  await unlinkIfOld(
-                    join(toolDirPath, tf.name),
-                    cutoffDate,
-                    fsImpl,
-                  )
-                ) {
-                  result.messages++
-                }
-              } catch {
-                result.errors++
-              }
-            }
-            await tryRmdir(toolDirPath, fsImpl)
-          }
-        }
-        await tryRmdir(toolResultsDir, fsImpl)
-        await tryRmdir(sessionDir, fsImpl)
+        await cleanupNestedDir(join(sessionDir, SUBAGENTS_SUBDIR))
+        await cleanupToolResultsDir(join(sessionDir, TOOL_RESULTS_SUBDIR))
+        await removeEmptyDir(sessionDir)
       }
     }
 
-    await tryRmdir(projectDir, fsImpl)
+    await removeEmptyDir(projectDir)
   }
 
   return result
@@ -268,7 +330,7 @@ async function cleanupSingleDirectory(
   extension: string,
   removeEmptyDir: boolean = true,
 ): Promise<CleanupResult> {
-  const cutoffDate = getCutoffDate()
+  const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
 
@@ -303,7 +365,7 @@ export function cleanupOldPlanFiles(): Promise<CleanupResult> {
 }
 
 export async function cleanupOldFileHistoryBackups(): Promise<CleanupResult> {
-  const cutoffDate = getCutoffDate()
+  const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
 
@@ -348,7 +410,7 @@ export async function cleanupOldFileHistoryBackups(): Promise<CleanupResult> {
 }
 
 export async function cleanupOldSessionEnvDirs(): Promise<CleanupResult> {
-  const cutoffDate = getCutoffDate()
+  const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
 
@@ -394,7 +456,7 @@ export async function cleanupOldSessionEnvDirs(): Promise<CleanupResult> {
  * and accumulate indefinitely without this cleanup.
  */
 export async function cleanupOldDebugLogs(): Promise<CleanupResult> {
-  const cutoffDate = getCutoffDate()
+  const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
   const debugDir = join(getClaudeConfigHomeDir(), 'debug')
@@ -574,7 +636,7 @@ export async function cleanupOldVersionsThrottled(): Promise<void> {
 
 export async function cleanupOldMessageFilesInBackground(): Promise<void> {
   // If settings have validation errors but the user explicitly set cleanupPeriodDays,
-  // skip cleanup entirely rather than falling back to the default (30 days).
+  // skip cleanup entirely rather than falling back to the default (365 days).
   // This prevents accidentally deleting files when the user intended a different retention period.
   const { errors } = getSettingsWithAllErrors()
   if (errors.length > 0 && rawSettingsContainsKey('cleanupPeriodDays')) {
@@ -591,8 +653,8 @@ export async function cleanupOldMessageFilesInBackground(): Promise<void> {
   await cleanupOldSessionEnvDirs()
   await cleanupOldDebugLogs()
   await cleanupOldImageCaches()
-  await cleanupOldPastes(getCutoffDate())
-  const removedWorktrees = await cleanupStaleAgentWorktrees(getCutoffDate())
+  await cleanupOldPastes(getGeneralCleanupCutoffDate())
+  const removedWorktrees = await cleanupStaleAgentWorktrees(getGeneralCleanupCutoffDate())
   if (removedWorktrees > 0) {
     logEvent('tengu_worktree_cleanup', { removed: removedWorktrees })
   }

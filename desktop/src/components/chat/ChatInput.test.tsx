@@ -1093,6 +1093,16 @@ describe('ChatInput file mentions', () => {
   // moved. The button has no label to shed any more — it is one round icon at
   // every width — so what needs pinning is that it does *not* change with the
   // column, leaving the location as the only thing that degrades (next test).
+  it.each(['mixed', 'unknown'] as const)('blocks sending in a %s protocol session with new-session guidance', async (sessionApiFormat) => {
+    useSessionStore.setState((state) => ({ sessions: state.sessions.map((session) => ({ ...session, sessionApiFormat })) }))
+    render(<ChatInput compact />)
+    setComposerText('Continue please', 15)
+    expect(screen.getByRole('alert')).toHaveTextContent('Start a new session')
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({type:'user_message'}))
+  })
+
   it('keeps the send button a fixed circle as the column narrows', async () => {
     const column = stubComposerColumnWidth(700)
 

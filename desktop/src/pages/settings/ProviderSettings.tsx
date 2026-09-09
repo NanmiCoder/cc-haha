@@ -996,6 +996,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
     : selectablePresets[0] ?? fallbackPreset
   const initialModels = stripModel1mMarkers(provider?.models ?? initialPreset.defaultModels)
+  const initialImageGeneration = provider
+    ? provider.imageGeneration
+    : initialPreset.defaultImageGeneration
   const initialModel1mSupport = getInitialModel1mSupport(
     provider?.models ?? initialPreset.defaultModels,
     provider,
@@ -1026,8 +1029,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [disableExperimentalBetas, setDisableExperimentalBetas] = useState(provider?.disableExperimentalBetas ?? false)
   const [supportsNestedToolResultMedia, setSupportsNestedToolResultMedia] = useState(provider?.supportsNestedToolResultMedia ?? true)
   const [imageGeneration, setImageGeneration] = useState<ImageGenerationFormValue>({
-    enabled: Boolean(provider?.imageGeneration),
-    model: provider?.imageGeneration?.model ?? '',
+    enabled: Boolean(initialImageGeneration),
+    model: initialImageGeneration?.model ?? '',
     baseUrl: provider?.imageGeneration?.baseUrl ?? '',
     apiKey: provider?.imageGeneration?.apiKey ?? '',
   })
@@ -1149,6 +1152,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     setSelectedPreset(preset)
     setName(preset.name)
     setBaseUrl(preset.baseUrl)
+    setImageGeneration({
+      enabled: Boolean(preset.defaultImageGeneration),
+      model: preset.defaultImageGeneration?.model ?? '',
+      baseUrl: '',
+      apiKey: '',
+    })
     setApiFormat(preset.apiFormat ?? 'anthropic')
     setAuthStrategy(getPresetAuthStrategy(preset))
     const nextModels = stripModel1mMarkers(preset.defaultModels)

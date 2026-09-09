@@ -7,6 +7,7 @@ export const OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT = 95
 export const OPENAI_CODEX_STANDARD_CONTEXT_WINDOW = 272_000
 export const OPENAI_CODEX_FRONTIER_CONTEXT_WINDOW = 372_000
 export const OPENAI_CODEX_LARGE_CONTEXT_WINDOW = 1_000_000
+export const OPENAI_CODEX_ASTRA_CONTEXT_WINDOW = 1_050_000
 export const OPENAI_CODEX_SPARK_CONTEXT_WINDOW = 128_000
 export const OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
   (OPENAI_CODEX_STANDARD_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
@@ -22,6 +23,10 @@ export const OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
 )
 export const OPENAI_CODEX_SPARK_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
   (OPENAI_CODEX_SPARK_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
+    100,
+)
+export const OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
+  (OPENAI_CODEX_ASTRA_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
     100,
 )
 
@@ -92,15 +97,6 @@ export const OPENAI_CODEX_MODEL_CATALOG: OpenAIModelCatalogEntry[] = [
     contextWindow: OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW,
   },
   {
-    value: 'gpt-6-astra',
-    label: 'GPT-6-Astra',
-    description: 'Our most capable model for complex, demanding work',
-    descriptionForModel: 'GPT-6-Astra - our most capable model for complex, demanding work',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: GPT_5_6_REASONING_EFFORTS,
-    contextWindow: OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW,
-  },
-  {
     value: 'gpt-5.3-codex',
     label: 'GPT-5.3 Codex',
     description: 'Best for coding and agentic work',
@@ -144,6 +140,15 @@ export const OPENAI_CODEX_MODEL_CATALOG: OpenAIModelCatalogEntry[] = [
     defaultReasoningEffort: 'medium',
     supportedReasoningEfforts: GPT_5_5_REASONING_EFFORTS,
     contextWindow: OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW,
+  },
+  {
+    value: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    description: 'Frontier model for complex reasoning and agentic work',
+    descriptionForModel: 'GPT-6 Astra - complex reasoning and agentic work',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    contextWindow: OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW,
   },
 ]
 
@@ -232,10 +237,26 @@ export function resolveOpenAICodexModel(model: string): string {
 }
 
 export function getOpenAIModelDisplayName(model: string): string | null {
-  const catalogEntry = getOpenAIModelCatalogEntry(model)
-  if (catalogEntry) return catalogEntry.label
-
   switch (model.trim().toLowerCase()) {
+    case 'gpt-6':
+    case 'gpt-6-astra':
+      return 'GPT-6 Astra'
+    case 'gpt-5.3-codex':
+      return 'GPT-5.3 Codex'
+    case 'gpt-5.6-sol':
+      return 'GPT-5.6-Sol'
+    case 'gpt-5.6-terra':
+      return 'GPT-5.6-Terra'
+    case 'gpt-5.6-luna':
+      return 'GPT-5.6-Luna'
+    case 'gpt-5.3-codex-spark':
+      return 'GPT-5.3 Codex Spark'
+    case 'gpt-5.5':
+      return 'GPT-5.5'
+    case 'gpt-5.4':
+      return 'GPT-5.4'
+    case 'gpt-5.4-mini':
+      return 'GPT-5.4 Mini'
     case 'gpt-5.2':
       return 'GPT-5.2'
     case 'gpt-5.2-codex':
@@ -254,25 +275,38 @@ export function getOpenAIModelDisplayName(model: string): string | null {
 export function getOpenAICodexContextWindowForModel(
   model: string,
 ): number | null {
-  const catalogEntry = getOpenAIModelCatalogEntry(model)
-  if (catalogEntry?.contextWindow) return catalogEntry.contextWindow
-
   const normalized = model.trim().toLowerCase()
 
   // Codex OAuth follows the Codex app model catalog, not the public API model
   // context limits. The catalog applies effective_context_window_percent=95,
   // and the runtime /context display reports this effective window.
-  if (normalized === 'gpt-5.6') {
-    return OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW
-  }
-
-  if (normalized === 'gpt-5.4-pro') {
-    return OPENAI_CODEX_LARGE_EFFECTIVE_CONTEXT_WINDOW
+  if (normalized === 'gpt-6-astra' || normalized === 'gpt-6') {
+    return OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW
   }
 
   if (
+    normalized === 'gpt-5.6-sol' ||
+    normalized === 'gpt-5.6-terra' ||
+    normalized === 'gpt-5.6-luna' ||
+    normalized === 'gpt-5.6'
+  ) {
+    return OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW
+  }
+
+  if (normalized === 'gpt-5.4' || normalized === 'gpt-5.4-pro') {
+    return OPENAI_CODEX_LARGE_EFFECTIVE_CONTEXT_WINDOW
+  }
+
+  if (normalized === 'gpt-5.3-codex-spark') {
+    return OPENAI_CODEX_SPARK_EFFECTIVE_CONTEXT_WINDOW
+  }
+
+  if (
+    normalized === 'gpt-5.5' ||
     normalized === 'gpt-5.5-pro' ||
+    normalized === 'gpt-5.4-mini' ||
     normalized === 'gpt-5.4-nano' ||
+    normalized === 'gpt-5.3-codex' ||
     normalized === 'gpt-5.2' ||
     normalized === 'gpt-5.2-codex' ||
     normalized === 'gpt-5.1' ||

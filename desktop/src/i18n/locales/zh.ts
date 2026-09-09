@@ -1,6 +1,7 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  'sidebar.projectHistoryFailed': '更早的会话加载失败。',
   // ─── Common ──────────────────────────────────────
   'common.cancel': '取消',
   'common.close': '关闭',
@@ -1549,6 +1550,24 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > General - Storage
   'settings.general.modeSwitchTitle': '切换数据存储位置？',
   'settings.general.modeSwitchConfirm': '保存并重启',
+  'settings.general.sessionRetentionTitle': '会话记录',
+  'settings.general.sessionRetentionDescription': '会话记录在本机保留多久。调小这个值会立即删除更早的记录，所以需要二次确认。',
+  'settings.general.sessionRetentionLabel': '会话记录保留时长',
+  'settings.general.sessionRetentionCurrent': '当前：{days} 天',
+  'settings.general.sessionRetentionCurrentOff': '当前：不保存记录',
+  'settings.general.sessionRetentionUnit': '天',
+  'settings.general.sessionRetentionHint': '默认 365 天。设为 0 将不再记录会话内容，并删除已有的全部记录。',
+  'settings.general.sessionRetentionRequired': '请输入天数。',
+  'settings.general.sessionRetentionRange': '请输入 0 到 {max} 之间的整数。',
+  'settings.general.sessionRetentionSave': '保存',
+  'settings.general.sessionRetentionSaved': '保留时长已更新，删除了 {count} 个过期会话文件。',
+  'settings.general.sessionRetentionSavedPartial': '保留时长已更新，删除了 {count} 个过期会话文件，另有 {errors} 个删除失败。',
+  'settings.general.sessionRetentionConfirmTitle': '确认修改会话记录保留时长？',
+  'settings.general.sessionRetentionConfirmDelete': '将永久删除 {days} 天前的会话记录，此操作不可恢复。',
+  'settings.general.sessionRetentionConfirmDisable': '设为 0 后将不再记录新的会话内容，并永久删除已有的全部记录，此操作不可恢复。',
+  'settings.general.sessionRetentionPreview': '按此设置，当前会删除 {count} 个文件。',
+  'settings.general.sessionRetentionPreviewUnavailable': '统计失败，仍可继续确认。',
+  'settings.general.sessionRetentionConfirmAction': '删除并保存',
   'settings.general.storageTitle': '数据存储位置',
   'settings.general.storageDescription': '低频高级设置。切换后，会话记录、Skills、MCP、插件、Provider 配置、任务和缓存都会从新的目录读取。',
   'settings.general.storageSystemTitle': '使用系统目录',
@@ -2342,6 +2361,10 @@ export const zh: Record<TranslationKey, string> = {
   // ─── Model Selector ──────────────────────────────────────
   'model.selectModel': '选择模型',
   'model.configureProvider': '配置模型供应商',
+  'model.protocolLocked': '此会话使用 {protocol} 协议。如需使用其他 API 协议，请新建会话。',
+  'model.protocolMixed': '此会话混用了多种 API 协议的历史，无法继续。请在模型菜单中新建会话。',
+  'model.protocolUnknown': '无法确定此旧会话的 API 协议。请在模型菜单中新建会话。',
+  'model.protocolRequiresNewSession': 'API 协议不同，请新建会话',
   'model.configuration': '模型配置',
   'model.searchPlaceholder': '搜索模型',
   'model.clearSearch': '清除模型搜索',

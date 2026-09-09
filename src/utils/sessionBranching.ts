@@ -12,6 +12,7 @@ import { parseJSONL } from './json.js'
 import { buildConversationChain, loadTranscriptFile } from './sessionStorage.js'
 import { jsonStringify } from './slowOperations.js'
 import { escapeRegExp } from './stringUtils.js'
+import { inferSessionApiFormat } from '../server/services/sessionProtocolHistory.js'
 
 type SessionMetaEntry = {
   type: 'session-meta'
@@ -452,6 +453,27 @@ export async function createSessionBranch(
     )
   }
 
+  // Provider snapshots describe the messages that follow them. Hoisting every
+  // session-meta record to the header would assign the final provider to all
+  // inherited replies. Keep those records next to the copied message that
+  // originally followed them, while preserving the active chain's message order.
+  const metadataBeforeMessage = new Map<string, SessionMetaEntry[]>()
+  let trailingSessionMetadata: SessionMetaEntry[] = []
+  const inheritedProtocolEntries: Parameters<typeof inferSessionApiFormat>[0] = []
+  for (const entry of sourceEntries) {
+    if (isSessionMetaEntry(entry)) {
+      trailingSessionMetadata.push(entry)
+      inheritedProtocolEntries.push(entry)
+    } else if (isTranscriptEntry(entry) && sourceMessageEntriesById.get(entry.uuid) === entry) {
+      metadataBeforeMessage.set(entry.uuid, trailingSessionMetadata)
+      trailingSessionMetadata = []
+      inheritedProtocolEntries.push(entry)
+    }
+  }
+  // Include explicit parent locks even if they were appended after the target.
+  // Later provider selections alone do not count as using that protocol.
+  const inheritedApiFormat = inferSessionApiFormat(inheritedProtocolEntries)
+
   const copiedToolResultIds = new Set(
     copiedMessages.flatMap((message) => extractToolResultIds(message)),
   )
@@ -468,6 +490,7 @@ export async function createSessionBranch(
   let parentUuid: UUID | null = null
 
   for (const entry of branchMessageEntries) {
+    messageLines.push(...(metadataBeforeMessage.get(entry.uuid) ?? []).map(metadata => jsonStringify(metadata)))
     const forkedEntry: TranscriptEntry = {
       ...entry,
       sessionId: forkSessionId,
@@ -512,9 +535,23 @@ export async function createSessionBranch(
   )
 
   const lines = [
-    ...metadataEntries.map((entry) => jsonStringify(entry)),
+    // Only synthesized session metadata belongs in the header; source records
+    // retain their relationship to the inherited messages above.
+    ...metadataEntries
+      .filter(entry => !isSessionMetaEntry(entry) || !sourceEntries.includes(entry))
+      .map((entry) => jsonStringify(entry)),
     ...messageLines,
+    ...trailingSessionMetadata.map(entry => jsonStringify(entry)),
   ]
+
+  if (inheritedApiFormat) {
+    lines.push(jsonStringify({
+      type: 'session-meta',
+      isMeta: true,
+      sessionApiFormat: inheritedApiFormat,
+      timestamp: new Date().toISOString(),
+    }))
+  }
 
   if (contentReplacementRecords.length > 0) {
     lines.push(jsonStringify({

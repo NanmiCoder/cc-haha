@@ -1,3 +1,4 @@
+import { createSessionProtocolAccumulator } from '../sessionProtocolHistory.js'
 import { cleanSessionTitleSource } from '../../../utils/sessionTitleText.js'
 import { SYNTHETIC_MODEL } from '../../../utils/messages.js'
 import { extractShotCountFromAssistantContent } from '../../../utils/shotStats.js'
@@ -89,6 +90,7 @@ type ReducerState = {
   runtimeProviderId: string | null | undefined
   runtimeModelId: string | undefined
   effortLevel: string | undefined
+  sessionProtocol: ReturnType<typeof createSessionProtocolAccumulator>
   repository: PersistedRepositorySession | undefined
   worktreeSession: PersistedWorktreeSession | null | undefined
   nextOrdinal: number
@@ -204,6 +206,7 @@ function latestTimestamp(current: string | null, candidate: unknown): string | n
 function cloneState(state: ReducerState): ReducerState {
   return {
     ...state,
+    sessionProtocol: state.sessionProtocol.clone(),
     repository: state.repository ? { ...state.repository } : undefined,
     worktreeSession: state.worktreeSession
       ? { ...state.worktreeSession }
@@ -248,6 +251,7 @@ function createInitialState(
     runtimeProviderId: undefined,
     runtimeModelId: undefined,
     effortLevel: undefined,
+    sessionProtocol: createSessionProtocolAccumulator(),
     repository: undefined,
     worktreeSession: undefined,
     nextOrdinal: 0,
@@ -506,6 +510,7 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
 }
 
 function applyEntry(state: ReducerState, entry: ReducerEntry): void {
+  state.sessionProtocol.add(entry)
   applyActivityEntry(state, entry)
   if (!state.hasCreatedAt && entry.timestamp) {
     state.createdAt = entry.timestamp
@@ -612,6 +617,7 @@ function summaryFromState(state: ReducerState): SessionListSummary {
       : {}),
     ...(state.runtimeModelId ? { runtimeModelId: state.runtimeModelId } : {}),
     ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+    ...(state.sessionProtocol.get() ? { sessionApiFormat: state.sessionProtocol.get() } : {}),
     ...(state.repository ? { repository: { ...state.repository } } : {}),
     ...(state.worktreeSession !== undefined
       ? {

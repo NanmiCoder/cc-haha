@@ -5329,23 +5329,29 @@ export function stripSignatureBlocksAfterModelChange(
   messages: Message[],
   currentModel: string,
 ): Message[] {
-  const signatureSource = messages.findLast(msg => (
-    msg.type === 'assistant' &&
-    msg.message.model !== SYNTHETIC_MODEL &&
-    msg.message.content.some(isThinkingBlock)
-  ))
-  if (signatureSource?.type !== 'assistant' || !signatureSource.message.model) {
-    return messages
-  }
-
   const normalize = (model: string) => normalizeModelStringForAPI(
     parseUserSpecifiedModel(model),
   ).trim().toLowerCase()
+  const targetModel = normalize(currentModel)
+  let changed = false
 
-  if (normalize(signatureSource.message.model) === normalize(currentModel)) {
-    return messages
-  }
-  return stripSignatureBlocks(messages)
+  // A new turn reloads the original transcript, including blocks cleaned only
+  // in memory on the previous turn. Inspect every source: the latest reply can
+  // already match the target while older, incompatible blocks remain.
+  const result = messages.map(msg => {
+    if (
+      msg.type !== 'assistant' ||
+      !msg.message.model ||
+      msg.message.model === SYNTHETIC_MODEL ||
+      normalize(msg.message.model) === targetModel
+    ) return msg
+
+    const [cleaned] = stripSignatureBlocks([msg])
+    if (cleaned !== msg) changed = true
+    return cleaned!
+  })
+
+  return changed ? result : messages
 }
 
 /**

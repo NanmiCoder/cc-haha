@@ -149,7 +149,8 @@ async function settlesBeforeBlockedTraceWrite<T>(promise: Promise<T>): Promise<T
   ])
 }
 
-async function captureComputerUseChatRequest(options: {
+async function captureOpenAIChatRequest(options: {
+  contentSource?: 'user' | 'tool'
   baseUrl: string
   model: string
   content: Array<Record<string, unknown>>
@@ -193,7 +194,7 @@ async function captureComputerUseChatRequest(options: {
         max_tokens: 64,
         messages: [{
           role: 'user',
-          content: [{
+          content: options.contentSource === 'user' ? options.content : [{
             type: 'tool_result',
             tool_use_id: 'computer_1',
             content: options.content,
@@ -585,6 +586,7 @@ describe('ProviderService', () => {
           'gpt-5.4': 950_000,
           'gpt-5.5': 258_400,
           'gpt-5.4-mini': 258_400,
+          'gpt-6-astra': 997_500,
         })
         expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
         expect(env.ANTHROPIC_API_KEY).toBeUndefined()
@@ -2106,9 +2108,13 @@ describe('ProviderService', () => {
       }
     })
 
-    test('preserves Computer Use tool images for explicit opencode vision models', async () => {
-      const body = await captureComputerUseChatRequest({
-        baseUrl: 'https://opencode.ai/zen',
+    test.each([
+      'https://opencode.ai/zen',
+      'https://api.deepseek.com',
+      'https://gateway.example.test',
+    ])('preserves Computer Use tool images for explicit vision models at %s', async (baseUrl) => {
+      const body = await captureOpenAIChatRequest({
+        baseUrl,
         model: 'deepseek-v4-flash-vision-exp',
         content: [
           { type: 'text', text: 'Computer Use state' },
@@ -2141,12 +2147,12 @@ describe('ProviderService', () => {
         model: 'deepseek-v4-flash',
       },
       {
-        name: 'classic DeepSeek endpoint even with a vision-named model',
+        name: 'classic DeepSeek text model',
         baseUrl: 'https://api.deepseek.com',
-        model: 'deepseek-v4-flash-vision-exp',
+        model: 'deepseek-v4-flash',
       },
     ])('uses text-only Computer Use content for $name', async ({ baseUrl, model }) => {
-      const body = await captureComputerUseChatRequest({
+      const body = await captureOpenAIChatRequest({
         baseUrl,
         model,
         content: [{
@@ -2165,8 +2171,33 @@ describe('ProviderService', () => {
       expect(JSON.stringify(body)).not.toContain('image_url')
     })
 
+    test.each([
+      { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash-vision-exp' },
+      { baseUrl: 'https://gateway.example.test', model: 'deepseek-v4-flash-vision-exp' },
+      { baseUrl: 'https://opencode.ai/zen', model: 'deepseek-v4-flash-vision-exp' },
+    ])('forwards chat attachments for $model at $baseUrl (#1304)', async ({ baseUrl, model }) => {
+      const body = await captureOpenAIChatRequest({
+        baseUrl,
+        model,
+        contentSource: 'user',
+        content: [
+          { type: 'text', text: 'Describe this picture.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'picture-data' } },
+        ],
+      })
+
+      expect(body.messages).toEqual([{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this picture.' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,picture-data' } },
+        ],
+      }])
+      expect(JSON.stringify(body)).not.toContain('Image omitted:')
+    })
+
     test('keeps generic OpenAI Chat providers vision-capable by default', async () => {
-      const body = await captureComputerUseChatRequest({
+      const body = await captureOpenAIChatRequest({
         baseUrl: 'https://chat.example.test',
         model: 'custom-text-named-model',
         content: [{
@@ -2384,6 +2415,76 @@ describe('ProviderService', () => {
   })
 
   describe('testProviderConfig', () => {
+    for (const [basePath, messagePath] of [
+      ['', '/v1/messages'],
+      ['/', '/v1/messages'],
+      ['/v1', '/v1/messages'],
+      ['/v1///', '/v1/messages'],
+      ['/anthropic', '/anthropic/v1/messages'],
+      ['/anthropic/v1/', '/anthropic/v1/messages'],
+      ['/v1/tenant', '/v1/tenant/v1/messages'],
+    ]) {
+      test(`Anthropic base URL ${basePath || '(root)'} works in connectivity and proxy requests (#1279)`, async () => {
+        const requests: Array<{ path: string; apiKey: string | null; version: string | null }> = []
+        const server = Bun.serve({
+          hostname: '127.0.0.1',
+          port: 0,
+          async fetch(req) {
+            const requestPath = new URL(req.url).pathname
+            requests.push({
+              path: requestPath,
+              apiKey: req.headers.get('x-api-key'),
+              version: req.headers.get('anthropic-version'),
+            })
+            if (requestPath !== messagePath) {
+              return Response.json({ error: { message: 'Unknown endpoint' } }, { status: 404 })
+            }
+            const body = await req.json() as { stream?: boolean }
+            if (body.stream) {
+              return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
+                headers: { 'Content-Type': 'text/event-stream' },
+              })
+            }
+            return Response.json({ type: 'message', model: 'model-main', content: [{ type: 'text', text: 'ok' }] })
+          },
+        })
+
+        try {
+          const svc = new ProviderService()
+          const baseUrl = `http://127.0.0.1:${server.port}${basePath}`
+          const provider = await svc.addProvider(sampleInput({
+            baseUrl,
+            authStrategy: 'api_key',
+            supportsNestedToolResultMedia: false,
+          }))
+          const result = await svc.testProvider(provider.id)
+          expect(requests[0]?.path).toBe(messagePath)
+          expect(result.connectivity.success).toBe(true)
+          expect(result.proxy?.success).toBe(true)
+
+          for (const stream of [false, true]) {
+            const req = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model: 'model-main', max_tokens: 16, stream, messages: [{ role: 'user', content: 'hello' }] }),
+            })
+            const response = await handleProxyRequest(req, new URL(req.url))
+            expect(response.status).toBe(200)
+            if (stream) expect(await response.text()).toContain('event: message_stop')
+            else expect(await response.json()).toMatchObject({ type: 'message' })
+          }
+          expect(requests).toEqual(Array.from({ length: 4 }, () => ({
+            path: messagePath,
+            apiKey: 'sk-test-key-123',
+            version: '2023-06-01',
+          })))
+          expect((await svc.getProvider(provider.id))?.baseUrl).toBe(baseUrl)
+        } finally {
+          server.stop(true)
+        }
+      })
+    }
+
     test('should use auth strategy headers for Anthropic-compatible tests', async () => {
       const originalFetch = globalThis.fetch
       const calls: Array<{ url: string; headers: Record<string, string> }> = []
@@ -3024,5 +3125,163 @@ describe('Providers API', () => {
     const res = await handleProvidersApi(req, url, segments)
 
     expect(res.status).toBe(405)
+  })
+})
+
+describe('ApiSmart preset request contract (offline fixtures)', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const apiKey = 'sk-apismart-offline-fixture'
+
+  async function createApiSmart() {
+    const { PROVIDER_PRESETS } = await import('../config/providerPresets.js')
+    const preset = PROVIDER_PRESETS.find(item => item.id === 'apismart')!
+    expect(preset).toBeDefined()
+    // Exercise the same API boundary as the desktop's save action.
+    const { req, url, segments } = makeRequest('POST', '/api/providers', {
+      presetId: preset.id, name: preset.name, baseUrl: preset.baseUrl,
+      apiFormat: preset.apiFormat, apiKey, models: preset.defaultModels,
+    })
+    const result = await handleProvidersApi(req, url, segments)
+    expect(result.status).toBe(201)
+    const saved = await result.json()
+    return { preset, provider: saved.provider }
+  }
+
+  async function proxy(providerId: string, body: Record<string, unknown>) {
+    const { req, url } = makeRequest('POST', `/proxy/providers/${providerId}/v1/messages`, body)
+    return handleProxyRequest(req, url)
+  }
+
+  test('preset save, model fetch, connectivity, and actual chat all use exactly one /v1', async () => {
+    const { preset, provider } = await createApiSmart()
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; method: string | undefined; body: any }> = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${apiKey}`)
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ url, method: init?.method, body })
+      if (url === 'https://gw.apismart.ai/v1/models' && init?.method === 'GET') {
+        return Response.json({ object: 'list', data: [
+          { id: 'deepseek-v4-pro-0813', object: 'model', owned_by: 'deepseek' },
+          { id: 'deepseek-v4-flash-0731-tem', object: 'model', owned_by: 'deepseek' },
+        ] })
+      }
+      if (url !== 'https://gw.apismart.ai/v1/chat/completions' || init?.method !== 'POST') {
+        return Response.json({ error: 'Wrong request endpoint' }, { status: 404 })
+      }
+      return Response.json({
+        id: 'chatcmpl-offline', object: 'chat.completion', model: body.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      })
+    }) as typeof fetch
+    try {
+      const catalog = makeRequest('POST', '/api/providers/models', { baseUrl: preset.baseUrl, apiKey })
+      const models = await handleProvidersApi(catalog.req, catalog.url, catalog.segments)
+      expect(models.status).toBe(200)
+      expect(await models.json()).toMatchObject({ ok: true, models: [
+        { id: 'deepseek-v4-flash-0731-tem' }, { id: 'deepseek-v4-pro-0813' },
+      ] })
+      const check = await new ProviderService().testProviderConfig({
+        baseUrl: preset.baseUrl, apiKey, apiFormat: preset.apiFormat, modelId: preset.defaultModels.main,
+      })
+      expect(check.connectivity.success).toBe(true)
+      expect(check.proxy?.success).toBe(true)
+      for (const model of [preset.defaultModels.main, preset.defaultModels.haiku]) {
+        const response = await proxy(provider.id, {
+          model, max_tokens: 64, system: 'Be helpful.', messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+          model, content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+        })
+        expect(calls.at(-1)?.body).toMatchObject({ model, stream: false, messages: [
+          { role: 'system', content: 'Be helpful.' }, { role: 'user', content: 'hello' },
+        ] })
+      }
+      expect(calls.map(call => call.url)).toEqual([
+        'https://gw.apismart.ai/v1/models',
+        ...Array(4).fill('https://gw.apismart.ai/v1/chat/completions'),
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('streamed tool calls survive the proxy and their result is sent back with DeepSeek reasoning', async () => {
+    const { preset, provider } = await createApiSmart()
+    const originalFetch = globalThis.fetch
+    const calls: any[] = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      expect(String(input)).toBe('https://gw.apismart.ai/v1/chat/completions')
+      expect(init?.method).toBe('POST')
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${apiKey}`)
+      calls.push(JSON.parse(String(init?.body)))
+      const chunks = calls.length === 1 ? [
+        { delta: { role: 'assistant', reasoning_content: 'Need the weather.' } },
+        { delta: { tool_calls: [{ index: 0, id: 'call_weather', type: 'function', function: { name: 'weather', arguments: '{"city":' } }] } },
+        { delta: { tool_calls: [{ index: 0, function: { arguments: '"Paris"}' } }] } },
+        { delta: {}, finish_reason: 'tool_calls' },
+      ] : [
+        { delta: { role: 'assistant', content: 'It is sunny.' } },
+        { delta: {}, finish_reason: 'stop' },
+      ]
+      const data = chunks.map(choice => `data: ${JSON.stringify({
+        id: 'chatcmpl-offline-tool', object: 'chat.completion.chunk', model: preset.defaultModels.main,
+        choices: [{ index: 0, ...choice }],
+      })}\n\n`).join('') + 'data: [DONE]\n\n'
+      return new Response(data, { headers: { 'Content-Type': 'text/event-stream' } })
+    }) as typeof fetch
+    try {
+      const tool = { name: 'weather', description: 'Get weather', input_schema: {
+        type: 'object', properties: { city: { type: 'string' } }, required: ['city'],
+      } }
+      const first = await proxy(provider.id, { model: preset.defaultModels.main, stream: true, max_tokens: 64,
+        messages: [{ role: 'user', content: 'Weather in Paris?' }], tools: [tool], tool_choice: { type: 'auto' },
+      })
+      expect(first.status).toBe(200)
+      const events = (await first.text()).split('\n\n').flatMap(block => {
+        const data = block.split('\n').find(line => line.startsWith('data: '))?.slice(6)
+        return data ? [JSON.parse(data)] : []
+      })
+      expect(calls[0]).toMatchObject({ stream: true, stream_options: { include_usage: true },
+        tools: [{ type: 'function', function: { name: 'weather', parameters: tool.input_schema } }], tool_choice: 'auto',
+      })
+      expect(events).toContainEqual(expect.objectContaining({ type: 'content_block_start', content_block: {
+        type: 'tool_use', id: 'call_weather', name: 'weather', input: {},
+      } }))
+      const toolInput = events.filter(event => event.delta?.type === 'input_json_delta')
+        .map(event => event.delta.partial_json).join('')
+      expect(JSON.parse(toolInput)).toEqual({ city: 'Paris' })
+      const thinking = events.filter(event => event.delta?.type === 'thinking_delta')
+        .map(event => event.delta.thinking).join('')
+      expect(thinking).toBe('Need the weather.')
+      expect(events.find(event => event.type === 'message_delta')?.delta.stop_reason).toBe('tool_use')
+      expect(events.at(-1)?.type).toBe('message_stop')
+      const second = await proxy(provider.id, { model: preset.defaultModels.main, stream: true, max_tokens: 64,
+        messages: [
+          { role: 'user', content: 'Weather in Paris?' },
+          { role: 'assistant', content: [
+            { type: 'thinking', thinking },
+            { type: 'tool_use', id: 'call_weather', name: 'weather', input: JSON.parse(toolInput) },
+          ] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_weather', content: 'sunny' }] },
+        ], tools: [tool],
+      })
+      expect(second.status).toBe(200)
+      expect(await second.text()).toContain('It is sunny.')
+      expect(calls[1].messages).toEqual([
+        { role: 'user', content: 'Weather in Paris?' },
+        { role: 'assistant', content: null, reasoning_content: 'Need the weather.', tool_calls: [
+          { id: 'call_weather', type: 'function', function: { name: 'weather', arguments: '{"city":"Paris"}' } },
+        ] },
+        { role: 'tool', tool_call_id: 'call_weather', content: 'sunny' },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

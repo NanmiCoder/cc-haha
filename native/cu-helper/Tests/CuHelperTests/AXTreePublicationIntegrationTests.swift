@@ -12,16 +12,34 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
     private static let fixtureReadyPath = "CC_HAHA_AX_PUBLICATION_READY"
     private static let fixtureStopPath = "CC_HAHA_AX_PUBLICATION_STOP"
     private static let fixtureTitle = "CC_HAHA_AX_PUBLICATION_TITLE"
+    private static let fixtureMismatchedTitle = "CC_HAHA_AX_PUBLICATION_MISMATCHED_TITLE"
 
     func testPublishedControlBelowDuplicateAncestorClicksImmediatelyAndRejectsOldGeneration() async throws {
+        try await verifyPublishedControl(mismatchedWindowTitle: false)
+    }
+
+    func testChromeStyleAXTitleCanDifferFromWindowServerTitleWithoutDisablingActions() async throws {
+        try await verifyPublishedControl(mismatchedWindowTitle: true)
+    }
+
+    private func verifyPublishedControl(mismatchedWindowTitle: Bool) async throws {
         if ProcessInfo.processInfo.environment[Self.fixtureFlag] == "1" {
-            try await runFixtureProcess()
-            return
+            try await runFixtureProcess(
+                mismatchedWindowTitle: ProcessInfo.processInfo.environment[Self.fixtureMismatchedTitle] == "1"
+            )
+            // This process is a disposable UI fixture, not another suite run.
+            exit(0)
         }
         try XCTSkipUnless(
             AXIsProcessTrusted(),
             "Live AX publication requires Accessibility permission for the test runner"
         )
+        if mismatchedWindowTitle {
+            try XCTSkipUnless(
+                Capture.hasScreenRecordingPermission(),
+                "Coordinate publication requires Screen Recording permission for the test runner"
+            )
+        }
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("cc-haha-ax-publication-\(UUID().uuidString)")
@@ -43,6 +61,7 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
             Self.fixtureReadyPath: ready.path,
             Self.fixtureStopPath: stop.path,
             Self.fixtureTitle: title,
+            Self.fixtureMismatchedTitle: mismatchedWindowTitle ? "1" : "0",
         ]) { _, fixture in fixture }
         configuration.activates = false
         configuration.createsNewApplicationInstance = true
@@ -60,6 +79,8 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
         defer { AXTree.invalidate(pid: pid) }
 
         let state = try await AXTree.appState(pid: pid, disableDiff: true)
+        let windowID = try XCTUnwrap(AXTree.snapshotEvidence(pid: pid)?.keyWindowID)
+        XCTAssertEqual(AXTree.currentKeyWindowID(pid: pid), windowID)
         let (handle, line) = try publishedHandle(label: "Bold", state: state)
         XCTAssertEqual(
             AXTree.record(pid: pid, index: handle.index)?.role,
@@ -89,6 +110,34 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
         let (_, clickedLine) = try publishedHandle(label: "Bold", state: clickedState)
         XCTAssertTrue(clickedLine.contains("Value: 1"), clickedLine)
 
+        if mismatchedWindowTitle {
+            // Exercise the actual state → screenshot → coordinate action path,
+            // using only this disposable fixture window. Previously the image
+            // was returned while its coordinate transform was never recorded.
+            let captured = try await router.handle(cmd: "get_app_state", payload: .object([
+                "pid": .int(Int(pid)), "disableDiff": .bool(true),
+            ]))
+            let shot = try XCTUnwrap(captured["screenshot"])
+            XCTAssertEqual(shot["windowID"]?.asInt, Int(windowID))
+            let frame = try XCTUnwrap(AXTree.record(pid: pid, index: handle.index)?.frameGlobal)
+            let x = (frame.x + frame.w / 2 - (try XCTUnwrap(shot["originX"]?.asDouble)))
+                * Double(try XCTUnwrap(shot["width"]?.asInt))
+                / (try XCTUnwrap(shot["pointWidth"]?.asDouble))
+            let y = (frame.y + frame.h / 2 - (try XCTUnwrap(shot["originY"]?.asDouble)))
+                * Double(try XCTUnwrap(shot["height"]?.asInt))
+                / (try XCTUnwrap(shot["pointHeight"]?.asDouble))
+            _ = try await router.handle(cmd: "click", payload: .object([
+                "pid": .int(Int(pid)), "x": .double(x), "y": .double(y),
+            ]))
+            let coordinateState = try await AXTree.appState(pid: pid, disableDiff: true)
+            let (coordinateHandle, coordinateLine) = try publishedHandle(label: "Bold", state: coordinateState)
+            XCTAssertTrue(coordinateLine.contains("Value: 0"), coordinateLine)
+            // Restore the checked state for the stale-generation assertion.
+            _ = try await router.handle(cmd: "click", payload: .object([
+                "pid": .int(Int(pid)), "index": .string(coordinateHandle.rawValue),
+            ]))
+        }
+
         AXTree.invalidate(pid: pid)
         let nextState = try await AXTree.appState(pid: pid, disableDiff: true)
         let (nextHandle, _) = try publishedHandle(label: "Bold", state: nextState)
@@ -113,7 +162,7 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
         try await waitUntil { process.isTerminated }
     }
 
-    private func runFixtureProcess() async throws {
+    private func runFixtureProcess(mismatchedWindowTitle: Bool) async throws {
         let environment = ProcessInfo.processInfo.environment
         let readyPath = try XCTUnwrap(environment[Self.fixtureReadyPath])
         let stopPath = try XCTUnwrap(environment[Self.fixtureStopPath])
@@ -129,6 +178,12 @@ final class AXTreePublicationIntegrationTests: XCTestCase {
             defer: false
         )
         window.title = title
+        if mismatchedWindowTitle {
+            // Chrome exposes a decorated AX title while WindowServer uses the
+            // page title (and may add an audio indicator). Both refer to the
+            // same window. Reproduce that mismatch without a real browser.
+            window.setAccessibilityTitle("\(title) - Google Chrome - Fixture")
+        }
         // TextEdit exposes formatting and alignment segments as two sibling
         // AXGroups whose own fingerprints are identical. Their description-only
         // children are the first semantic evidence that distinguishes the paths.

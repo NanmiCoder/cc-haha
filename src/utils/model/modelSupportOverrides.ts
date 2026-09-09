@@ -36,5 +36,5 @@ export const get3PModelCapabilityOverride = memoize(
     }
     return undefined
   },
-  (model, capability) => `${model.toLowerCase()}:${capability}`,
+  (model, capability) => `${normalizeModelContextKey(model)}:${capability}`,
 )

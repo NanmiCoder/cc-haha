@@ -38,9 +38,9 @@ export const OPENAI_OFFICIAL_MODELS: ModelInfo[] = [
   },
   {
     id: 'gpt-6-astra',
-    name: 'GPT-6-Astra',
-    description: 'Our most capable model for complex, demanding work',
-    context: '258400',
+    name: 'GPT-6 Astra',
+    description: 'Frontier model for complex reasoning and agentic work',
+    context: '997500',
     defaultReasoningEffort: 'medium',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },

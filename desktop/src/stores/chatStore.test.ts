@@ -29,6 +29,7 @@ const {
   updateSessionTitleMock,
   updateSessionMessageCountMock,
   updateSessionPermissionModeMock,
+  updateSessionApiFormatMock,
   sessionStoreSnapshot,
   cliTaskStoreSnapshot,
   connectionStateHandlers,
@@ -55,6 +56,7 @@ const {
   updateSessionTitleMock: vi.fn(),
   updateSessionMessageCountMock: vi.fn(),
   updateSessionPermissionModeMock: vi.fn(),
+  updateSessionApiFormatMock: vi.fn(),
   sessionStoreSnapshot: {
     sessions: [] as Array<{
       id: string
@@ -139,6 +141,7 @@ vi.mock('./sessionStore', () => ({
       updateSessionTitle: updateSessionTitleMock,
       updateSessionMessageCount: updateSessionMessageCountMock,
       updateSessionPermissionMode: updateSessionPermissionModeMock,
+      updateSessionApiFormat: updateSessionApiFormatMock,
     }),
   },
 }))
@@ -8878,6 +8881,22 @@ describe('chatStore history mapping', () => {
 
     expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID)
     expect(sendMock).not.toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'prewarm_session' })
+  })
+
+  it('hydrates the authoritative protocol before reconnecting and mirrors it to session metadata', () => {
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession() } })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_protocol', sessionApiFormat: 'openai_responses',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.sessionApiFormat).toBe('openai_responses')
+    expect(updateSessionApiFormatMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'openai_responses')
+    useChatStore.setState((state) => ({ sessions: {
+      ...state.sessions, [TEST_SESSION_ID]: { ...state.sessions[TEST_SESSION_ID]!, connectionState: 'disconnected' },
+    } }))
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, { minimalBootstrap: true, prewarm: false })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.sessionApiFormat).toBe('openai_responses')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'session_protocol', sessionApiFormat: 'mixed' })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.sessionApiFormat).toBe('mixed')
   })
 
   it('sends explicit runtime overrides over websocket', () => {

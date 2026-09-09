@@ -15,6 +15,7 @@ import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
 import { ProjectEditorModal, type ProjectEditorSubmission } from './ProjectEditorModal'
 import { SidebarTaskList } from './SidebarTaskList'
+import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
 import {
   buildSidebarTaskGroups,
   getSessionProjectKey,
@@ -54,7 +55,6 @@ const PROJECT_HIDDEN_STORAGE_KEY = 'cc-haha-sidebar-hidden-projects'
 const PROJECT_ORGANIZATION_STORAGE_KEY = 'cc-haha-sidebar-project-organization'
 const PROJECT_SORT_STORAGE_KEY = 'cc-haha-sidebar-project-sort'
 const PROJECT_GROUP_VISIBLE_COUNT = 6
-const PROJECT_GROUP_SCROLL_COUNT = 12
 
 type SidebarProjectOrganization = 'project' | 'recentProject' | 'time'
 type SidebarProjectSortBy = 'createdAt' | 'updatedAt'
@@ -113,6 +113,7 @@ export function Sidebar({
 }: SidebarProps) {
   const t = useTranslation()
   const sessions = useSessionStore((s) => s.sessions)
+  const projectHistory = useSessionStore((s) => s.projectHistory)
   const isLoading = useSessionStore((s) => s.isLoading)
   const error = useSessionStore((s) => s.error)
   const indexStatus = useSessionStore((s) => s.indexStatus)
@@ -795,7 +796,7 @@ export function Sidebar({
       handleBatchSessionClick(event, session.id)
       return
     }
-    useTabStore.getState().openTab(session.id, session.title)
+    useSessionStore.getState().openHistoricalSession(session)
     useChatStore.getState().connectToSession(session.id)
     closeMobileDrawer()
   }, [closeMobileDrawer, handleBatchSessionClick, isBatchMode])
@@ -1170,6 +1171,7 @@ export function Sidebar({
             )}
             <div
               ref={sessionScrollAreaRef}
+              onScroll={(event) => notifyProjectHistoryAtSidebarBottom(event.currentTarget)}
               data-testid="sidebar-session-scroll-area"
               className="sidebar-scroll-area min-h-0 flex-1 overflow-y-auto px-3 pb-20"
             >
@@ -1232,7 +1234,7 @@ export function Sidebar({
                 const hiddenCount = project.sessions.length - visibleItems.length
                 const groupIds = project.sessions.map((session) => session.id)
                 const groupSelectedCount = groupIds.filter((id) => selectedSessionIds.has(id)).length
-                const hasInternalScroll = sessionsExpanded && project.sessions.length > PROJECT_GROUP_SCROLL_COUNT
+                const history = projectHistory[project.key]
                 const isProjectDragging = draggingProjectKey === project.key
                 const isProjectPinned = pinnedProjectKeys.has(project.key)
                 const dropBefore = projectDropTarget?.key === project.key && projectDropTarget.position === 'before'
@@ -1348,9 +1350,20 @@ export function Sidebar({
                     </div>
                     {!projectCollapsed && (
                       <div className="mt-0.5 pl-5">
-                        <div
-                          className={hasInternalScroll ? 'max-h-[420px] overflow-y-auto pr-1' : undefined}
-                          data-testid={`sidebar-project-session-list-${domSafeProjectKey(project.key)}`}
+                        <ProjectSessionList
+                          projectKey={project.key}
+                          outerScrollRef={sessionScrollAreaRef}
+                          testId={`sidebar-project-session-list-${domSafeProjectKey(project.key)}`}
+                          expanded={sessionsExpanded}
+                          hasHiddenSessions={hiddenCount > 0}
+                          itemCount={visibleItems.length}
+                          nextCursor={history?.nextCursor}
+                          isLoading={history?.isLoading ?? false}
+                          hasMore={history?.hasMore ?? true}
+                          error={history?.error}
+                          onExpand={() => setExpandedProjectKeys((current) => new Set([...current, project.key]))}
+                          onLoadMore={() => useSessionStore.getState().loadMoreProjectSessions(project.key)}
+                          onRelease={() => useSessionStore.getState().releaseProjectHistory(project.key)}
                         >
                           {visibleItems.map((session) => (
                             <div
@@ -1426,7 +1439,7 @@ export function Sidebar({
                               )}
                             </div>
                           ))}
-                        </div>
+                        </ProjectSessionList>
                         {(hiddenCount > 0 || sessionsExpanded) && (
                           <div className="mt-2 flex justify-start px-2.5">
                             <button

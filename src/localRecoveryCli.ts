@@ -1,8 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { readFileSync } from 'fs'
 import { createInterface } from 'readline'
+import { normalizeAnthropicBaseUrl } from './services/api/anthropicBaseUrl.js'
 
 type OutputFormat = 'text' | 'json'
+type RecoveryInput = NodeJS.ReadableStream & { isTTY?: boolean }
 
 function printHelp(): void {
   process.stdout.write(
@@ -105,10 +107,10 @@ function parseArgs(argv: string[]) {
   }
 }
 
-async function readPromptFromStdin(): Promise<string> {
-  if (process.stdin.isTTY) return ''
+async function readPromptFromStdin(input: RecoveryInput): Promise<string> {
+  if (input.isTTY) return ''
   const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) {
+  for await (const chunk of input) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
   }
   return Buffer.concat(chunks).toString('utf8').trim()
@@ -124,8 +126,11 @@ function getSystemPrompt(
   return systemPrompt ?? appendSystemPrompt
 }
 
-async function run(): Promise<void> {
-  const parsed = parseArgs(process.argv.slice(2))
+export async function run(
+  argv = process.argv.slice(2),
+  input: RecoveryInput = process.stdin,
+): Promise<void> {
+  const parsed = parseArgs(argv)
 
   if (parsed.command === 'help') {
     printHelp()
@@ -137,11 +142,11 @@ async function run(): Promise<void> {
   }
 
   if (!parsed.print) {
-    await runInteractive(parsed)
+    await runInteractive(parsed, input)
     return
   }
 
-  const prompt = parsed.prompt || (await readPromptFromStdin())
+  const prompt = parsed.prompt || (await readPromptFromStdin(input))
   if (!prompt) {
     process.stderr.write('Error: prompt is required\n')
     process.exitCode = 1
@@ -172,7 +177,9 @@ async function run(): Promise<void> {
   const client = new Anthropic({
     apiKey: apiKey ?? undefined,
     authToken: authToken ?? undefined,
-    baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
+    baseURL: process.env.ANTHROPIC_BASE_URL
+      ? normalizeAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL)
+      : undefined,
     timeout: parseInt(process.env.API_TIMEOUT_MS || String(600_000), 10),
     maxRetries: 0,
   })
@@ -201,7 +208,7 @@ async function runInteractive(parsed: {
   model?: string
   systemPrompt?: string
   appendSystemPrompt?: string
-}): Promise<void> {
+}, input: RecoveryInput): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   const authToken = process.env.ANTHROPIC_AUTH_TOKEN
   if (!apiKey && !authToken) {
@@ -226,7 +233,9 @@ async function runInteractive(parsed: {
   const client = new Anthropic({
     apiKey: apiKey ?? undefined,
     authToken: authToken ?? undefined,
-    baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
+    baseURL: process.env.ANTHROPIC_BASE_URL
+      ? normalizeAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL)
+      : undefined,
     timeout: parseInt(process.env.API_TIMEOUT_MS || String(600_000), 10),
     maxRetries: 0,
   })
@@ -234,7 +243,7 @@ async function runInteractive(parsed: {
   const system = getSystemPrompt(parsed.systemPrompt, parsed.appendSystemPrompt)
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = []
   const rl = createInterface({
-    input: process.stdin,
+    input,
     output: process.stdout,
     prompt: 'you> ',
   })
@@ -284,8 +293,10 @@ async function runInteractive(parsed: {
   }
 }
 
-void run().catch(error => {
-  const message = error instanceof Error ? error.stack || error.message : String(error)
-  process.stderr.write(`${message}\n`)
-  process.exitCode = 1
-})
+if (import.meta.main) {
+  void run().catch(error => {
+    const message = error instanceof Error ? error.stack || error.message : String(error)
+    process.stderr.write(`${message}\n`)
+    process.exitCode = 1
+  })
+}

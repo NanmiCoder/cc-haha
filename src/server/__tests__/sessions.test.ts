@@ -853,6 +853,8 @@ describe('SessionService', () => {
 
     expect(scanned).toEqual(reduced.summary)
     expect(scanned).toEqual({
+      // The completed legacy messages predate any provable protocol snapshot.
+      sessionApiFormat: 'unknown',
       title: 'Canonical parity title',
       createdAt: '2026-07-01T01:00:00.000Z',
       modifiedAt: '2026-07-01T02:05:00.000Z',

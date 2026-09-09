@@ -1,6 +1,15 @@
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { RotateCw } from 'lucide-react'
-import { useSettingsStore, UI_ZOOM_DEFAULT, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP } from '../../stores/settingsStore'
+import {
+  useSettingsStore,
+  UI_ZOOM_DEFAULT,
+  UI_ZOOM_MIN,
+  UI_ZOOM_MAX,
+  UI_ZOOM_STEP,
+  DEFAULT_CLEANUP_PERIOD_DAYS,
+  MAX_CLEANUP_PERIOD_DAYS,
+} from '../../stores/settingsStore'
+import { settingsApi } from '../../api/settings'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
@@ -21,6 +30,7 @@ import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { getDesktopNotificationPermission, notifyDesktop, getDesktopNotificationPlatform, openDesktopNotificationSettings, requestDesktopNotificationPermission, type DesktopNotificationPermission } from '../../lib/desktopNotifications'
 import { SETTINGS_CHECKBOX_INPUT_CLASS, SettingsCheckboxMark, isValidHttpProxyUrl } from '../settings/shared'
+import { isTouchH5Document } from '../../lib/touchH5'
 import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 
 /**
@@ -84,6 +94,8 @@ export function GeneralSettings() {
     setWebSearch,
     network,
     setNetwork,
+    cleanupPeriodDays,
+    setCleanupPeriodDays,
     traceCapture,
     setTraceCaptureEnabled,
     responseLanguage,
@@ -124,9 +136,23 @@ export function GeneralSettings() {
   const [modeActionRunning, setModeActionRunning] = useState(false)
   const [modeError, setModeError] = useState<string | null>(null)
   const [uiZoomDraft, setUiZoomDraft] = useState(uiZoom)
+  const [retentionInput, setRetentionInput] = useState(String(cleanupPeriodDays ?? DEFAULT_CLEANUP_PERIOD_DAYS))
+  const [retentionConfirmOpen, setRetentionConfirmOpen] = useState(false)
+  const [retentionActionRunning, setRetentionActionRunning] = useState(false)
+  const [retentionSaveError, setRetentionSaveError] = useState<string | null>(null)
+  const [retentionPreviewFiles, setRetentionPreviewFiles] = useState<number | null>(null)
+  const [retentionPreviewLoading, setRetentionPreviewLoading] = useState(false)
+  /**
+   * The value the open dialog is asking about. Pinned when the dialog opens so
+   * a failed save (which rolls the store back and resets the input) cannot
+   * silently change what the user is about to confirm.
+   */
+  const [retentionPendingDays, setRetentionPendingDays] = useState<number | null>(null)
   const [isUiZoomDragging, setIsUiZoomDragging] = useState(false)
   const [effortOpen, setEffortOpen] = useState(false)
   const isUiZoomDraggingRef = useRef(false)
+  /** Guards against a slow dry-run response overwriting a newer one. */
+  const retentionPreviewRequestId = useRef(0)
   const effortButtonRef = useRef<HTMLButtonElement>(null)
   const addToast = useUIStore((s) => s.addToast)
   const openTargets = useOpenTargetStore((s) => s.targets)
@@ -169,6 +195,10 @@ export function GeneralSettings() {
     setNetworkTimeoutInput(String(Math.round(network.aiRequestTimeoutMs / 1000)))
     setNetworkSaveError(null)
   }, [network])
+
+  useEffect(() => {
+    setRetentionInput(String(cleanupPeriodDays ?? DEFAULT_CLEANUP_PERIOD_DAYS))
+  }, [cleanupPeriodDays])
 
   useEffect(() => {
     if (!isUiZoomDragging) {
@@ -420,6 +450,23 @@ export function GeneralSettings() {
     networkDraft.proxy.mode !== network.proxy.mode ||
     networkDraft.proxy.url.trim() !== network.proxy.url.trim()
 
+  const effectiveRetentionDays = cleanupPeriodDays ?? DEFAULT_CLEANUP_PERIOD_DAYS
+  const parsedRetentionDays = (() => {
+    const trimmed = retentionInput.trim()
+    if (!/^\d+$/.test(trimmed)) return null
+    const days = Number(trimmed)
+    if (!Number.isInteger(days) || days < 0 || days > MAX_CLEANUP_PERIOD_DAYS) return null
+    return days
+  })()
+  const retentionInputError =
+    retentionInput.trim().length === 0
+      ? t('settings.general.sessionRetentionRequired')
+      : parsedRetentionDays === null
+        ? t('settings.general.sessionRetentionRange', { max: String(MAX_CLEANUP_PERIOD_DAYS) })
+        : null
+  const retentionDirty =
+    parsedRetentionDays !== null && parsedRetentionDays !== effectiveRetentionDays
+
   const setNetworkTimeoutSeconds = (seconds: number) => {
     const nextSeconds = Math.min(Math.max(Math.round(seconds), NETWORK_TIMEOUT_MIN_SECONDS), NETWORK_TIMEOUT_MAX_SECONDS)
     setNetworkTimeoutInput(String(nextSeconds))
@@ -461,6 +508,82 @@ export function GeneralSettings() {
       setNetworkSaveError(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSavingNetwork(false)
+    }
+  }
+
+  /**
+   * Changing the retention period deletes transcripts immediately, so the save
+   * button never saves directly. It first asks the server for a dry-run count
+   * and only then opens the dialog with the blast radius already on screen —
+   * the dialog can therefore never be confirmed before the count is known.
+   */
+  const openRetentionConfirm = async () => {
+    if (parsedRetentionDays === null) {
+      setRetentionSaveError(
+        retentionInputError ??
+          t('settings.general.sessionRetentionRange', {
+            max: String(MAX_CLEANUP_PERIOD_DAYS),
+          }),
+      )
+      return
+    }
+    const days = parsedRetentionDays
+    const requestId = ++retentionPreviewRequestId.current
+    setRetentionSaveError(null)
+    setRetentionPreviewFiles(null)
+    setRetentionPreviewLoading(true)
+    try {
+      const preview = await settingsApi.cleanupSessions(days, true)
+      if (requestId !== retentionPreviewRequestId.current) return
+      setRetentionPreviewFiles(preview.files)
+      setRetentionPendingDays(days)
+      setRetentionConfirmOpen(true)
+    } catch (error) {
+      if (requestId !== retentionPreviewRequestId.current) return
+      setRetentionSaveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (requestId === retentionPreviewRequestId.current) {
+        setRetentionPreviewLoading(false)
+      }
+    }
+  }
+
+  const closeRetentionConfirm = () => {
+    if (retentionActionRunning) return
+    setRetentionConfirmOpen(false)
+    setRetentionPendingDays(null)
+    setRetentionSaveError(null)
+  }
+
+  const confirmRetentionChange = async () => {
+    if (retentionPendingDays === null) return
+    setRetentionActionRunning(true)
+    setRetentionSaveError(null)
+    try {
+      await setCleanupPeriodDays(retentionPendingDays)
+      const result = await settingsApi.cleanupSessions(retentionPendingDays)
+      setRetentionConfirmOpen(false)
+      setRetentionPendingDays(null)
+      addToast({
+        type: 'success',
+        message:
+          result.errors > 0
+            ? t('settings.general.sessionRetentionSavedPartial', {
+                count: String(result.files),
+                errors: String(result.errors),
+              })
+            : t('settings.general.sessionRetentionSaved', {
+                count: String(result.files),
+              }),
+      })
+      void useSessionStore.getState().fetchSessions()
+    } catch (error) {
+      // Keep the dialog open: the error is rendered inside it and the target
+      // value stays pinned, so confirming again retries the same change even if
+      // the failed save already rolled the store back.
+      setRetentionSaveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRetentionActionRunning(false)
     }
   }
 
@@ -1379,6 +1502,84 @@ export function GeneralSettings() {
         </Card>
       </div>
 
+      {/*
+        Retention changes delete transcripts irreversibly and the server only
+        accepts them with the desktop process token, so a paired phone browser
+        would only ever see a 403 here.
+      */}
+      {!isTouchH5Document() && (
+      <div className="mt-8 border-t border-[var(--color-border)] pt-8">
+        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.sessionRetentionTitle')}</h2>
+        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.sessionRetentionDescription')}</p>
+
+        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <label htmlFor="session-retention-days" className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.general.sessionRetentionLabel')}
+            </label>
+            <span className="rounded-[var(--radius-md)] bg-[var(--color-surface)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
+              {effectiveRetentionDays === 0
+                ? t('settings.general.sessionRetentionCurrentOff')
+                : t('settings.general.sessionRetentionCurrent', { days: String(effectiveRetentionDays) })}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <input
+                id="session-retention-days"
+                type="number"
+                min={0}
+                max={MAX_CLEANUP_PERIOD_DAYS}
+                step={1}
+                inputMode="numeric"
+                value={retentionInput}
+                aria-invalid={retentionInputError ? true : undefined}
+                aria-describedby="session-retention-help"
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value
+                  if (!/^\d*$/.test(nextValue)) return
+                  setRetentionInput(nextValue)
+                  setRetentionSaveError(null)
+                }}
+                className={`h-10 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface)] px-3 pr-14 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] ${
+                  retentionInputError
+                    ? 'border-[var(--color-error)] focus:shadow-[var(--shadow-error-ring)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'
+                }`}
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-tertiary)]">
+                {t('settings.general.sessionRetentionUnit')}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="min-w-[72px] px-4 whitespace-nowrap"
+              disabled={
+                !retentionDirty ||
+                !!retentionInputError ||
+                retentionActionRunning ||
+                retentionPreviewLoading
+              }
+              loading={retentionPreviewLoading || retentionActionRunning}
+              onClick={() => void openRetentionConfirm()}
+            >
+              {t('settings.general.sessionRetentionSave')}
+            </Button>
+          </div>
+          <p
+            id="session-retention-help"
+            className={`mt-2 text-xs leading-5 ${retentionInputError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}`}
+          >
+            {retentionInputError ?? t('settings.general.sessionRetentionHint')}
+          </p>
+          {retentionSaveError && (
+            <p className="mt-2 text-[11px] leading-4 text-[var(--color-error)]">{retentionSaveError}</p>
+          )}
+        </Card>
+      </div>
+      )}
+
       {isDesktopRuntime() && (
         <div className="mt-8 border-t border-[var(--color-border)] pt-8">
           <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.storageTitle')}</h2>
@@ -1539,6 +1740,37 @@ export function GeneralSettings() {
         cancelLabel={t('common.cancel')}
         confirmVariant="primary"
         loading={autoDreamActionRunning}
+      />
+      <ConfirmDialog
+        open={retentionConfirmOpen}
+        onClose={closeRetentionConfirm}
+        onConfirm={() => void confirmRetentionChange()}
+        title={t('settings.general.sessionRetentionConfirmTitle')}
+        body={(
+          <div className="space-y-2 text-sm leading-6">
+            <p>
+              {retentionPendingDays === 0
+                ? t('settings.general.sessionRetentionConfirmDisable')
+                : t('settings.general.sessionRetentionConfirmDelete', {
+                    days: String(retentionPendingDays ?? effectiveRetentionDays),
+                  })}
+            </p>
+            <p className="text-[var(--color-text-tertiary)]">
+              {retentionPreviewFiles === null
+                ? t('settings.general.sessionRetentionPreviewUnavailable')
+                : t('settings.general.sessionRetentionPreview', {
+                    count: String(retentionPreviewFiles),
+                  })}
+            </p>
+            {retentionSaveError && (
+              <p className="text-[var(--color-error)]">{retentionSaveError}</p>
+            )}
+          </div>
+        )}
+        confirmLabel={t('settings.general.sessionRetentionConfirmAction')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={retentionActionRunning}
       />
     </div>
   )

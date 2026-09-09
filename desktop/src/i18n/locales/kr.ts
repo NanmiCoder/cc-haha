@@ -1,6 +1,7 @@
 import type { TranslationKey } from './en'
 
 export const kr: Record<TranslationKey, string> = {
+  'sidebar.projectHistoryFailed': '이전 세션을 불러오지 못했습니다.',
   // ─── Common ──────────────────────────────────────
   'common.cancel': '취소',
   'common.close': '닫기',
@@ -1550,6 +1551,24 @@ export const kr: Record<TranslationKey, string> = {
   // Settings > General - Storage
   'settings.general.modeSwitchTitle': '데이터 저장 위치를 전환하시겠습니까?',
   'settings.general.modeSwitchConfirm': '저장하고 다시 시작',
+  'settings.general.sessionRetentionTitle': '세션 기록',
+  'settings.general.sessionRetentionDescription': '세션 기록을 이 기기에 보관하는 기간입니다. 값을 줄이면 오래된 기록이 즉시 삭제되므로 확인을 요청합니다.',
+  'settings.general.sessionRetentionLabel': '세션 기록 보관 기간',
+  'settings.general.sessionRetentionCurrent': '현재: {days}일',
+  'settings.general.sessionRetentionCurrentOff': '현재: 기록 저장 안 함',
+  'settings.general.sessionRetentionUnit': '일',
+  'settings.general.sessionRetentionHint': '기본값은 365일입니다. 0으로 설정하면 세션 내용을 기록하지 않고 기존 기록도 모두 삭제합니다.',
+  'settings.general.sessionRetentionRequired': '일수를 입력하세요.',
+  'settings.general.sessionRetentionRange': '0에서 {max} 사이의 정수를 입력하세요.',
+  'settings.general.sessionRetentionSave': '저장',
+  'settings.general.sessionRetentionSaved': '보관 기간을 업데이트하고 만료된 세션 파일 {count}개를 삭제했습니다.',
+  'settings.general.sessionRetentionSavedPartial': '보관 기간을 업데이트했습니다. 만료된 세션 파일 {count}개를 삭제했고 {errors}개는 삭제하지 못했습니다.',
+  'settings.general.sessionRetentionConfirmTitle': '세션 기록 보관 기간을 변경할까요?',
+  'settings.general.sessionRetentionConfirmDelete': '{days}일보다 오래된 세션 기록을 영구적으로 삭제합니다. 되돌릴 수 없습니다.',
+  'settings.general.sessionRetentionConfirmDisable': '0으로 설정하면 새 세션 내용을 기록하지 않고 기존 기록도 모두 영구적으로 삭제합니다. 되돌릴 수 없습니다.',
+  'settings.general.sessionRetentionPreview': '이 설정에서는 현재 파일 {count}개가 삭제됩니다.',
+  'settings.general.sessionRetentionPreviewUnavailable': '집계에 실패했습니다. 계속 진행할 수 있습니다.',
+  'settings.general.sessionRetentionConfirmAction': '삭제하고 저장',
   'settings.general.storageTitle': '데이터 저장 위치',
   'settings.general.storageDescription': '고급, 사용 빈도가 낮은 설정입니다. 전환 후에는 세션, 스킬, MCP, 플러그인, 공급자 설정, 작업, 캐시를 새 디렉터리에서 읽습니다.',
   'settings.general.storageSystemTitle': '시스템 디렉터리 사용',
@@ -2343,6 +2362,10 @@ export const kr: Record<TranslationKey, string> = {
   // ─── Model Selector ──────────────────────────────────────
   'model.selectModel': '모델 선택',
   'model.configureProvider': '모델 공급자 설정',
+  'model.protocolLocked': '이 세션은 {protocol} 프로토콜을 사용합니다. 다른 API 프로토콜을 사용하려면 새 세션을 시작하세요.',
+  'model.protocolMixed': '여러 API 프로토콜의 기록이 섞여 있어 이 세션을 계속할 수 없습니다. 모델 메뉴에서 새 세션을 시작하세요.',
+  'model.protocolUnknown': '이전 세션의 API 프로토콜을 확인할 수 없습니다. 모델 메뉴에서 새 세션을 시작하세요.',
+  'model.protocolRequiresNewSession': 'API 프로토콜이 다릅니다. 새 세션을 시작하세요',
   'model.configuration': '모델 구성',
   'model.searchPlaceholder': '모델 검색',
   'model.clearSearch': '모델 검색 지우기',

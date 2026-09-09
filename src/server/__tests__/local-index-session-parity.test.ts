@@ -403,6 +403,7 @@ describe('SessionService local-index routing parity', () => {
       projectPath: fileSession.projectPath,
       workDir: fileSession.workDir,
       runtimeProviderId: null,
+      sessionApiFormat: fileSession.sessionApiFormat,
     }
     gateway.page = { sessions: [explicitNullRow], total: 1 }
     await service.listSessions()

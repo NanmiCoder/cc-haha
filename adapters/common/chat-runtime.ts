@@ -35,6 +35,8 @@ import {
   type PermissionDecision,
 } from './permission.js'
 import { restoreStoredSessionBinding } from './session-recovery.js'
+import { SessionSelectionController } from './session-selection.js'
+import { syncImPermissionState } from './permission-sync.js'
 import type { SessionStore } from './session-store.js'
 import type { AttachmentRef, ServerMessage, WsBridge } from './ws-bridge.js'
 import { ImageBlockWatcher } from './attachment/image-block-watcher.js'
@@ -148,6 +150,7 @@ export class ImChatRuntime {
   private readonly pendingPermissions = new Map<string, Set<string>>()
   private readonly pendingProjectSelection = new Set<string>()
   private readonly imageWatchers = new Map<string, ImageBlockWatcher>()
+  private readonly sessionSelection: SessionSelectionController
 
   constructor(options: ImChatRuntimeOptions) {
     this.port = options.port
@@ -160,6 +163,17 @@ export class ImChatRuntime {
     this.dedup = options.dedup
     this.flushIntervalMs = options.flushIntervalMs ?? 800
     this.flushCharThreshold = options.flushCharThreshold ?? 320
+    this.sessionSelection = new SessionSelectionController({
+      httpClient: this.httpClient,
+      bridge: this.bridge,
+      sessionStore: this.sessionStore,
+      sendNotice: (chatId, text) => this.port.sendNotice(chatId, text),
+      onServerMessage: (chatId, message) => this.handleServerMessage(chatId, message),
+      clearTransientState: (chatId) => this.clearTransientChatState(chatId),
+      clearProjectSelection: (chatId) => { this.pendingProjectSelection.delete(chatId) },
+      isBusy: (chatId) => this.getRuntimeState(chatId).state !== 'idle'
+        || Boolean(this.pendingPermissions.get(chatId)?.size),
+    })
   }
 
   /** The work dir a `/new` with no argument would use. Exposed for adapters
@@ -230,6 +244,8 @@ export class ImChatRuntime {
       return
     }
 
+    if (!hasAttachments && await this.sessionSelection.handleInput(chatId, text)) return
+
     if (!hasAttachments && this.pendingProjectSelection.has(chatId)) {
       if (text) await this.startNewSession(chatId, text)
       return
@@ -247,6 +263,7 @@ export class ImChatRuntime {
     if (!effective && attachments.length === 0) return
 
     this.port.setBusy?.(chatId, true)
+    this.getRuntimeState(chatId).state = 'thinking'
     const sent = this.bridge.sendUserMessage(
       chatId,
       effective,
@@ -254,6 +271,7 @@ export class ImChatRuntime {
     )
     if (!sent) {
       this.port.setBusy?.(chatId, false)
+      this.getRuntimeState(chatId).state = 'idle'
       await this.port.sendNotice(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
     }
   }
@@ -299,6 +317,7 @@ export class ImChatRuntime {
       }
       this.clearTransientChatState(chatId)
       const sent = this.bridge.sendUserMessage(chatId, '/clear')
+      if (sent) this.getRuntimeState(chatId).state = 'thinking'
       await this.port.sendNotice(
         chatId,
         sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。',
@@ -338,6 +357,7 @@ export class ImChatRuntime {
 
   async handleServerMessage(chatId: string, msg: ServerMessage): Promise<void> {
     const runtime = this.getRuntimeState(chatId)
+    if (syncImPermissionState(chatId, msg, runtime, this.pendingPermissions)) return
 
     switch (msg.type) {
       case 'connected':
@@ -531,6 +551,7 @@ export class ImChatRuntime {
   }
 
   async showProjectPicker(chatId: string): Promise<void> {
+    this.sessionSelection.clear(chatId)
     try {
       const projects = await this.httpClient.listRecentProjects()
       if (projects.length === 0) {
@@ -557,6 +578,7 @@ export class ImChatRuntime {
   }
 
   async startNewSession(chatId: string, query?: string): Promise<void> {
+    this.sessionSelection.clear(chatId)
     this.bridge.resetSession(chatId)
     this.sessionStore.delete(chatId)
     this.clearTransientChatState(chatId)

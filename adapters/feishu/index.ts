@@ -26,6 +26,8 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
+import { syncImPermissionState } from '../common/permission-sync.js'
+import { SessionSelectionController } from '../common/session-selection.js'
 import { type RecentProject } from '../common/http-client.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import {
@@ -96,6 +98,21 @@ const uploadedImageKeys = new Map<string, Map<string, string>>()
 let botOpenId: string | null = null
 // WSClient reference for graceful shutdown
 let wsClient: InstanceType<typeof Lark.WSClient> | null = null
+
+const sessionSelectionController = new SessionSelectionController({
+  httpClient,
+  bridge,
+  sessionStore,
+  sendNotice: async (chatId, text) => { await sendText(chatId, text) },
+  onServerMessage: handleServerMessage,
+  clearTransientState: clearTransientChatState,
+  clearProjectSelection: (chatId) => { projectSelectionController.clear(chatId) },
+  isBusy: (chatId) => {
+    const runtime = getRuntimeState(chatId)
+    return runtime.state !== 'idle' || runtime.pendingPermissionCount > 0
+      || (pendingPermissions.get(chatId)?.size ?? 0) > 0
+  },
+})
 
 type ChatRuntimeState = {
   state: 'idle' | 'thinking' | 'streaming' | 'tool_executing' | 'permission_pending'
@@ -643,6 +660,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
 }
 
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
+  sessionSelectionController.clear(chatId)
   try {
     // Always tear down any stale WS connection before creating a new session.
     // Without this, bridge.connectSession() below would short-circuit when an
@@ -673,6 +691,7 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
+  sessionSelectionController.clear(chatId)
   try {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
@@ -694,6 +713,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
 }
 
 function prepareNewSession(chatId: string): void {
+  sessionSelectionController.clear(chatId)
   bridge.resetSession(chatId)
   sessionStore.delete(chatId)
   // Abort any in-flight streaming card for the previous session
@@ -712,10 +732,12 @@ function prepareNewSession(chatId: string): void {
 
 async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<void> {
   const runtime = getRuntimeState(chatId)
+  if (syncImPermissionState(chatId, msg, runtime, pendingPermissions)) return
 
   switch (msg.type) {
     case 'connected':
       break
+
 
     case 'status': {
       runtime.state = msg.state
@@ -959,6 +981,8 @@ async function handleMessage(data: any): Promise<void> {
       return
     }
 
+    if (!hasAttachments && await sessionSelectionController.handleInput(chatId, msgText)) return
+
     const projectOutcome = !hasAttachments
       ? await projectSelectionController.handleInput(chatId, msgText)
       : null
@@ -983,6 +1007,7 @@ async function handleMessage(data: any): Promise<void> {
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
+      if (sent) getRuntimeState(chatId).state = 'thinking'
       if (!sent) {
         await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
         return
@@ -1093,6 +1118,7 @@ async function handleMessage(data: any): Promise<void> {
     })
 
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments)
+    if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
       await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
     }
@@ -1171,12 +1197,14 @@ async function handleCardAction(data: any): Promise<any> {
     const projectName = event.action?.value?.projectName ?? realPath ?? '(unknown)'
     if (!realPath) return
 
-    projectSelectionController.clear(chatId)
-    // createSessionForChat handles its own error messaging on failure
-    const ok = await createSessionForChat(chatId, realPath)
-    if (ok) {
-      await sendText(chatId, `✅ 已新建会话：**${projectName}**`)
-    }
+    await enqueue(chatId, async () => {
+      projectSelectionController.clear(chatId)
+      // createSessionForChat handles its own error messaging on failure
+      const ok = await createSessionForChat(chatId, realPath)
+      if (ok) {
+        await sendText(chatId, `✅ 已新建会话：**${projectName}**`)
+      }
+    })
     return { toast: { type: 'info', content: `📁 ${projectName}` } }
   }
 }
@@ -1254,14 +1282,16 @@ async function start(): Promise<void> {
   console.log('[Feishu] Bot is running! (WebSocket connected)')
 }
 
-start().catch((err) => {
+if (import.meta.main || process.argv.includes('--feishu')) start().catch((err) => {
   console.error('[Feishu] Failed to start:', err)
   process.exit(1)
 })
 
-process.on('SIGINT', () => {
+if (import.meta.main || process.argv.includes('--feishu')) process.on('SIGINT', () => {
   console.log('[Feishu] Shutting down...')
   bridge.destroy()
   dedup.destroy()
   process.exit(0)
 })
+
+export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, handleMessage, handleCardAction, larkClient, prepareNewSession }

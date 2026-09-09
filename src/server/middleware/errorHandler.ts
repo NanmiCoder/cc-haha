@@ -3,6 +3,7 @@
  */
 
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { SessionProtocolError } from '../services/sessionProtocolHistory.js'
 
 export class ApiError extends Error {
   constructor(
@@ -32,7 +33,7 @@ export class ApiError extends Error {
 }
 
 export function errorResponse(error: unknown): Response {
-  if (error instanceof ApiError) {
+  if (error instanceof ApiError || error instanceof SessionProtocolError) {
     return Response.json(
       { error: error.code || 'ERROR', message: error.message },
       { status: error.statusCode }

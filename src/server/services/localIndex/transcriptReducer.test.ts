@@ -116,6 +116,7 @@ describe('reduceTranscript', () => {
     const result = reduceTranscript(chunks, initialProjection())
 
     expect(result.summary).toEqual({
+      sessionApiFormat: 'unknown',
       title: 'Pinned title',
       createdAt: '2026-01-01T00:00:00.000Z',
       modifiedAt: '2026-01-01T00:02:00.000Z',

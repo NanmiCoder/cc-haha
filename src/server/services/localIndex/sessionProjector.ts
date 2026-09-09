@@ -34,7 +34,7 @@ import type {
 // that refreshes already-indexed transcripts.
 // 3: usage is deduplicated per (message.id, requestId), and sessions carry active working time.
 // 4: usage copied into a fork is excluded from the fork's activity projection.
-export const SESSION_SUMMARY_PARSER_VERSION = 4
+export const SESSION_SUMMARY_PARSER_VERSION = 5
 
 export type SessionSourceCandidate = {
   path: string
@@ -573,8 +573,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           transcript_path, session_id, project_path, title, created_at,
           modified_at, modified_at_ms, message_count, work_dir, repository_json,
           worktree_session_json, permission_mode, runtime_provider_id,
-          runtime_provider_present, runtime_model_id, effort_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          runtime_provider_present, runtime_model_id, effort_level, session_api_format
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(transcript_path) DO UPDATE SET
           session_id = excluded.session_id,
           project_path = excluded.project_path,
@@ -590,7 +590,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           runtime_provider_id = excluded.runtime_provider_id,
           runtime_provider_present = excluded.runtime_provider_present,
           runtime_model_id = excluded.runtime_model_id,
-          effort_level = excluded.effort_level
+          effort_level = excluded.effort_level,
+          session_api_format = excluded.session_api_format
       `,
       bundle.candidate.path,
       bundle.candidate.sessionId,
@@ -609,7 +610,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
       summary.runtimeProviderId ?? null,
       runtimeProviderPresent,
       summary.runtimeModelId ?? null,
-      summary.effortLevel ?? null)
+      summary.effortLevel ?? null,
+      summary.sessionApiFormat ?? null)
 
       writeBackfillState(
         writer,

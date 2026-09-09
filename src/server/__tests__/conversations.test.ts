@@ -34,7 +34,7 @@ import { ProviderService } from '../services/providerService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
-import * as desktopOpenAIModelCatalog from '../services/openAIModelCatalogService.js'
+import * as desktopOpenAIModelCatalog from '../services/openaiModelCatalog.js'
 
 async function rmWithRetry(targetPath: string): Promise<void> {
   const attempts = process.platform === 'win32' ? 5 : 1
@@ -4027,7 +4027,7 @@ describe('WebSocket Chat Integration', () => {
       markValidationStarted = resolve
     })
     let releaseValidation!: () => void
-    const validationGate = new Promise<Awaited<ReturnType<typeof desktopOpenAIModelCatalog.getDesktopOpenAIModelCatalog>>>((resolve) => {
+    const validationGate = new Promise<Awaited<ReturnType<typeof desktopOpenAIModelCatalog.getDesktopOpenAICodexModelCatalog>>>((resolve) => {
       releaseValidation = () => resolve([{
         value: 'gpt-5.6-sol',
         label: 'GPT-5.6 Sol',
@@ -4038,7 +4038,7 @@ describe('WebSocket Chat Integration', () => {
     })
     const modelCatalogSpy = spyOn(
       desktopOpenAIModelCatalog,
-      'getDesktopOpenAIModelCatalog',
+      'getDesktopOpenAICodexModelCatalog',
     ).mockImplementation(() => {
       markValidationStarted()
       return validationGate

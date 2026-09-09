@@ -1,3 +1,4 @@
+import type { SessionProtocolState } from '../../../src/shared/sessionProtocol'
 import { create } from 'zustand'
 import { wsManager } from '../api/websocket'
 import { sessionsApi } from '../api/sessions'
@@ -106,6 +107,7 @@ type PendingComputerUsePermission = {
 type PendingComputerUsePermissions = Record<string, PendingComputerUsePermission>
 
 export type PerSessionState = {
+  sessionApiFormat?: SessionProtocolState
   messages: UIMessage[]
   chatState: ChatState
   /**
@@ -2596,6 +2598,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         [sessionId]: {
           ...createDefaultSessionState(),
           connectionState: 'connecting',
+          sessionApiFormat: existing?.sessionApiFormat,
           connectionSnapshotReady: false,
           messages: existing?.messages ?? [],
           // A new connection lifecycle may have durable transcript rows that
@@ -4335,6 +4338,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ? 'idle'
             : 'running',
         )
+        break
+
+      case 'session_protocol':
+        update(() => ({ sessionApiFormat: msg.sessionApiFormat }))
+        useSessionStore.getState().updateSessionApiFormat(sessionId, msg.sessionApiFormat)
         break
 
       case 'runtime_config_applied': {

@@ -24,7 +24,10 @@ type SessionRuntimeStore = {
   setSelection: (key: string, selection: RuntimeSelection) => void
   clearSelection: (key: string) => void
   moveSelection: (fromKey: string, toKey: string) => void
-  syncFromSessions: (sessions: SessionListItem[]) => void
+  syncFromSessions: (
+    sessions: SessionListItem[],
+    expectedSelections?: Record<string, RuntimeSelection>,
+  ) => void
 }
 
 function normalizeSelection(selection: RuntimeSelection): RuntimeSelection | null {
@@ -132,10 +135,13 @@ export const useSessionRuntimeStore = create<SessionRuntimeStore>((set) => ({
       return { selections }
     }),
 
-  syncFromSessions: (sessions) =>
+  syncFromSessions: (sessions, expectedSelections) =>
     set((state) => {
       let selections = state.selections
       for (const session of sessions) {
+        // A list response can describe the runtime before a user switched
+        // models. Never replay that snapshot over a selection made in flight.
+        if (expectedSelections && state.selections[session.id] !== expectedSelections[session.id]) continue
         if (!session.runtimeModelId || session.runtimeProviderId === undefined) continue
         const selection = normalizeSelection({
           providerId: session.runtimeProviderId,

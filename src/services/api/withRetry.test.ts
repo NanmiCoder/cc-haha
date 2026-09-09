@@ -399,3 +399,33 @@ describe('RetriableStreamError', () => {
     expect(wrapped.message).toContain('boom')
   })
 })
+
+describe('policy rejection retry boundaries', () => {
+  test.each([401, 429, 503, 529])('stops HTTP %s policy errors before retry, refresh or model fallback', async status => {
+    const body = { error: { type: 'overloaded_error', code: 'cyber_policy', message: 'Rejected' } }
+    const rejection = new APIError(status, body, undefined, new Headers({ 'x-should-retry': 'true', 'retry-after': '0' }))
+    let clientCalls = 0
+    let attempts = 0
+    const generator = withRetry(
+      async () => { clientCalls++; return {} as Anthropic },
+      async () => { attempts++; throw rejection },
+      { model: 'gpt-6', fallbackModel: 'fallback', initialConsecutive529Errors: 2, thinkingConfig: { type: 'disabled' }, maxRetries: 3 },
+    )
+    // The first next must fail; even a retry status yield would mean replay was scheduled.
+    let caught: unknown
+    try { await generator.next() } catch (error) { caught = error }
+    expect(caught).toBeInstanceOf(CannotRetryError)
+    expect((caught as CannotRetryError).originalError).toBe(rejection)
+    expect(attempts).toBe(1)
+    expect(clientCalls).toBe(1)
+  })
+
+  test('does not retry policy errors disguised as transient SSE or transport errors', () => {
+    for (const type of ['api_error', 'overloaded_error']) {
+      const body = { error: { type, code: 'cyber_policy' } }
+      expect(isRetryableStreamError(new APIError(undefined, body, undefined, undefined))).toBe(false)
+    }
+    const error = Object.assign(new Error('Disconnected'), { code: 'ECONNRESET', cause: { error: { code: 'cyber_policy' } } })
+    expect(isRetryableStreamTransportError(error)).toBe(false)
+  })
+})

@@ -118,6 +118,7 @@ function createController(overrides?: Record<string, unknown>) {
             title: 'Fix IM',
             createdAt: '2026-06-09T07:00:00.000Z',
             workDir: '/work/repo',
+            projectRoot: '/work/repo',
             projectPath: '/work/repo',
             workDirExists: true,
             modifiedAt: '2026-06-09T08:00:00.000Z',
@@ -126,11 +127,15 @@ function createController(overrides?: Record<string, unknown>) {
         ],
         total: 1,
       })),
+      sessionExists: mock(async () => true),
     },
     defaultWorkDir: '/work/repo',
     isAllowedUser: mock(() => true),
     ensureExistingSession: mock(async () => ({ sessionId: 'active', workDir: '/work/repo' })),
     clearTransientChatState: mock((chatId: string) => bridgeEvents.push(`clear:${chatId}`)),
+    clearOtherSelections: mock(() => {}),
+    isBusy: mock(() => false),
+    getStoredSession: mock(() => ({ sessionId: 'active', workDir: '/work/repo', updatedAt: 1 })),
     setStoredSession: mock((chatId: string, sessionId: string, workDir: string) => {
       bridgeEvents.push(`store:${chatId}:${sessionId}:${workDir}`)
     }),
@@ -140,6 +145,7 @@ function createController(overrides?: Record<string, unknown>) {
       bridgeEvents.push(`connect:${chatId}:${sessionId}`)
     }),
     onBridgeServerMessage: mock((chatId: string) => bridgeEvents.push(`listen:${chatId}`)),
+    handleServerMessage: mock(async () => {}),
     waitForBridgeOpen: mock(async () => true),
     sendUserMessage: mock((chatId: string, content: string) => {
       sentUserMessages.push({ chatId, content })
@@ -239,7 +245,7 @@ describe('Telegram command controller helpers', () => {
     } as any
 
     registerTelegramExtendedCommands(bot, controller)
-    expect(commands).toEqual(['start', 'help', 'resume', 'provider', 'model', 'skills'])
+    expect(commands).toEqual(['start', 'help', 'provider', 'model', 'skills'])
 
     const handled = await tryHandleTelegramSelectionCallback(
       'tgsel:model:pick:2',
@@ -555,8 +561,7 @@ describe('Telegram command controller helpers', () => {
     })
 
     expect(deps.httpClient.listSessions).toHaveBeenCalledWith({
-      project: '/work/repo',
-      limit: 50,
+      limit: 100,
       offset: 0,
     })
     expect(projectCallback.edits[0]).toContain('选择要恢复的会话')
@@ -568,14 +573,113 @@ describe('Telegram command controller helpers', () => {
       index: 0,
     })
 
-    expect(bridgeEvents).toEqual([
-      'reset:42',
-      'clear:42',
-      'store:42:session-123456789:/work/repo',
-      'connect:42:session-123456789',
-      'listen:42',
-    ])
+    expect(bridgeEvents).toContain('connect:42:session-123456789')
+    expect(bridgeEvents.indexOf('store:42:session-123456789:/work/repo'))
+      .toBeGreaterThan(bridgeEvents.indexOf('connect:42:session-123456789'))
+    expect(deps.httpClient.sessionExists).toHaveBeenCalledWith('session-123456789')
     expect(sessionCallback.edits[0]).toContain('已恢复会话')
+  })
+
+  it('keeps the current binding when a selected historical session has been deleted', async () => {
+    const { controller, deps, bridgeEvents } = createController()
+    deps.httpClient.sessionExists = mock(async () => false)
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    await controller.handleSelectionCallback(createCommandContext().ctx, {
+      kind: 'resume_project', action: 'pick', index: 0,
+    })
+    const callback = createCommandContext()
+    await controller.handleSelectionCallback(callback.ctx, {
+      kind: 'resume_session', action: 'pick', index: 0,
+    })
+    expect(bridgeEvents).toEqual([])
+    expect(callback.edits[0]).toContain('不存在')
+  })
+
+  it('loads every history page and restores a worktree through the project resume menu', async () => {
+    const { controller, deps } = createController()
+    const histories = Array.from({ length: 105 }, (_, index) => ({
+      id: `session-${String(index).padStart(3, '0')}`,
+      title: index === 104 ? 'Tree migration' : `History ${index}`,
+      createdAt: '2026-06-09T07:00:00.000Z',
+      modifiedAt: '2026-06-09T08:00:00.000Z',
+      messageCount: 5,
+      workDir: index === 104 ? '/work/repo-feature' : '/work/repo',
+      projectRoot: '/work/repo',
+      projectPath: index === 104 ? '-work-repo-feature' : '-work-repo',
+      workDirExists: true,
+    }))
+    histories.push({ ...histories[0], id: 'foreign', title: 'Other project', workDir: '/work/other', projectRoot: '/work/other' })
+    deps.httpClient.listSessions.mockImplementation(async (query: { project?: string; limit: number; offset: number }) => {
+      const matches = query.project ? histories.filter((session) => session.workDir === query.project) : histories
+      return { sessions: matches.slice(query.offset, query.offset + query.limit), total: matches.length }
+    })
+
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    await controller.handleSelectionCallback(createCommandContext().ctx, {
+      kind: 'resume_project', action: 'pick', index: 0,
+    })
+    const lastPage = createCommandContext()
+    await controller.handleSelectionCallback(lastPage.ctx, {
+      kind: 'resume_session', action: 'page', index: 13,
+    })
+    expect(lastPage.edits[0]).toContain('Tree migration')
+    expect(lastPage.edits[0]).not.toContain('Other project')
+    expect(deps.httpClient.listSessions.mock.calls).toEqual([
+      [{ limit: 100, offset: 0 }],
+      [{ limit: 100, offset: 100 }],
+    ])
+
+    const callback = createCommandContext()
+    await controller.handleSelectionCallback(callback.ctx, {
+      kind: 'resume_session', action: 'pick', index: 104,
+    })
+    expect(deps.setStoredSession).toHaveBeenCalledWith('42', 'session-104', '/work/repo-feature')
+    expect(deps.connectBridgeSession).toHaveBeenCalledWith('42', 'session-104')
+    expect(callback.edits[0]).toContain('已恢复会话')
+  })
+
+  it('refuses to switch an active turn or permission request from the resume menu', async () => {
+    const { controller, deps, bridgeEvents } = createController({ isBusy: () => true })
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    expect(deps.clearOtherSelections).toHaveBeenCalledWith('42')
+    await controller.handleSelectionCallback(createCommandContext().ctx, {
+      kind: 'resume_project', action: 'pick', index: 0,
+    })
+    const callback = createCommandContext()
+    await controller.handleSelectionCallback(callback.ctx, {
+      kind: 'resume_session', action: 'pick', index: 0,
+    })
+    expect(bridgeEvents).toEqual([])
+    expect(callback.edits[0]).toContain('/stop')
+    expect(deps.httpClient.sessionExists).not.toHaveBeenCalled()
+  })
+
+  it('clears an older menu before a new resume list fails to load', async () => {
+    const { controller, deps } = createController()
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    deps.httpClient.listRecentProjects.mockRejectedValueOnce(new Error('offline'))
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    const callback = createCommandContext()
+    await controller.handleSelectionCallback(callback.ctx, {
+      kind: 'resume_project', action: 'pick', index: 0,
+    })
+    expect(callback.answers[0]).toContain('选择已过期')
+    expect(deps.httpClient.listSessions).not.toHaveBeenCalled()
+  })
+
+  it('reports a preflight failure without disconnecting the current session', async () => {
+    const { controller, deps, bridgeEvents } = createController()
+    deps.httpClient.sessionExists.mockRejectedValueOnce(new Error('server unavailable'))
+    await controller.handleResumeCommand(createCommandContext().ctx)
+    await controller.handleSelectionCallback(createCommandContext().ctx, {
+      kind: 'resume_project', action: 'pick', index: 0,
+    })
+    const callback = createCommandContext()
+    await controller.handleSelectionCallback(callback.ctx, {
+      kind: 'resume_session', action: 'pick', index: 0,
+    })
+    expect(bridgeEvents).toEqual([])
+    expect(callback.edits[0]).toContain('server unavailable')
   })
 
   it('handles selection callback edge cases and resume timeout cleanup', async () => {
@@ -629,9 +733,10 @@ describe('Telegram command controller helpers', () => {
       index: 0,
     })
 
-    expect(deps.deleteStoredSession).toHaveBeenCalledWith('42')
-    expect(bridgeEvents).toContain('delete:42')
-    expect(timeout.edits[0]).toContain('连接服务器超时')
+    expect(deps.deleteStoredSession).not.toHaveBeenCalled()
+    expect(deps.setStoredSession).not.toHaveBeenCalled()
+    expect(bridgeEvents).toContain('connect:42:active')
+    expect(timeout.edits[0]).toContain('超时')
   })
 
   it('handles selection callback failures for provider, model, and session lists', async () => {
@@ -698,7 +803,10 @@ describe('Telegram command controller helpers', () => {
       defaultWorkDir: '/work/repo',
       bridge: {
         resetSession: (chatId) => events.push(`reset:${chatId}`),
-        connectSession: (chatId, sessionId) => events.push(`connect:${chatId}:${sessionId}`),
+        connectSession: (chatId, sessionId) => {
+          events.push(`connect:${chatId}:${sessionId}`)
+          return true
+        },
         onServerMessage: (chatId, handler) => {
           events.push(`listen:${chatId}`)
           void handler({ type: 'connected' })
@@ -714,16 +822,20 @@ describe('Telegram command controller helpers', () => {
         },
       },
       sessionStore: {
+        get: () => ({ sessionId: 'active', workDir: '/work/repo', updatedAt: 1 }),
         set: (chatId, sessionId, workDir) => events.push(`store:${chatId}:${sessionId}:${workDir}`),
         delete: (chatId) => events.push(`delete:${chatId}`),
       },
       isAllowedUser: () => allowPermissionUser,
       ensureExistingSession: mock(async () => ({ sessionId: 'active', workDir: '/work/repo' })),
       clearTransientChatState: (chatId) => events.push(`clear:${chatId}`),
+      clearOtherSelections: () => {},
+      isBusy: () => false,
       handleServerMessage: (chatId, msg) => {
         events.push(`message:${chatId}:${(msg as any).type}`)
       },
       setRuntimeModel: (chatId, modelId) => events.push(`model:${chatId}:${modelId}`),
+      setRuntimeBusy: (chatId) => events.push(`busy:${chatId}`),
     })
 
     await controller.setModelFromCommand('42', 'model-x')
@@ -749,6 +861,13 @@ describe('Telegram command controller helpers', () => {
     expect(events).toContain('permit:42:req-1:true:')
     expect(events).toContain('decrement:42')
     expect(permissionCtx.edits[0]).toContain('已允许')
+
+    await controller.handleSkillsCommand(createCommandContext().ctx)
+    await controller.handleSelectionCallback(createCommandContext().ctx, {
+      kind: 'skill', action: 'pick', index: 0,
+    })
+    expect(events).toContain('send:42:/skill-a')
+    expect(events).toContain('busy:42')
 
     const missingIdentityCtx = createCommandContext()
     delete (missingIdentityCtx.ctx as any).from

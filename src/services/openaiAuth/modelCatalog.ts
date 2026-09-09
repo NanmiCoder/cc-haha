@@ -7,7 +7,6 @@ import {
 import { createModelCatalogCache } from '../modelCatalogCache.js'
 import { ensureFreshOpenAITokens } from './index.js'
 import { getOpenAIOAuthTokens } from './storage.js'
-import type { OpenAIOAuthTokens } from './types.js'
 import {
   OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT,
   OPENAI_CODEX_MODEL_CATALOG,
@@ -96,14 +95,21 @@ function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry |
   }
 }
 
-type OpenAIModelCatalogTokens = Pick<OpenAIOAuthTokens, 'accessToken' | 'accountId'>
+export type OpenAIModelCatalogTokens = {
+  accessToken: string
+  accountId?: string | null
+  email?: string | null
+}
+
 type OpenAIModelCatalogTokenProvider = () => Promise<OpenAIModelCatalogTokens | null>
 
 export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
-  tokenProvider: OpenAIModelCatalogTokenProvider = ensureFreshOpenAITokens,
+  suppliedTokens?: OpenAIModelCatalogTokens | null,
 ): Promise<OpenAIModelCatalogEntry[]> {
-  const tokens = await tokenProvider()
+  const tokens = suppliedTokens === undefined
+    ? await ensureFreshOpenAITokens()
+    : suppliedTokens
   if (!tokens) {
     throw new Error('OpenAI OAuth token is unavailable')
   }
@@ -143,22 +149,24 @@ export async function getOpenAICodexModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
   throwOnForceRefreshError?: boolean
-  accountKey?: string
+  /** Explicit desktop credentials; null must never fall through to CLI storage. */
+  tokens?: OpenAIModelCatalogTokens | null
+  /** Refresh credentials only when fetching, not on the cached startup path. */
   tokenProvider?: OpenAIModelCatalogTokenProvider
 }): Promise<OpenAIModelCatalogEntry[]> {
   if (options?.forceRefresh) runtimeCatalogGeneration += 1
   const resolutionGeneration = runtimeCatalogGeneration
-  const tokens = options?.accountKey ? null : getOpenAIOAuthTokens()
-  const accountKey = options?.accountKey ?? (tokens
+  const tokens = options?.tokens === undefined ? getOpenAIOAuthTokens() : options.tokens
+  const accountKey = tokens
     ? tokens.accountId ?? tokens.email ?? 'authenticated-default'
-    : 'logged-out')
+    : 'logged-out'
   const models = await catalogCache.resolve({
     accountKey,
     fetchCatalog: async () => {
-      const models = await fetchOpenAICodexModelCatalog(
-        options?.fetchOverride,
-        options?.tokenProvider,
-      )
+      const suppliedTokens = options?.tokenProvider
+        ? await options.tokenProvider()
+        : options?.tokens
+      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride, suppliedTokens)
       if (models.length === 0) {
         throw new Error('OpenAI models endpoint returned no visible models')
       }

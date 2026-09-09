@@ -10,6 +10,9 @@ import {
   OPENAI_OFFICIAL_PROVIDER_ID,
 } from '../../constants/openaiOfficialProvider'
 import { useTranslation } from '../../i18n'
+import { Button } from '@/components/ui/Button'
+import { resolveProviderApiFormat, type SessionApiFormat } from '../../../../src/shared/sessionProtocol'
+import { useSessionStore } from '@/stores/sessionStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
@@ -48,6 +51,7 @@ type ProviderChoice = {
   providerId: string | null
   providerName: string
   isDefault: boolean
+  apiFormat?: SessionApiFormat
   models: ModelInfo[]
 }
 
@@ -112,6 +116,7 @@ function officialChoices(
     providerId,
     providerName: officialName,
     isDefault,
+    apiFormat: resolveProviderApiFormat(providerId),
     models,
   }
 }
@@ -224,6 +229,7 @@ function buildProviderChoices(
       providerId: provider.id,
       providerName: provider.name,
       isDefault: activeId === provider.id,
+      apiFormat: resolveProviderApiFormat(provider.id, provider),
       models: buildProviderModels(provider, labels),
     })
   }
@@ -275,6 +281,16 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const runtimeSelection = useSessionRuntimeStore((state) =>
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
+  const listedSession = useSessionStore((state) =>
+    runtimeKey ? state.sessions.find((session) => session.id === runtimeKey) : undefined,
+  )
+  const liveProtocol = useChatStore((state) =>
+    runtimeKey ? state.sessions[runtimeKey]?.sessionApiFormat : undefined,
+  )
+  const sessionProtocol = runtimeKey && runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY
+    ? liveProtocol ?? listedSession?.sessionApiFormat
+    : undefined
+  const [creatingSession, setCreatingSession] = useState(false)
   const [open, setOpen] = useState(false)
   const [effortOpen, setEffortOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -570,8 +586,47 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     open: openSelector,
   }), [openSelector])
 
+  const protocolLabel = (protocol: SessionApiFormat) => ({
+    anthropic: 'Messages',
+    openai_chat: 'Chat Completions',
+    openai_responses: 'Responses',
+  })[protocol]
+  const protocolNotice = sessionProtocol === 'mixed'
+    ? t('model.protocolMixed')
+    : sessionProtocol === 'unknown'
+      ? t('model.protocolUnknown')
+      : sessionProtocol
+        ? t('model.protocolLocked', { protocol: protocolLabel(sessionProtocol) })
+        : null
+  const blocksProtocol = (apiFormat: SessionApiFormat | undefined) => Boolean(
+    sessionProtocol && sessionProtocol !== apiFormat,
+  )
+  const createNewSession = async () => {
+    if (creatingSession) return
+    setCreatingSession(true)
+    try {
+      const sessionId = await useSessionStore.getState().createSession(
+        listedSession?.workDir || listedSession?.projectRoot || undefined,
+      )
+      if (requestedRuntimeSelection) {
+        useSessionRuntimeStore.getState().setSelection(sessionId, requestedRuntimeSelection)
+      }
+      useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
+      useChatStore.getState().connectToSession(sessionId)
+      setOpen(false)
+    } catch (error) {
+      useUIStore.getState().addToast({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+      })
+    } finally {
+      setCreatingSession(false)
+    }
+  }
+
   const handleRuntimeSelect = (selection: RuntimeSelection) => {
     const provider = providers.find((entry) => entry.id === selection.providerId)
+    if (blocksProtocol(resolveProviderApiFormat(selection.providerId, provider))) return
     const normalizedSelection = normalizeRuntimeSelection(
       selection,
       provider?.apiFormat,
@@ -612,6 +667,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
 
   const dropdownContent = (
     <>
+      {protocolNotice && (
+        <div className="flex-none border-b border-[var(--color-border)] px-4 py-3">
+          <p role="status" className="text-xs text-[var(--color-text-secondary)]">{protocolNotice}</p>
+          <Button size="sm" variant="ghost" disabled={creatingSession} onClick={() => void createNewSession()}>
+            {t('sidebar.newSession')}
+          </Button>
+        </div>
+      )}
       {/* The header stays OUTSIDE the scroll region: a sticky header inside
           `overflow-y-auto` depends on the engine compositing it above the
           scrolling layer, and on the desktop shell scrolled items paint
@@ -655,10 +718,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                     const isSelected =
                       activeRuntimeSelection?.providerId === choice.providerId &&
                       activeRuntimeSelection.modelId === model.id
+                    const protocolBlocked = blocksProtocol(choice.apiFormat)
                     return (
                       <button
                         key={`${choice.providerId ?? 'official'}:${model.id}`}
+                        disabled={protocolBlocked}
+                        title={protocolBlocked ? t('model.protocolRequiresNewSession') : undefined}
                         onClick={() => {
+                          if (protocolBlocked) return
                           const supportedEfforts = model.supportedReasoningEfforts
                           const explicitEffort = activeRuntimeSelection?.effortLevel
                           const selectedProvider = providers.find(
@@ -701,7 +768,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                           })
                         }}
                         className={`
-                          w-full rounded-[var(--radius-md)] border px-3 text-left transition-colors
+                          w-full rounded-[var(--radius-md)] border px-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50
                           ${isMobileBrowser ? 'min-h-[56px] py-3' : 'py-2'}
                           ${isSelected
                             ? 'border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
@@ -716,6 +783,11 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                             <div className="truncate font-mono text-[13px] font-medium text-[var(--color-text-primary)]">
                               {model.name}
                             </div>
+                            {protocolBlocked && (
+                              <div aria-hidden="true" className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
+                                {t('model.protocolRequiresNewSession')}
+                              </div>
+                            )}
                             {model.description && (
                               <div className="mt-0.5 truncate pr-[6px] text-[11px] text-[var(--color-text-tertiary)]">
                                 {model.description}

@@ -24,6 +24,8 @@ import { getCcHahaDir, getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getImageStoreDir } from '../../utils/imageStore.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import { isUserProvidedImage } from '../../utils/userProvidedImages.js'
+import { buildApiSmartImageBodies, isApiSmartImageConfig } from './apiSmart.js'
+import { downloadGeneratedImage } from './imageDownload.js'
 
 export type ImageGenerationInput = {
   prompt: string
@@ -76,6 +78,7 @@ export type PreparedInputImage = {
 
 type GenerateOptions = {
   fetchImpl?: FetchLike
+  downloadImage?: (url: string, signal: AbortSignal) => Promise<Buffer>
   outputDir?: string
   inputRootDirs?: string[]
   signal?: AbortSignal
@@ -122,6 +125,7 @@ export async function generateImages(
         config.kind,
         fetchImpl,
         signal,
+        isApiSmartImageConfig(config) ? options.downloadImage ?? downloadGeneratedImage : undefined,
       )
       images.push(
         await persistImage(outputDir, bytes, index, rawImage.revisedPrompt),
@@ -264,9 +268,11 @@ async function requestCompatibleImages(
     ? buildImagesEditUrl(config.baseUrl)
     : buildImagesGenerationUrl(config.baseUrl)
   const images: RawGeneratedImage[] = []
-  const bodies = inputImages.length > 0
-    ? buildCompatibleEditBodies(input, inputImages)
-    : buildCompatibleRequestBodies(input)
+  const bodies = isApiSmartImageConfig(config)
+    ? buildApiSmartImageBodies(input, inputImages)
+    : inputImages.length > 0
+      ? buildCompatibleEditBodies(input, inputImages)
+      : buildCompatibleRequestBodies(input)
   for (const body of bodies) {
     const response = body instanceof FormData
       ? await postMultipartImages(fetchImpl, url, config.apiKey, body, signal)
@@ -696,6 +702,7 @@ async function resolveImageBytes(
   providerKind: ImageGenerationProviderKind,
   fetchImpl: FetchLike,
   signal: AbortSignal,
+  downloadImage?: (url: string, signal: AbortSignal) => Promise<Buffer>,
 ): Promise<Buffer> {
   if (image.b64Json) {
     const normalized = image.b64Json.replace(/\s+/g, '')
@@ -712,6 +719,7 @@ async function resolveImageBytes(
   if (!image.url) {
     throw new Error('The image provider returned an empty image item.')
   }
+  if (downloadImage) return downloadImage(image.url, signal)
   if (providerKind !== 'grok_oauth') {
     throw new Error(
       'The custom image API returned a URL. Configure it to return b64_json so the desktop can save the image safely.',

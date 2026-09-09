@@ -16,7 +16,7 @@ import { ImChatRuntime, type ChatPort, type ResponseStream } from '../chat-runti
 import { loadConfig } from '../config.js'
 import { MessageDedup } from '../message-dedup.js'
 import { SessionStore } from '../session-store.js'
-import type { AdapterHttpClient } from '../http-client.js'
+import type { AdapterHttpClient, SessionListItem } from '../http-client.js'
 import type { AttachmentRef, ServerMessage, WsBridge } from '../ws-bridge.js'
 
 const CHAT_ID = 'chat-1'
@@ -87,6 +87,7 @@ class FakeBridge {
 }
 
 class FakeHttpClient {
+  sessions: SessionListItem[] = []
   createdSessions: string[] = []
   existingSessions = new Set<string>()
   projects: Array<{ projectName: string; realPath: string; branch?: string }> = []
@@ -105,6 +106,10 @@ class FakeHttpClient {
 
   async listRecentProjects() {
     return this.projects
+  }
+
+  async listSessions() {
+    return { sessions: this.sessions, total: this.sessions.length }
   }
 
   async matchProject(query: string) {
@@ -607,5 +612,98 @@ describe('ImChatRuntime attachment authorization', () => {
     await Promise.all([slow, fast])
 
     expect(bridge.sent.map((item) => item.content)).toEqual(['with attachment', 'plain text'])
+  })
+})
+
+describe('ImChatRuntime historical sessions', () => {
+  function addHistory(httpClient: FakeHttpClient) {
+    httpClient.existingSessions.add('desktop-history')
+    httpClient.sessions = [{
+      id: 'desktop-history', title: 'Continue desktop work', createdAt: '2026-08-01',
+      modifiedAt: '2026-08-31', messageCount: 5, projectPath: 'encoded',
+      workDir: tmpDir, workDirExists: true,
+    }]
+    httpClient.projects = [{ projectName: 'demo', realPath: tmpDir }]
+  }
+
+  it('continues a desktop session through the real command pipeline and forwards the next message to that ID', async () => {
+    const { runtime, httpClient, bridge, sessionStore, notices } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, '/sessions demo')
+    expect(notices.at(-1)).toContain('Continue desktop work')
+    expect(bridge.sent).toEqual([])
+    await inbound(runtime, '/resume 1')
+    expect(sessionStore.get(CHAT_ID)?.sessionId).toBe('desktop-history')
+    await inbound(runtime, '接着完成刚才的任务')
+    expect(bridge.getSessionId(CHAT_ID)).toBe('desktop-history')
+    expect(bridge.sent).toEqual([{ content: '接着完成刚才的任务', attachments: undefined }])
+    expect(httpClient.createdSessions).toEqual([])
+  })
+
+  it('refuses switching between sending a prompt and the first server status, then allows it after idle', async () => {
+    const { runtime, httpClient, bridge, sessionStore, notices } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, 'start')
+    const original = sessionStore.get(CHAT_ID)?.sessionId
+    await inbound(runtime, '/sessions')
+    await inbound(runtime, '/resume 1')
+    expect(notices.at(-1)).toContain('正在运行')
+    expect(sessionStore.get(CHAT_ID)?.sessionId).toBe(original)
+    await runtime.handleServerMessage(CHAT_ID, { type: 'status', state: 'idle' })
+    await inbound(runtime, '/resume 1')
+    expect(bridge.getSessionId(CHAT_ID)).toBe('desktop-history')
+  })
+
+  it('recognizes a running desktop turn from the initial connection snapshot', async () => {
+    const { runtime, httpClient, sessionStore, notices } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, '/sessions demo')
+    await inbound(runtime, '/resume 1')
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', turnActive: true })
+    expect(runtime.getRuntimeState(CHAT_ID).state).toBe('thinking')
+    await inbound(runtime, '/sessions')
+    await inbound(runtime, '/resume 1')
+    expect(notices.at(-1)).toContain('正在运行')
+    expect(sessionStore.get(CHAT_ID)?.sessionId).toBe('desktop-history')
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_request', requestId: 'pending', toolName: 'Bash', input: {} })
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', turnActive: true })
+    expect(runtime.getRuntimeState(CHAT_ID).state).toBe('permission_pending')
+  })
+
+  it('allows another history selection after a replayed permission is resolved on Desktop', async () => {
+    const { runtime, httpClient, notices } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, '/sessions demo')
+    await inbound(runtime, '/resume 1')
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_request', requestId: 'desktop-request', toolName: 'Bash', input: {} })
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', toolRequestIds: ['desktop-request'], turnActive: true })
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_resolved', requestId: 'desktop-request', permissionType: 'tool', allowed: true })
+    await runtime.handleServerMessage(CHAT_ID, { type: 'status', state: 'idle' })
+    expect(runtime.getRuntimeState(CHAT_ID).pendingPermissionCount).toBe(0)
+    await inbound(runtime, '/sessions')
+    await inbound(runtime, '/resume 1')
+    expect(notices.at(-1)).toContain('已恢复会话')
+  })
+
+  it('keeps permission answers ahead of session numbers and cancels the picker for project switching', async () => {
+    const { runtime, httpClient, bridge, sessionStore } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, '/sessions demo')
+    await runtime.handleServerMessage(CHAT_ID, { type: 'permission_request', requestId: 'req-1', toolName: 'Bash', input: {} })
+    await inbound(runtime, '1')
+    expect(bridge.permissionResponses).toHaveLength(1)
+    expect(sessionStore.get(CHAT_ID)).toBeNull()
+    await inbound(runtime, '/projects')
+    await inbound(runtime, '/resume 1')
+    expect(sessionStore.get(CHAT_ID)).toBeNull()
+  })
+
+  it('authorizes history commands and does not interpret attachment captions as commands', async () => {
+    const { runtime, httpClient, notices, bridge } = createRuntime()
+    addHistory(httpClient)
+    await inbound(runtime, '/sessions demo', { userId: 'stranger' })
+    expect(notices.at(-1)).toContain('未授权')
+    await inbound(runtime, '/sessions demo', { hasAttachments: true, loadAttachments: async () => [] })
+    expect(bridge.sent.at(-1)?.content).toBe('/sessions demo')
   })
 })

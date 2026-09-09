@@ -1,6 +1,7 @@
 import type { TranslationKey } from './en'
 
 export const jp: Record<TranslationKey, string> = {
+  'sidebar.projectHistoryFailed': '以前のセッションを読み込めませんでした。',
   // ─── Common ──────────────────────────────────────
   'common.cancel': 'キャンセル',
   'common.close': '閉じる',
@@ -1550,6 +1551,24 @@ export const jp: Record<TranslationKey, string> = {
   // Settings > General - Storage
   'settings.general.modeSwitchTitle': 'データ保存場所を切り替えますか？',
   'settings.general.modeSwitchConfirm': '保存して再起動',
+  'settings.general.sessionRetentionTitle': 'セッション履歴',
+  'settings.general.sessionRetentionDescription': 'セッション記録をこの端末に保持する期間です。値を小さくすると古い記録がすぐに削除されるため、確認を求めます。',
+  'settings.general.sessionRetentionLabel': 'セッション履歴の保持期間',
+  'settings.general.sessionRetentionCurrent': '現在：{days} 日',
+  'settings.general.sessionRetentionCurrentOff': '現在：記録を保存しない',
+  'settings.general.sessionRetentionUnit': '日',
+  'settings.general.sessionRetentionHint': '既定は 365 日です。0 にするとセッション内容を記録しなくなり、既存の記録もすべて削除します。',
+  'settings.general.sessionRetentionRequired': '日数を入力してください。',
+  'settings.general.sessionRetentionRange': '0 から {max} までの整数を入力してください。',
+  'settings.general.sessionRetentionSave': '保存',
+  'settings.general.sessionRetentionSaved': '保持期間を更新し、期限切れのセッションファイルを {count} 件削除しました。',
+  'settings.general.sessionRetentionSavedPartial': '保持期間を更新しました。期限切れのセッションファイルを {count} 件削除し、{errors} 件は削除できませんでした。',
+  'settings.general.sessionRetentionConfirmTitle': 'セッション履歴の保持期間を変更しますか？',
+  'settings.general.sessionRetentionConfirmDelete': '{days} 日より古いセッション記録を完全に削除します。元に戻せません。',
+  'settings.general.sessionRetentionConfirmDisable': '0 にすると新しいセッション内容を記録しなくなり、既存の記録もすべて完全に削除します。元に戻せません。',
+  'settings.general.sessionRetentionPreview': 'この設定では現在 {count} 件のファイルが削除されます。',
+  'settings.general.sessionRetentionPreviewUnavailable': '集計に失敗しました。そのまま続行できます。',
+  'settings.general.sessionRetentionConfirmAction': '削除して保存',
   'settings.general.storageTitle': 'データ保存場所',
   'settings.general.storageDescription': '高度で使用頻度の低い設定です。切り替え後は、セッション、スキル、MCP、プラグイン、プロバイダー設定、タスク、キャッシュが新しいディレクトリから読み込まれます。',
   'settings.general.storageSystemTitle': 'システムディレクトリを使用',
@@ -2343,6 +2362,10 @@ export const jp: Record<TranslationKey, string> = {
   // ─── Model Selector ──────────────────────────────────────
   'model.selectModel': 'モデルを選択',
   'model.configureProvider': 'モデルプロバイダーを設定',
+  'model.protocolLocked': 'このセッションは {protocol} を使用します。別の API プロトコルを使うには、新しいセッションを作成してください。',
+  'model.protocolMixed': '複数の API プロトコルの履歴が混在しているため、このセッションは続行できません。モデルメニューから新しいセッションを作成してください。',
+  'model.protocolUnknown': 'この古いセッションの API プロトコルを特定できません。モデルメニューから新しいセッションを作成してください。',
+  'model.protocolRequiresNewSession': 'API プロトコルが異なります。新しいセッションを作成してください',
   'model.configuration': 'モデル設定',
   'model.searchPlaceholder': 'モデルを検索',
   'model.clearSearch': 'モデル検索をクリア',

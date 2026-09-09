@@ -1,4 +1,7 @@
 import { formatImHelp } from '../common/format.js'
+import { listProjectSessionHistory, restoreSelectedSession } from '../common/session-selection.js'
+import type { SessionEntry } from '../common/session-store.js'
+import type { ServerMessage } from '../common/ws-bridge.js'
 import {
   formatPermissionDecisionStatus,
   type PermissionDecision,
@@ -69,11 +72,15 @@ export type TelegramCommandControllerDeps = {
   isAllowedUser: (userId: number) => boolean
   ensureExistingSession: (chatId: string) => Promise<{ sessionId: string; workDir: string } | null>
   clearTransientChatState: (chatId: string) => void
+  clearOtherSelections: (chatId: string) => void
+  isBusy: (chatId: string) => boolean
+  getStoredSession: (chatId: string) => SessionEntry | null
   setStoredSession: (chatId: string, sessionId: string, workDir: string) => void
   deleteStoredSession: (chatId: string) => void
   resetBridgeSession: (chatId: string) => void
-  connectBridgeSession: (chatId: string, sessionId: string) => void
-  onBridgeServerMessage: (chatId: string) => void
+  connectBridgeSession: (chatId: string, sessionId: string) => boolean
+  onBridgeServerMessage: (chatId: string, handler: (msg: ServerMessage) => void | Promise<void>) => void
+  handleServerMessage: (chatId: string, msg: ServerMessage) => void | Promise<void>
   waitForBridgeOpen: (chatId: string) => Promise<boolean>
   sendUserMessage: (chatId: string, content: string) => boolean
   setRuntimeModel: RuntimeModelSetter
@@ -216,7 +223,7 @@ export type TelegramRuntimeCommandControllerDeps = {
   defaultWorkDir: string
   bridge: {
     resetSession: (chatId: string) => void
-    connectSession: (chatId: string, sessionId: string) => void
+    connectSession: (chatId: string, sessionId: string) => boolean
     onServerMessage: (chatId: string, handler: (msg: unknown) => void | Promise<void>) => void
     waitForOpen: (chatId: string) => Promise<boolean>
     sendUserMessage: (chatId: string, content: string) => boolean
@@ -228,14 +235,18 @@ export type TelegramRuntimeCommandControllerDeps = {
     ) => boolean
   }
   sessionStore: {
+    get: (chatId: string) => SessionEntry | null
     set: (chatId: string, sessionId: string, workDir: string) => void
     delete: (chatId: string) => void
   }
   isAllowedUser: (userId: number) => boolean
   ensureExistingSession: (chatId: string) => Promise<{ sessionId: string; workDir: string } | null>
   clearTransientChatState: (chatId: string) => void
+  clearOtherSelections: (chatId: string) => void
+  isBusy: (chatId: string) => boolean
   handleServerMessage: (chatId: string, msg: unknown) => void | Promise<void>
   setRuntimeModel: (chatId: string, modelId: string) => void
+  setRuntimeBusy: (chatId: string) => void
 }
 
 export function createTelegramRuntimeCommandController(
@@ -248,16 +259,24 @@ export function createTelegramRuntimeCommandController(
     isAllowedUser: deps.isAllowedUser,
     ensureExistingSession: deps.ensureExistingSession,
     clearTransientChatState: deps.clearTransientChatState,
+    clearOtherSelections: deps.clearOtherSelections,
+    isBusy: deps.isBusy,
+    getStoredSession: (chatId) => deps.sessionStore.get(chatId),
     setStoredSession: (chatId, sessionId, workDir) => deps.sessionStore.set(chatId, sessionId, workDir),
     deleteStoredSession: (chatId) => deps.sessionStore.delete(chatId),
     resetBridgeSession: (chatId) => deps.bridge.resetSession(chatId),
     connectBridgeSession: (chatId, sessionId) => deps.bridge.connectSession(chatId, sessionId),
-    onBridgeServerMessage: (chatId) => deps.bridge.onServerMessage(
+    onBridgeServerMessage: (chatId, handler) => deps.bridge.onServerMessage(
       chatId,
-      (msg) => deps.handleServerMessage(chatId, msg),
+      (msg) => handler(msg as ServerMessage),
     ),
+    handleServerMessage: deps.handleServerMessage,
     waitForBridgeOpen: (chatId) => deps.bridge.waitForOpen(chatId),
-    sendUserMessage: (chatId, content) => deps.bridge.sendUserMessage(chatId, content),
+    sendUserMessage: (chatId, content) => {
+      const sent = deps.bridge.sendUserMessage(chatId, content)
+      if (sent) deps.setRuntimeBusy(chatId)
+      return sent
+    },
     setRuntimeModel: deps.setRuntimeModel,
   })
   return {
@@ -282,10 +301,51 @@ export function registerTelegramExtendedCommands(
 ): void {
   bot.command('start', (ctx) => void controller.sendHelp(ctx))
   bot.command('help', (ctx) => void controller.sendHelp(ctx))
-  bot.command('resume', (ctx) => void controller.handleResumeCommand(ctx))
   bot.command('provider', (ctx) => void controller.handleProviderCommand(ctx))
   bot.command('model', (ctx) => void controller.handleModelCommand(ctx))
   bot.command('skills', (ctx) => void controller.handleSkillsCommand(ctx))
+}
+
+/** Session commands use the same authorization, deduplication and queue as messages. */
+export function registerTelegramSessionCommands(
+  bot: TelegramCommandRegistrar,
+  routeInput: (ctx: TelegramCommandContext, text: string) => Promise<void>,
+): void {
+  for (const command of ['new', 'projects', 'sessions', 'resume']) {
+    bot.command(command, (ctx) => {
+      const query = getCommandMatchText(ctx)
+      return routeInput(ctx, `/${command}${query ? ` ${query}` : ''}`)
+    })
+  }
+}
+
+export async function tryHandleTelegramSessionInput(
+  chatId: string,
+  text: string,
+  hasAttachments: boolean,
+  deps: {
+    startNewSession: (chatId: string, query?: string) => Promise<void>
+    showProjectPicker: (chatId: string) => Promise<void>
+    showResumeProjectPicker: (chatId: string) => Promise<void>
+    handleSessionInput: (chatId: string, text: string) => Promise<boolean>
+  },
+): Promise<boolean> {
+  if (hasAttachments) return false
+  const trimmed = text.trim()
+  const newCommand = /^\/new(?:\s+([\s\S]+))?$/.exec(trimmed)
+  if (newCommand) {
+    await deps.startNewSession(chatId, newCommand[1])
+    return true
+  }
+  if (trimmed === '/projects') {
+    await deps.showProjectPicker(chatId)
+    return true
+  }
+  if (trimmed === '/resume') {
+    await deps.showResumeProjectPicker(chatId)
+    return true
+  }
+  return await deps.handleSessionInput(chatId, text)
 }
 
 export async function tryHandleTelegramSelectionCallback(
@@ -529,6 +589,8 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
   }
 
   const showResumeProjectPicker = async (chatId: string): Promise<void> => {
+    deps.clearOtherSelections(chatId)
+    pendingSelections.delete(chatId)
     try {
       const projects = await deps.httpClient.listRecentProjects()
       if (projects.length === 0) {
@@ -563,12 +625,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
     const chatId = getCallbackChatId(ctx)
     if (!chatId) return
     try {
-      const { sessions } = await deps.httpClient.listSessions({
-        project: project.value,
-        limit: 50,
-        offset: 0,
-      })
-      const resumableSessions = sessions.filter((session) => session.workDir)
+      const resumableSessions = await listProjectSessionHistory(deps.httpClient, project.value)
       if (resumableSessions.length === 0) {
         pendingSelections.delete(chatId)
         await ctx.editMessageText(`没有可恢复会话：${project.label}`)
@@ -598,25 +655,25 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       return
     }
 
-    deps.resetBridgeSession(chatId)
-    deps.clearTransientChatState(chatId)
-    deps.setStoredSession(chatId, item.value, workDir)
-    deps.connectBridgeSession(chatId, item.value)
-    deps.onBridgeServerMessage(chatId)
-    const opened = await deps.waitForBridgeOpen(chatId)
-    if (!opened) {
-      deps.deleteStoredSession(chatId)
-      await ctx.editMessageText('⚠️ 恢复会话时连接服务器超时，请重试。')
-      return
-    }
-
-    pendingSelections.delete(chatId)
-    await ctx.editMessageText([
-      `✅ 已恢复会话：${item.label}`,
-      workDir,
-      '',
-      '可以继续发送消息。',
-    ].join('\n'))
+    const result = await restoreSelectedSession({
+      httpClient: deps.httpClient,
+      bridge: {
+        resetSession: deps.resetBridgeSession,
+        connectSession: deps.connectBridgeSession,
+        onServerMessage: deps.onBridgeServerMessage,
+        waitForOpen: deps.waitForBridgeOpen,
+      },
+      sessionStore: {
+        get: deps.getStoredSession,
+        set: deps.setStoredSession,
+        delete: deps.deleteStoredSession,
+      },
+      onServerMessage: deps.handleServerMessage,
+      clearTransientState: deps.clearTransientChatState,
+      isBusy: deps.isBusy,
+    }, chatId, { id: item.value, workDir, title: item.label })
+    if (result.ok) pendingSelections.delete(chatId)
+    await ctx.editMessageText(result.message)
   }
 
   const handleSelectionCallback = async (
@@ -699,7 +756,7 @@ export function buildTelegramHelpText(): string {
     formatImHelp(),
     '',
     'Telegram 扩展命令：',
-    '/resume — 恢复历史会话',
+    '/resume — 按钮选择项目与历史会话',
     '/provider — 切换 Provider',
     '/model [model] — 查看或切换模型',
     '/skills — 查看当前项目可用 Skills',

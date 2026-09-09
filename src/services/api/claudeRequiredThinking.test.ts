@@ -467,6 +467,25 @@ async function captureQueryRequest({
   }
 }
 
+test('does not replay a policy-blocked stream through non-streaming fallback', async () => {
+  let calls = 0
+  const result = await captureQueryRequest({
+    model: 'gpt-6-astra',
+    continuationSystemPrompts: [],
+    responseFactory: model => {
+      calls += 1
+      return new Response(calls === 1 ? sseEvent('error', {
+        type: 'error',
+        error: { type: 'permission_error', code: 'cyber_policy', message: 'Request blocked by safety policy' },
+      }) : successfulResponse(model), {
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    },
+  })
+  expect(result.requests).toHaveLength(1)
+  expect(JSON.stringify(result.content)).toContain('Request blocked by safety policy')
+})
+
 test('keeps required-thinking models enabled when the caller requests disabled thinking', async () => {
   const { content, requests } = await captureQueryRequest({
     model: 'k3',

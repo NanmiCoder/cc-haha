@@ -48,6 +48,23 @@ describe('buildOpenAICodexFetch', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
+  test('preserves a structured policy rejection even when upstream wraps it in HTTP 503', async () => {
+    const codexFetch = buildOpenAICodexFetch(async () => Response.json({
+      error: { code: 'cyber_policy', message: 'Request blocked by safety policy' },
+    }, { status: 503, headers: { 'x-request-id': 'policy-request-id' } }), 'test')!
+    const response = await codexFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'gpt-6-astra', max_tokens: 64, messages: [{ role: 'user', content: 'Hello' }] }),
+    })
+    expect(response.status).toBe(403)
+    expect(response.headers.get('x-should-retry')).toBe('false')
+    expect(response.headers.get('x-request-id')).toBe('policy-request-id')
+    expect(await response.json()).toEqual({
+      type: 'error',
+      error: { type: 'permission_error', code: 'cyber_policy', message: 'Request blocked by safety policy' },
+    })
+  })
+
   test('maps Anthropic messages to ChatGPT Codex responses endpoint with account header', async () => {
     const upstreamCalls: Array<{
       url: string

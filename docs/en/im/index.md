@@ -16,6 +16,7 @@ The chat partner is a bot or account you bound yourself. Messages reach your loc
 ## What you get
 
 - **The same session, continued.** Messages sent from your phone enter the Claude Code session on your computer, where file edits, commands, and reads really happen.
+- **Resume history.** `/sessions` lists history in the current project; `/sessions <project name or absolute path>` opens another project. Use `/resume <number>` to continue, including sessions created on Desktop.
 - **Project switching.** `/projects` lists recent projects and switches to the one you pick; `/new` starts a fresh session.
 - **Permission approval.** When Claude wants to write a file or run a risky command, the request is pushed to the chat. Feishu and DingTalk send interactive cards, Telegram sends buttons, and every other platform expects a text reply.
 - **Status and stop.** `/status` reports the current project, model, and run state; `/stop` interrupts the current turn.
@@ -63,6 +64,16 @@ Paired accounts appear under **Paired Users**, where **Unbind** revokes one of t
 
 Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` changes the directory; `/clear` empties the context while keeping the project binding.
 
+## Find an old session from your phone
+
+Send `/sessions` to list history for your current project. Without a session binding, it starts with a project picker. Use `/sessions projects` to choose a different project, or `/sessions <project name or absolute path>` to open one directly. Ambiguous names show a list to choose from.
+
+Each page shows eight sessions with their title, update time, message count, and a marker for the current session. Reply with a number shown on that page or send `/resume <number>` to continue the selected conversation. Use `/sessions next` and `/sessions prev` to turn pages. Accessible worktree sessions are grouped under their project and resume in their original working directory.
+
+Browsing preserves the current binding. `/cancel` exits selection; ordinary chat text also leaves the history picker and continues your current conversation. Lists expire after 15 minutes. Finish pending approvals or send `/stop` and wait for the current turn to stop before switching. If a session was deleted, its directory is unavailable, or connecting fails, the original binding is retained.
+
+Telegram also keeps its `/resume` project and session button menu. The text commands above work on all platforms.
+
 ## Common commands
 
 Entry points differ slightly per platform — Feishu can expose commands as a bot menu — but these work everywhere:
@@ -71,6 +82,9 @@ Entry points differ slightly per platform — Feishu can expose commands as a bo
 - `/status` — current project, model, and run state
 - `/projects` — list recent projects and switch
 - `/new` — start a new session, optionally with a project number or path
+- `/sessions [project]` — list old sessions; `/sessions projects` chooses another project
+- `/resume <number>` — continue a session from the list
+- `/cancel` — exit selection and keep the current session
 - `/clear` — clear context, keep the project binding
 - `/stop` — stop the current generation
 

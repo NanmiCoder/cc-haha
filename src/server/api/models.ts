@@ -14,7 +14,7 @@ import { attributionHeaderEnvForModel } from '../services/attributionHeaderPolic
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { hasOpenAIAuthLogin } from '../../utils/auth.js'
 import { getOpenAICodexModelCatalog } from '../../services/openaiAuth/modelCatalog.js'
-import { getDesktopOpenAIModelCatalog } from '../services/openAIModelCatalogService.js'
+import { getDesktopOpenAICodexModelCatalog } from '../services/openaiModelCatalog.js'
 import {
   OPENAI_DEFAULT_MAIN_MODEL,
   type OpenAIModelCatalogEntry,
@@ -191,7 +191,10 @@ function buildOpenAIModelList(catalog: OpenAIModelCatalogEntry[]): ApiModelInfo[
 async function getOpenAIModelList(options?: {
   forceRefresh?: boolean
 }): Promise<ApiModelInfo[]> {
-  return buildOpenAIModelList(await getDesktopOpenAIModelCatalog(options))
+  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog({
+    ...options,
+    throwOnForceRefreshError: true,
+  }))
 }
 
 function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {

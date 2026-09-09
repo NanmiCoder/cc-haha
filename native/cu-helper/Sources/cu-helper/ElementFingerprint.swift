@@ -138,9 +138,9 @@ struct SnapshotPathStep: Sendable, Hashable {
     }
 }
 
-/// Pure fail-closed rules shared by snapshot-time AX↔CG window mapping. Frames
-/// are checked by AXTree; this type owns the evidence rules that are easy to
-/// accidentally weaken: titles must be symmetric, and root IDs must be 1:1.
+/// Pure fail-closed rules shared by snapshot-time AX↔CG window mapping. Direct
+/// IDs must belong to the target process's candidates; fallback title evidence
+/// must be symmetric, and root IDs must be 1:1.
 enum SnapshotWindowIdentityEvidence {
     struct Candidate: Sendable, Equatable {
         let id: UInt32
@@ -152,15 +152,23 @@ enum SnapshotWindowIdentityEvidence {
         normalizedTitle(axTitle) == normalizedTitle(cgTitle)
     }
 
-    /// Select a public WindowServer identity without trusting AX window order.
-    /// Exact frame + bilateral title evidence remains authoritative. Stage
+    /// Select a WindowServer identity without trusting AX window order. Prefer
+    /// the native ID, with exact frame + bilateral title as a fallback. Stage
     /// Manager can expose only thumbnail bounds for background windows; when no
     /// candidate matches the AX frame at all, a unique bilateral non-empty title
-    /// match is the bounded fallback. Any ambiguity still fails closed.
+    /// match is the last fallback. Any ambiguity still fails closed.
     static func mappedWindowID(
         axTitle: String?,
-        candidates: [Candidate]
+        candidates: [Candidate],
+        nativeWindowID: UInt32? = nil
     ) -> UInt32? {
+        if let nativeWindowID, nativeWindowID != 0 {
+            // A direct ID is stronger than a mutable title or frame. Never
+            // fall back to another window when that ID is missing from the
+            // target PID's live candidates (closed, wrong process, or layer).
+            let matches = candidates.filter { $0.id == nativeWindowID }
+            return matches.count == 1 ? nativeWindowID : nil
+        }
         let frameMatches = candidates.filter(\.frameMatches)
         let framedEvidence = frameMatches.filter {
             titlesMatch(axTitle: axTitle, cgTitle: $0.title)

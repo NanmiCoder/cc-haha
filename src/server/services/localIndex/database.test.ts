@@ -604,6 +604,37 @@ describe('local index database', () => {
     }
   })
 
+  it('upgrades a frozen v4 cache additively and preserves its existing rows', async () => {
+    const databasePath = join(process.env.CLAUDE_CONFIG_DIR!, 'frozen-v4.sqlite')
+    await mkdir(dirname(databasePath), { recursive: true })
+    const seed = await openRawDatabase(databasePath)
+    seedFrozenV3(seed)
+    seed.exec('ALTER TABLE activity_sessions ADD COLUMN active_duration_ms INTEGER NOT NULL DEFAULT 0')
+    seed.exec('PRAGMA user_version = 4')
+    seed.exec("INSERT INTO schema_meta (key, value) VALUES ('future-extension', 'keep-me')")
+    const originalSessions = queryAll<{ transcript_path: string; title: string }>(seed,
+      'SELECT transcript_path, title FROM sessions ORDER BY transcript_path')
+    seed.close(true)
+    const { openLocalIndexDatabase } = await loadDatabase()
+    const upgraded = openLocalIndexDatabase({ path: databasePath })
+    try {
+      expect(upgraded.read(operation => operation.all<{ name: string }>(
+        'PRAGMA table_info(sessions)',
+      ).map(row => row.name))).toContain('session_api_format')
+      expect(upgraded.read(operation => operation.all<{ transcript_path: string; title: string }>(
+        'SELECT transcript_path, title FROM sessions ORDER BY transcript_path',
+      ))).toEqual(originalSessions)
+      expect(upgraded.read(operation => operation.get<{ value: string }>(
+        "SELECT value FROM schema_meta WHERE key = 'future-extension'",
+      )?.value)).toBe('keep-me')
+      expect(upgraded.read(operation => operation.get<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM sessions WHERE session_api_format IS NOT NULL',
+      )?.count)).toBe(0)
+    } finally {
+      upgraded.close()
+    }
+  })
+
   it('rolls back an interrupted v2 to v3 migration without changing v2 data', async () => {
     const databasePath = join(process.env.CLAUDE_CONFIG_DIR!, 'blocked-v3.sqlite')
     await mkdir(dirname(databasePath), { recursive: true })

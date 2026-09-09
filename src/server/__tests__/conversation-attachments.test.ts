@@ -72,6 +72,9 @@ describe('ConversationService attachment materialization', () => {
         },
       },
       pendingOutbound: [],
+      workDir: tmpDir,
+      providerId: null,
+      apiFormat: 'anthropic',
     })
 
     const ok = await svc.sendMessage(sessionId, '这张图说了什么？', [
@@ -119,6 +122,9 @@ describe('ConversationService attachment materialization', () => {
         },
       },
       pendingOutbound: [],
+      workDir: tmpDir,
+      providerId: null,
+      apiFormat: 'anthropic',
     })
 
     const ok = await svc.sendMessage(sessionId, '', [
@@ -155,6 +161,9 @@ describe('ConversationService attachment materialization', () => {
         },
       },
       pendingOutbound: [],
+      workDir: tmpDir,
+      providerId: null,
+      apiFormat: 'anthropic',
     })
 
     const ok = await svc.sendMessage(sessionId, '看这个截图', [

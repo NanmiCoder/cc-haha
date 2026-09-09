@@ -7,6 +7,7 @@
  */
 
 import { ProviderService } from './providerService.js'
+import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { getPresetAuthStrategy } from './providerRuntimeEnv.js'
 import {
   getNetworkProxyFetchOptions,
@@ -195,7 +196,7 @@ export async function generateTitle(
     if (!resolvedProvider?.baseUrl || !resolvedProvider?.apiKey) return null
 
     const model = resolvedProvider.models.haiku || resolvedProvider.models.main
-    const url = `${resolvedProvider.baseUrl.replace(/\/+$/, '')}/v1/messages`
+    const url = `${normalizeAnthropicBaseUrl(resolvedProvider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
     const authStrategy = resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
     const requestHeaders = buildAnthropicTitleRequestHeaders(resolvedProvider.apiKey, authStrategy)
     const requestBody = {

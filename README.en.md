@@ -71,6 +71,16 @@ This project is maintained in the author's spare time. Corporate or individual s
         Thanks to <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha">Atlas Cloud</a> for sponsoring this project. Atlas Cloud is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities. Atlas Cloud is already built into the cc-haha provider list, so you can pick it in settings and start using it with just an API key. Check out Atlas Cloud's new <a href="https://www.atlascloud.ai/console/coding-plan">coding plan promotion</a> for more budget-friendly API access.
       </td>
     </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://www.apismart.ai">
+          <img src="docs/images/sponsors/apismart-logo.png" width="180" alt="ApiSmart">
+        </a>
+      </td>
+      <td valign="middle">
+        Thanks to <a href="https://www.apismart.ai">ApiSmart</a> for sponsoring this project. ApiSmart provides unified access to leading AI models through a single API. Use one API key to connect with LLM, image, and video models through an OpenAI-compatible interface. Easily switch between models, simplify billing, and improve reliability with intelligent routing and automatic failover.
+      </td>
+    </tr>
   </tbody>
 </table>
 

@@ -112,6 +112,7 @@ let daemonStartCount = 0
 
 let overlayDesiredVisible = false
 let overlayActualVisible = false
+let overlayCleanupRequested = false
 let overlayDesiredPayload: Record<string, unknown> = {}
 let overlayDesiredKey = '{}'
 let overlayActualKey: string | undefined
@@ -391,6 +392,7 @@ function resetState(reason: string, expectedGeneration?: number): void {
 
   overlayDesiredVisible = false
   overlayActualVisible = false
+  overlayCleanupRequested = false
   overlayActualKey = undefined
   overlayRevision++
   activeTurnId = undefined
@@ -697,7 +699,12 @@ function needsOverlayReconciliation(): boolean {
   // sleep assertion) still needs an explicit turn_end at host cleanup. The
   // keyed SCStream consumer deliberately survives that boundary and retires on
   // target/config changes or daemon teardown.
-  if (!overlayDesiredVisible) return overlayActualVisible || activeTurnId !== undefined
+  // A failed visual-feedback request also leaves the overlay hidden, but must
+  // not release the active turn's snapshots. Only explicit host cleanup owns
+  // that lifetime boundary.
+  if (!overlayDesiredVisible) {
+    return overlayCleanupRequested && (overlayActualVisible || activeTurnId !== undefined)
+  }
   return !overlayActualVisible || overlayActualKey !== overlayDesiredKey
 }
 
@@ -725,7 +732,7 @@ async function reconcileOverlay(): Promise<void> {
         overlayActualVisible = false
         overlayActualKey = undefined
         logForDebugging(`cu-helper overlay_show failed: ${String(err)}`, { level: 'debug' })
-        return
+        continue
       }
       continue
     }
@@ -734,6 +741,7 @@ async function reconcileOverlay(): Promise<void> {
     // pending show completes this branch sees the already-owned daemon and
     // serially ends the turn. This also covers read-only turns whose overlay
     // was never visible.
+    overlayCleanupRequested = false
     if (!statePromise || activeDaemonGeneration === undefined) {
       overlayActualVisible = false
       overlayActualKey = undefined
@@ -770,6 +778,7 @@ export function overlayShow(
   target: Record<string, unknown> = {},
 ): Promise<void> {
   overlayDesiredVisible = true
+  overlayCleanupRequested = false
   overlayDesiredPayload = { ...target }
   overlayDesiredKey = JSON.stringify(overlayDesiredPayload)
   overlayRevision++
@@ -779,6 +788,7 @@ export function overlayShow(
 /** Hide the overlay, serialized after any pending show (best-effort). */
 export function overlayHide(): Promise<void> {
   overlayDesiredVisible = false
+  overlayCleanupRequested = true
   overlayRevision++
   return scheduleOverlayReconciliation()
 }
@@ -817,6 +827,7 @@ export function __resetDaemonClientForTests(): void {
   activeDaemonGeneration = undefined
   overlayDesiredVisible = false
   overlayActualVisible = false
+  overlayCleanupRequested = false
   overlayDesiredPayload = {}
   overlayDesiredKey = '{}'
   overlayActualKey = undefined

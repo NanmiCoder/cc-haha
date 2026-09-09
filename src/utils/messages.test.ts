@@ -221,6 +221,45 @@ describe('stripSignatureBlocksAfterModelChange', () => {
     ).toBe(messages)
   })
 
+  test('cleans restored mixed history even after the selected model has replied', () => {
+    const gptThinking = assistant('gpt-response', [
+      { type: 'redacted_thinking', data: 'cc-haha:openai-reasoning:v1:fixture' },
+    ])
+    gptThinking.message.model = 'gpt-luna'
+    const gptTool = assistant('gpt-response', [toolUse('read-gpt')])
+    gptTool.message.model = 'gpt-luna'
+    const deepseek = assistant('deepseek-response', [
+      { type: 'thinking', thinking: 'Current model reasoning', signature: 'deepseek-signature' },
+      { type: 'text', text: 'DeepSeek reply' },
+    ])
+    deepseek.message.model = 'deepseek-v4-flash'
+    const history = [
+      createUserMessage({ content: 'Start' }),
+      gptThinking, gptTool, toolResult('read-gpt'),
+      deepseek, createUserMessage({ content: 'Continue next turn' }),
+    ]
+
+    const cleaned = stripSignatureBlocksAfterModelChange(history, 'deepseek-v4-flash')
+    const normalized = normalizeMessagesForAPI(cleaned)
+    const replies = normalized.filter((msg): msg is AssistantMessage => msg.type === 'assistant')
+
+    expect(replies.flatMap(msg => msg.message.content).some(block => block.type === 'redacted_thinking')).toBe(false)
+    expect(replies.find(msg => msg.message.id === 'gpt-response')?.message.content).toEqual([toolUse('read-gpt')])
+    expect(cleaned[4]).toBe(deepseek)
+    expect(normalized.some(msg => msg.type === 'user' && Array.isArray(msg.message.content)
+      && msg.message.content.some(block => block.type === 'tool_result' && block.tool_use_id === 'read-gpt'))).toBe(true)
+    expect(gptThinking.message.content[0]?.type).toBe('redacted_thinking')
+    expect(stripSignatureBlocksAfterModelChange(cleaned, 'deepseek-v4-flash')).toBe(cleaned)
+
+    // Switching back also checks every historical source, preserving this model's
+    // original encrypted block without replaying DeepSeek's signed thinking.
+    const switchedBack = stripSignatureBlocksAfterModelChange(history, 'gpt-luna')
+    expect(switchedBack[1]).toBe(gptThinking)
+    expect(switchedBack[4]?.type === 'assistant' && switchedBack[4].message.content).toEqual([
+      { type: 'text', text: 'DeepSeek reply' },
+    ])
+  })
+
   test('leaves history without protected thinking untouched', () => {
     const messages = [createUserMessage({ content: 'Continue' })]
 

@@ -698,3 +698,35 @@ describe('openaiResponsesStreamToAnthropicResponse', () => {
     expect(error.code).toBe('ERR_STREAM_PREMATURE_CLOSE')
   })
 })
+
+
+describe('OpenAI policy failures', () => {
+  for (const code of ['cyber_policy', 'content_policy', 'content_policy_violation']) {
+    for (const oauth of [true, false]) {
+      test(`preserves ${code} as a terminal permission error (OAuth=${oauth})`, async () => {
+        const chunk = `event: response.failed\ndata: ${JSON.stringify({ response: { error: { code, message: 'Request denied' } } })}\n\n`
+        const events = await collectSse(openaiResponsesStreamToAnthropic(
+          makeStream([chunk]), 'test-model', { openAICodexOAuth: oauth },
+        ))
+        expect(events.find((event) => event.event === 'error')?.data).toEqual({
+          type: 'error', error: { type: 'permission_error', code, message: 'Request denied' },
+        })
+        expect(events.some((event) => event.event === 'message_stop')).toBe(false)
+        await expect(openaiResponsesStreamToAnthropicResponse(
+          makeStream([chunk]), 'test-model', { openAICodexOAuth: oauth },
+        )).rejects.toMatchObject({ code, type: 'permission_error', status: 403 })
+      })
+    }
+  }
+})
+
+
+test('Chat SSE policy errors stop without a successful completion', async () => {
+  const events = await collectSse(openaiChatStreamToAnthropic(makeStream([
+    'data: {"error":{"code":"cyber_policy","message":"Request denied"}}\n\n',
+    'data: [DONE]\n\n',
+  ]), 'test-model'))
+  expect(events).toEqual([{ event: 'error', data: {
+    type: 'error', error: { type: 'permission_error', code: 'cyber_policy', message: 'Request denied' },
+  } }])
+})

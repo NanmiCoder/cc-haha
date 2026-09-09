@@ -284,6 +284,28 @@
     }
   },
   {
+    "id": "apismart",
+    "name": "ApiSmart",
+    "defaultImageGeneration": { "model": "doubao-seedream-5-0" },
+    "baseUrl": "https://gw.apismart.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-v4-pro-0813",
+      "haiku": "deepseek-v4-flash-0731-tem",
+      "sonnet": "deepseek-v4-pro-0813",
+      "opus": "deepseek-v4-pro-0813"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://www.apismart.ai",
+    "apiKeyUrl": "https://www.apismart.ai",
+    "featured": true,
+    "authStrategy": "api_key",
+    "modelContextWindows": {
+      "deepseek-v4-pro-0813": 1000000,
+      "deepseek-v4-flash-0731-tem": 1000000
+    }
+  },
+  {
     "id": "lmstudio",
     "name": "LM Studio",
     "baseUrl": "http://localhost:1234",

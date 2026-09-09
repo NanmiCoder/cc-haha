@@ -29,6 +29,8 @@ import {
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
+import { SessionSelectionController } from '../common/session-selection.js'
+import { syncImPermissionState } from '../common/permission-sync.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { TelegramMediaService } from './media.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -38,7 +40,7 @@ import { ImageBlockWatcher } from '../common/attachment/image-block-watcher.js'
 import type { PendingUpload } from '../common/attachment/attachment-types.js'
 import { sendSafeOutboundImage } from '../common/attachment/outbound-image.js'
 import { syncTelegramBotCommands } from './menu.js'
-import { createTelegramRuntimeCommandController, registerAuthorizedTelegramCommand, registerTelegramExtendedCommands, shouldProcessTelegramMessage, tryHandleTelegramSelectionCallback } from './commands.js'
+import { createTelegramRuntimeCommandController, registerAuthorizedTelegramCommand, registerTelegramExtendedCommands, registerTelegramSessionCommands, shouldProcessTelegramMessage, tryHandleTelegramSelectionCallback, tryHandleTelegramSessionInput } from './commands.js'
 
 // ---------- init ----------
 
@@ -48,7 +50,7 @@ if (!config.telegram.botToken) {
   process.exit(1)
 }
 
-const bot = new Bot(config.telegram.botToken)
+export const bot = new Bot(config.telegram.botToken)
 const bridge = new WsBridge(config.serverUrl, 'tg')
 const streamDelivery = new TelegramStreamDelivery(bot.api)
 const dedup = new MessageDedup()
@@ -56,9 +58,6 @@ const sessionStore = new SessionStore()
 const { httpClient, defaultWorkDir } = createAdapterClient(config, config.telegram)
 const attachmentStore = new AttachmentStore()
 const media = new TelegramMediaService(bot, attachmentStore)
-attachmentStore.gc().catch((err) => {
-  console.warn('[Telegram] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
-})
 
 const accumulatedThinkingText = new Map<string, string>()
 // Track chats waiting for project selection
@@ -84,7 +83,31 @@ type ChatRuntimeState = {
   pendingPermissionCount: number
 }
 
-const commandController = createTelegramRuntimeCommandController({ botApi: bot.api, httpClient, defaultWorkDir, bridge, sessionStore, ensureExistingSession, clearTransientChatState, isAllowedUser: (userId) => isAllowedUser('telegram', userId), handleServerMessage: (chatId, msg) => handleServerMessage(chatId, msg as ServerMessage), setRuntimeModel: (chatId, modelId) => { getRuntimeState(chatId).model = modelId } })
+const isChatBusy = (chatId: string) => getRuntimeState(chatId).state !== 'idle' || Boolean(pendingPermissions.get(chatId)?.size)
+const commandController = createTelegramRuntimeCommandController({
+  botApi: bot.api, httpClient, defaultWorkDir, bridge, sessionStore,
+  ensureExistingSession, clearTransientChatState,
+  clearOtherSelections: (chatId) => {
+    pendingProjectSelection.delete(chatId)
+    sessionSelection.clear(chatId)
+  },
+  isBusy: isChatBusy,
+  isAllowedUser: (userId) => isAllowedUser('telegram', userId),
+  handleServerMessage: (chatId, msg) => handleServerMessage(chatId, msg as ServerMessage),
+  setRuntimeModel: (chatId, modelId) => { getRuntimeState(chatId).model = modelId },
+  setRuntimeBusy: (chatId) => { getRuntimeState(chatId).state = 'thinking' },
+})
+const sessionSelection = new SessionSelectionController({
+  httpClient, bridge, sessionStore,
+  sendNotice: async (chatId, text) => { await bot.api.sendMessage(Number(chatId), text) },
+  onServerMessage: handleServerMessage,
+  clearTransientState: clearTransientChatState,
+  clearProjectSelection: (chatId) => {
+    pendingProjectSelection.delete(chatId)
+    commandController.clearPendingSelections(chatId)
+  },
+  isBusy: isChatBusy,
+})
 
 // ---------- helpers ----------
 
@@ -231,6 +254,9 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
+  sessionSelection.clear(chatId)
+  commandController.clearPendingSelections(chatId)
+  pendingProjectSelection.delete(chatId)
   const numericChatId = Number(chatId)
   try {
     const projects = await httpClient.listRecentProjects()
@@ -276,6 +302,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
   const numericChatId = Number(chatId)
   const runtime = getRuntimeState(chatId)
 
+  if (syncImPermissionState(chatId, msg, runtime, pendingPermissions)) return
   switch (msg.type) {
     case 'connected':
       break
@@ -402,6 +429,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
 // ---------- bot handlers ----------
 
 registerTelegramExtendedCommands(bot, commandController)
+registerTelegramSessionCommands(bot, (ctx, text) => routeUserMessage(ctx as Context, text, []))
 
 /** Reset session state and start a new session for chatId.
  *  If `query` is provided, match a project by index or name;
@@ -413,6 +441,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   sessionStore.delete(chatId)
   streamDelivery.clear(chatId)
   pendingProjectSelection.delete(chatId)
+  sessionSelection.clear(chatId)
   commandController.clearPendingSelections(chatId)
   pendingPermissions.delete(chatId)
   runtimeStates.delete(chatId)
@@ -454,19 +483,8 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
 
 const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', userId)
 
-registerAuthorizedTelegramCommand(bot, 'new', isAuthorizedTelegramUser, async (ctx) => {
-  const chatId = String(ctx.chat.id)
-  const query = typeof ctx.match === 'string' ? ctx.match.trim() : undefined
-  await startNewSession(chatId, query || undefined)
-})
-
-registerAuthorizedTelegramCommand(bot, 'projects', isAuthorizedTelegramUser, async (ctx) => {
-  const chatId = String(ctx.chat.id)
-  await showProjectPicker(chatId)
-})
-
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
-  const chatId = String(ctx.chat.id)
+  const chatId = String(ctx.chat!.id)
   void (async () => {
     const stored = await ensureExistingSession(chatId)
     if (!stored) {
@@ -479,12 +497,12 @@ registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) =
 })
 
 registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async (ctx) => {
-  const chatId = String(ctx.chat.id)
+  const chatId = String(ctx.chat!.id)
   await ctx.reply(await buildStatusText(chatId))
 })
 
 registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) => {
-  const chatId = String(ctx.chat.id)
+  const chatId = String(ctx.chat!.id)
   void (async () => {
     const stored = await ensureExistingSession(chatId)
     if (!stored) {
@@ -497,6 +515,7 @@ registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) 
       await ctx.reply('⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
       return
     }
+    getRuntimeState(chatId).state = 'thinking'
     await ctx.reply('🧹 已清空当前会话上下文。')
   })()
 })
@@ -532,8 +551,12 @@ async function routeUserMessage(
     return
   }
 
-  enqueue(chatId, async () => {
-    const permissionDecision = attachments.length === 0
+  // Captions remain conversation content even when an attachment download fails.
+  const hasAttachments = attachments.length > 0 || Boolean(
+    ctx.message?.photo || ctx.message?.document || ctx.message?.video || ctx.message?.audio || ctx.message?.voice,
+  )
+  await enqueue(chatId, async () => {
+    const permissionDecision = !hasAttachments
       ? parsePermissionCommand(text, pendingPermissions.get(chatId))
       : null
     if (permissionDecision) {
@@ -541,7 +564,14 @@ async function routeUserMessage(
       return
     }
 
-    if (pendingProjectSelection.has(chatId)) {
+    if (await tryHandleTelegramSessionInput(chatId, text, hasAttachments, {
+      startNewSession,
+      showProjectPicker,
+      showResumeProjectPicker: commandController.showResumeProjectPicker,
+      handleSessionInput: (id, input) => sessionSelection.handleInput(id, input),
+    })) return
+
+    if (!hasAttachments && pendingProjectSelection.has(chatId)) {
       if (text.trim()) await startNewSession(chatId, text.trim())
       return
     }
@@ -553,6 +583,8 @@ async function routeUserMessage(
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
     if (!sent) {
       await bot.api.sendMessage(Number(chatId), '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+    } else {
+      getRuntimeState(chatId).state = 'thinking'
     }
   })
 }
@@ -645,33 +677,43 @@ bot.on(
 )
 
 bot.on('callback_query:data', async (ctx) => {
+  if (!ctx.from || ctx.chat?.type !== 'private') return
+  if (!dedup.tryRecord(`telegram:callback:${ctx.callbackQuery.id}`)) return
   const data = ctx.callbackQuery.data
-  if (await tryHandleTelegramSelectionCallback(data, ctx, commandController)) return
+  await enqueue(String(ctx.chat.id), async () => {
+    if (await tryHandleTelegramSelectionCallback(data, ctx, commandController)) return
 
-  if (!data.startsWith('permit:')) return
+    if (!data.startsWith('permit:')) return
 
-  const decision = parsePermitCallbackData(data)
-  if (!decision) return
-  await commandController.handlePermissionCallback(ctx, decision, pendingPermissions, (chatId) => getRuntimeState(chatId).pendingPermissionCount = Math.max(0, getRuntimeState(chatId).pendingPermissionCount - 1))
+    const decision = parsePermitCallbackData(data)
+    if (!decision) return
+    await commandController.handlePermissionCallback(ctx, decision, pendingPermissions, (chatId) => getRuntimeState(chatId).pendingPermissionCount = Math.max(0, getRuntimeState(chatId).pendingPermissionCount - 1))
+  })
 })
 
 // ---------- start ----------
 
-console.log('[Telegram] Starting bot...')
-console.log(`[Telegram] Server: ${config.serverUrl}`)
-console.log(`[Telegram] Allowed users: ${config.telegram.allowedUsers.length === 0 ? 'paired users only' : config.telegram.allowedUsers.join(', ')}`)
-
-void syncTelegramBotCommands(bot.api).then(() => console.log('[Telegram] Command menu synced')).catch((err) => console.warn('[Telegram] Command menu sync failed:', err instanceof Error ? err.message : err))
-
-bot.start({
-  onStart: () => console.log('[Telegram] Bot is running!'),
-})
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('[Telegram] Shutting down...')
-  bot.stop()
+export function stopTelegramAdapter(): void {
+  if (bot.isRunning()) void bot.stop()
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
-})
+}
+
+export function startTelegramAdapter(): void {
+  console.log('[Telegram] Starting bot...')
+  console.log(`[Telegram] Server: ${config.serverUrl}`)
+  console.log(`[Telegram] Allowed users: ${config.telegram.allowedUsers.length === 0 ? 'paired users only' : config.telegram.allowedUsers.join(', ')}`)
+  void attachmentStore.gc().catch((err) => {
+    console.warn('[Telegram] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
+  })
+  void syncTelegramBotCommands(bot.api).then(() => console.log('[Telegram] Command menu synced')).catch((err) => console.warn('[Telegram] Command menu sync failed:', err instanceof Error ? err.message : err))
+  void bot.start({ onStart: () => console.log('[Telegram] Bot is running!') })
+  process.once('SIGINT', () => {
+    console.log('[Telegram] Shutting down...')
+    stopTelegramAdapter()
+    process.exit(0)
+  })
+}
+
+// Desktop's shared sidecar imports this module with its explicit adapter flag.
+if (import.meta.main || process.argv.includes('--telegram')) startTelegramAdapter()

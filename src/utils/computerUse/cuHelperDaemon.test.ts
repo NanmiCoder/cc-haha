@@ -443,11 +443,34 @@ describe('cu-helper overlay reconciliation', () => {
     await show
 
     expect(isOverlayShown()).toBe(false)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(socket.writes).toHaveLength(1)
     const hide = overlayHide()
     await waitForWriteCount(socket, 2)
     expect(JSON.parse(socket.writes[1]!)).toMatchObject({ cmd: 'turn_end' })
     reply(socket, 1, { ok: true, result: true })
     await hide
+  })
+
+  test('cleanup requested during a failed show waits until turn_end completes', async () => {
+    const socket = new FakeSocket()
+    __setDaemonSocketForTests(socket as never)
+
+    const show = overlayShow({ app: 'TextEdit' })
+    await waitForWriteCount(socket, 1)
+    let cleanupCompleted = false
+    const hide = overlayHide().then(() => { cleanupCompleted = true })
+    reply(socket, 0, { ok: false, error: { message: 'target_not_running' } })
+    await waitForWriteCount(socket, 2)
+    expect(JSON.parse(socket.writes[1]!)).toMatchObject({ cmd: 'turn_end' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(cleanupCompleted).toBe(false)
+
+    reply(socket, 1, { ok: true, result: true })
+    await Promise.all([show, hide])
+    expect(cleanupCompleted).toBe(true)
+    expect(isOverlayShown()).toBe(false)
+    expect(socket.writes).toHaveLength(2)
   })
 
   test('cleanup ends a read-only turn even when no overlay was shown', async () => {

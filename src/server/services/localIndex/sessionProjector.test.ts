@@ -431,6 +431,35 @@ describe('session projector', () => {
     }
   })
 
+  it('round-trips inferred and locked protocols through projection, SQLite reads and restart seeds', async () => {
+    const root = await createTempDir('projector-protocol')
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    const index = createSessionIndex(database)
+    const projector = createSessionProjector({ database, index, scope: root })
+    try {
+      for (const protocol of ['anthropic', 'openai_chat', 'openai_responses', 'mixed', 'unknown'] as const) {
+        const candidate = await createCandidate({
+          root, projectPath: '-repo-a', sessionId: protocol,
+          content: line({ type: 'session-meta', sessionApiFormat: protocol }),
+        })
+        const original = await sourceHash(candidate.path)
+        await projector.projectSource(candidate)
+        expect(index.listSessions({ limit: 20 }).sessions.find(row => row.id === protocol)?.sessionApiFormat).toBe(protocol)
+        expect(index.getProjectionSeed(candidate.path)?.summary.sessionApiFormat).toBe(protocol)
+        expect(await sourceHash(candidate.path)).toBe(original)
+      }
+      const legacy = await createCandidate({
+        root, projectPath: '-repo-a', sessionId: 'legacy',
+        content: line({ type: 'session-meta', runtimeProviderId: 'openai-official' }) +
+          line(user('Legacy', '2026-01-01T00:00:00.000Z')) + line(assistant('2026-01-01T00:00:01.000Z')),
+      })
+      await projector.projectSource(legacy)
+      expect(index.getProjectionSeed(legacy.path)?.summary.sessionApiFormat).toBe('openai_responses')
+    } finally {
+      database.close()
+    }
+  })
+
   it('removes only a confirmed missing source projection', async () => {
     const root = await createTempDir('projector-delete')
     const candidate = await createCandidate({

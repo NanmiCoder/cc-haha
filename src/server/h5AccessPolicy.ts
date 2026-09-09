@@ -327,6 +327,29 @@ export function isH5AccessControlPath(pathname: string): boolean {
 }
 
 /**
+ * Endpoints that irreversibly destroy user data in a single request. The H5
+ * token is minted for a paired phone's convenience, not for bulk deletion, so
+ * these require the desktop process token even though they sit under the
+ * ordinary `/api` surface.
+ */
+const LOCAL_CREDENTIAL_ONLY_PATHS: ReadonlySet<string> = new Set([
+  '/api/settings/session-cleanup',
+])
+
+/**
+ * Compare paths the way the router routes them (`split('/').filter(Boolean)`)
+ * so `/x/y/`, `//x/y` and `/x/y` cannot slip past a gated endpoint by changing
+ * the URL shape — the handler still matches all three.
+ */
+function normalizeApiPath(pathname: string): string {
+  return `/${pathname.split('/').filter(Boolean).join('/')}`
+}
+
+export function isLocalCredentialOnlyPath(pathname: string): boolean {
+  return LOCAL_CREDENTIAL_ONLY_PATHS.has(normalizeApiPath(pathname))
+}
+
+/**
  * The control plane — enabling remote access, minting and revoking H5 tokens —
  * is the one surface where loopback alone is deliberately not enough. Once the
  * desktop shell has injected its process token, only components holding that
@@ -334,13 +357,18 @@ export function isH5AccessControlPath(pathname: string): boolean {
  * same box must not be able to publish the user's sessions to the network.
  * This is the boundary `harden desktop request isolation` set out to protect,
  * and it is kept here instead of being applied to every local request.
+ *
+ * `LOCAL_CREDENTIAL_ONLY_PATHS` joins it for the same reason from the other
+ * direction: a stolen H5 token must not be able to wipe the machine's history.
  */
 export function requiresLocalAccessCredential(
   pathname: string,
   context: H5RequestContext,
 ): boolean {
   if (!context.localAccessTokenConfigured) return false
-  if (!isH5AccessControlPath(pathname)) return false
+  if (!isH5AccessControlPath(pathname) && !isLocalCredentialOnlyPath(pathname)) {
+    return false
+  }
   return context.localAccessAuthorized !== true
 }
 

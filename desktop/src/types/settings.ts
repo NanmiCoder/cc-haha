@@ -169,7 +169,18 @@ export type UserSettings = {
   }
   language?: string
   desktopTerminal?: Partial<DesktopTerminalSettings>
+  /** Days to keep transcripts. 0 disables session persistence entirely. */
+  cleanupPeriodDays?: number
   [key: string]: unknown
+}
+
+export type SessionCleanupResult = {
+  ok: true
+  days: number
+  dryRun: boolean
+  /** Transcript / tool-result files matched by the cleanup. */
+  files: number
+  errors: number
 }
 
 export type AppMode = 'default' | 'portable'

@@ -1,3 +1,4 @@
+import type { SessionProtocolState } from '../../../src/shared/sessionProtocol'
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
 
@@ -83,6 +84,7 @@ export type UIAttachment = {
 
 export type ServerMessage =
   | { type: 'connected'; sessionId: string }
+  | { type: 'session_protocol'; sessionApiFormat: SessionProtocolState }
   | {
       type: 'session_state'
       turnState: 'running' | 'idle'

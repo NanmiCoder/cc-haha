@@ -4,6 +4,8 @@ import { get3PModelCapabilityOverride } from './modelSupportOverrides.js'
 const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_DEFAULT_FABLE_MODEL',
+  'ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES',
 ] as const
@@ -34,6 +36,9 @@ describe('third-party model capability overrides', () => {
       ['MiniMax-M3', 'MiniMax-M3[1m]'],
       ['glm-5.2', 'glm-5.2:1m'],
       ['vendor/future-model', 'vendor/future-model[1m]'],
+      ['vendor/future-model[1m]', 'vendor/future-model'],
+      ['vendor/future-model:1m', 'vendor/future-model'],
+      [' VENDOR/FUTURE-MODEL[1M] ', 'vendor/future-model:1m'],
     ] as const
 
     for (const [runtimeModel, pinnedModel] of cases) {
@@ -53,6 +58,39 @@ describe('third-party model capability overrides', () => {
 
     expect(get3PModelCapabilityOverride('provider-a/shared-model', 'effort')).toBe(true)
     expect(get3PModelCapabilityOverride('provider-b/shared-model', 'effort')).toBeUndefined()
+  })
+
+  test.each([
+    'vendor/future-model[2m]',
+    'vendor[1m]/future-model',
+  ])('keeps capability decisions independent for the distinct model %s', distinctModel => {
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'vendor/future-model[1m]'
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = distinctModel
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES = 'none'
+
+    // Both lookup orders must preserve the provider's explicit opt-out.
+    for (const models of [
+      ['vendor/future-model', distinctModel],
+      [distinctModel, 'vendor/future-model'],
+    ]) {
+      clearCapabilityCache()
+      for (const model of models) {
+        expect(get3PModelCapabilityOverride(model, 'thinking')).toBe(model !== distinctModel)
+        expect(get3PModelCapabilityOverride(model, 'effort')).toBe(model !== distinctModel)
+      }
+    }
+  })
+
+  test('preserves Fable capability opt-ins and opt-outs across 1M aliases', () => {
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = 'vendor/fable-model[1m]'
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES = 'thinking,effort'
+
+    for (const model of ['vendor/fable-model', 'vendor/fable-model[1m]', 'vendor/fable-model:1m']) {
+      expect(get3PModelCapabilityOverride(model, 'thinking')).toBe(true)
+      expect(get3PModelCapabilityOverride(model, 'effort')).toBe(true)
+      expect(get3PModelCapabilityOverride(model, 'adaptive_thinking')).toBe(false)
+      expect(get3PModelCapabilityOverride(model, 'max_effort')).toBe(false)
+    }
   })
 })
 

@@ -1,6 +1,7 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  'sidebar.projectHistoryFailed': '無法載入更早的對話。',
   // ─── Common ──────────────────────────────────────
   'common.cancel': '取消',
   'common.close': '關閉',
@@ -1549,6 +1550,24 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > General - Storage
   'settings.general.modeSwitchTitle': '切換資料儲存位置？',
   'settings.general.modeSwitchConfirm': '儲存並重啟',
+  'settings.general.sessionRetentionTitle': '工作階段記錄',
+  'settings.general.sessionRetentionDescription': '工作階段記錄在本機保留多久。調小這個值會立即刪除較早的記錄，因此需要二次確認。',
+  'settings.general.sessionRetentionLabel': '工作階段記錄保留時長',
+  'settings.general.sessionRetentionCurrent': '目前：{days} 天',
+  'settings.general.sessionRetentionCurrentOff': '目前：不儲存記錄',
+  'settings.general.sessionRetentionUnit': '天',
+  'settings.general.sessionRetentionHint': '預設 365 天。設為 0 將不再記錄工作階段內容，並刪除既有的全部記錄。',
+  'settings.general.sessionRetentionRequired': '請輸入天數。',
+  'settings.general.sessionRetentionRange': '請輸入 0 到 {max} 之間的整數。',
+  'settings.general.sessionRetentionSave': '儲存',
+  'settings.general.sessionRetentionSaved': '保留時長已更新，刪除了 {count} 個過期工作階段檔案。',
+  'settings.general.sessionRetentionSavedPartial': '保留時長已更新，刪除了 {count} 個過期工作階段檔案，另有 {errors} 個刪除失敗。',
+  'settings.general.sessionRetentionConfirmTitle': '確認修改工作階段記錄保留時長？',
+  'settings.general.sessionRetentionConfirmDelete': '將永久刪除 {days} 天前的工作階段記錄，此操作無法復原。',
+  'settings.general.sessionRetentionConfirmDisable': '設為 0 後將不再記錄新的工作階段內容，並永久刪除既有的全部記錄，此操作無法復原。',
+  'settings.general.sessionRetentionPreview': '依此設定，目前會刪除 {count} 個檔案。',
+  'settings.general.sessionRetentionPreviewUnavailable': '統計失敗，仍可繼續確認。',
+  'settings.general.sessionRetentionConfirmAction': '刪除並儲存',
   'settings.general.storageTitle': '資料儲存位置',
   'settings.general.storageDescription': '低頻高階設定。切換後，會話記錄、Skills、MCP、外掛、Provider 配置、任務和快取都會從新的目錄讀取。',
   'settings.general.storageSystemTitle': '使用系統目錄',
@@ -2342,6 +2361,10 @@ export const zh: Record<TranslationKey, string> = {
   // ─── Model Selector ──────────────────────────────────────
   'model.selectModel': '選擇模型',
   'model.configureProvider': '設定模型服務商',
+  'model.protocolLocked': '此對話使用 {protocol} 協定。如需使用其他 API 協定，請建立新對話。',
+  'model.protocolMixed': '此對話混用了多種 API 協定的歷史，無法繼續。請在模型選單中建立新對話。',
+  'model.protocolUnknown': '無法判定此舊對話的 API 協定。請在模型選單中建立新對話。',
+  'model.protocolRequiresNewSession': 'API 協定不同，請建立新對話',
   'model.configuration': '模型配置',
   'model.searchPlaceholder': '搜尋模型',
   'model.clearSearch': '清除模型搜尋',

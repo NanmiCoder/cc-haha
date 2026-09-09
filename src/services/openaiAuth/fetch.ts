@@ -1,5 +1,6 @@
 import type { ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
+import { getOpenAIPolicyError } from './policyError.js'
 import {
   OPENAI_CODEX_API_ENDPOINT,
   OPENAI_CODEX_ORIGINATOR,
@@ -119,6 +120,21 @@ export function buildOpenAICodexFetch(
       const errorText = await upstream.text().catch(() => '').finally(() => {
         upstreamAbort?.dispose()
       })
+      const policyError = getOpenAIPolicyError({ message: errorText })
+      if (policyError) {
+        return Response.json({
+          type: 'error',
+          error: { type: 'permission_error', ...policyError },
+        }, {
+          status: 403,
+          headers: {
+            'x-should-retry': 'false',
+            ...(upstream.headers.get('x-request-id')
+              ? { 'x-request-id': upstream.headers.get('x-request-id')! }
+              : {}),
+          },
+        })
+      }
       return Response.json(
         {
           type: 'error',

@@ -1,9 +1,11 @@
 import { create } from 'zustand'
 import { sessionsApi } from '../api/sessions'
+import { ApiError } from '../api/client'
 import { dropSession as dropVirtualHeightSession } from '../components/chat/virtualHeightCache'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { teamMemberSessionId } from '../types/team'
+import type { SessionListItem } from '../types/session'
 
 const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
 
@@ -107,6 +109,16 @@ function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabT
     return tab.type
   }
   return null
+}
+
+function getPersistedSessionId(tab: TabPersistence['openTabs'][number]): string | null {
+  if (getPersistentSpecialTabType(tab)) return null
+  if (tab.type === 'trace') return tab.traceSessionId || null
+  if (
+    tab.type === 'terminal' || tab.type === 'workbench' || tab.type === 'subagent' ||
+    tab.type === 'team' || tab.type === 'team-member'
+  ) return null
+  return tab.sessionId
 }
 
 export const useTabStore = create<TabStore>((set, get) => ({
@@ -462,6 +474,12 @@ export const useTabStore = create<TabStore>((set, get) => ({
   restoreTabs: async () => {
     try {
       const restoreStartedWith = get()
+      const expectedSelections = useSessionRuntimeStore.getState().selections
+      const restoreStillCurrent = () => {
+        const current = get()
+        return current.tabs === restoreStartedWith.tabs &&
+          current.activeTabId === restoreStartedWith.activeTabId
+      }
       const raw = localStorage.getItem(TAB_STORAGE_KEY)
       if (!raw) return
 
@@ -473,24 +491,49 @@ export const useTabStore = create<TabStore>((set, get) => ({
       }
 
       const { sessions } = await sessionsApi.list({ limit: 200 })
-      const current = get()
-      if (
-        current.tabs !== restoreStartedWith.tabs ||
-        current.activeTabId !== restoreStartedWith.activeTabId
-      ) {
-        return
+      if (!restoreStillCurrent()) return
+      const sessionsById = new Map(sessions.map((session) => [session.id, session]))
+      const historicalSessions: SessionListItem[] = []
+      const missingIds = new Set<string>()
+      // The recent page cannot prove an old saved tab was deleted. Resolve
+      // only missing saved ids, sequentially so large tab sets stay bounded.
+      for (const tab of data.openTabs) {
+        const sessionId = getPersistedSessionId(tab)
+        if (!sessionId || sessionsById.has(sessionId) || missingIds.has(sessionId)) continue
+        try {
+          const session = await sessionsApi.getSummary(sessionId)
+          if (!restoreStillCurrent()) return
+          sessionsById.set(sessionId, session)
+          historicalSessions.push(session)
+        } catch (error) {
+          if (!restoreStillCurrent()) return
+          if (error instanceof ApiError && error.status === 404) {
+            missingIds.add(sessionId)
+          } else {
+            // Keep persisted tabs intact on a timeout or unavailable server.
+            throw error
+          }
+        }
       }
-      useSessionRuntimeStore.getState().syncFromSessions(sessions)
-      const existingIds = new Set(sessions.map((s) => s.id))
+
+      // Avoid the sessionStore -> tabStore static import cycle. There must
+      // be no await between reconciliation and activating the restored tabs.
+      const { useSessionStore, reconcileSessionSnapshots } = await import('./sessionStore')
+      if (!restoreStillCurrent()) return
+      const recentSessions = reconcileSessionSnapshots(sessions, useSessionStore.getState().sessions)
+      for (const session of recentSessions) sessionsById.set(session.id, session)
+      if (historicalSessions.length > 0) {
+        const hydrated = useSessionStore.getState().hydrateHistoricalSessions(historicalSessions, expectedSelections)
+        for (const session of hydrated) sessionsById.set(session.id, session)
+      }
+      useSessionRuntimeStore.getState().syncFromSessions(recentSessions, expectedSelections)
 
       const validTabs: Tab[] = data.openTabs
         .filter((t) => {
           // Special tabs are always valid
           if (getPersistentSpecialTabType(t)) return true
-          if (t.type === 'trace') return !!t.traceSessionId && existingIds.has(t.traceSessionId)
-          if (t.type === 'terminal' || t.type === 'team' || t.type === 'team-member') return false
-          // Session tabs must exist on server
-          return existingIds.has(t.sessionId)
+          const sessionId = getPersistedSessionId(t)
+          return sessionId !== null && sessionsById.has(sessionId)
         })
         .map((t) => {
           const specialType = getPersistentSpecialTabType(t)
@@ -500,7 +543,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
           if (t.type === 'trace' && t.traceSessionId) {
             // Titled with the traced session, same as a freshly opened trace
             // tab — the tab bar's glyph is what marks it as a trace.
-            const sourceTitle = sessions.find((s) => s.id === t.traceSessionId)?.title || t.title
+            const sourceTitle = sessionsById.get(t.traceSessionId)?.title || t.title
             return {
               sessionId: `${TRACE_TAB_PREFIX}${t.traceSessionId}`,
               title: sourceTitle,
@@ -511,7 +554,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
           }
           return {
             sessionId: t.sessionId,
-            title: sessions.find((s) => s.id === t.sessionId)?.title || t.title,
+            title: sessionsById.get(t.sessionId)?.title || t.title,
             type: 'session' as const,
             status: 'idle' as const,
           }

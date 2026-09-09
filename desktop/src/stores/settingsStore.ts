@@ -50,6 +50,11 @@ export const UI_ZOOM_STEP = APP_ZOOM_CONTROL_STEP
 export const UI_ZOOM_DEFAULT = DEFAULT_APP_ZOOM
 let desktopNotificationsSaveQueue: Promise<void> = Promise.resolve()
 
+/** Mirrors DEFAULT_SESSION_RETENTION_DAYS in src/utils/cleanup.ts. */
+export const DEFAULT_CLEANUP_PERIOD_DAYS = 365
+/** Mirrors MAX_SESSION_RETENTION_DAYS in src/server/api/settings.ts. */
+export const MAX_CLEANUP_PERIOD_DAYS = 3650
+
 type SettingsStore = {
   permissionMode: PermissionMode
   currentModel: ModelInfo | null
@@ -78,6 +83,8 @@ type SettingsStore = {
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
+  /** null = never configured; the UI falls back to DEFAULT_CLEANUP_PERIOD_DAYS. */
+  cleanupPeriodDays: number | null
   traceCapture: TraceCaptureSettings
   h5Access: H5AccessSettings
   h5AccessDiagnostics: H5AccessDiagnostics | null
@@ -111,6 +118,7 @@ type SettingsStore = {
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
+  setCleanupPeriodDays: (days: number) => Promise<void>
   setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
   enableH5Access: () => Promise<string>
   disableH5Access: () => Promise<void>
@@ -204,6 +212,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
+  cleanupPeriodDays: null,
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
   h5Access: DEFAULT_H5_ACCESS_SETTINGS,
   h5AccessDiagnostics: null,
@@ -272,6 +281,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
+        cleanupPeriodDays: normalizeCleanupPeriodDays(userSettings.cleanupPeriodDays),
         traceCapture,
         h5Access: h5AccessResult.settings,
         h5AccessDiagnostics: h5AccessResult.diagnostics,
@@ -532,6 +542,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setCleanupPeriodDays: async (days) => {
+    const next = normalizeCleanupPeriodDays(days)
+    if (next === null) {
+      throw new Error(`Invalid cleanup period: ${days}`)
+    }
+    const prev = get().cleanupPeriodDays
+    set({ cleanupPeriodDays: next })
+    try {
+      await settingsApi.updateUser({ cleanupPeriodDays: next })
+    } catch (error) {
+      set({ cleanupPeriodDays: prev })
+      throw error
+    }
+  },
+
   setTraceCaptureEnabled: async (enabled) => {
     const prev = get().traceCapture
     set({ traceCapture: { ...prev, enabled } })
@@ -741,6 +766,23 @@ function normalizeNetworkSettings(
         : '',
     },
   }
+}
+
+/**
+ * Returns the stored retention in days, or null when the user never set one
+ * (the UI then shows DEFAULT_CLEANUP_PERIOD_DAYS). 0 is a real value: it means
+ * "stop persisting transcripts", not "unset".
+ */
+function normalizeCleanupPeriodDays(value: unknown): number | null {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > MAX_CLEANUP_PERIOD_DAYS
+  ) {
+    return null
+  }
+  return value
 }
 
 function normalizeTraceCaptureSettings(

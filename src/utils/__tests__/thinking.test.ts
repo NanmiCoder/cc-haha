@@ -148,10 +148,10 @@ describe('provider-aware thinking support', () => {
     expect(shouldSendExplicitDisabledThinking()).toBe(true)
   })
 
-  test('DeepSeek preset can follow the global thinking setting through capability overrides', () => {
+  test('DeepSeek preset with a 1M marker preserves runtime thinking and effort overrides', () => {
     process.env.ANTHROPIC_API_KEY = 'third-party-key'
     process.env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'
-    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'deepseek-v4-pro'
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'deepseek-v4-pro[1m]'
     process.env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES =
       'thinking,effort,adaptive_thinking,xhigh_effort,max_effort'
     delete process.env.CC_HAHA_SEND_DISABLED_THINKING
@@ -173,11 +173,13 @@ describe('provider-aware thinking support', () => {
       'thinking,adaptive_thinking'
     clearCapabilityCache()
 
-    expect(modelSupportsThinking('MiniMax-M3[1m]')).toBe(true)
-    expect(modelSupportsAdaptiveThinking('MiniMax-M3[1m]')).toBe(true)
-    expect(modelSupportsEffort('MiniMax-M3[1m]')).toBe(false)
-    expect(modelSupportsXHighEffort('MiniMax-M3[1m]')).toBe(false)
-    expect(modelSupportsMaxEffort('MiniMax-M3[1m]')).toBe(false)
+    for (const model of ['MiniMax-M3[1m]', 'MiniMax-M3', 'MiniMax-M3:1m']) {
+      expect(modelSupportsThinking(model)).toBe(true)
+      expect(modelSupportsAdaptiveThinking(model)).toBe(true)
+      expect(modelSupportsEffort(model)).toBe(false)
+      expect(modelSupportsXHighEffort(model)).toBe(false)
+      expect(modelSupportsMaxEffort(model)).toBe(false)
+    }
   })
 
   test('Kimi K3 preset requires thinking and supports effort passthrough', () => {

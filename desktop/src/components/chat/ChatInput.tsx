@@ -212,6 +212,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     : undefined
   const runtimeModelLabel = runtimeSelection?.modelId ?? currentModel?.name ?? currentModel?.id
   const activeSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
+  const sessionProtocol = sessionState?.sessionApiFormat ?? activeSession?.sessionApiFormat
+  const isProtocolBlocked = sessionProtocol === 'mixed' || sessionProtocol === 'unknown'
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -298,7 +300,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
     : null
-  const canSubmit = !isWorkspaceMissing &&
+  const canSubmit = !isWorkspaceMissing && !isProtocolBlocked &&
     !launchTransitioning &&
     !isPreparingTurn &&
     (!showLaunchControls || launchReady || !!pendingSlashUiAction) &&
@@ -705,6 +707,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
   const handleSubmit = async () => {
     const text = input.trim()
+    if (isProtocolBlocked) return
     if ((!text && ((!attachments.length && !hasWorkspaceReferences) || isMemberSession)) || isWorkspaceMissing) return
 
     if (pendingSlashUiAction?.type === 'panel') {
@@ -1086,6 +1089,11 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               : `${isMobileComposer ? 'mx-0 max-w-none' : 'mx-auto max-w-[900px]'}`
         }
       >
+        {isProtocolBlocked && (
+          <p role="alert" className="mb-2 text-sm text-[var(--color-text-secondary)]">
+            {t(sessionProtocol === 'mixed' ? 'model.protocolMixed' : 'model.protocolUnknown')}
+          </p>
+        )}
         <div
           ref={panelRef}
           data-testid="chat-input-panel"

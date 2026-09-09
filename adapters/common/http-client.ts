@@ -151,12 +151,10 @@ export class AdapterHttpClient {
         throw new Error(`Failed to check session: ${(err as any).message}`)
       }
       const data = (await res.json()) as {
-        status?: {
-          workDir?: string
-          permissionMode?: string
-        }
+        workDir?: string
+        permissionMode?: string
       }
-      return this.isSafeRemoteSession(data.status)
+      return this.isSafeRemoteSession(data)
     } finally {
       clearTimeout(timer)
     }
@@ -295,7 +293,9 @@ export class AdapterHttpClient {
         workDir: session.workDir,
         permissionMode: session.permissionMode,
       }))
-      return { sessions, total: sessions.length }
+      // total counts server candidates before the local safety filter. Keep it
+      // for offset pagination, including pages with no locally allowed sessions.
+      return { sessions, total: data.total }
     } finally {
       clearTimeout(timer)
     }

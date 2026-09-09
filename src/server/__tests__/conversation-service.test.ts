@@ -187,6 +187,9 @@ describe('ConversationService', () => {
   ) {
     const session = {
       outputCallbacks: [],
+      workDir: tmpDir,
+      providerId: null,
+      apiFormat: 'anthropic',
       networkRoutingFingerprint: '',
       networkDerivedFirstTokenTimeout,
       sdkSocket: {
@@ -525,6 +528,8 @@ describe('ConversationService', () => {
     const sent: string[] = []
     service.sessions.set('sleep-wake-session', {
       proc: {},
+      providerId: null,
+      apiFormat: 'anthropic',
       outputCallbacks: [],
       workDir: tmpDir,
       permissionMode: 'default',

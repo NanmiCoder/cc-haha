@@ -1255,7 +1255,7 @@ public enum AXAction {
         var value: CFTypeRef?
         if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
            let windows = value as? [AXUIElement] {
-            for window in windows where windowNumber(of: window) == windowID {
+            for window in windows where WindowGeometry.axWindowID(of: window) == windowID {
                 if actionNames(window).contains(axRaise) {
                     _ = AXUIElementPerformAction(window, axRaise as CFString)
                 }
@@ -1265,18 +1265,6 @@ public enum AXAction {
         // The raise is best-effort, so the answer is what the screen shows, not
         // what the AX calls returned.
         return !WindowGeometry.isFullyCovered(windowID: windowID)
-    }
-
-    /// The CGWindowID behind an AX window element, via the private-but-stable
-    /// `_AXUIElementGetWindow`. Returns 0 when it cannot be read, which never
-    /// matches a real window and so simply skips that element.
-    private static func windowNumber(of element: AXUIElement) -> CGWindowID {
-        typealias GetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
-        guard let handle = dlopen(nil, RTLD_LAZY),
-              let symbol = dlsym(handle, "_AXUIElementGetWindow") else { return 0 }
-        let getWindow = unsafeBitCast(symbol, to: GetWindow.self)
-        var id: CGWindowID = 0
-        return getWindow(element, &id) == .success ? id : 0
     }
 
     private static func activateWindow(_ element: AXUIElement) -> Bool {

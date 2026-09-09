@@ -1,5 +1,10 @@
 import { api } from './client'
-import type { OutputStylesResponse, PermissionMode, UserSettings } from '../types/settings'
+import type {
+  OutputStylesResponse,
+  PermissionMode,
+  SessionCleanupResult,
+  UserSettings,
+} from '../types/settings'
 
 export type CliLauncherStatus = {
   supported: boolean
@@ -51,5 +56,17 @@ export const settingsApi = {
 
   getCliLauncherStatus() {
     return api.get<CliLauncherStatus>('/api/settings/cli-launcher')
+  },
+
+  /**
+   * Delete transcripts older than `days`, or preview how many files that would
+   * remove when `dryRun` is set. Mirrors `cleanupPeriodDays` semantics: 0 wipes
+   * every transcript and stops future persistence.
+   */
+  cleanupSessions(days: number, dryRun = false) {
+    return api.post<SessionCleanupResult>('/api/settings/session-cleanup', {
+      days,
+      dryRun,
+    })
   },
 }

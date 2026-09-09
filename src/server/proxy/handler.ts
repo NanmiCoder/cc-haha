@@ -9,6 +9,9 @@
  * Original work by Jason Young, MIT License
  */
 
+import { getOpenAIPolicyError } from '../../services/openaiAuth/policyError.js'
+import { buildOpenaiEndpoint } from './openaiEndpoint.js'
+import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { createGunzip, createInflate } from 'node:zlib'
 
 import { ProviderService } from '../services/providerService.js'
@@ -267,15 +270,16 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
       }).catch(() => {})
     }
     console.error('[Proxy] Upstream request failed:', err)
+    const policyError = getOpenAIPolicyError(err)
     return Response.json(
       {
         type: 'error',
-        error: {
+        error: policyError ? { type: 'permission_error', ...policyError } : {
           type: 'api_error',
           message: err instanceof Error ? err.message : String(err),
         },
       },
-      { status: 502 },
+      { status: policyError ? 403 : 502 },
     )
   }
 }
@@ -440,7 +444,7 @@ async function handleAnthropicCompatible(
   traceContext: ProxyTraceContext | null,
 ): Promise<Response> {
   const transformed = hoistToolResultMediaForCompatibility(body)
-  const url = `${baseUrl}/v1/messages`
+  const url = `${normalizeAnthropicBaseUrl(baseUrl)}/v1/messages`
   const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
 
   const headers: Record<string, string> = {
@@ -660,7 +664,7 @@ async function handleOpenaiChat(
     passThinkingToggle: knownDeepSeekHost,
     imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl, body.model) ? 'text_only' : 'vision',
   })
-  const url = `${baseUrl}/v1/chat/completions`
+  const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
   const upstreamRequestHeaders = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
@@ -707,9 +711,15 @@ async function handleOpenaiChat(
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '')
+    let policyError = null
+    try {
+      policyError = getOpenAIPolicyError(JSON.parse(errText))
+    } catch {
+      // Unstructured upstream failures keep their existing error classification.
+    }
     const errorBody = {
       type: 'error',
-      error: {
+      error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
         message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
       },
@@ -732,7 +742,7 @@ async function handleOpenaiChat(
     }
     return Response.json(
       errorBody,
-      { status: upstream.status },
+      { status: policyError ? 403 : upstream.status },
     )
   }
 
@@ -788,7 +798,10 @@ async function handleOpenaiChat(
 
   // Non-streaming
   const responseBody = await upstream.json()
-  const anthropicResponse = openaiChatToAnthropic(responseBody, body.model)
+  const policyError = getOpenAIPolicyError(responseBody)
+  const anthropicResponse = policyError
+    ? { type: 'error', error: { type: 'permission_error', ...policyError } }
+    : openaiChatToAnthropic(responseBody, body.model)
   if (traceContext) {
     recordProxyTraceInBackground({
       callId: traceCallId,
@@ -805,7 +818,7 @@ async function handleOpenaiChat(
       responseHeaders: upstream.headers,
     })
   }
-  return Response.json(anthropicResponse)
+  return Response.json(anthropicResponse, { status: policyError ? 403 : 200 })
 }
 
 function shouldUseDeepSeekReasoningCompat(baseUrl: string): boolean {
@@ -816,8 +829,11 @@ function shouldUseDeepSeekReasoningCompat(baseUrl: string): boolean {
 }
 
 function shouldUseTextOnlyOpenAIChatContent(baseUrl: string, model: string): boolean {
-  // DeepSeek's classic Chat endpoint accepts string content only.
-  if (/(^|[./-])deepseek([./-]|$)/i.test(baseUrl)) return true
+  // Keep classic DeepSeek text models compatible without dropping images for
+  // explicitly vision-capable models served by the same Chat endpoint.
+  if (/(^|[./-])deepseek([./-]|$)/i.test(baseUrl)) {
+    return !hasExplicitVisionModelMarker(model)
+  }
 
   // image_url inside a tool message is a gateway extension, not a universal
   // Chat Completions contract. Only opt opencode models in when their id
@@ -845,7 +861,7 @@ async function handleOpenaiResponses(
   promptCacheKey?: string,
 ): Promise<Response> {
   const transformed = anthropicToOpenaiResponses(body, { cacheKey: promptCacheKey })
-  const url = `${baseUrl}/v1/responses`
+  const url = buildOpenaiEndpoint(baseUrl, 'responses')
   const upstreamRequestHeaders = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
@@ -892,9 +908,15 @@ async function handleOpenaiResponses(
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '')
+    let policyError = null
+    try {
+      policyError = getOpenAIPolicyError(JSON.parse(errText))
+    } catch {
+      // Unstructured upstream failures keep their existing error classification.
+    }
     const errorBody = {
       type: 'error',
-      error: {
+      error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
         message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
       },
@@ -917,7 +939,7 @@ async function handleOpenaiResponses(
     }
     return Response.json(
       errorBody,
-      { status: upstream.status },
+      { status: policyError ? 403 : upstream.status },
     )
   }
 
@@ -973,7 +995,10 @@ async function handleOpenaiResponses(
 
   // Non-streaming
   const responseBody = await upstream.json()
-  const anthropicResponse = openaiResponsesToAnthropic(responseBody, body.model)
+  const policyError = getOpenAIPolicyError(responseBody)
+  const anthropicResponse = policyError
+    ? { type: 'error', error: { type: 'permission_error', ...policyError } }
+    : openaiResponsesToAnthropic(responseBody, body.model)
   if (traceContext) {
     recordProxyTraceInBackground({
       callId: traceCallId,
@@ -990,7 +1015,7 @@ async function handleOpenaiResponses(
       responseHeaders: upstream.headers,
     })
   }
-  return Response.json(anthropicResponse)
+  return Response.json(anthropicResponse, { status: policyError ? 403 : 200 })
 }
 
 function buildProxyTraceContext(

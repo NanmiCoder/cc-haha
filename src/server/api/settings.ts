@@ -6,6 +6,7 @@
  * GET  /api/settings/project    — 获取项目设置
  * PUT  /api/settings/user       — 更新用户设置
  * PUT  /api/settings/project    — 更新项目设置
+ * POST /api/settings/session-cleanup — 按指定保留天数清理会话记录（可 dryRun 预览）
  * GET  /api/permissions/mode    — 获取权限模式
  * PUT  /api/permissions/mode    — 设置权限模式
  */
@@ -20,8 +21,13 @@ import {
   type OutputStyleConfig,
 } from '../../constants/outputStyles.js'
 import { getCwd } from '../../utils/cwd.js'
+import { cleanupOldSessionFiles } from '../../utils/cleanup.js'
 
 const settingsService = new SettingsService()
+
+/** Upper bound for the retention input; 10 years is effectively "forever". */
+const MAX_SESSION_RETENTION_DAYS = 3650
+const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 type OutputStyleSource =
   | OutputStyleConfig['source']
@@ -75,6 +81,9 @@ export async function handleSettingsApi(
 
       case 'output-style':
         return await handleOutputStyle(req)
+
+      case 'session-cleanup':
+        return await handleSessionCleanup(req)
 
       case 'cli-launcher':
         if (method !== 'GET') throw methodNotAllowed(method)
@@ -185,6 +194,44 @@ async function handleOutputStyle(req: Request): Promise<Response> {
     outputStyle,
     scope: 'userSettings',
     workDir: null,
+  })
+}
+
+/**
+ * Run (or preview) transcript cleanup with an explicit retention window.
+ *
+ * The desktop writes `cleanupPeriodDays` through this same service, so we take
+ * `days` from the request rather than reading it back: the CLI refreshes its
+ * settings cache from a file watcher, so a read-back could still race the write.
+ */
+async function handleSessionCleanup(req: Request): Promise<Response> {
+  if (req.method !== 'POST') {
+    throw methodNotAllowed(req.method)
+  }
+
+  const body = await parseJsonBody(req)
+  const days = body.days
+  if (
+    typeof days !== 'number' ||
+    !Number.isInteger(days) ||
+    days < 0 ||
+    days > MAX_SESSION_RETENTION_DAYS
+  ) {
+    throw ApiError.badRequest(
+      `"days" must be an integer between 0 and ${MAX_SESSION_RETENTION_DAYS}`,
+    )
+  }
+
+  const dryRun = body.dryRun === true
+  const cutoffDate = new Date(Date.now() - days * MS_PER_DAY)
+  const result = await cleanupOldSessionFiles(cutoffDate, { dryRun })
+
+  return Response.json({
+    ok: true,
+    days,
+    dryRun,
+    files: result.messages,
+    errors: result.errors,
   })
 }
 

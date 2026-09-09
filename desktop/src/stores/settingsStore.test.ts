@@ -1725,3 +1725,96 @@ describe('settingsStore H5 access behavior', () => {
     expect('h5AccessGeneratedToken' in useSettingsStore.getState()).toBe(false)
   })
 })
+
+describe('settingsStore session retention persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  function mockApis(
+    updateUser: ReturnType<typeof vi.fn>,
+    getUser: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
+  ) {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser,
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+  }
+
+  it('treats 0 as an explicit value and persists it', async () => {
+    const updateUser = vi.fn().mockResolvedValue({})
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().setCleanupPeriodDays(0)
+
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBe(0)
+    expect(updateUser).toHaveBeenCalledWith({ cleanupPeriodDays: 0 })
+  })
+
+  it('rolls the optimistic value back when persisting fails', async () => {
+    const updateUser = vi.fn().mockRejectedValue(new Error('offline'))
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await expect(
+      useSettingsStore.getState().setCleanupPeriodDays(90),
+    ).rejects.toThrow('offline')
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBeNull()
+  })
+
+  it('rejects out-of-range values without calling the API', async () => {
+    const updateUser = vi.fn()
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await expect(useSettingsStore.getState().setCleanupPeriodDays(-1)).rejects.toThrow()
+    await expect(useSettingsStore.getState().setCleanupPeriodDays(3651)).rejects.toThrow()
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('reads the stored retention and falls back to null for invalid values', async () => {
+    const getUser = vi.fn().mockResolvedValue({ cleanupPeriodDays: 30 })
+    mockApis(vi.fn(), getUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBe(30)
+
+    getUser.mockResolvedValue({ cleanupPeriodDays: 'thirty' })
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBeNull()
+  })
+})

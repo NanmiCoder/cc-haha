@@ -126,9 +126,9 @@ describe('bundled provider presets', () => {
       .not.toContain(id)
   })
 
-  it('keeps Atlas Cloud selectable and featured', () => {
+  it('keeps active sponsors selectable and ordered like the README', () => {
     expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).filter((preset) => preset.featured).map((preset) => preset.id))
-      .toEqual(['atlascloud'])
+      .toEqual(['atlascloud', 'apismart'])
   })
 
   it('keeps the retired 接口AI preset resolvable but not selectable', () => {

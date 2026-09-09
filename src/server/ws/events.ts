@@ -109,6 +109,7 @@ export type ServerMessage =
    */
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+  | { type: 'session_protocol'; sessionApiFormat: import('../../shared/sessionProtocol.js').SessionProtocolState }
   | {
       type: typeof RUNTIME_CONFIG_APPLIED_EVENT
       providerId: string | null

@@ -223,6 +223,7 @@ import {
   startSessionActivity,
   stopSessionActivity,
 } from "../../utils/sessionActivity.js";
+import { isOpenAIPolicyError } from "../openaiAuth/policyError.js"
 import { shouldTriggerNonStreamingFallbackForEmptyStream } from "./streamFallback.js";
 import { StreamAssistantCommitBuffer } from "./streamAssistantCommitBuffer.js";
 import {
@@ -2774,6 +2775,9 @@ async function* queryModel(
         streamMaxDurationTimer = null;
       }
 
+      // A safety rejection is terminal, including for non-streaming fallback.
+      if (isOpenAIPolicyError(streamingError)) throw streamingError
+
       // Instrumentation: if the watchdog had already fired and the for-await
       // threw (rather than exiting cleanly), record that the loop DID exit and
       // how long after the watchdog. Distinguishes true hangs from error exits.
@@ -3068,6 +3072,7 @@ async function* queryModel(
     // with raw streams, 404s are thrown during creation (caught here).
     const is404StreamCreationError =
       !didFallBackToNonStreaming &&
+      !isOpenAIPolicyError(errorFromRetry) &&
       errorFromRetry instanceof CannotRetryError &&
       errorFromRetry.originalError instanceof APIError &&
       errorFromRetry.originalError.status === 404;
