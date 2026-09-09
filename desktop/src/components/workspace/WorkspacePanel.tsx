@@ -1290,6 +1290,7 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
   const setActiveView = useWorkspacePanelStore((state) => state.setActiveView)
   const loadStatus = useWorkspacePanelStore((state) => state.loadStatus)
   const loadTree = useWorkspacePanelStore((state) => state.loadTree)
+  const refreshWorkspaceTree = useWorkspacePanelStore((state) => state.refreshWorkspaceTree)
   const toggleTreeNode = useWorkspacePanelStore((state) => state.toggleTreeNode)
   const openPreview = useWorkspacePanelStore((state) => state.openPreview)
   const closePreview = useWorkspacePanelStore((state) => state.closePreview)
@@ -1460,10 +1461,11 @@ export function WorkspacePanel({ sessionId, embedded = false, forceVisible = fal
     if (activePreviewTab) {
       void openPreview(sessionId, activePreviewTab.path, activePreviewTab.kind)
     }
+    if (navigatorView === 'all') {
+      void refreshWorkspaceTree(sessionId)
+    }
     if (hasWorkspaceSearch) {
       setWorkspaceSearchRevision((revision) => revision + 1)
-    } else if (navigatorView === 'all') {
-      void loadTree(sessionId, '')
     }
   }
 
