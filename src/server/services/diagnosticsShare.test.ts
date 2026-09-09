@@ -115,6 +115,99 @@ describe('projectDiagnosticEventForSharing', () => {
     expect(projected.omittedFields).toContain('details.error.message')
     expect(projected.omittedFields).toContain('details.error.stack')
   })
+
+  test('keeps the failing API route and method so 4xx events are attributable', () => {
+    const event: DiagnosticEvent = {
+      id: 'event-api-failure',
+      timestamp: '2026-07-11T09:10:11.000Z',
+      type: 'client_api_request_failed',
+      severity: 'warn',
+      summary: 'GET /api/sessions/... failed',
+      details: {
+        method: 'GET',
+        path: '/api/sessions/f9312a1e-3fe0-42d5-8d2b-522a06146987/messages',
+        status: 404,
+      },
+    }
+
+    const projected = projectDiagnosticEventForSharing(event)
+
+    expect(projected.details).toEqual({
+      method: 'GET',
+      path: '/api/sessions/:id/messages',
+      status: 404,
+    })
+    expect(JSON.stringify(projected)).not.toContain('f9312a1e')
+    expect(projected.omittedFields).not.toContain('details.path')
+    expect(projected.omittedFields).not.toContain('details.method')
+  })
+
+  test('replaces identifier-shaped route segments regardless of position', () => {
+    const event: DiagnosticEvent = {
+      id: 'event-api-ids',
+      timestamp: '2026-07-11T09:10:11.000Z',
+      type: 'client_api_request_failed',
+      severity: 'warn',
+      summary: 'ids',
+      details: {
+        path: '/api/projects/42/files/9f86d081884c7d659a2feaa0c55ad015/raw',
+      },
+    }
+
+    expect(projectDiagnosticEventForSharing(event).details).toEqual({
+      path: '/api/projects/:id/files/:id/raw',
+    })
+  })
+
+  test('strips query strings and fragments while keeping the route', () => {
+    for (const [path, expected] of [
+      ['/api/files?token=query-secret', '/api/files'],
+      ['/api/files#private-fragment', '/api/files'],
+      ['/api/sessions/f9312a1e-3fe0-42d5-8d2b-522a06146987?token=secret', '/api/sessions/:id'],
+    ] as const) {
+      const projected = projectDiagnosticEventForSharing({
+        id: 'event-api-query',
+        timestamp: '2026-07-11T09:10:11.000Z',
+        type: 'client_api_request_failed',
+        severity: 'warn',
+        summary: 'query',
+        details: { path },
+      })
+
+      expect(projected.details?.path).toBe(expected)
+      const serialized = JSON.stringify(projected)
+      expect(serialized).not.toContain('query-secret')
+      expect(serialized).not.toContain('private-fragment')
+      expect(serialized).not.toContain('f9312a1e')
+    }
+  })
+
+  test('omits paths that are not in-app API routes', () => {
+    for (const path of [
+      '/Users/alice/private/project/notes.md',
+      '/home/alice/.ssh/id_rsa',
+      '/api/files/%2Fetc%2Fpasswd',
+      '/api/files/../../etc/passwd',
+      'https://example.com/api/files',
+      '//evil.example.com/api',
+      `/api/${'deep/'.repeat(20)}leaf`,
+    ]) {
+      const projected = projectDiagnosticEventForSharing({
+        id: 'event-api-unsafe',
+        timestamp: '2026-07-11T09:10:11.000Z',
+        type: 'client_api_request_failed',
+        severity: 'warn',
+        summary: 'unsafe',
+        details: { path },
+      })
+
+      expect(projected.details?.path).toBeUndefined()
+      expect(projected.omittedFields).toContain('details.path')
+      expect(JSON.stringify(projected)).not.toContain('query-secret')
+      expect(JSON.stringify(projected)).not.toContain('/Users/alice')
+      expect(JSON.stringify(projected)).not.toContain('passwd')
+    }
+  })
 })
 
 describe('buildDiagnosticsIssueReport', () => {
