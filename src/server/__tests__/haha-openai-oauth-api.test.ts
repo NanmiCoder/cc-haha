@@ -11,6 +11,11 @@ import { handleHahaOpenAIOAuthApi } from '../api/haha-openai-oauth.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { ProviderService } from '../services/providerService.js'
+import {
+  clearOpenAICodexModelCatalogCache,
+  getOpenAICodexModelCatalog,
+} from '../../services/openaiAuth/modelCatalog.js'
+import { OPENAI_CODEX_MODEL_CATALOG } from '../../services/openaiAuth/models.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -24,6 +29,7 @@ async function setup() {
 }
 
 async function teardown() {
+  clearOpenAICodexModelCatalogCache()
   hahaOpenAIOAuthService.dispose()
   hahaOpenAIOAuthService.resetCallbackPortForTests()
   if (originalConfigDir === undefined) {
@@ -170,7 +176,7 @@ describe('DELETE /api/haha-openai-oauth', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  test('clears token file', async () => {
+  test('clears the token file and account model cache', async () => {
     await hahaOpenAIOAuthService.saveTokens({
       accessToken: 'a',
       refreshToken: null,
@@ -178,11 +184,30 @@ describe('DELETE /api/haha-openai-oauth', () => {
       email: null,
       accountId: null,
     })
+    const cachedModels = await getOpenAICodexModelCatalog({
+      accountKey: 'acct_logout',
+      forceRefresh: true,
+      tokenProvider: async () => ({ accessToken: 'a' }),
+      fetchOverride: async () => Response.json({
+        models: [{
+          slug: 'account-only-model',
+          display_name: 'Account Only',
+          visibility: 'list',
+        }],
+      }),
+    })
+    expect(cachedModels.map(model => model.value)).toEqual(['account-only-model'])
 
     const { req, url, segments } = buildReq('DELETE', '/api/haha-openai-oauth')
     const res = await handleHahaOpenAIOAuthApi(req, url, segments)
     expect(res.status).toBe(200)
     expect(await hahaOpenAIOAuthService.loadTokens()).toBeNull()
+
+    const modelsAfterLogout = await getOpenAICodexModelCatalog({
+      accountKey: 'acct_logout',
+      tokenProvider: async () => null,
+    })
+    expect(modelsAfterLogout).toEqual(OPENAI_CODEX_MODEL_CATALOG)
   })
 })
 

@@ -6,8 +6,12 @@ type CurrentModelResponse = { model: ModelInfo }
 type EffortResponse = { level: EffortLevel; available: EffortLevel[] }
 
 export const modelsApi = {
-  list() {
-    return api.get<ModelsResponse>('/api/models')
+  list(options?: { providerId?: string; refresh?: boolean }) {
+    const params = new URLSearchParams()
+    if (options?.providerId) params.set('providerId', options.providerId)
+    if (options?.refresh) params.set('refresh', 'true')
+    const query = params.size > 0 ? `?${params.toString()}` : ''
+    return api.get<ModelsResponse>(`/api/models${query}`)
   },
 
   getCurrent() {

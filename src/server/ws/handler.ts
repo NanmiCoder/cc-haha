@@ -32,7 +32,7 @@ import {
 } from '../services/providerRuntimeEnv.js'
 import { isOpenAIOfficialProviderId } from '../services/openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from '../services/grokOfficialProvider.js'
-import { getOpenAICodexModelCatalog } from '../../services/openaiAuth/modelCatalog.js'
+import { getDesktopOpenAIModelCatalog } from '../services/openAIModelCatalogService.js'
 import {
   OPENAI_DEFAULT_MAIN_MODEL,
   getOpenAIModelCatalogEntry,
@@ -4097,7 +4097,7 @@ type RuntimeSettings = {
 }
 
 async function getDefaultOpenAIReasoningEffort(modelId: string): Promise<string> {
-  const catalog = await getOpenAICodexModelCatalog()
+  const catalog = await getDesktopOpenAIModelCatalog()
   return getOpenAIModelCatalogEntry(modelId, catalog)?.defaultReasoningEffort ?? 'medium'
 }
 
@@ -4142,7 +4142,7 @@ async function resolveRuntimeEffort(
       return { valid: false }
     }
 
-    const catalog = await getOpenAICodexModelCatalog()
+    const catalog = await getDesktopOpenAIModelCatalog()
     const model = getOpenAIModelCatalogEntry(modelId, catalog)
     return !model || model.supportedReasoningEfforts.includes(effort)
       ? { valid: true, effort }

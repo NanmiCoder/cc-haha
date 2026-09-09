@@ -176,6 +176,7 @@ function buildProviderChoices(
   providers: SavedProvider[],
   activeId: string | null,
   availableModels: ModelInfo[],
+  openAIDynamicModels: ModelInfo[],
   officialName: string,
   openAIOfficialName: string,
   grokOfficialName: string,
@@ -187,9 +188,11 @@ function buildProviderChoices(
   const claudeOfficialModels = activeId === null && availableModels.length > 0
     ? mergeOfficialModels(availableModels)
     : OFFICIAL_MODELS
-  const openAIOfficialModels = activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length > 0
-    ? availableModels
-    : OPENAI_OFFICIAL_MODELS
+  const openAIOfficialModels = openAIDynamicModels.length > 0
+    ? openAIDynamicModels
+    : activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length > 0
+      ? availableModels
+      : OPENAI_OFFICIAL_MODELS
   const grokOfficialModels = activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length > 0
     ? availableModels
     : GROK_OFFICIAL_MODELS
@@ -265,6 +268,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const claudeOAuthStatus = useHahaOAuthStore((s) => s.status)
   const fetchClaudeOAuthStatus = useHahaOAuthStore((s) => s.fetchStatus)
   const openAIOAuthStatus = useHahaOpenAIOAuthStore((s) => s.status)
+  const openAIDynamicModels = useHahaOpenAIOAuthStore((s) => s.models)
   const fetchOpenAIOAuthStatus = useHahaOpenAIOAuthStore((s) => s.fetchStatus)
   const grokOAuthStatus = useHahaGrokOAuthStore((s) => s.status)
   const fetchGrokOAuthStatus = useHahaGrokOAuthStore((s) => s.fetchStatus)
@@ -400,6 +404,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       providers,
       activeId,
       availableModels,
+      openAIDynamicModels,
       t('settings.providers.officialName'),
       t('settings.providers.openaiOfficialName'),
       t('settings.providers.grokOfficialName'),
@@ -408,7 +413,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       openAIOAuthStatus?.loggedIn === true,
       grokOAuthStatus?.loggedIn === true,
     ),
-    [activeId, availableModels, providers, roleLabels, t, claudeOAuthStatus, grokOAuthStatus, openAIOAuthStatus],
+    [activeId, availableModels, openAIDynamicModels, providers, roleLabels, t, claudeOAuthStatus, grokOAuthStatus, openAIOAuthStatus],
   )
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase()
   const selectableModels = isControlled && models ? models : availableModels

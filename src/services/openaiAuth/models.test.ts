@@ -65,6 +65,10 @@ describe('openai auth model resolution', () => {
       'gpt-5.6-terra',
       'gpt-5.6-luna',
     ])
+    expect(getOpenAIModelDisplayName('gpt-6-astra')).toBe('GPT-6-Astra')
+    expect(getOpenAIModelDisplayName('gpt-5.3-codex-spark')).toBe('GPT-5.3-Codex-Spark')
+    expect(resolveOpenAIReasoningEffort('gpt-6-astra', undefined)).toBe('medium')
+    expect(resolveOpenAIReasoningEffort('gpt-6-astra', 'max')).toBe('max')
     expect(getOpenAIModelDisplayName('gpt-5.6-sol')).toBe('GPT-5.6-Sol')
     expect(resolveOpenAIReasoningEffort('gpt-5.6-sol', undefined)).toBe('low')
     expect(resolveOpenAIReasoningEffort('gpt-5.6-terra', undefined)).toBe('medium')

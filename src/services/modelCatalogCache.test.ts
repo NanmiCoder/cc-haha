@@ -118,6 +118,20 @@ describe('model catalog cache', () => {
     expect(models).toEqual(FALLBACK)
   })
 
+  test('can propagate a forced refresh failure', async () => {
+    const cache = makeCache()
+
+    await expect(cache.resolve({
+      accountKey: 'a',
+      fetchCatalog: async () => {
+        throw new Error('upstream unreachable')
+      },
+      fallback: FALLBACK,
+      forceRefresh: true,
+      throwOnForceRefreshError: true,
+    })).rejects.toThrow('upstream unreachable')
+  })
+
   test('prefers a stale entry over the fallback while revalidating', async () => {
     const cache = makeCache({ ttlMs: 20 })
     const fetchCatalog = async () => REMOTE
@@ -149,6 +163,26 @@ describe('model catalog cache', () => {
     })
 
     expect(other).toEqual(FALLBACK)
+  })
+
+  test('clear() prevents an in-flight refresh from restoring a stale entry', async () => {
+    const cache = makeCache()
+    let resolveRefresh: ((models: string[]) => void) | undefined
+    const fetchCatalog = () => new Promise<string[]>((resolve) => {
+      resolveRefresh = resolve
+    })
+
+    expect(await cache.resolve({ accountKey: 'a', fetchCatalog, fallback: FALLBACK })).toEqual(FALLBACK)
+    cache.clear()
+    resolveRefresh?.(REMOTE)
+    await sleep(5)
+
+    const models = await cache.resolve({
+      accountKey: 'a',
+      fetchCatalog: () => new Promise<string[]>(() => {}),
+      fallback: FALLBACK,
+    })
+    expect(models).toEqual(FALLBACK)
   })
 
   test('clear() drops the entry and the failure backoff', async () => {

@@ -7,6 +7,7 @@ import {
   clearOpenAICodexModelCatalogCache,
   fetchOpenAICodexModelCatalog,
   getOpenAICodexModelCatalog,
+  getOpenAIRuntimeModelCatalog,
 } from './modelCatalog.js'
 import { OPENAI_CODEX_MODEL_CATALOG } from './models.js'
 import { clearOpenAIOAuthTokenCache } from './storage.js'
@@ -44,41 +45,48 @@ describe('OpenAI Codex model catalog', () => {
   test('loads the account model list with auth and removes unsupported product-only efforts', async () => {
     let requestUrl = ''
     let requestHeaders = new Headers()
-    const models = await fetchOpenAICodexModelCatalog(async (input, init) => {
-      requestUrl = String(input)
-      requestHeaders = new Headers(init?.headers)
-      return Response.json({
-        models: [
-          {
-            slug: 'gpt-next-account-only',
-            display_name: 'GPT Next',
-            description: 'Account-scoped model.',
-            default_reasoning_level: 'xhigh',
-            supported_reasoning_levels: [
-              { effort: 'low' },
-              { effort: 'xhigh' },
-              { effort: 'ultra' },
-            ],
-            visibility: 'list',
-            supported_in_api: false,
-            context_window: 400_000,
-            effective_context_window_percent: 90,
-          },
-          {
-            slug: 'hidden-model',
-            visibility: 'hide',
-            supported_in_api: true,
-            supported_reasoning_levels: [],
-          },
-        ],
-      })
-    })
+    const models = await fetchOpenAICodexModelCatalog(
+      async (input, init) => {
+        requestUrl = String(input)
+        requestHeaders = new Headers(init?.headers)
+        return Response.json({
+          models: [
+            {
+              slug: 'gpt-next-account-only',
+              display_name: 'GPT Next',
+              description: 'Account-scoped model.',
+              default_reasoning_level: 'xhigh',
+              supported_reasoning_levels: [
+                { effort: 'low' },
+                { effort: 'xhigh' },
+                { effort: 'ultra' },
+              ],
+              visibility: 'list',
+              supported_in_api: false,
+              context_window: 400_000,
+              effective_context_window_percent: 90,
+            },
+            {
+              slug: 'hidden-model',
+              visibility: 'hide',
+              supported_in_api: true,
+              supported_reasoning_levels: [],
+            },
+          ],
+        })
+      },
+      async () => ({
+        accessToken: 'desktop-catalog-access-token',
+        accountId: 'acct_desktop',
+      }),
+    )
 
+    expect(OPENAI_CODEX_CLIENT_VERSION).toBe('0.153.4')
     expect(new URL(requestUrl).searchParams.get('client_version')).toBe(
       OPENAI_CODEX_CLIENT_VERSION,
     )
-    expect(requestHeaders.get('Authorization')).toBe('Bearer catalog-access-token')
-    expect(requestHeaders.get('ChatGPT-Account-Id')).toBe('acct_catalog')
+    expect(requestHeaders.get('Authorization')).toBe('Bearer desktop-catalog-access-token')
+    expect(requestHeaders.get('ChatGPT-Account-Id')).toBe('acct_desktop')
     expect(requestHeaders.get('originator')).toBe('codex_cli_rs')
     expect(models).toEqual([
       {
@@ -92,7 +100,31 @@ describe('OpenAI Codex model catalog', () => {
     ])
   })
 
-  test('falls back to the bundled GPT-5.6 catalog when the endpoint fails', async () => {
+  test('does not restore the runtime catalog after an in-flight refresh is cleared', async () => {
+    let resolveFetch: ((response: Response) => void) | undefined
+    const request = getOpenAICodexModelCatalog({
+      accountKey: 'acct_old',
+      forceRefresh: true,
+      tokenProvider: async () => ({ accessToken: 'old-account-token' }),
+      fetchOverride: () => new Promise<Response>((resolve) => {
+        resolveFetch = resolve
+      }),
+    })
+    while (!resolveFetch) await Promise.resolve()
+
+    clearOpenAICodexModelCatalogCache()
+    resolveFetch(Response.json({
+      models: [{
+        slug: 'old-account-only',
+        display_name: 'Old Account Only',
+        visibility: 'list',
+      }],
+    }))
+    expect((await request).map(model => model.value)).toEqual(['old-account-only'])
+    expect(getOpenAIRuntimeModelCatalog()).toEqual(OPENAI_CODEX_MODEL_CATALOG)
+  })
+
+  test('falls back to the bundled catalog when the endpoint fails', async () => {
     const models = await getOpenAICodexModelCatalog({
       forceRefresh: true,
       fetchOverride: async () => new Response('unavailable', { status: 503 }),

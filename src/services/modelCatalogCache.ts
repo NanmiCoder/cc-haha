@@ -32,6 +32,8 @@ export interface ResolveCatalogInput<T> {
   fallback: T
   /** Await the upstream request instead of refreshing in the background. */
   forceRefresh?: boolean
+  /** Propagate a forced refresh failure instead of returning the fallback. */
+  throwOnForceRefreshError?: boolean
 }
 
 export interface ModelCatalogCache<T> {
@@ -46,6 +48,7 @@ export function createModelCatalogCache<T>(
   let cached: { accountKey: string; expiresAt: number; models: T } | null = null
   let inFlight: Promise<void> | null = null
   let retryAfter = 0
+  let generation = 0
 
   const store = (accountKey: string, models: T) => {
     cached = { accountKey, expiresAt: Date.now() + ttlMs, models }
@@ -56,28 +59,44 @@ export function createModelCatalogCache<T>(
     // Callers arrive in bursts (`/api/models` and `/api/models/current` are
     // requested in the same tick), so a single refresh serves all of them.
     if (inFlight) return inFlight
-    inFlight = fetchCatalog()
+    const requestGeneration = generation
+    const request = fetchCatalog()
       .then((models) => {
-        store(accountKey, models)
+        if (generation === requestGeneration) store(accountKey, models)
       })
       .catch(() => {
-        retryAfter = Date.now() + failureBackoffMs
+        if (generation === requestGeneration) {
+          retryAfter = Date.now() + failureBackoffMs
+        }
       })
       .finally(() => {
-        inFlight = null
+        if (inFlight === request) inFlight = null
       })
-    return inFlight
+    inFlight = request
+    return request
   }
 
   return {
-    async resolve({ accountKey, fetchCatalog, fallback, forceRefresh }) {
+    async resolve({
+      accountKey,
+      fetchCatalog,
+      fallback,
+      forceRefresh,
+      throwOnForceRefreshError,
+    }) {
       if (forceRefresh) {
+        generation += 1
+        inFlight = null
+        const requestGeneration = generation
         try {
           const models = await fetchCatalog()
-          store(accountKey, models)
+          if (generation === requestGeneration) store(accountKey, models)
           return models
-        } catch {
-          retryAfter = Date.now() + failureBackoffMs
+        } catch (error) {
+          if (generation === requestGeneration) {
+            retryAfter = Date.now() + failureBackoffMs
+          }
+          if (throwOnForceRefreshError) throw error
           return fallback
         }
       }
@@ -93,6 +112,7 @@ export function createModelCatalogCache<T>(
     },
 
     clear() {
+      generation += 1
       cached = null
       inFlight = null
       retryAfter = 0

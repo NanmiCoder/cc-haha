@@ -943,6 +943,65 @@ describe('ModelSelector', () => {
     })
   })
 
+  it('uses the dynamic ChatGPT catalog when another provider is active', async () => {
+    const providerModel: ModelInfo = {
+      id: 'provider-main',
+      name: 'provider-main',
+      description: 'Main model',
+      context: '',
+    }
+    useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, email: null, accountId: null },
+      models: [{
+        id: 'gpt-6-astra',
+        name: 'GPT-6-Astra',
+        description: 'Most capable model',
+        context: '258400',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      }],
+      fetchStatus: async () => {},
+    })
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: [providerModel],
+      currentModel: providerModel,
+      activeProviderName: 'Provider A',
+    })
+    useProviderStore.setState({
+      providers: [{
+        id: 'provider-a',
+        presetId: 'custom',
+        name: 'Provider A',
+        apiKey: '***',
+        baseUrl: 'https://api.example.com',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'provider-main',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+      }],
+      activeId: 'provider-a',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSessionRuntimeStore.getState().setSelection('session-dynamic-openai', {
+      providerId: 'provider-a',
+      modelId: 'provider-main',
+      effortLevel: 'high',
+    })
+
+    render(<ModelSelector runtimeKey="session-dynamic-openai" />)
+
+    await clickByRole(/provider-main/i)
+
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    expect(within(dropdown).getByText('ChatGPT Official')).toBeInTheDocument()
+    expect(within(dropdown).getByRole('button', { name: /GPT-6-Astra/ })).toBeInTheDocument()
+  })
+
   it('uses each ChatGPT model reasoning catalog and resets unsupported effort to its default', async () => {
     const openAIModels: ModelInfo[] = [
       {
