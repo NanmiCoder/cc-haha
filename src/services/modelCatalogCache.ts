@@ -49,6 +49,7 @@ export function createModelCatalogCache<T>(
   let inFlight: Promise<void> | null = null
   let retryAfter = 0
   let generation = 0
+  let activeAccountKey: string | null = null
 
   const store = (accountKey: string, models: T) => {
     cached = { accountKey, expiresAt: Date.now() + ttlMs, models }
@@ -84,6 +85,13 @@ export function createModelCatalogCache<T>(
       forceRefresh,
       throwOnForceRefreshError,
     }) {
+      if (activeAccountKey !== accountKey) {
+        generation += 1
+        activeAccountKey = accountKey
+        cached = null
+        inFlight = null
+        retryAfter = 0
+      }
       if (forceRefresh) {
         generation += 1
         inFlight = null
@@ -113,6 +121,7 @@ export function createModelCatalogCache<T>(
 
     clear() {
       generation += 1
+      activeAccountKey = null
       cached = null
       inFlight = null
       retryAfter = 0

@@ -123,6 +123,46 @@ describe('OpenAI Codex model catalog', () => {
     expect(getOpenAIRuntimeModelCatalog()).toEqual(OPENAI_CODEX_MODEL_CATALOG)
   })
 
+  test('does not let an old forced request overwrite a different account after a normal refresh', async () => {
+    let finishOld!: (response: Response) => void
+    const oldRequest = getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'old-token', accountId: 'account-a' },
+      forceRefresh: true,
+      fetchOverride: () => new Promise(resolve => { finishOld = resolve }),
+    })
+    await Promise.resolve()
+
+    const currentOptions = {
+      tokens: { accessToken: 'current-token', accountId: 'account-b' },
+      fetchOverride: async () => Response.json({
+        models: [{ slug: 'account-b-model', visibility: 'list' }],
+      }),
+    }
+    await getOpenAICodexModelCatalog(currentOptions)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect((await getOpenAICodexModelCatalog(currentOptions)).map(model => model.value))
+      .toEqual(['account-b-model'])
+
+    finishOld(Response.json({ models: [{ slug: 'account-a-model', visibility: 'list' }] }))
+    await oldRequest
+    expect(getOpenAIRuntimeModelCatalog().map(model => model.value)).toEqual(['account-b-model'])
+    expect((await getOpenAICodexModelCatalog(currentOptions)).map(model => model.value))
+      .toEqual(['account-b-model'])
+  })
+
+  test('updates runtime metadata when the background catalog finishes without another read', async () => {
+    await getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'background-token', accountId: 'background-account' },
+      fetchOverride: async () => Response.json({
+        models: [{ slug: 'background-model', visibility: 'list', context_window: 400_000 }],
+      }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(getOpenAIRuntimeModelCatalog()).toEqual([
+      expect.objectContaining({ value: 'background-model', contextWindow: 380_000 }),
+    ])
+  })
+
   test('uses explicitly supplied credentials instead of CLI storage', async () => {
     const models = await getOpenAICodexModelCatalog({
       tokens: { accessToken: 'desktop-token', accountId: 'desktop-account' },

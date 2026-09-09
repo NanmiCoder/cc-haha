@@ -22,8 +22,12 @@ vi.mock('../api/models', () => ({
 }))
 
 import { useHahaOpenAIOAuthStore } from './hahaOpenAIOAuthStore'
+import { useProviderStore } from './providerStore'
+import { useSettingsStore } from './settingsStore'
 
 const initialState = useHahaOpenAIOAuthStore.getState()
+const initialProviderState = useProviderStore.getState()
+const initialSettingsState = useSettingsStore.getState()
 
 describe('hahaOpenAIOAuthStore', () => {
   beforeEach(() => {
@@ -54,6 +58,8 @@ describe('hahaOpenAIOAuthStore', () => {
   afterEach(() => {
     useHahaOpenAIOAuthStore.getState().stopPolling()
     useHahaOpenAIOAuthStore.setState(initialState)
+    useProviderStore.setState(initialProviderState)
+    useSettingsStore.setState(initialSettingsState)
     vi.useRealTimers()
   })
 
@@ -146,6 +152,38 @@ describe('hahaOpenAIOAuthStore', () => {
 
     expect(useHahaOpenAIOAuthStore.getState().status).toEqual({ loggedIn: false })
     expect(useHahaOpenAIOAuthStore.getState().models).toEqual([])
+  })
+
+  it('does not request models while logged out', async () => {
+    await useHahaOpenAIOAuthStore.getState().refreshModels()
+    expect(modelsListMock).not.toHaveBeenCalled()
+  })
+
+  it('shares concurrent refreshes and updates the active ChatGPT provider catalog', async () => {
+    useProviderStore.setState({ activeId: 'openai-official' })
+    useHahaOpenAIOAuthStore.setState({ status: { loggedIn: true, accountId: 'account-a', expiresAt: null, email: null } })
+    const first = useHahaOpenAIOAuthStore.getState().refreshModels()
+    const second = useHahaOpenAIOAuthStore.getState().refreshModels()
+    expect(first).toBe(second)
+    await Promise.all([first, second])
+    expect(modelsListMock).toHaveBeenCalledTimes(1)
+    expect(useSettingsStore.getState().availableModels).toEqual(useHahaOpenAIOAuthStore.getState().models)
+    expect(useSettingsStore.getState().activeProviderName).toBe('ChatGPT Official')
+  })
+
+  it('keeps the new account catalog when an old account refresh finishes late', async () => {
+    let finishOld!: (value: unknown) => void
+    useHahaOpenAIOAuthStore.setState({ status: { loggedIn: true, accountId: 'account-a', expiresAt: null, email: null } })
+    modelsListMock.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+    const oldRequest = useHahaOpenAIOAuthStore.getState().refreshModels()
+    statusMock.mockResolvedValue({ loggedIn: true, accountId: 'account-b', expiresAt: null, email: null })
+    await useHahaOpenAIOAuthStore.getState().fetchStatus()
+    const currentModels = useHahaOpenAIOAuthStore.getState().models
+    finishOld({ models: [{ id: 'account-a-only' }], provider: null })
+    await oldRequest
+    expect(useHahaOpenAIOAuthStore.getState().status).toMatchObject({ loggedIn: true, accountId: 'account-b' })
+    expect(useHahaOpenAIOAuthStore.getState().models).toEqual(currentModels)
+    expect(modelsListMock).toHaveBeenCalledTimes(2)
   })
 
   it('logout clears status, models, and stops polling', async () => {

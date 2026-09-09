@@ -165,6 +165,43 @@ describe('model catalog cache', () => {
     expect(other).toEqual(FALLBACK)
   })
 
+  test('an account switch starts a fresh request even when the old account is still loading', async () => {
+    const cache = makeCache()
+    let finishOld!: (models: string[]) => void
+    await cache.resolve({
+      accountKey: 'a',
+      fetchCatalog: () => new Promise(resolve => { finishOld = resolve }),
+      fallback: FALLBACK,
+    })
+    let calls = 0
+    const fetchCurrent = async () => {
+      calls += 1
+      return ['account-b']
+    }
+    await cache.resolve({ accountKey: 'b', fetchCatalog: fetchCurrent, fallback: FALLBACK })
+    await sleep(5)
+    finishOld(['account-a'])
+    await sleep(5)
+    expect(await cache.resolve({ accountKey: 'b', fetchCatalog: fetchCurrent, fallback: FALLBACK }))
+      .toEqual(['account-b'])
+    expect(calls).toBe(1)
+  })
+
+  test('does not carry a failed account request backoff into a different account', async () => {
+    const cache = makeCache()
+    await cache.resolve({
+      accountKey: 'a',
+      fetchCatalog: async () => { throw new Error('account-a unavailable') },
+      fallback: FALLBACK,
+      forceRefresh: true,
+    })
+    const fetchCatalog = async () => ['account-b']
+    await cache.resolve({ accountKey: 'b', fetchCatalog, fallback: FALLBACK })
+    await sleep(5)
+    expect(await cache.resolve({ accountKey: 'b', fetchCatalog, fallback: FALLBACK }))
+      .toEqual(['account-b'])
+  })
+
   test('clear() prevents an in-flight refresh from restoring a stale entry', async () => {
     const cache = makeCache()
     let resolveRefresh: ((models: string[]) => void) | undefined
