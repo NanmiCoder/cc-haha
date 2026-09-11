@@ -74,6 +74,33 @@ Browsing preserves the current binding. `/cancel` exits selection; ordinary chat
 
 Telegram also keeps its `/resume` project and session button menu. The text commands above work on all platforms.
 
+## Allowed project directories decide which projects it can touch
+
+**Default Project** only decides where new sessions start — it is **not** the access boundary. The real boundary is **Allowed project directories**: the bot can only list, open, and start sessions in projects inside those directories, which constrains `/projects`, `/sessions`, and picking a project by name or absolute path.
+
+Leaving it empty means the default: your home directory (plus the default project, if it is outside home). Most people never need to change it. To narrow it to a few directories, add them to the list in Settings.
+
+The configuration lives in `~/.claude/adapters.json`, and each platform can be narrowed on its own:
+
+```json
+{
+  "allowedProjectRoots": ["~/work", "~/side"],
+  "whatsapp": { "allowedProjectRoots": ["~/work/sandbox"] }
+}
+```
+
+A per-platform setting **replaces** (does not add to) the global one: in the config above, WhatsApp can only touch `~/work/sandbox`, while every other platform gets `~/work` and `~/side`. The Settings UI edits the global copy, so once a platform is configured separately, changes made there no longer affect it.
+
+Running an adapter standalone (without the Desktop app) also accepts the `ADAPTER_ALLOWED_PROJECT_ROOTS` environment variable, with directories separated by the platform path delimiter (`:` on macOS / Linux, `;` on Windows). This environment variable outranks both file layers.
+
+A few boundary rules:
+
+- A directory must be an existing absolute path (`~` is expanded). Paths that do not exist are ignored and logged; if none resolve, the default is used rather than locking the bot out.
+- The default never inherits roots such as `/` or `/Users`. When the Desktop app is launched as a GUI, the sidecar's working directory is `/`, and taking that as the boundary is the same as having none.
+- If **Default Project** falls outside the allowed set, a new session starts in the first allowed directory and a line is logged — so `/new` does not fail when the two settings disagree.
+
+Pairing is still the first gate: an unpaired sender cannot issue commands at all, and this directory list is a second line of defense on top of it. Note that the home directory also contains sensitive paths like `~/.claude` and `~/.ssh`; for stronger isolation, narrow the list to specific project directories.
+
 ## Common commands
 
 Entry points differ slightly per platform — Feishu can expose commands as a bot menu — but these work everywhere:
