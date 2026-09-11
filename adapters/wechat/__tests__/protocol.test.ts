@@ -43,7 +43,7 @@ describe('WeChat protocol helpers', () => {
     expect(collectWechatMediaCandidates([
       {
         type: 2,
-        msg_id: 'img-1',
+        msg_id: 'v1:15085615559322850173',
         image_item: {
           aeskey: '00112233445566778899aabbccddeeff',
           media: {
@@ -66,7 +66,7 @@ describe('WeChat protocol helpers', () => {
     ])).toMatchObject([
       {
         kind: 'image',
-        name: 'wechat-image-img-1.jpg',
+        name: 'wechat-image-v1_15085615559322850173.jpg',
         url: 'https://cdn.example.com/image',
       },
       {
