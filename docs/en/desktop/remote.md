@@ -89,7 +89,8 @@ Paired users are listed below and can be unbound at any time; unbinding requires
 
 ### Other settings
 
-- **Default project** — the working directory for new IM sessions. Left empty, it uses your current user working directory.
+- **Default project** — the working directory for new IM sessions. Left empty, it uses your current user working directory. It's only a starting point — it doesn't restrict which projects the bot can reach.
+- **Allowed project directories** — the boundary for the bot: `/projects` only lists projects inside these directories. Left empty, it defaults to your home directory (plus the default project, if it is outside home).
 - **Streaming card mode** — updates the message content live, so it reads more like watching it type.
 - **Permission requests** — DingTalk can use an interactive card template ID for button-based approval. Without it, every platform falls back to the `/allow`, `/always`, and `/deny` text commands.
 
