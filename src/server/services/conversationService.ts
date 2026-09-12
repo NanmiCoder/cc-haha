@@ -1676,7 +1676,7 @@ export class ConversationService {
       // Healthy input_json_delta events reset this budget; the independent full
       // response cap above still bounds a stream that trickles forever.
       CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS:
-        cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS || '120000',
+        cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS || '600000',
       // Time-to-first-token budget: how long to wait for the FIRST streamed
       // chunk after response headers arrive. The idle timer above is the wrong
       // knob for slow prefill — it kills healthy local/3P models that take
