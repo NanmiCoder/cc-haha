@@ -12,6 +12,7 @@ import {
 import {
   createCuHelperBuildEnv,
   resolveCuHelperArch,
+  shouldBuildCuHelper,
   type CuHelperArch,
 } from './cu-helper-build-target'
 
@@ -64,15 +65,22 @@ await compileExecutable({
 
 console.log(`[build-sidecars] Built desktop sidecar for ${targetTriple} (${bunTarget})`)
 
-// macOS-only: build + bundle the native `cu-helper` Computer Use binary.
-// On Windows/Linux this is skipped entirely so the Python helper path is
-// preserved (helperBridge.ts routes non-darwin → python). We do NOT ad-hoc
-// re-sign cu-helper here: native/cu-helper/build.sh already signs it with a
-// STABLE identity + hardened runtime, and re-signing would rotate its TCC
-// identity, dropping the user's Accessibility + Screen Recording grants.
+// macOS-only: build + bundle the native `cu-helper` Computer Use binary when
+// the build has a stable signing identity. Unsigned macOS builds skip it because
+// native/cu-helper/build.sh intentionally refuses ad-hoc signing. We do NOT
+// re-sign cu-helper here: build.sh already applies the stable identity +
+// hardened runtime, and re-signing would rotate its TCC identity.
 const cuHelperArch = resolveCuHelperArch(targetTriple)
-if (process.platform === 'darwin' && cuHelperArch) {
+const signingIdentity = process.platform === 'darwin'
+  ? await detectStableSigningIdentity()
+  : null
+if (shouldBuildCuHelper(process.platform, cuHelperArch, signingIdentity)) {
   await buildCuHelper(cuHelperArch)
+} else if (process.platform === 'darwin' && cuHelperArch) {
+  console.warn(
+    '[build-sidecars] skipping native cu-helper: no stable code-signing identity is available; ' +
+    'unsigned macOS builds use the non-native helper path',
+  )
 }
 
 async function stageHostRipgrepForOfflineBuild() {
