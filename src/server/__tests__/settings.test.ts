@@ -63,6 +63,7 @@ let originalAnthropicDefaultOpusModel: string | undefined
 let originalAnthropicDefaultFableModel: string | undefined
 let originalAnthropicDefaultFableModelName: string | undefined
 let originalDisable1mContext: string | undefined
+let originalOpenAIOAuthFile: string | undefined
 
 async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-'))
@@ -84,11 +85,13 @@ async function setup() {
   originalAnthropicDefaultFableModel = process.env.ANTHROPIC_DEFAULT_FABLE_MODEL
   originalAnthropicDefaultFableModelName = process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME
   originalDisable1mContext = process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT
+  originalOpenAIOAuthFile = process.env.OPENAI_CODEX_OAUTH_FILE
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   process.env.HOME = tmpDir
   process.env.USERPROFILE = tmpDir
   process.env.SHELL = '/bin/zsh'
   process.env.PATH = ''
+  delete process.env.OPENAI_CODEX_OAUTH_FILE
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.ANTHROPIC_BASE_URL
   delete process.env.ANTHROPIC_MODEL
@@ -101,12 +104,14 @@ async function setup() {
   clearKeychainCache()
   primeKeychainCacheFromPrefetch(null)
   clearOpenAIOAuthTokenCache()
+  clearOpenAICodexModelCatalogCache()
 }
 
 async function teardown() {
   plainTextStorage.delete()
   clearKeychainCache()
   clearOpenAIOAuthTokenCache()
+  clearOpenAICodexModelCatalogCache()
   resetSettingsCache()
   clearAllOutputStylesCache()
   clearOutputStyleCaches()
@@ -115,6 +120,12 @@ async function teardown() {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
     delete process.env.CLAUDE_CONFIG_DIR
+  }
+
+  if (originalOpenAIOAuthFile !== undefined) {
+    process.env.OPENAI_CODEX_OAUTH_FILE = originalOpenAIOAuthFile
+  } else {
+    delete process.env.OPENAI_CODEX_OAUTH_FILE
   }
 
   if (originalHome !== undefined) {
@@ -1330,6 +1341,7 @@ describe('Models API', () => {
       'gpt-5.6-terra',
       'gpt-5.6-luna',
       'gpt-5.3-codex',
+      'gpt-5.3-codex-spark',
       'gpt-5.4',
       'gpt-5.5',
       'gpt-5.4-mini',
@@ -1340,6 +1352,66 @@ describe('Models API', () => {
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
+  })
+
+  it('GET /api/models should force-refresh ChatGPT models with desktop OAuth and proxy settings', async () => {
+    const settingsSvc = new SettingsService()
+    await settingsSvc.updateUserSettings({
+      network: {
+        aiRequestTimeoutMs: 600_000,
+        proxy: { mode: 'manual', url: 'http://127.0.0.1:9876' },
+      },
+    })
+    await hahaOpenAIOAuthService.saveTokens({
+      accessToken: 'desktop-openai-token',
+      refreshToken: null,
+      expiresAt: null,
+      email: 'user@example.com',
+      accountId: 'acct_desktop',
+    })
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      expect(url.pathname).toBe('/backend-api/codex/models')
+      expect(url.searchParams.get('client_version')).toBe('0.153.4')
+      const headers = new Headers(init?.headers)
+      expect(headers.get('Authorization')).toBe('Bearer desktop-openai-token')
+      expect(headers.get('ChatGPT-Account-Id')).toBe('acct_desktop')
+      expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:9876')
+      return Response.json({
+        models: [{
+          slug: 'gpt-6-astra',
+          display_name: 'GPT-6-Astra',
+          description: 'Our most capable model.',
+          default_reasoning_level: 'medium',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'max' }],
+          visibility: 'list',
+          context_window: 272_000,
+          effective_context_window_percent: 95,
+        }],
+      })
+    })
+
+    try {
+      const { req, url, segments } = makeRequest(
+        'GET',
+        '/api/models?providerId=openai-official&refresh=true',
+      )
+      const res = await handleModelsApi(req, url, segments)
+      const body = await res.json() as {
+        models: Array<{ id: string; context: string }>
+        provider: { id: string; name: string } | null
+      }
+
+      expect(res.status).toBe(200)
+      expect(body.provider?.id).toBe('openai-official')
+      expect(body.models).toEqual([expect.objectContaining({
+        id: 'gpt-6-astra',
+        context: '258400',
+      })])
+    } finally {
+      fetchSpy.mockRestore()
+      clearOpenAICodexModelCatalogCache()
+    }
   })
 
   it('GET /api/models discovers models using the desktop ChatGPT account', async () => {

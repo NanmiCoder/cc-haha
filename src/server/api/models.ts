@@ -188,8 +188,13 @@ function buildOpenAIModelList(catalog: OpenAIModelCatalogEntry[]): ApiModelInfo[
   }))
 }
 
-async function getOpenAIModelList(): Promise<ApiModelInfo[]> {
-  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog())
+async function getOpenAIModelList(options?: {
+  forceRefresh?: boolean
+}): Promise<ApiModelInfo[]> {
+  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog({
+    ...options,
+    throwOnForceRefreshError: true,
+  }))
 }
 
 function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {
@@ -285,7 +290,7 @@ export async function handleModelsApi(
       case undefined:
         // GET /api/models — 优先从激活的 Provider 读取模型列表
         if (req.method !== 'GET') throw methodNotAllowed(req.method)
-        return await handleModelsList()
+        return await handleModelsList(url)
 
       case 'current':
         return await handleCurrentModel(req)
@@ -300,11 +305,15 @@ export async function handleModelsApi(
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-async function handleModelsList(): Promise<Response> {
+async function handleModelsList(url: URL): Promise<Response> {
   const { providers, activeId } = await providerService.listProviders()
-  if (isOpenAIOfficialProviderId(activeId)) {
+  const requestedProviderId = url.searchParams.get('providerId')
+  const openAIRequested = isOpenAIOfficialProviderId(requestedProviderId)
+  if (isOpenAIOfficialProviderId(activeId) || openAIRequested) {
     return Response.json({
-      models: await getOpenAIModelList(),
+      models: await getOpenAIModelList({
+        forceRefresh: openAIRequested && url.searchParams.get('refresh') === 'true',
+      }),
       provider: {
         id: OPENAI_OFFICIAL_PROVIDER_ID,
         name: OPENAI_OFFICIAL_PROVIDER_NAME,

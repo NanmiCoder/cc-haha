@@ -27,6 +27,9 @@ const catalogCache = createModelCatalogCache<OpenAIModelCatalogEntry[]>({
   ttlMs: MODEL_CATALOG_TTL_MS,
   failureBackoffMs: MODEL_CATALOG_FAILURE_BACKOFF_MS,
 })
+let runtimeCatalog: readonly OpenAIModelCatalogEntry[] = OPENAI_CODEX_MODEL_CATALOG
+let runtimeCatalogGeneration = 0
+let runtimeAccountKey: string | null = null
 
 type RemoteReasoningLevel = {
   effort?: unknown
@@ -99,6 +102,8 @@ export type OpenAIModelCatalogTokens = {
   email?: string | null
 }
 
+type OpenAIModelCatalogTokenProvider = () => Promise<OpenAIModelCatalogTokens | null>
+
 export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
   suppliedTokens?: OpenAIModelCatalogTokens | null,
@@ -144,27 +149,55 @@ export async function fetchOpenAICodexModelCatalog(
 export async function getOpenAICodexModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  throwOnForceRefreshError?: boolean
   /** Explicit desktop credentials; null must never fall through to CLI storage. */
   tokens?: OpenAIModelCatalogTokens | null
+  /** Refresh credentials only when fetching, not on the cached startup path. */
+  tokenProvider?: OpenAIModelCatalogTokenProvider
 }): Promise<OpenAIModelCatalogEntry[]> {
   const tokens = options?.tokens === undefined ? getOpenAIOAuthTokens() : options.tokens
   const accountKey = tokens
     ? tokens.accountId ?? tokens.email ?? 'authenticated-default'
     : 'logged-out'
-  return catalogCache.resolve({
+  if (runtimeAccountKey !== accountKey) {
+    runtimeCatalogGeneration += 1
+    runtimeAccountKey = accountKey
+    runtimeCatalog = OPENAI_CODEX_MODEL_CATALOG
+  }
+  if (options?.forceRefresh) runtimeCatalogGeneration += 1
+  const resolutionGeneration = runtimeCatalogGeneration
+  const models = await catalogCache.resolve({
     accountKey,
     fetchCatalog: async () => {
-      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride, options?.tokens)
+      const suppliedTokens = options?.tokenProvider
+        ? await options.tokenProvider()
+        : options?.tokens
+      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride, suppliedTokens)
       if (models.length === 0) {
         throw new Error('OpenAI models endpoint returned no visible models')
       }
+      if (runtimeCatalogGeneration === resolutionGeneration) runtimeCatalog = models
       return models
     },
     fallback: OPENAI_CODEX_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(options?.throwOnForceRefreshError
+      ? { throwOnForceRefreshError: true }
+      : {}),
   })
+  if (runtimeCatalogGeneration === resolutionGeneration) {
+    runtimeCatalog = models
+  }
+  return models
+}
+
+export function getOpenAIRuntimeModelCatalog(): readonly OpenAIModelCatalogEntry[] {
+  return runtimeCatalog
 }
 
 export function clearOpenAICodexModelCatalogCache(): void {
+  runtimeCatalogGeneration += 1
+  runtimeAccountKey = null
   catalogCache.clear()
+  runtimeCatalog = OPENAI_CODEX_MODEL_CATALOG
 }

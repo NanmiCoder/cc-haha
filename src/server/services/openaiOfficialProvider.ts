@@ -1,4 +1,5 @@
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
+import { getOpenAIRuntimeModelCatalog } from '../../services/openaiAuth/modelCatalog.js'
 import {
   OPENAI_CODEX_MODEL_CATALOG,
   OPENAI_DEFAULT_HAIKU_MODEL,
@@ -61,7 +62,15 @@ export const OPENAI_OFFICIAL_PROVIDER: SavedProvider = {
 }
 
 export function buildOpenAIOfficialRuntimeEnv(): Record<string, string> {
-  const modelContextWindows = OPENAI_OFFICIAL_PROVIDER.modelContextWindows ?? {}
+  const runtimeContextWindows = Object.fromEntries(
+    getOpenAIRuntimeModelCatalog().flatMap(model =>
+      model.contextWindow ? [[model.value, model.contextWindow]] : [],
+    ),
+  )
+  const modelContextWindows = {
+    ...OPENAI_OFFICIAL_PROVIDER.modelContextWindows,
+    ...runtimeContextWindows,
+  }
   return {
     [OPENAI_OAUTH_PROVIDER_ENV_KEY]: '1',
     [OPENAI_CODEX_OAUTH_FILE_ENV_KEY]: getHahaOpenAIOAuthFilePath(),

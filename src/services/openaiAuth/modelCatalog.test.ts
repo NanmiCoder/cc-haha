@@ -7,6 +7,7 @@ import {
   clearOpenAICodexModelCatalogCache,
   fetchOpenAICodexModelCatalog,
   getOpenAICodexModelCatalog,
+  getOpenAIRuntimeModelCatalog,
 } from './modelCatalog.js'
 import { OPENAI_CODEX_MODEL_CATALOG } from './models.js'
 import { clearOpenAIOAuthTokenCache } from './storage.js'
@@ -44,41 +45,48 @@ describe('OpenAI Codex model catalog', () => {
   test('loads the account model list with auth and removes unsupported product-only efforts', async () => {
     let requestUrl = ''
     let requestHeaders = new Headers()
-    const models = await fetchOpenAICodexModelCatalog(async (input, init) => {
-      requestUrl = String(input)
-      requestHeaders = new Headers(init?.headers)
-      return Response.json({
-        models: [
-          {
-            slug: 'gpt-next-account-only',
-            display_name: 'GPT Next',
-            description: 'Account-scoped model.',
-            default_reasoning_level: 'xhigh',
-            supported_reasoning_levels: [
-              { effort: 'low' },
-              { effort: 'xhigh' },
-              { effort: 'ultra' },
-            ],
-            visibility: 'list',
-            supported_in_api: false,
-            context_window: 400_000,
-            effective_context_window_percent: 90,
-          },
-          {
-            slug: 'hidden-model',
-            visibility: 'hide',
-            supported_in_api: true,
-            supported_reasoning_levels: [],
-          },
-        ],
-      })
-    })
+    const models = await fetchOpenAICodexModelCatalog(
+      async (input, init) => {
+        requestUrl = String(input)
+        requestHeaders = new Headers(init?.headers)
+        return Response.json({
+          models: [
+            {
+              slug: 'gpt-next-account-only',
+              display_name: 'GPT Next',
+              description: 'Account-scoped model.',
+              default_reasoning_level: 'xhigh',
+              supported_reasoning_levels: [
+                { effort: 'low' },
+                { effort: 'xhigh' },
+                { effort: 'ultra' },
+              ],
+              visibility: 'list',
+              supported_in_api: false,
+              context_window: 400_000,
+              effective_context_window_percent: 90,
+            },
+            {
+              slug: 'hidden-model',
+              visibility: 'hide',
+              supported_in_api: true,
+              supported_reasoning_levels: [],
+            },
+          ],
+        })
+      },
+      {
+        accessToken: 'desktop-catalog-access-token',
+        accountId: 'acct_desktop',
+      },
+    )
 
+    expect(OPENAI_CODEX_CLIENT_VERSION).toBe('0.153.4')
     expect(new URL(requestUrl).searchParams.get('client_version')).toBe(
       OPENAI_CODEX_CLIENT_VERSION,
     )
-    expect(requestHeaders.get('Authorization')).toBe('Bearer catalog-access-token')
-    expect(requestHeaders.get('ChatGPT-Account-Id')).toBe('acct_catalog')
+    expect(requestHeaders.get('Authorization')).toBe('Bearer desktop-catalog-access-token')
+    expect(requestHeaders.get('ChatGPT-Account-Id')).toBe('acct_desktop')
     expect(requestHeaders.get('originator')).toBe('codex_cli_rs')
     expect(models).toEqual([
       {
@@ -89,6 +97,69 @@ describe('OpenAI Codex model catalog', () => {
         supportedReasoningEfforts: ['low', 'xhigh'],
         contextWindow: 360_000,
       },
+    ])
+  })
+
+  test('does not restore the runtime catalog after an in-flight refresh is cleared', async () => {
+    let resolveFetch: ((response: Response) => void) | undefined
+    const request = getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'old-account-token', accountId: 'acct_old' },
+      forceRefresh: true,
+      fetchOverride: () => new Promise<Response>((resolve) => {
+        resolveFetch = resolve
+      }),
+    })
+    while (!resolveFetch) await Promise.resolve()
+
+    clearOpenAICodexModelCatalogCache()
+    resolveFetch(Response.json({
+      models: [{
+        slug: 'old-account-only',
+        display_name: 'Old Account Only',
+        visibility: 'list',
+      }],
+    }))
+    expect((await request).map(model => model.value)).toEqual(['old-account-only'])
+    expect(getOpenAIRuntimeModelCatalog()).toEqual(OPENAI_CODEX_MODEL_CATALOG)
+  })
+
+  test('does not let an old forced request overwrite a different account after a normal refresh', async () => {
+    let finishOld!: (response: Response) => void
+    const oldRequest = getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'old-token', accountId: 'account-a' },
+      forceRefresh: true,
+      fetchOverride: () => new Promise(resolve => { finishOld = resolve }),
+    })
+    await Promise.resolve()
+
+    const currentOptions = {
+      tokens: { accessToken: 'current-token', accountId: 'account-b' },
+      fetchOverride: async () => Response.json({
+        models: [{ slug: 'account-b-model', visibility: 'list' }],
+      }),
+    }
+    await getOpenAICodexModelCatalog(currentOptions)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect((await getOpenAICodexModelCatalog(currentOptions)).map(model => model.value))
+      .toEqual(['account-b-model'])
+
+    finishOld(Response.json({ models: [{ slug: 'account-a-model', visibility: 'list' }] }))
+    await oldRequest
+    expect(getOpenAIRuntimeModelCatalog().map(model => model.value)).toEqual(['account-b-model'])
+    expect((await getOpenAICodexModelCatalog(currentOptions)).map(model => model.value))
+      .toEqual(['account-b-model'])
+  })
+
+  test('updates runtime metadata when the background catalog finishes without another read', async () => {
+    await getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'background-token', accountId: 'background-account' },
+      fetchOverride: async () => Response.json({
+        models: [{ slug: 'background-model', visibility: 'list', context_window: 400_000 }],
+      }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(getOpenAIRuntimeModelCatalog()).toEqual([
+      expect.objectContaining({ value: 'background-model', contextWindow: 380_000 }),
     ])
   })
 
