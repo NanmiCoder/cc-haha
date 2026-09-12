@@ -2353,6 +2353,9 @@ export const kr: Record<TranslationKey, string> = {
   'promptEditor.within': '범위:',
   'promptEditor.selectFolder': '— 범위를 제한할 폴더 선택',
 
+  'permMode.chipTooltip': '클릭하여 권한 변경',
+  'permMode.chipTooltipDisabled': '세션이 진행 중일 때는 권한을 변경할 수 없습니다',
+  
   // ─── Permission Mode Selector ──────────────────────────────────────
   'permMode.executionPermissions': '실행 권한',
   'permMode.askPermissions': '권한 확인',
