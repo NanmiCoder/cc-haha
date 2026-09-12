@@ -260,7 +260,7 @@ describe('ConversationService', () => {
       expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('600000')
       // Tool JSON gets a shorter inactivity budget. Progress resets it, while
       // the overall response cap still bounds a stream that trickles forever.
-      expect(env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS).toBe('120000')
+      expect(env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS).toBe('600000')
       // Non-streaming fallback stays off — its retry loop also hangs the UI (#766).
       expect(env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK).toBe('1')
     } finally {
