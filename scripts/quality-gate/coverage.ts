@@ -357,7 +357,15 @@ function isUsableLcovRecord(record: LcovRecord) {
 
 export function parseBunTestFileCount(output: string) {
   const match = output.match(/Ran \d+ tests? across (\d+) files?\./)
-  return match ? Number(match[1]) : null
+  if (match) return Number(match[1])
+
+  const groupedTestFiles = new Set<string>()
+  for (const group of output.matchAll(/^::group::(.+):\r?$/gm)) {
+    const file = group[1]?.trim()
+    if (file && TEST_FILE_PATTERN.test(file)) groupedTestFiles.add(file.replace(/\\/g, '/'))
+  }
+
+  return groupedTestFiles.size > 0 ? groupedTestFiles.size : null
 }
 
 export function buildRootCoverageCommand(outputDir: string, serverFiles: string[]) {
