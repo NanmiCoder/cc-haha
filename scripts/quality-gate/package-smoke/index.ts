@@ -20,6 +20,7 @@ type InspectOptions = {
   platform: PackageSmokePlatform
   arch?: PackageSmokeArch
   artifactsDir?: string
+  allowMissingMacosCuHelper?: boolean
   requireMacosGatekeeper?: boolean
   packageKind?: PackageKind
   commandRunner?: PackageSmokeCommandRunner
@@ -31,6 +32,7 @@ export type PackageSmokeArgs = {
   platform: PackageSmokePlatform
   arch?: PackageSmokeArch
   artifactsDir?: string
+  allowMissingMacosCuHelper?: boolean
   requireMacosGatekeeper?: boolean
   packageKind?: PackageKind
 }
@@ -73,7 +75,7 @@ type PackageSmokeCommandOptions = {
 type PackageSmokeCommandRunner = (command: string, args: string[], options?: PackageSmokeCommandOptions) => PackageSmokeCommandResult
 
 function usage() {
-  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper]'
+  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--allow-missing-macos-cu-helper] [--require-macos-gatekeeper]'
 }
 
 function readArgValue(argv: string[], index: number, flag: string) {
@@ -88,6 +90,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
   let platform: PackageSmokePlatform | undefined
   let arch: PackageSmokeArch | undefined
   let artifactsDir: string | undefined
+  let allowMissingMacosCuHelper = false
   let requireMacosGatekeeper = false
   let packageKind: PackageKind = 'auto'
 
@@ -136,6 +139,11 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
       requireMacosGatekeeper = true
       continue
     }
+
+    if (arg === '--allow-missing-macos-cu-helper') {
+      allowMissingMacosCuHelper = true
+      continue
+    }
   }
 
   if (!platform) {
@@ -146,6 +154,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
     platform,
     arch,
     artifactsDir,
+    allowMissingMacosCuHelper,
     requireMacosGatekeeper,
     packageKind,
   }
@@ -942,11 +951,16 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
     releaseMode,
   )
   addPresenceCheck(report, rootDir, 'macOS node-pty package.json', join(nodePtyDir, 'package.json'))
-  addPresenceCheck(report, rootDir, 'macOS cu-helper app bundle', helperApp)
-  addPresenceCheck(report, rootDir, 'macOS cu-helper Info.plist', helperInfoPlist)
-  addPresenceCheck(report, rootDir, 'macOS cu-helper executable', helperExecutable)
-  addMacosCursorResourceCheck(report, rootDir, helperApp, options)
-  if (existsSync(helperInfoPlist)) addHelperMinimumSystemCheck(report, rootDir, helperInfoPlist)
+  const helperRequired = !options.allowMissingMacosCuHelper || existsSync(helperApp)
+  if (helperRequired) {
+    addPresenceCheck(report, rootDir, 'macOS cu-helper app bundle', helperApp)
+    addPresenceCheck(report, rootDir, 'macOS cu-helper Info.plist', helperInfoPlist)
+    addPresenceCheck(report, rootDir, 'macOS cu-helper executable', helperExecutable)
+    addMacosCursorResourceCheck(report, rootDir, helperApp, options)
+    if (existsSync(helperInfoPlist)) addHelperMinimumSystemCheck(report, rootDir, helperInfoPlist)
+  } else {
+    report.notes.push('macOS native cu-helper is absent; allowed for unsigned builds.')
+  }
   addBundledRipgrepLicenseChecks(report, rootDir, sidecarDir, 'macOS')
   addMatchCheck(
     report,
