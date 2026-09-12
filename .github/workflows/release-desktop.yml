@@ -59,10 +59,12 @@ jobs:
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}
           SKIP_WINDOWS_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_windows_signing == true }}
         run: |
-          # macOS signing + notarization is preferred: Squirrel.Mac auto-update and
-          # first-launch Gatekeeper approval and Computer Use client attestation
-          # require a consistent Developer ID build. Drafts use the same native
-          # runtime, so an unsigned macOS lane would be a knowingly broken app.
+          # macOS signing + notarization is required for tags and published
+          # releases: Squirrel.Mac auto-update, first-launch Gatekeeper approval
+          # and Computer Use client attestation require a consistent Developer ID
+          # build. Manual drafts may be unsigned while credentials are being
+          # provisioned; build-sidecars and package-smoke omit the native helper
+          # for that explicitly marked, non-production artifact.
           missing=()
           [ -n "$CSC_LINK" ] || missing+=("MACOS_CERTIFICATE")
           [ -n "$CSC_KEY_PASSWORD" ] || missing+=("MACOS_CERTIFICATE_PASSWORD")
@@ -70,9 +72,13 @@ jobs:
           [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] || missing+=("APPLE_APP_SPECIFIC_PASSWORD")
           [ -n "$APPLE_TEAM_ID" ] || missing+=("APPLE_TEAM_ID")
           if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::Missing macOS signing/notarization secrets (%s): refusing to build a macOS release whose Computer Use runtime cannot pass client attestation.\n' "${missing[*]}"
             echo "macos_signed=false" >> "$GITHUB_OUTPUT"
-            exit 1
+            if [ "$RELEASE_DRAFT" = "true" ]; then
+              printf '::warning::Missing macOS signing/notarization secrets (%s): manual draft will build unsigned macOS artifacts without the native Computer Use helper.\n' "${missing[*]}"
+            else
+              printf '::error::Missing macOS signing/notarization secrets (%s): refusing to build a non-draft macOS release whose Computer Use runtime cannot pass client attestation.\n' "${missing[*]}"
+              exit 1
+            fi
           else
             echo "macos_signed=true" >> "$GITHUB_OUTPUT"
           fi
