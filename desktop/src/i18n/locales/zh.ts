@@ -2352,6 +2352,9 @@ export const zh: Record<TranslationKey, string> = {
   'promptEditor.within': '范围',
   'promptEditor.selectFolder': '— 选择文件夹以限制范围',
 
+  'permMode.chipTooltip': '点击修改权限',
+  'permMode.chipTooltipDisabled': '会话进行中，无法切换权限',
+  
   // ─── Permission Mode Selector ──────────────────────────────────────
   'permMode.executionPermissions': '执行权限',
   'permMode.askPermissions': '询问权限',
