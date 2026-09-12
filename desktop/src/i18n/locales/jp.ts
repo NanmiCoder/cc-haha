@@ -2352,7 +2352,10 @@ export const jp: Record<TranslationKey, string> = {
   'promptEditor.bypassWarning': 'バイパスモードはシステムへの完全なアクセスを許可します',
   'promptEditor.within': '範囲:',
   'promptEditor.selectFolder': '— スコープを限定するフォルダを選択',
-
+  
+  'permMode.chipTooltip': 'クリックして権限を変更',
+  'permMode.chipTooltipDisabled': 'セッションの実行中は権限を切り替えられません',
+  
   // ─── Permission Mode Selector ──────────────────────────────────────
   'permMode.executionPermissions': '実行権限',
   'permMode.askPermissions': '権限を確認',
