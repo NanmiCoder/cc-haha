@@ -92,6 +92,18 @@ describe('release desktop workflow', () => {
     }
   })
 
+  test('package smoke shell is Bash because its optional-argument setup is portable across runners', () => {
+    for (const workflowPath of [
+      '.github/workflows/build-desktop-dev.yml',
+      '.github/workflows/release-desktop.yml',
+    ]) {
+      const step = extractStep(readFileSync(workflowPath, 'utf8'), 'Verify packaged app structure')
+      expect(step, workflowPath).toContain('shell: bash')
+      expect(step, workflowPath).toContain('if [')
+      expect(step, workflowPath).toContain('EXTRA_ARGS')
+    }
+  })
+
   test('Windows x64 builds execute the compiled sidecar before packaging', () => {
     for (const workflowPath of [
       '.github/workflows/build-desktop-dev.yml',
@@ -280,7 +292,7 @@ describe('release desktop workflow', () => {
     )
   })
 
-  test('release workflow requires signed macOS Computer Use and preserves SignPath draft policy', () => {
+  test('release workflow requires signed macOS Computer Use for production and permits explicit unsigned drafts', () => {
     const workflow = readReleaseWorkflow()
     const signingJob = workflow.match(
       /signing-preflight:[\s\S]*?(?:\n {2}[a-zA-Z0-9_-]+:|$)/,
@@ -312,7 +324,8 @@ describe('release desktop workflow', () => {
       expect(signingJob).toContain(setting)
     }
     expect(signingJob).toContain('Missing macOS signing/notarization secrets')
-    expect(signingJob).toContain('refusing to build a macOS release whose Computer Use runtime cannot pass client attestation')
+    expect(signingJob).toContain('manual draft will build unsigned macOS artifacts without the native Computer Use helper')
+    expect(signingJob).toContain('refusing to build a non-draft macOS release whose Computer Use runtime cannot pass client attestation')
     expect(signingJob).toContain("RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}")
     expect(signingJob).toContain('macos_signed=false')
     expect(signingJob).toContain('macos_signed=true')
@@ -323,9 +336,9 @@ describe('release desktop workflow', () => {
     expect(signingJob).toContain("inputs.draft == true && vars.SIGNPATH_TEST_SIGNING_POLICY_SLUG || vars.SIGNPATH_RELEASE_SIGNING_POLICY_SLUG")
 
     const macRequiredBlock = signingJob?.match(
-      /missing=\(\)[\s\S]*?# Drafts may remain unsigned/,
+      /missing=\(\)[\s\S]*?# A maintainer can explicitly release unsigned Windows builds/,
     )?.[0]
-    expect(macRequiredBlock).not.toContain('if [ "$RELEASE_DRAFT" != "true" ]; then')
+    expect(macRequiredBlock).toContain('if [ "$RELEASE_DRAFT" = "true" ]; then')
     expect(macRequiredBlock).toContain('exit 1')
     expect(signingJob).toContain('if [ "$RELEASE_DRAFT" != "true" ]; then')
     expect(signingJob).toContain('exit 1')
@@ -353,7 +366,8 @@ describe('release desktop workflow', () => {
       { name: 'explicit skip without SignPath', env: { SKIP_WINDOWS_SIGNING: 'true', SIGNPATH_API_TOKEN: '' }, code: 0, outputs: 'macos_signed=true\nwindows_signed=false\n' },
       { name: 'release missing SignPath without skip', env: { SIGNPATH_API_TOKEN: '' }, code: 1, outputs: 'macos_signed=true\nwindows_signed=false\n' },
       { name: 'draft missing SignPath', env: { RELEASE_DRAFT: 'true', SIGNPATH_API_TOKEN: '' }, code: 0, outputs: 'macos_signed=true\nwindows_signed=false\n' },
-      { name: 'explicit skip still requires macOS credentials', env: { SKIP_WINDOWS_SIGNING: 'true', CSC_LINK: '' }, code: 1, outputs: 'macos_signed=false\n' },
+      { name: 'draft may omit macOS credentials', env: { RELEASE_DRAFT: 'true', SKIP_WINDOWS_SIGNING: 'true', CSC_LINK: '' }, code: 0, outputs: 'macos_signed=false\nwindows_signed=false\n' },
+      { name: 'release still requires macOS credentials', env: { SKIP_WINDOWS_SIGNING: 'true', CSC_LINK: '' }, code: 1, outputs: 'macos_signed=false\n' },
     ]
     try {
       for (const [index, scenario] of cases.entries()) {
