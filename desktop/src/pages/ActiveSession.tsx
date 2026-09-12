@@ -35,6 +35,7 @@ import {
 } from '@/components/chat/SessionChatSurface'
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
 import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
+import { PermissionModeChip } from '../components/controls/PermissionModeChip'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
 import { snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
 import {
@@ -716,6 +717,15 @@ export function ActiveSession() {
           ),
         }
       : null,
+    {
+      key: 'permission',
+      content: (
+        <PermissionModeChip
+          sessionId={activeTabId}
+          disabled={chatState !== 'idle'}
+        />
+      ),
+    },
     lastUpdated
       ? {
           key: 'updated',
