@@ -2350,7 +2350,10 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'promptEditor.bypassWarning': 'Bypass mode grants full system access',
   'promptEditor.within': 'within',
   'promptEditor.selectFolder': '— select a folder to limit scope',
-
+  
+  'permMode.chipTooltip': 'Click to change permissions',
+  'permMode.chipTooltipDisabled': 'Cannot switch permissions while session is active',
+  
   // ─── Permission Mode Selector ──────────────────────────────────────
   'permMode.executionPermissions': 'Execution Permissions',
   'permMode.askPermissions': 'Ask permissions',
