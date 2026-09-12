@@ -1,5 +1,13 @@
 export type CuHelperArch = 'arm64' | 'x86_64'
 
+export function shouldBuildCuHelper(
+  platform: NodeJS.Platform,
+  arch: CuHelperArch | null,
+  signingIdentity: string | null,
+): arch is CuHelperArch {
+  return platform === 'darwin' && arch !== null && signingIdentity !== null
+}
+
 /**
  * Resolve the Swift helper architecture from the package target, never from
  * the build host. macOS x64 releases are commonly cross-built on Apple Silicon,
