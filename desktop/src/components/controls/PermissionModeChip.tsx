@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useId } from 'react'
+import { useState, useRef, useCallback, useId, useEffect } from 'react'
 import DOMPurify from 'dompurify'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -54,6 +54,7 @@ export function PermissionModeChip({ sessionId: sessionIdProp, disabled = false 
   const [confirmDialog, setConfirmDialog] = useState(false)
   const [autoDialog, setAutoDialog] = useState(false)
   const [autoConsentPending, setAutoConsentPending] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
   const interactionTabIdRef = useRef<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -72,6 +73,16 @@ export function PermissionModeChip({ sessionId: sessionIdProp, disabled = false 
     onDismiss: closeMenu,
     stopEscapePropagation: true,
   })
+
+  useEffect(() => {
+    if (open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      setMenuPosition({
+        top: rect.bottom + 4,
+        left: rect.left,
+      })
+    }
+  }, [open])
 
   const PERMISSION_ITEMS: Array<{
     value: PermissionMode
@@ -173,7 +184,11 @@ export function PermissionModeChip({ sessionId: sessionIdProp, disabled = false 
           id={menuId}
           ref={menuRef}
           role="menu"
-          className="absolute left-0 top-full z-[var(--z-dropdown)] mt-1 w-[320px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1.5 shadow-[var(--shadow-overlay)]"
+          className="fixed z-[var(--z-dropdown)] w-[320px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1.5 shadow-[var(--shadow-overlay)]"
+          style={{
+            top: `${menuPosition.top}px`,
+            left: `${menuPosition.left}px`,
+          }}
         >
           <div className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-tertiary)]">
             {t('permMode.executionPermissions')}
