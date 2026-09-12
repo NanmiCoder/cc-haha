@@ -6,10 +6,11 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
-import { useTranslation } from '../../i18n'
 import type { PermissionMode } from '../../types/settings'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { AutoModeOptInDialog } from './AutoModeOptInDialog'
+import { useTranslation } from '../../i18n'
+import type { TranslationKey } from '../../i18n'
 
 const MODE_DOT_COLOR: Record<PermissionMode, string> = {
   plan: 'bg-[var(--color-text-tertiary)]',
@@ -20,7 +21,7 @@ const MODE_DOT_COLOR: Record<PermissionMode, string> = {
   dontAsk: 'bg-[var(--color-error)]',
 }
 
-const MODE_LABELS: Record<PermissionMode, string> = {
+const MODE_LABELS: Record<PermissionMode, TranslationKey> = {
   default: 'permMode.label.default',
   acceptEdits: 'permMode.label.acceptEdits',
   auto: 'permMode.label.auto',
