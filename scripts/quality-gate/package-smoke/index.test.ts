@@ -104,6 +104,7 @@ describe('package smoke args', () => {
     expect(parsePackageSmokeArgs(['--platform', 'macos']).packageKind).toBe('auto')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--package-kind', 'dir']).packageKind).toBe('dir')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--require-macos-gatekeeper']).requireMacosGatekeeper).toBe(true)
+    expect(parsePackageSmokeArgs(['--platform', 'macos', '--allow-missing-macos-cu-helper']).allowMissingMacosCuHelper).toBe(true)
   })
 
   test('maps host platforms to current package-smoke platforms', () => {
@@ -315,6 +316,31 @@ describe('packaged artifact inspection', () => {
     expect(report.missingChecks.some(
       check => check.label === 'macOS bundled ripgrep binary',
     )).toBe(true)
+  })
+
+  test('allows unsigned macOS packages to omit the native helper explicitly', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    const app = 'desktop/build-artifacts/electron/mac/Claude Code Haha.app'
+    const resources = `${app}/Contents/Resources`
+    const binaries = `${resources}/app.asar.unpacked/src-tauri/binaries`
+    writeFile(rootDir, `${app}/Contents/Info.plist`)
+    writeFile(rootDir, `${app}/Contents/MacOS/Claude Code Haha`, thinMachO('x64'))
+    writeFile(rootDir, `${resources}/app.asar`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/dist/index.html`)
+    writeFile(rootDir, `${binaries}/claude-sidecar-x86_64-apple-darwin`, thinMachO('x64'))
+    writeFile(rootDir, `${resources}/app.asar.unpacked/node_modules/node-pty/package.json`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/pty.node`, thinMachO('x64'))
+    writeFile(rootDir, `${resources}/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/spawn-helper`, thinMachO('x64'))
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'macos',
+      arch: 'x64',
+      packageKind: 'dir',
+      allowMissingMacosCuHelper: true,
+    })
+
+    expect(report.passed).toBe(true)
+    expect(report.missingChecks.some(check => check.label.startsWith('macOS cu-helper'))).toBe(false)
   })
 
   test('fails closed when an arm64 package contains an x64 cu-helper', async () => {
