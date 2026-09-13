@@ -95,6 +95,7 @@ type WorkspacePanelStore = {
   setActiveView: (sessionId: string, view: WorkspacePanelView) => void
   loadStatus: (sessionId: string) => Promise<void>
   loadTree: (sessionId: string, path?: string) => Promise<void>
+  refreshWorkspaceTree: (sessionId: string) => Promise<void>
   toggleTreeNode: (sessionId: string, path: string) => Promise<void>
   openPreview: (
     sessionId: string,
@@ -481,6 +482,12 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
     if (shouldLoad) {
       await get().loadTree(sessionId, path)
     }
+  },
+
+  refreshWorkspaceTree: async (sessionId) => {
+    const expanded = get().expandedPathsBySession[sessionId] ?? []
+    const pathsToRefresh = Array.from(new Set(['', ...expanded]))
+    await Promise.all(pathsToRefresh.map((path) => get().loadTree(sessionId, path)))
   },
 
   openPreview: async (sessionId, path, kind, origin, reveal) => {
