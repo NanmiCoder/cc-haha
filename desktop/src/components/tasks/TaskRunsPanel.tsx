@@ -67,6 +67,7 @@ const STATUS_CONFIG: Record<string, { icon: string; color: string }> = {
   completed: { icon: 'check_circle', color: 'var(--color-success)' },
   failed:    { icon: 'error',        color: 'var(--color-error)' },
   timeout:   { icon: 'timer_off',    color: 'var(--color-error)' },
+  missed:    { icon: 'event_busy',   color: 'var(--color-warning)' },
 }
 
 export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {

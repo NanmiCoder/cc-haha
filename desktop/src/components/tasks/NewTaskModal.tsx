@@ -13,6 +13,15 @@ import { PromptEditor } from './PromptEditor'
 import { DayOfWeekPicker } from './DayOfWeekPicker'
 import { useTranslation } from '../../i18n'
 import { describeCron, isValidCron, parseCron, type FrequencyKey } from '../../lib/cronDescribe'
+import {
+  buildOneShotCron,
+  fromDateTimeLocalValue,
+  isOneShotCron,
+  isWithinReservationWindow,
+  oneShotCronToDate,
+  RESERVATION_WINDOW_MS,
+  toDateTimeLocalValue,
+} from '../../lib/oneShotCron'
 import type { CronTask } from '../../types/task'
 
 type NotificationChannel = 'desktop' | 'telegram' | 'feishu'
@@ -37,10 +46,17 @@ function buildCron(
     selectedDays: number[]
     monthDay: number
     customCron: string
+    oneShotDateTime: string
   },
 ): string {
   const [hours, minutes] = time.split(':').map(Number)
   switch (freq) {
+    case 'oneShot': {
+      const target = fromDateTimeLocalValue(opts.oneShotDateTime)
+      // Fall back to a never-matching-but-valid pinned cron when the field is
+      // empty; canSubmit blocks submission in that case.
+      return target ? buildOneShotCron(target) : '0 0 1 1 *'
+    }
     case 'everyNMinutes':
       return `*/${opts.minuteInterval} * * * *`
     case 'everyNHours':
@@ -79,8 +95,24 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
 
   const isEdit = !!editTask
   const parsed = editTask ? parseCron(editTask.cron) : null
+  // A saved one-shot reservation is `recurring: false` with a pinned cron. The
+  // generic parseCron cannot tell a pinned `M H D Mo *` reservation from a
+  // yearly recurring cron, so detect it from the recurring flag.
+  const isEditOneShot =
+    !!editTask && editTask.recurring === false && isOneShotCron(editTask.cron)
+  const initialOneShotDateTime = (() => {
+    if (isEditOneShot && editTask) {
+      const resolved = oneShotCronToDate(editTask.cron, new Date(editTask.createdAt))
+      if (resolved) return toDateTimeLocalValue(resolved)
+    }
+    // Default to one hour from now, truncated to the minute.
+    const soon = new Date(Date.now() + 60 * 60 * 1000)
+    soon.setSeconds(0, 0)
+    return toDateTimeLocalValue(soon)
+  })()
 
   const FREQUENCY_OPTIONS: Array<{ value: FrequencyKey; label: string }> = [
+    { value: 'oneShot',       label: t('newTask.oneShot') },
     { value: 'everyNMinutes', label: t('newTask.everyNMinutes') },
     { value: 'everyNHours',   label: t('newTask.everyNHours') },
     { value: 'daily',         label: t('newTask.daily') },
@@ -93,7 +125,9 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const [name, setName] = useState(editTask?.name || '')
   const [description, setDescription] = useState(editTask?.description || '')
   const [prompt, setPrompt] = useState(editTask?.prompt || '')
-  const [frequency, setFrequency] = useState<FrequencyKey>(parsed?.frequency || 'daily')
+  const [frequency, setFrequency] = useState<FrequencyKey>(
+    isEditOneShot ? 'oneShot' : parsed?.frequency || 'daily',
+  )
   const [time, setTime] = useState(parsed?.time || '09:00')
   const [model, setModel] = useState(editTask?.model || '')
   const [providerId, setProviderId] = useState<string | null | undefined>(editTask?.providerId)
@@ -110,11 +144,16 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const [selectedDays, setSelectedDays] = useState<number[]>(parsed?.selectedDays || [1])
   const [monthDay, setMonthDay] = useState(parsed?.monthDay || 1)
   const [customCron, setCustomCron] = useState(parsed?.customCron || '0 9 * * *')
+  const [oneShotDateTime, setOneShotDateTime] = useState(initialOneShotDateTime)
 
   const showTime = ['daily', 'weekdays', 'specificDays', 'monthly'].includes(frequency)
 
+  // One-shot reservation validity: a real datetime, in the future, within 48h.
+  const oneShotTarget = frequency === 'oneShot' ? fromDateTimeLocalValue(oneShotDateTime) : null
+  const oneShotValid = !!oneShotTarget && isWithinReservationWindow(oneShotTarget.getTime(), Date.now())
+
   const cronValue = buildCron(frequency, time, {
-    minuteInterval, hourInterval, minuteOffset, selectedDays, monthDay, customCron,
+    minuteInterval, hourInterval, minuteOffset, selectedDays, monthDay, customCron, oneShotDateTime,
   })
 
   const canSubmit =
@@ -123,6 +162,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
     prompt.trim() &&
     (frequency !== 'customCron' || isValidCron(customCron)) &&
     (frequency !== 'specificDays' || selectedDays.length > 0) &&
+    (frequency !== 'oneShot' || oneShotValid) &&
     (!notifyEnabled || notifyChannels.length > 0)
 
   const handleSubmit = async () => {
@@ -143,10 +183,15 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
           ? { enabled: true, channels: notifyChannels }
           : undefined,
       }
+      const recurring = frequency !== 'oneShot'
       if (isEdit) {
-        await updateTask(editTask!.id, payload)
+        // Only touch `recurring` when the reservation shape is involved, so
+        // editing an unrelated task preserves its stored value.
+        const recurringUpdate =
+          frequency === 'oneShot' || isEditOneShot ? { recurring } : {}
+        await updateTask(editTask!.id, { ...payload, ...recurringUpdate })
       } else {
-        await createTask({ ...payload, enabled: true, recurring: true })
+        await createTask({ ...payload, enabled: true, recurring })
       }
       onClose()
     } catch (err) {
@@ -156,9 +201,15 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
     }
   }
 
-  const cronPreview = frequency === 'customCron' && customCron.trim() && !isValidCron(customCron)
-    ? t('newTask.invalidCron')
-    : describeCron(cronValue, t)
+  const cronPreview = frequency === 'oneShot'
+    ? (oneShotTarget
+        ? (oneShotValid
+            ? t('newTask.oneShotAt', { datetime: oneShotTarget.toLocaleString() })
+            : t('newTask.oneShotOutOfRange'))
+        : t('newTask.oneShotPickTime'))
+    : frequency === 'customCron' && customCron.trim() && !isValidCron(customCron)
+      ? t('newTask.invalidCron')
+      : describeCron(cronValue, t)
 
   return (
     <Modal
@@ -254,6 +305,33 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
             />
           )}
         </div>
+
+        {/* One-shot reservation: a concrete local date/time within 48h. The
+            window is enforced client-side (disable submit + inline alert) and
+            re-checked authoritatively by the server. */}
+        {frequency === 'oneShot' && (
+          <div className="flex flex-col gap-1.5">
+            <input
+              type="datetime-local"
+              aria-label={t('newTask.oneShotTime')}
+              value={oneShotDateTime}
+              min={toDateTimeLocalValue(new Date())}
+              max={toDateTimeLocalValue(new Date(Date.now() + RESERVATION_WINDOW_MS))}
+              onChange={(e) => setOneShotDateTime(e.target.value)}
+              className="h-10 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-mono text-sm tabular-nums text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)]"
+            />
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              {t('newTask.oneShotWindowHint')}
+            </p>
+            {oneShotDateTime && !oneShotValid && (
+              <p role="alert" className="text-xs text-[var(--color-error)]">
+                {oneShotTarget
+                  ? t('newTask.oneShotOutOfRange')
+                  : t('newTask.oneShotPickTime')}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Sub-controls based on frequency */}
         {frequency === 'everyNMinutes' && (

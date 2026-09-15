@@ -12,6 +12,7 @@ export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
 export const GROK_OFFICIAL_PROVIDER_ID = 'grok-official'
 export const PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION = 4
 export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
+export const PROVIDER_USE_PROXY_SCHEMA_VERSION = 6
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -69,6 +70,17 @@ export const ToolSearchEnabledSchema = z.boolean()
 export const DisableExperimentalBetasSchema = z.boolean()
 export const SupportsNestedToolResultMediaSchema = z.boolean()
 
+// Per-provider NETWORK egress proxy override (three-state):
+//   inherit — follow the global NetworkProxyMode (missing field means inherit)
+//   on      — force this provider through the proxy (falls back to the system
+//             resolver when the global mode is direct; degrades to direct when
+//             no proxy URL is available)
+//   off     — force a direct connection, bypassing the global proxy
+// This is unrelated to providerNeedsProxy()/the protocol-transform proxy that
+// converts between Anthropic and OpenAI request shapes.
+export const ProviderUseProxySchema = z.enum(['inherit', 'on', 'off'])
+export type ProviderUseProxy = z.infer<typeof ProviderUseProxySchema>
+
 const RequestCapabilitySchema = z.enum(['auto', 'supported', 'unsupported'])
 const OutputTokenBudgetSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
 
@@ -108,6 +120,7 @@ export const SavedProviderSchema = z.object({
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  useProxy: ProviderUseProxySchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
@@ -135,6 +148,7 @@ export const CreateProviderSchema = z.object({
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  useProxy: ProviderUseProxySchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
@@ -154,6 +168,7 @@ export const UpdateProviderSchema = z.object({
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  useProxy: ProviderUseProxySchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.nullable().optional(),
   imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
   notes: z.string().optional(),

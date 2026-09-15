@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
+import type { ProviderUseProxy } from '../types/provider.js'
 import { SettingsService } from './settingsService.js'
 import {
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
@@ -59,8 +60,10 @@ import { attributionHeaderEnvForModel } from './attributionHeaderPolicy.js'
 import {
   buildNetworkEnvironment,
   loadNetworkSettings,
+  resolveEffectiveProxyMode,
   resolveStreamMaxDurationMs,
   SYSTEM_PROXY_URL_ENV,
+  type NetworkProxyMode,
   type NetworkSettings,
 } from './networkSettings.js'
 import { readTraceCaptureSettings } from './traceCaptureService.js'
@@ -182,13 +185,18 @@ type SessionOutputCallback = (msg: any) => void
 function networkRoutingFingerprint(
   settings: NetworkSettings,
   env: NodeJS.ProcessEnv = process.env,
+  effectiveMode?: NetworkProxyMode,
 ): string {
+  // The effective mode folds in the provider-level useProxy override; both the
+  // launch-time and per-turn fingerprints must use it or an override would look
+  // like a settings change every turn.
+  const mode = effectiveMode ?? settings.proxy.mode
   return JSON.stringify({
     timeoutMs: settings.aiRequestTimeoutMs,
-    proxyMode: settings.proxy.mode,
-    manualProxyUrl: settings.proxy.mode === 'manual' ? settings.proxy.url.trim() : '',
+    proxyMode: mode,
+    manualProxyUrl: mode === 'manual' ? settings.proxy.url.trim() : '',
     systemProxyUrl:
-      settings.proxy.mode === 'system'
+      mode === 'system'
         ? env[SYSTEM_PROXY_URL_ENV]?.trim() || ''
         : '',
     noProxy: env.no_proxy || env.NO_PROXY || '',
@@ -203,6 +211,8 @@ type SessionProcess = {
   networkRoutingFingerprint: string
   networkDerivedFirstTokenTimeout: boolean
   networkDerivedStreamMaxDuration: boolean
+  /** Provider-level NETWORK proxy override resolved at launch (absent = inherit). */
+  providerUseProxy?: ProviderUseProxy
   sdkToken: string
   sdkSocket: { send(data: string): void } | null
   sdkAttached: Promise<void>
@@ -432,6 +442,8 @@ export class ConversationService {
     const networkRuntimeMetadata = {
       firstTokenTimeoutDerived: false,
       streamMaxDurationDerived: false,
+      providerUseProxy: undefined as ProviderUseProxy | undefined,
+      effectiveProxyMode: undefined as NetworkProxyMode | undefined,
     }
     const childEnv = await this.buildChildEnv(
       launchWorkDir,
@@ -476,9 +488,14 @@ export class ConversationService {
       outputCallbacks: [],
       workDir: launchWorkDir,
       permissionMode: options?.permissionMode || 'default',
-      networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
+      networkRoutingFingerprint: networkRoutingFingerprint(
+        networkSettings,
+        childEnv,
+        networkRuntimeMetadata.effectiveProxyMode,
+      ),
       networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
       networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
+      providerUseProxy: networkRuntimeMetadata.providerUseProxy,
       sdkToken: this.getSdkTokenFromUrl(sdkUrl),
       sdkSocket: null,
       seenSdkMessageUuids: new Set<string>(),
@@ -646,12 +663,16 @@ export class ConversationService {
     session: SessionProcess,
   ): Promise<boolean> {
     const settings = await loadNetworkSettings()
+    // Re-apply the session's provider-level NETWORK proxy override: a refresh
+    // triggered by an unrelated settings change must not silently revert the
+    // provider's forced on/off routing back to the global mode.
+    const effectiveProxyMode = resolveEffectiveProxyMode(settings, session.providerUseProxy)
     const baseEnv = await getProcessEnvWithTerminalShellEnvironment()
-    const networkEnv = buildNetworkEnvironment(settings, baseEnv)
+    const networkEnv = buildNetworkEnvironment(settings, baseEnv, effectiveProxyMode)
     const fingerprint = networkRoutingFingerprint(settings, {
       ...baseEnv,
       ...networkEnv,
-    })
+    }, effectiveProxyMode)
 
     if (this.sessions.get(sessionId) !== session) return false
     if (!session.networkRoutingFingerprint) {
@@ -1540,6 +1561,8 @@ export class ConversationService {
     networkRuntimeMetadata?: {
       firstTokenTimeoutDerived: boolean
       streamMaxDurationDerived: boolean
+      providerUseProxy?: ProviderUseProxy
+      effectiveProxyMode?: NetworkProxyMode
     },
   ): Promise<Record<string, string>> {
     // Provider isolation: when Desktop has its own provider config/index,
@@ -1619,9 +1642,25 @@ export class ConversationService {
     const explicitProviderEnv = explicitProvider
       ? await this.providerService.getProviderRuntimeEnv(explicitProvider.id)
       : null
+    const resolvedNetworkSettings = networkSettingsOverride ?? await loadNetworkSettings()
+    // Per-provider NETWORK egress override: read the target provider's useProxy
+    // (an explicit providerId, or the active provider when none is given; null
+    // means Claude Official and inherits) and fold it into the global mode so
+    // the CLI subprocess env matches the in-process proxy path.
+    const providerUseProxy =
+      await this.providerService.getProviderUseProxyForRouting(options?.providerId)
+    const effectiveProxyMode: NetworkProxyMode = resolveEffectiveProxyMode(
+      resolvedNetworkSettings,
+      providerUseProxy,
+    )
+    if (networkRuntimeMetadata) {
+      networkRuntimeMetadata.providerUseProxy = providerUseProxy
+      networkRuntimeMetadata.effectiveProxyMode = effectiveProxyMode
+    }
     const networkEnv = buildNetworkEnvironment(
-      networkSettingsOverride ?? await loadNetworkSettings(),
+      resolvedNetworkSettings,
       cleanEnv,
+      effectiveProxyMode,
     )
     // The overall-duration cap has to scale with the user's "请求超时" or raising
     // that setting can never extend a long response — the cap is a wall-clock

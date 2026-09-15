@@ -13,6 +13,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { CronService, type CronTask } from './cronService.js'
+import { parseOneShotCronTarget } from './scheduledReservation.js'
 import { SessionService } from './sessionService.js'
 import { sendTaskNotification } from './notificationService.js'
 import { ProviderService } from './providerService.js'
@@ -28,6 +29,8 @@ import { diagnosticsService } from './diagnosticsService.js'
 import {
   buildNetworkEnvironment,
   loadNetworkSettings,
+  resolveEffectiveProxyMode,
+  type NetworkProxyMode,
 } from './networkSettings.js'
 import { resolveLocalIndexMode } from './localIndex/config.js'
 import {
@@ -50,7 +53,7 @@ export type TaskRun = {
   taskName: string
   startedAt: string // ISO timestamp
   completedAt?: string
-  status: 'running' | 'completed' | 'failed' | 'timeout'
+  status: 'running' | 'completed' | 'failed' | 'timeout' | 'missed'
   prompt: string
   output?: string // captured stdout summary
   error?: string
@@ -58,6 +61,104 @@ export type TaskRun = {
   durationMs?: number
   sessionId?: string // links to a session for rich output rendering
 }
+
+// ─── One-shot reservation helpers ─────────────────────────────────────────────
+
+/**
+ * A one-shot reservation was "missed" when the server was down at its pinned
+ * target time and it never fired. Detection is intentionally conservative: we
+ * never auto-run a missed reservation (that would deliver a message hours
+ * later with no user present). Instead the caller disables it, records a
+ * `missed` run, and lets the user run it now or reschedule.
+ *
+ * Pure so it can be unit-tested without touching the filesystem or clock.
+ *
+ * @param tasks   all persisted tasks
+ * @param now     current time
+ * @returns the subset of enabled one-shot tasks whose target has passed
+ *          without a recorded fire at/after that target
+ */
+export function findMissedOneShotTasks(
+  tasks: CronTask[],
+  now: Date,
+): CronTask[] {
+  const nowMs = now.getTime()
+  const missed: CronTask[] = []
+  for (const task of tasks) {
+    if (task.enabled === false) continue
+    if (task.recurring !== false) continue
+    // Anchor on createdAt so the resolved target is the originally-scheduled
+    // occurrence, not next year's. parseOneShotCronTarget returns null for
+    // non-pinned crons, which are never one-shot reservations.
+    const target = parseOneShotCronTarget(task.cron, new Date(task.createdAt))
+    if (!target) continue
+    const targetMs = target.getTime()
+    if (targetMs > nowMs) continue // still in the future — not missed
+    if (task.lastFiredAt) {
+      const firedMs = new Date(task.lastFiredAt).getTime()
+      // Fired at/after the target means it ran on time (or was run manually
+      // after) — not missed.
+      if (Number.isFinite(firedMs) && firedMs >= targetMs - 60_000) continue
+    }
+    missed.push(task)
+  }
+  return missed
+}
+
+// ─── Rate-limit / retry helpers ───────────────────────────────────────────────
+
+/** Maximum number of spawn attempts for a single run (1 initial + retries). */
+export const MAX_RUN_ATTEMPTS = 3
+
+/**
+ * Minimum wall-clock runtime (ms) before a failed attempt is eligible for
+ * rate-limit retry. A real 429 requires at least one network round-trip
+ * (DNS + TCP + TLS + request + response), which takes >1s even on localhost.
+ * Processes that die faster are startup crashes (wrong path, missing deps,
+ * permission errors) — retrying them just flashes console windows on Windows.
+ */
+export const MIN_RETRY_RUNTIME_MS = 3_000
+
+/**
+ * True when CLI output/exit signals provider rate limiting (HTTP 429,
+ * "rate limit", "overloaded", "too many requests"). Used to decide whether a
+ * failed run is worth a bounded backoff retry.
+ *
+ * The '429' check requires HTTP status context (e.g. "status 429", "429 Too
+ * Many Requests", "HTTP 429", "error 429") to avoid false positives from port
+ * numbers, timestamps, line numbers, or memory addresses that happen to
+ * contain the substring "429".
+ */
+export function isRateLimitedRunOutput(text: string): boolean {
+  if (!text) return false
+  const lower = text.toLowerCase()
+  return (
+    /(?:status|http|error|code)\s*[:\s]?\s*429\b/.test(lower) ||
+    /\b429\s+too\s+many\b/.test(lower) ||
+    lower.includes('rate limit') ||
+    lower.includes('rate_limit') ||
+    lower.includes('ratelimit') ||
+    lower.includes('overloaded') ||
+    lower.includes('too many requests')
+  )
+}
+
+/**
+ * Exponential backoff for run retries: ~2s / 4s / 8s plus a small (<10%)
+ * jitter, capped at 8s of base delay. `attempt` is 1-based (the delay before
+ * the 2nd spawn is `computeRunRetryDelayMs(1)`).
+ */
+export function computeRunRetryDelayMs(attempt: number): number {
+  const cappedAttempt = Math.max(1, Math.min(attempt, 3))
+  const base = 2000 * 2 ** (cappedAttempt - 1)
+  const jitter = Math.floor(Math.random() * base * 0.1)
+  return base + jitter
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 
 export function buildCronTaskSpawnOptions(
   cwd: string,
@@ -537,6 +638,11 @@ export class CronScheduler {
     this.cleanupStaleRuns().catch((err) =>
       console.error('[CronScheduler] Error cleaning up stale runs:', err),
     )
+    // Surface one-shot reservations missed while the server was down (disable
+    // + record a `missed` run). Never auto-runs them.
+    this.detectMissedOneShotTasks().catch((err) =>
+      console.error('[CronScheduler] Error detecting missed one-shot tasks:', err),
+    )
     this.intervalId = setInterval(() => this.tick(), 60_000)
     // Immediate first check
     this.tick()
@@ -608,7 +714,18 @@ export class CronScheduler {
    * @param task The task to execute
    * @param options.createSession When true, creates a Session for rich output viewing (used for manual "Run Now")
    */
-  async executeTask(task: CronTask, options?: { createSession?: boolean }): Promise<TaskRun> {
+  async executeTask(
+    task: CronTask,
+    options?: {
+      createSession?: boolean
+      /** Total spawn attempts (1 = no retry). Defaults to {@link MAX_RUN_ATTEMPTS}. */
+      maxRunAttempts?: number
+      /** Injectable backoff wait so tests never sleep for real seconds. */
+      sleep?: (ms: number) => Promise<void>
+      /** Override minimum runtime before retry eligibility (tests use 0). */
+      minRetryRuntimeMs?: number
+    },
+  ): Promise<TaskRun> {
     const runLogTarget = captureRunsFileMutationTarget()
 
     // Prevent concurrent executions of the same task
@@ -695,12 +812,149 @@ export class CronScheduler {
 
     const childEnv = await this.buildTaskChildEnv(workDir, task)
     const taskTimeoutMs = resolveCronTaskTimeoutMs()
+    const sleep = options?.sleep ?? defaultSleep
+    const maxAttempts = Math.max(1, options?.maxRunAttempts ?? MAX_RUN_ATTEMPTS)
+    const minRetryRuntime = options?.minRetryRuntimeMs ?? MIN_RETRY_RUNTIME_MS
+
+    try {
+      // Bounded backoff retry when the provider rate-limits the run. The first
+      // attempt always runs; each retry only happens while the previous
+      // attempt signalled 429/overloaded and we have attempts left.
+      let outcome = await this.spawnTaskAttempt({
+        task,
+        runId,
+        inputPayload,
+        cliArgs,
+        workDir,
+        childEnv,
+        taskTimeoutMs,
+      })
+      for (let attempt = 1; attempt < maxAttempts; attempt++) {
+        const rateLimited =
+          !outcome.wasTimeout &&
+          outcome.exitCode !== 0 &&
+          outcome.durationMs >= minRetryRuntime &&
+          isRateLimitedRunOutput(`${outcome.rawOutput}\n${outcome.stderrText}`)
+        if (!rateLimited) break
+        const delayMs = computeRunRetryDelayMs(attempt)
+        console.warn(
+          `[CronScheduler] Task ${task.id} rate limited; retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxAttempts})`,
+        )
+        // Keep the minute-key guard fresh across the backoff sleep so tick()
+        // cannot re-fire this task if the sleep crosses a minute boundary
+        // (spawnTaskAttempt's finally already cleared runningTasks).
+        this.lastFiredMinuteKey.set(task.id, CronScheduler.minuteKey(new Date()))
+        await sleep(delayMs)
+        outcome = await this.spawnTaskAttempt({
+          task,
+          runId,
+          inputPayload,
+          cliArgs,
+          workDir,
+          childEnv,
+          taskTimeoutMs,
+        })
+      }
+
+      const completedAt = new Date().toISOString()
+      const durationMs =
+        new Date(completedAt).getTime() - new Date(startedAt).getTime()
+
+      // Extract only meaningful AI text responses from raw NDJSON output.
+      // The raw stream contains system/init messages, tool_use blocks, and
+      // tool_result echoes that consume thousands of chars before any actual
+      // AI answer appears. A naive .slice(0, 10_000) would lose the answer.
+      const output = extractAssistantText(outcome.rawOutput)
+
+      const completedRun: TaskRun = {
+        ...run,
+        completedAt,
+        status: outcome.wasTimeout
+          ? 'timeout'
+          : outcome.exitCode === 0
+            ? 'completed'
+            : 'failed',
+        output: output.slice(0, 50_000), // cap after extraction
+        exitCode: outcome.exitCode,
+        durationMs,
+      }
+
+      // Collect stderr for error field
+      if (outcome.exitCode !== 0 && outcome.stderrText) {
+        completedRun.error = outcome.stderrText.slice(0, 5_000)
+      }
+
+      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await updateRun(completedRun, runLogTarget)
+
+      // Send IM notification if configured
+      if (task.notification?.enabled && task.notification.channels.length > 0) {
+        sendTaskNotification(completedRun, task.notification).catch((err) => {
+          console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
+        })
+      }
+
+      // If non-recurring, disable after first run
+      if (!task.recurring) {
+        await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
+          // Task may have been deleted
+        })
+      }
+
+      return completedRun
+    } catch (err) {
+      // spawnTaskAttempt's finally already cleared its per-attempt timeout and
+      // removed the runningTasks entry when the proc matched. If Bun.spawn
+      // threw before the entry was set, delete is a harmless no-op.
+      this.runningTasks.delete(task.id)
+
+      const completedAt = new Date().toISOString()
+      const failedRun: TaskRun = {
+        ...run,
+        completedAt,
+        status: 'failed',
+        error: (err as Error).message,
+        durationMs:
+          new Date(completedAt).getTime() - new Date(startedAt).getTime(),
+      }
+
+      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await updateRun(failedRun, runLogTarget)
+
+      return failedRun
+    }
+  }
+
+  /**
+   * Spawn one CLI attempt for a task, collect its stdout/stderr and exit code,
+   * and enforce the per-attempt timeout. Manages the `runningTasks` guard for
+   * the lifetime of this attempt only, so the retry loop in {@link executeTask}
+   * can re-enter cleanly. Extracted for the 429 backoff-retry path.
+   */
+  private async spawnTaskAttempt(params: {
+    task: CronTask
+    runId: string
+    inputPayload: string
+    cliArgs: string[]
+    workDir: string
+    childEnv: Record<string, string | undefined>
+    taskTimeoutMs: number
+  }): Promise<{
+    exitCode: number
+    rawOutput: string
+    stderrText: string
+    wasTimeout: boolean
+    durationMs: number
+  }> {
+    const { task, runId, inputPayload, cliArgs, workDir, childEnv, taskTimeoutMs } =
+      params
+    const attemptStartedAt = Date.now()
     const proc = Bun.spawn(
       cliArgs,
       buildCronTaskSpawnOptions(workDir, childEnv),
     )
 
-    this.runningTasks.set(task.id, { proc, startedAt: Date.now(), runId })
+    this.runningTasks.set(task.id, { proc, startedAt: attemptStartedAt, runId })
 
     // Write prompt to stdin then close it
     try {
@@ -710,9 +964,9 @@ export class CronScheduler {
       // If writing fails, the process may have already exited
     }
 
-    // Set up a timeout
+    // Set up a timeout for this attempt
     const timeoutId = setTimeout(() => {
-      if (this.runningTasks.has(task.id)) {
+      if (this.runningTasks.get(task.id)?.proc === proc) {
         try {
           proc.kill()
         } catch {
@@ -740,79 +994,76 @@ export class CronScheduler {
 
       // Wait for exit
       const exitCode = await proc.exited
-
-      clearTimeout(timeoutId)
-      this.runningTasks.delete(task.id)
-
-      const completedAt = new Date().toISOString()
+      const wasTimeout = Date.now() - attemptStartedAt >= taskTimeoutMs
       const rawOutput = stdoutChunks.join('')
-      const durationMs =
-        new Date(completedAt).getTime() - new Date(startedAt).getTime()
 
-      // Determine if this was a timeout
-      const wasTimeout = durationMs >= taskTimeoutMs
-
-      // Extract only meaningful AI text responses from raw NDJSON output.
-      // The raw stream contains system/init messages, tool_use blocks, and
-      // tool_result echoes that consume thousands of chars before any actual
-      // AI answer appears. A naive .slice(0, 10_000) would lose the answer.
-      const output = extractAssistantText(rawOutput)
-
-      const completedRun: TaskRun = {
-        ...run,
-        completedAt,
-        status: wasTimeout ? 'timeout' : exitCode === 0 ? 'completed' : 'failed',
-        output: output.slice(0, 50_000), // cap after extraction
-        exitCode,
-        durationMs,
-      }
-
-      // Collect stderr for error field
+      let stderrText = ''
       if (exitCode !== 0 && proc.stderr) {
         try {
-          const stderrText = await new Response(proc.stderr).text()
-          completedRun.error = stderrText.slice(0, 5_000)
+          stderrText = await new Response(proc.stderr).text()
         } catch {
           // ignore
         }
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
-      await updateRun(completedRun, runLogTarget)
-
-      // Send IM notification if configured
-      if (task.notification?.enabled && task.notification.channels.length > 0) {
-        sendTaskNotification(completedRun, task.notification).catch((err) => {
-          console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
-        })
-      }
-
-      // If non-recurring, disable after first run
-      if (!task.recurring) {
-        await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
-          // Task may have been deleted
-        })
-      }
-
-      return completedRun
-    } catch (err) {
+      return { exitCode, rawOutput, stderrText, wasTimeout, durationMs: Date.now() - attemptStartedAt }
+    } finally {
       clearTimeout(timeoutId)
-      this.runningTasks.delete(task.id)
-
-      const completedAt = new Date().toISOString()
-      const failedRun: TaskRun = {
-        ...run,
-        completedAt,
-        status: 'failed',
-        error: (err as Error).message,
-        durationMs:
-          new Date(completedAt).getTime() - new Date(startedAt).getTime(),
+      if (this.runningTasks.get(task.id)?.proc === proc) {
+        this.runningTasks.delete(task.id)
       }
+    }
+  }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
-      await updateRun(failedRun, runLogTarget)
+  /**
+   * Detect one-shot reservations whose target time passed while the server was
+   * down and never fired. For each, disable the task (so its pinned cron cannot
+   * re-trigger next year) and record a `missed` run so the existing desktop
+   * notification path can tell the user to run it now or reschedule. We never
+   * auto-run a missed reservation.
+   */
+  async detectMissedOneShotTasks(): Promise<void> {
+    const now = new Date()
+    let tasks: CronTask[]
+    try {
+      tasks = await this.cronService.listTasks()
+    } catch (err) {
+      console.error('[CronScheduler] Error listing tasks for missed detection:', err)
+      return
+    }
 
-      return failedRun
+    const missed = findMissedOneShotTasks(tasks, now)
+    if (missed.length === 0) return
+
+    const runLogTarget = captureRunsFileMutationTarget()
+    for (const task of missed) {
+      // Disable first so the pinned cron cannot fire again, then record the
+      // missed run. Both are best-effort: a deleted task must not abort the
+      // sweep of the remaining ones.
+      await this.cronService
+        .updateTask(task.id, { enabled: false })
+        .catch(() => {})
+
+      const missedAt = now.toISOString()
+      const missedRun: TaskRun = {
+        id: crypto.randomBytes(6).toString('hex'),
+        taskId: task.id,
+        taskName: task.name || task.prompt.slice(0, 60),
+        startedAt: missedAt,
+        completedAt: missedAt,
+        status: 'missed',
+        prompt: task.prompt,
+        durationMs: 0,
+      }
+      await appendRun(missedRun, runLogTarget).catch((err) => {
+        console.error(
+          `[CronScheduler] Failed to record missed run for task ${task.id}:`,
+          err,
+        )
+      })
+      console.warn(
+        `[CronScheduler] One-shot reservation ${task.id} was missed while the server was down; disabled it`,
+      )
     }
   }
 
@@ -875,9 +1126,18 @@ export class CronScheduler {
         explicitProviderEnv?.ANTHROPIC_MODEL ||
         cleanEnv.ANTHROPIC_MODEL,
     )
+    const networkSettings = await loadNetworkSettings()
+    // Per-provider NETWORK egress override for the scheduled task's target
+    // provider (or the active provider when the task pins none), matching the
+    // interactive CLI launch path.
+    const effectiveProxyMode: NetworkProxyMode = resolveEffectiveProxyMode(
+      networkSettings,
+      await this.providerService.getProviderUseProxyForRouting(task.providerId),
+    )
     const networkEnv = buildNetworkEnvironment(
-      await loadNetworkSettings(),
+      networkSettings,
       cleanEnv,
+      effectiveProxyMode,
     )
     const agentTeamsEnabled = await new SettingsService().getAgentTeamsEnabled()
 

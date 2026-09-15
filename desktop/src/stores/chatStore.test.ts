@@ -4100,15 +4100,16 @@ describe('chatStore history mapping', () => {
         lineEnd: 4,
       }],
     })
+    expect(id).not.toBeNull()
 
-    useChatStore.getState().updateQueuedUserMessage(TEST_SESSION_ID, id, 'tighten this')
+    useChatStore.getState().updateQueuedUserMessage(TEST_SESSION_ID, id!, 'tighten this')
 
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.queuedUserMessages?.[0]).toMatchObject({
       displayContent: 'tighten this',
       content: 'Referenced workspace context:\n@"src/App.tsx:L4":\n```tsx\nconst value = 1\n```\n\ntighten this',
     })
 
-    useChatStore.getState().sendQueuedUserMessage(TEST_SESSION_ID, id)
+    useChatStore.getState().sendQueuedUserMessage(TEST_SESSION_ID, id!)
 
     expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, {
       type: 'user_message',

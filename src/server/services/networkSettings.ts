@@ -1,5 +1,6 @@
 import { SettingsService } from './settingsService.js'
 import { getProxyFetchOptions, getProxyUrl } from '../../utils/proxy.js'
+import type { ProviderUseProxy } from '../types/provider.js'
 
 export type NetworkProxyMode = 'direct' | 'system' | 'manual'
 
@@ -108,17 +109,54 @@ export function getManualNetworkProxyUrl(settings: NetworkSettings): string | un
   return url || undefined
 }
 
+/**
+ * Fold a provider-level three-state override into the global proxy mode.
+ *
+ * - `inherit` (or a missing/unknown value): keep the global mode.
+ * - `off`: force `direct`, bypassing the global proxy (e.g. domestic models
+ *   that must not leave through an overseas proxy).
+ * - `on`: force a proxied egress. When the global mode is already `system` or
+ *   `manual`, keep it. When the global mode is `direct`, borrow the manual URL
+ *   if one is present and otherwise fall back to the `system` resolver; if no
+ *   proxy URL can be resolved downstream, the callers degrade to direct.
+ *
+ * Pure function — no I/O, no env reads. This is the NETWORK egress override
+ * and has nothing to do with providerNeedsProxy() (protocol transform proxy).
+ */
+export function resolveEffectiveProxyMode(
+  globalSettings: NetworkSettings,
+  providerUseProxy?: ProviderUseProxy | null,
+): NetworkProxyMode {
+  const globalMode = globalSettings.proxy.mode
+  if (providerUseProxy === 'off') return 'direct'
+  if (providerUseProxy !== 'on') return globalMode
+  if (globalMode !== 'direct') return globalMode
+  return globalSettings.proxy.url.trim() ? 'manual' : 'system'
+}
+
 export function getNetworkProxyUrl(
   settings: NetworkSettings,
   env: NodeJS.ProcessEnv = process.env,
+  effectiveMode?: NetworkProxyMode,
 ): string | null {
-  if (settings.proxy.mode === 'manual') return getManualNetworkProxyUrl(settings) ?? null
-  if (settings.proxy.mode === 'system') {
+  const mode = effectiveMode ?? settings.proxy.mode
+  if (mode === 'manual') {
+    // Read the URL directly: a provider-forced override can land on 'manual'
+    // while settings.proxy.mode still holds the global value.
+    const url = settings.proxy.url.trim()
+    return url || null
+  }
+  if (mode === 'system') {
     const bridgeUrl = env[SYSTEM_PROXY_URL_ENV]?.trim()
     if (bridgeUrl) return bridgeUrl
 
     const bridgeError = env[SYSTEM_PROXY_ERROR_ENV]?.trim()
     if (bridgeError) {
+      // A provider-level useProxy='on' override against a global 'direct'
+      // setting borrows the system resolver as a fallback. When the resolver
+      // failed, no proxy URL is available, so degrade to direct instead of
+      // surfacing an error the user never asked for by choosing system mode.
+      if (settings.proxy.mode === 'direct') return getProxyUrl(env) ?? null
       throw new Error(bridgeError)
     }
 
@@ -148,12 +186,14 @@ export function mergeLoopbackNoProxy(existing: string | undefined): string {
 export function buildNetworkEnvironment(
   settings: NetworkSettings,
   baseEnv: NodeJS.ProcessEnv = process.env,
+  effectiveMode?: NetworkProxyMode,
 ): Record<string, string> {
   const env: Record<string, string> = {
     API_TIMEOUT_MS: String(settings.aiRequestTimeoutMs),
   }
 
-  if (settings.proxy.mode === 'direct') {
+  const mode = effectiveMode ?? settings.proxy.mode
+  if (mode === 'direct') {
     env.HTTP_PROXY = ''
     env.HTTPS_PROXY = ''
     env.http_proxy = ''
@@ -163,7 +203,7 @@ export function buildNetworkEnvironment(
     return env
   }
 
-  const proxyUrl = getNetworkProxyUrl(settings, baseEnv)
+  const proxyUrl = getNetworkProxyUrl(settings, baseEnv, effectiveMode)
 
   if (proxyUrl) {
     const noProxy = mergeLoopbackNoProxy(baseEnv.no_proxy || baseEnv.NO_PROXY)
@@ -190,9 +230,10 @@ export function buildNetworkEnvironment(
 export function getNetworkProxyFetchOptions(
   settings: NetworkSettings,
   targetUrl: string | URL,
+  effectiveMode?: NetworkProxyMode,
 ): ReturnType<typeof getProxyFetchOptions> {
   const noProxy = mergeLoopbackNoProxy(process.env.no_proxy || process.env.NO_PROXY)
-  const proxyUrl = getNetworkProxyUrl(settings)
+  const proxyUrl = getNetworkProxyUrl(settings, process.env, effectiveMode)
 
   return getProxyFetchOptions({
     proxyUrl,

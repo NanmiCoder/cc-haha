@@ -19,6 +19,7 @@ import type {
   ApiFormat,
   ProviderAuthStrategy,
   ProvidersIndex,
+  ProviderUseProxy,
   SavedProvider,
 } from '../types/provider.js'
 import {
@@ -155,6 +156,16 @@ export function normalizeDisableExperimentalBetas(value: unknown): boolean {
   return false
 }
 
+/**
+ * Canonical form of the per-provider NETWORK proxy override: only an explicit
+ * 'on'/'off' is stored; 'inherit', an absent field, and any invalid persisted
+ * value all normalize to undefined (absent === inherit). Unrelated to
+ * providerNeedsProxy(), which is the protocol-transform proxy.
+ */
+export function normalizeUseProxy(value: unknown): ProviderUseProxy | undefined {
+  return value === 'on' || value === 'off' ? value : undefined
+}
+
 export function normalizeModelMapping(models: SavedProvider['models']): SavedProvider['models'] {
   const main = models.main.trim()
   return {
@@ -218,11 +229,13 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
     imageGeneration: rawImageGeneration,
     model1mSupport: rawModel1mSupport,
     supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia,
+    useProxy: rawUseProxy,
     ...rest
   } = provider
   const rawProvider = provider as SavedProvider & Record<string, unknown>
   const model1mSupport = normalizeModel1mSupport(rawModel1mSupport)
   const imageGeneration = normalizeImageGeneration(rawImageGeneration)
+  const useProxy = normalizeUseProxy(rawUseProxy)
   return {
     ...rest,
     apiFormat: provider.apiFormat ?? 'anthropic',
@@ -233,6 +246,7 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
       ? { supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia }
       : {}),
     ...(normalizeDisableExperimentalBetas(rawDisableExperimentalBetas) ? { disableExperimentalBetas: true } : {}),
+    ...(useProxy !== undefined ? { useProxy } : {}),
     ...(model1mSupport !== undefined ? { model1mSupport } : {}),
     ...(imageGeneration !== undefined ? { imageGeneration } : {}),
   }

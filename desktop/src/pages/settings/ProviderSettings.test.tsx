@@ -266,3 +266,82 @@ describe('provider request compatibility', () => {
     expect(dialog.queryByRole('textbox', { name: 'Reply output budget' })).not.toBeInTheDocument()
   })
 })
+
+describe('provider network proxy override', () => {
+  const baseProvider: SavedProvider = {
+    ...savedProviders[0]!, id: 'proxy-provider', name: 'Proxy Fixture',
+  }
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [baseProvider], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+  afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  const openEdit = async (provider: SavedProvider = baseProvider) => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [provider], activeId: null })
+    render(<ProviderSettings />)
+    const card = await screen.findByTestId(`provider-${provider.id}`)
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    return within(screen.getByRole('dialog'))
+  }
+
+  it('renders the three-state control with follow-global selected by default and saves an explicit on', async () => {
+    const update = vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({
+      provider: { ...baseProvider, ...input } as SavedProvider,
+    }))
+    const dialog = await openEdit()
+    const group = dialog.getByRole('radiogroup', { name: 'Network proxy' })
+    expect(within(group).getByRole('radio', { name: 'Follow global' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(group).getByRole('radio', { name: 'Always proxy' })).toHaveAttribute('aria-checked', 'false')
+    expect(within(group).getByRole('radio', { name: 'Direct' })).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(within(group).getByRole('radio', { name: 'Always proxy' }))
+    expect(within(group).getByRole('radio', { name: 'Always proxy' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(baseProvider.id, expect.objectContaining({ useProxy: 'on' })))
+  })
+
+  it('loads a stored off override and clears it back to inherit', async () => {
+    const storedOff = { ...baseProvider, useProxy: 'off' as const }
+    const update = vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({
+      provider: { ...storedOff, ...input } as SavedProvider,
+    }))
+    const dialog = await openEdit(storedOff)
+    const group = dialog.getByRole('radiogroup', { name: 'Network proxy' })
+    expect(within(group).getByRole('radio', { name: 'Direct' })).toHaveAttribute('aria-checked', 'true')
+
+    // 'inherit' is sent explicitly so the server clears the stored override.
+    fireEvent.click(within(group).getByRole('radio', { name: 'Follow global' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(storedOff.id, expect.objectContaining({ useProxy: 'inherit' })))
+  })
+
+  it('omits useProxy from the create payload while inherit and includes it when forced', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'created-proxy', apiFormat: input.apiFormat ?? 'anthropic' } as unknown as SavedProvider,
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    let dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-proxy-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    // inherit is the absent default: nothing is materialized in the payload.
+    expect(create.mock.calls[0]![0]).not.toHaveProperty('useProxy')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-proxy-key' } })
+    const group = dialog.getByRole('radiogroup', { name: 'Network proxy' })
+    fireEvent.click(within(group).getByRole('radio', { name: 'Direct' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    expect(create.mock.calls[1]![0]).toMatchObject({ useProxy: 'off' })
+  })
+})

@@ -466,4 +466,69 @@ describe('persistent storage upgrade migrations', () => {
     expect(rewritten.providers[1].requestCompatibility.futureParameter).toBe('keep')
     expect(rewritten.providers[0].futureProvider).toBe('keep')
   })
+
+  test('upgrades v5 providers to schema version 6 without materializing useProxy defaults', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const fixture = {
+      presetId: 'custom', name: 'Fixture provider', apiKey: 'fake-test-token',
+      baseUrl: 'https://provider.example.test/v1', apiFormat: 'anthropic',
+      models: { main: 'fixture-model', haiku: '', sonnet: '', opus: '' },
+    }
+    const legacy = {
+      schemaVersion: 5,
+      activeId: 'proxy-forced',
+      futureRoot: { keep: true },
+      providers: [
+        { ...fixture, id: 'plain', toolSearchEnabled: true, futureProvider: 'keep' },
+        {
+          ...fixture,
+          id: 'proxy-forced',
+          // A hand-edited or future-client override must survive untouched.
+          useProxy: 'on',
+          requestCompatibility: { maxOutputTokens: 64_000, futureParameter: 'keep' },
+        },
+      ],
+    }
+    await fs.writeFile(file, JSON.stringify(legacy))
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).toContain('cc-haha/providers.json')
+
+    const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(migrated.schemaVersion).toBe(6)
+    expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    // v6 follows the v5 non-materializing pattern: absent stays absent because
+    // a missing useProxy already means 'inherit' at every read site.
+    expect('useProxy' in migrated.providers[0]).toBe(false)
+    expect(migrated.providers[0].toolSearchEnabled).toBe(true)
+    expect(migrated.providers[1].useProxy).toBe('on')
+    // Unknown fields survive at the root, provider, and nested levels.
+    expect(migrated.futureRoot).toEqual({ keep: true })
+    expect(migrated.providers[0].futureProvider).toBe('keep')
+    expect(migrated.providers[1].requestCompatibility.futureParameter).toBe('keep')
+
+    const backups = (await fs.readdir(dir)).filter(name => name.startsWith('providers.json.bak-before-migration-'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(dir, backups[0]!), 'utf8'))).toEqual(legacy)
+
+    // Re-running the migration is a no-op once the index is at v6.
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+
+    // A real service write keeps the stored override and every unknown field.
+    const service = new ProviderService()
+    await service.updateProvider('plain', { name: 'Renamed fixture' })
+    const rewritten = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(rewritten.schemaVersion).toBe(6)
+    const plain = rewritten.providers.find((entry: { id: string }) => entry.id === 'plain')
+    const forced = rewritten.providers.find((entry: { id: string }) => entry.id === 'proxy-forced')
+    expect(plain.name).toBe('Renamed fixture')
+    expect(plain.futureProvider).toBe('keep')
+    expect('useProxy' in plain).toBe(false)
+    expect(forced.useProxy).toBe('on')
+    expect(forced.requestCompatibility.futureParameter).toBe('keep')
+  })
 })

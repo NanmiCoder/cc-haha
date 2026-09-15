@@ -109,7 +109,7 @@ vi.mock('../controls/ModelSelector', async () => {
 
 import { ChatInput } from './ChatInput'
 import { getComposerElement, getComposerText, setComposerText } from './composerTestUtils'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, MAX_QUEUED_USER_MESSAGES } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -696,7 +696,7 @@ describe('ChatInput file mentions', () => {
     expect(getComposerText()).toBe('')
     expect(screen.getByTestId('pending-user-message')).toHaveTextContent('please adjust the current direction')
 
-    fireEvent.click(screen.getByRole('button', { name: /Guide now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Jump the queue now/i }))
 
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
       type: 'user_message',
@@ -825,6 +825,117 @@ describe('ChatInput file mentions', () => {
       { type: 'assistant_text', content: 'workingdone now' },
       { type: 'user_text', content: 'continue after completion' },
     ])
+  })
+
+  it('pauses the queue instead of auto-sending when the turn ends in an error, then resumes on demand', async () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'assistant-stream', type: 'assistant_text', content: 'working', timestamp: 1 }],
+          chatState: 'streaming',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 12,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    setComposerText('retry after failure', 21)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(screen.getByTestId('pending-user-message')).toHaveTextContent('retry after failure')
+
+    act(() => {
+      // The server emits `error` immediately before the terminal `message_complete`.
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'error',
+        message: 'provider overloaded',
+        code: 'CLI_ERROR',
+      })
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'message_complete',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      })
+    })
+
+    // The queued prompt must NOT have been fired into the failed turn.
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message',
+      content: 'retry after failure',
+    }))
+    expect(screen.getByTestId('pending-user-message-paused')).toBeInTheDocument()
+    expect(screen.getByTestId('pending-user-message')).toHaveTextContent('retry after failure')
+
+    // Resuming is an explicit user choice; it drains the queue now.
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: 'retry after failure',
+      attachments: [],
+    })
+    expect(screen.queryByTestId('pending-user-message')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('pending-user-message-paused')).not.toBeInTheDocument()
+  })
+
+  it('rejects queuing past the cap and preserves the composer text', async () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'assistant-stream', type: 'assistant_text', content: 'working', timestamp: 1 }],
+          chatState: 'streaming',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 12,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+          queuedUserMessages: Array.from({ length: MAX_QUEUED_USER_MESSAGES }, (_, index) => ({
+            id: `queued-${index}`,
+            content: `queued ${index}`,
+            displayContent: `queued ${index}`,
+            createdAt: index,
+          })),
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    expect(screen.getAllByTestId('pending-user-message')).toHaveLength(MAX_QUEUED_USER_MESSAGES)
+    expect(screen.getByTestId('pending-user-message-full')).toBeInTheDocument()
+
+    setComposerText('one too many', 12)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+
+    // Nothing new is queued and the draft survives so the user does not lose it.
+    expect(screen.getAllByTestId('pending-user-message')).toHaveLength(MAX_QUEUED_USER_MESSAGES)
+    expect(getComposerText()).toBe('one too many')
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message',
+      content: 'one too many',
+    }))
   })
 
   it('shows branch and worktree launch controls for an empty active Git session', async () => {

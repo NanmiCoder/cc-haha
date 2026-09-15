@@ -986,6 +986,93 @@ describe('ProviderService', () => {
     })
   })
 
+  // ─── useProxy (per-provider network egress override) ──────────────────────
+
+  describe('useProxy', () => {
+    test('omits useProxy when the provider inherits the global proxy mode', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+
+      // Absent === inherit; nothing is materialized on create.
+      expect(added.useProxy).toBeUndefined()
+      const stored = await readProvidersConfig()
+      const providers = stored.providers as Array<Record<string, unknown>>
+      expect(providers[0]).not.toHaveProperty('useProxy')
+    })
+
+    test('persists an explicit on/off useProxy override on create', async () => {
+      const svc = new ProviderService()
+      const forced = await svc.addProvider(sampleInput({ name: 'Forced', useProxy: 'on' }))
+      const direct = await svc.addProvider(sampleInput({ name: 'Direct', useProxy: 'off' }))
+
+      expect(forced.useProxy).toBe('on')
+      expect(direct.useProxy).toBe('off')
+
+      const stored = await readProvidersConfig()
+      const providers = stored.providers as Array<Record<string, unknown>>
+      expect(providers.find((p) => p.id === forced.id)?.useProxy).toBe('on')
+      expect(providers.find((p) => p.id === direct.id)?.useProxy).toBe('off')
+    })
+
+    test('updates useProxy and clears it back to inherit', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+
+      const turnedOn = await svc.updateProvider(added.id, { useProxy: 'on' })
+      expect(turnedOn.useProxy).toBe('on')
+
+      const turnedOff = await svc.updateProvider(added.id, { useProxy: 'off' })
+      expect(turnedOff.useProxy).toBe('off')
+
+      // 'inherit' is the clear signal: the stored field is removed entirely.
+      const inherited = await svc.updateProvider(added.id, { useProxy: 'inherit' })
+      expect(inherited.useProxy).toBeUndefined()
+      const stored = await readProvidersConfig()
+      const providers = stored.providers as Array<Record<string, unknown>>
+      expect(providers[0]).not.toHaveProperty('useProxy')
+    })
+
+    test('survives a round trip through normalization on read', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput({ useProxy: 'on' }))
+      // A separate service instance re-reads from disk and normalizes.
+      const reloaded = await new ProviderService().getProvider(added.id)
+      expect(reloaded.useProxy).toBe('on')
+      const list = await new ProviderService().listProviders()
+      expect(list.providers.find((p) => p.id === added.id)?.useProxy).toBe('on')
+    })
+
+    test('projects useProxy through getProviderForProxy so the handler can route it', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput({ useProxy: 'off' }))
+      await svc.activateProvider(added.id)
+
+      const byId = await svc.getProviderForProxy(added.id)
+      expect(byId?.useProxy).toBe('off')
+
+      const active = await svc.getActiveProviderForProxy()
+      expect(active?.useProxy).toBe('off')
+    })
+
+    test('getProviderUseProxyForRouting resolves explicit, active, and official providers', async () => {
+      const svc = new ProviderService()
+      const forced = await svc.addProvider(sampleInput({ name: 'Forced', useProxy: 'on' }))
+      const plain = await svc.addProvider(sampleInput({ name: 'Plain' }))
+
+      // Explicit id wins over the active provider.
+      await svc.activateProvider(plain.id)
+      expect(await svc.getProviderUseProxyForRouting(forced.id)).toBe('on')
+      expect(await svc.getProviderUseProxyForRouting(plain.id)).toBeUndefined()
+      // No id → the active provider (plain, inherit).
+      expect(await svc.getProviderUseProxyForRouting()).toBeUndefined()
+      // Activate the forced provider → the active lookup now returns 'on'.
+      await svc.activateProvider(forced.id)
+      expect(await svc.getProviderUseProxyForRouting()).toBe('on')
+      // Claude Official (null) always inherits.
+      expect(await svc.getProviderUseProxyForRouting(null)).toBeUndefined()
+    })
+  })
+
   // ─── deleteProvider ──────────────────────────────────────────────────────
 
   describe('deleteProvider', () => {

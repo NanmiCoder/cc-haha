@@ -95,7 +95,7 @@ export function describeCron(cron: string, t: TFunc): string {
  * Reverse-parse a cron expression back into UI-friendly state
  * for the task edit modal.
  */
-export type FrequencyKey = 'everyNMinutes' | 'everyNHours' | 'daily' | 'weekdays' | 'specificDays' | 'monthly' | 'customCron'
+export type FrequencyKey = 'oneShot' | 'everyNMinutes' | 'everyNHours' | 'daily' | 'weekdays' | 'specificDays' | 'monthly' | 'customCron'
 
 export type ParsedCron = {
   frequency: FrequencyKey

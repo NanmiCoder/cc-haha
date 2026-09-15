@@ -5,6 +5,12 @@ import * as path from 'path'
 import { handleProxyRequest, withStreamIdleTimeout } from '../proxy/handler.js'
 import { ProviderService } from '../services/providerService.js'
 import {
+  normalizeNetworkSettings,
+  resolveEffectiveProxyMode,
+  type NetworkProxyMode,
+} from '../services/networkSettings.js'
+import type { ProviderUseProxy } from '../types/provider.js'
+import {
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
   traceCaptureService,
@@ -46,6 +52,32 @@ async function waitForTraceCall(sessionId: string) {
 describe('proxy network settings', () => {
   beforeEach(setup)
   afterEach(teardown)
+
+  // Full truth table for the per-provider NETWORK proxy override:
+  // rows = inherit/on/off × columns = direct/system/manual global modes.
+  const MATRIX: Array<{ override?: ProviderUseProxy; global: NetworkProxyMode; expected: NetworkProxyMode }> = [
+    { override: undefined, global: 'direct', expected: 'direct' },
+    { override: undefined, global: 'system', expected: 'system' },
+    { override: undefined, global: 'manual', expected: 'manual' },
+    { override: 'inherit', global: 'direct', expected: 'direct' },
+    { override: 'inherit', global: 'system', expected: 'system' },
+    { override: 'inherit', global: 'manual', expected: 'manual' },
+    // on: keep an available proxy mode; borrow system when global is direct.
+    { override: 'on', global: 'direct', expected: 'system' },
+    { override: 'on', global: 'system', expected: 'system' },
+    { override: 'on', global: 'manual', expected: 'manual' },
+    // off: always direct.
+    { override: 'off', global: 'direct', expected: 'direct' },
+    { override: 'off', global: 'system', expected: 'direct' },
+    { override: 'off', global: 'manual', expected: 'direct' },
+  ]
+
+  test.each(MATRIX)('resolves override=$override against global=$global to $expected', ({ override, global, expected }) => {
+    const settings = normalizeNetworkSettings({
+      network: { proxy: { mode: global, url: global === 'manual' ? 'http://127.0.0.1:7890' : '' } },
+    })
+    expect(resolveEffectiveProxyMode(settings, override)).toBe(expected)
+  })
 
   for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
     for (const upstreamStatus of [503, 200, 'thrown'] as const) {
@@ -392,6 +424,161 @@ describe('proxy network settings', () => {
       expect(calls.map((call) => call.proxy)).toEqual([undefined])
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  test("a provider forced off bypasses the global manual proxy for upstream requests", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        network: {
+          proxy: { mode: 'manual', url: 'http://127.0.0.1:1181' },
+        },
+      }),
+      'utf-8',
+    )
+
+    const svc = new ProviderService()
+    const provider = await svc.addProvider({
+      presetId: 'custom',
+      name: 'Domestic Model',
+      baseUrl: 'https://api.example.com',
+      apiKey: 'sk-test',
+      apiFormat: 'openai_chat',
+      useProxy: 'off',
+      models: {
+        main: 'model-main',
+        haiku: 'model-main',
+        sonnet: 'model-main',
+        opus: 'model-main',
+      },
+    })
+
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; proxy?: string }> = []
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        proxy: (init as RequestInit & { proxy?: string } | undefined)?.proxy,
+      })
+      return new Response(JSON.stringify({
+        id: 'chatcmpl-forced-direct',
+        object: 'chat.completion',
+        created: 0,
+        model: 'model-main',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    try {
+      const req = new Request(
+        `http://localhost:3456/proxy/providers/${provider.id}/v1/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'model-main',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'hello' }],
+          }),
+        },
+      )
+      const res = await handleProxyRequest(req, new URL(req.url))
+
+      expect(res.status).toBe(200)
+      expect(calls.map((call) => call.url)).toEqual(['https://api.example.com/v1/chat/completions'])
+      // useProxy='off' must win over the configured manual proxy.
+      expect(calls.map((call) => call.proxy)).toEqual([undefined])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('a provider forced on borrows the system proxy while the global mode is direct', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        network: {
+          proxy: { mode: 'direct', url: '' },
+        },
+      }),
+      'utf-8',
+    )
+
+    const svc = new ProviderService()
+    const provider = await svc.addProvider({
+      presetId: 'custom',
+      name: 'Overseas Model',
+      baseUrl: 'https://api.example.com',
+      apiKey: 'sk-test',
+      apiFormat: 'openai_chat',
+      useProxy: 'on',
+      models: {
+        main: 'model-main',
+        haiku: 'model-main',
+        sonnet: 'model-main',
+        opus: 'model-main',
+      },
+    })
+
+    const originalFetch = globalThis.fetch
+    const originalBridgeUrl = process.env.CC_HAHA_SYSTEM_PROXY_URL
+    const calls: Array<{ url: string; proxy?: string }> = []
+    process.env.CC_HAHA_SYSTEM_PROXY_URL = 'http://127.0.0.1:1183'
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        proxy: (init as RequestInit & { proxy?: string } | undefined)?.proxy,
+      })
+      return new Response(JSON.stringify({
+        id: 'chatcmpl-forced-proxy',
+        object: 'chat.completion',
+        created: 0,
+        model: 'model-main',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    try {
+      const req = new Request(
+        `http://localhost:3456/proxy/providers/${provider.id}/v1/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'model-main',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'hello' }],
+          }),
+        },
+      )
+      const res = await handleProxyRequest(req, new URL(req.url))
+
+      expect(res.status).toBe(200)
+      expect(calls.map((call) => call.url)).toEqual(['https://api.example.com/v1/chat/completions'])
+      // useProxy='on' against a direct global mode falls back to the system
+      // resolver bridge instead of going direct.
+      expect(calls.map((call) => call.proxy)).toEqual(['http://127.0.0.1:1183'])
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalBridgeUrl === undefined) delete process.env.CC_HAHA_SYSTEM_PROXY_URL
+      else process.env.CC_HAHA_SYSTEM_PROXY_URL = originalBridgeUrl
     }
   })
 

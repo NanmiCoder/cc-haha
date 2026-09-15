@@ -83,6 +83,13 @@ export type QueuedUserMessage = {
   createdAt: number
 }
 
+/**
+ * Upper bound on how many messages may wait in the pre-queue for one session.
+ * A runaway queue would fire an unbounded burst of turns the moment the active
+ * one finishes, so the composer rejects anything past this limit.
+ */
+export const MAX_QUEUED_USER_MESSAGES = 5
+
 export type ComposerReferenceInsertion = {
   text: string
   reference?: {
@@ -194,6 +201,18 @@ export type PerSessionState = {
   composerDraft?: ComposerDraftState | null
   repositoryLaunchDraft?: RepositoryLaunchDraftState | null
   queuedUserMessages?: QueuedUserMessage[]
+  /**
+   * True when auto-send of queued messages is paused because the previous turn
+   * ended abnormally (runtime error or user stop). The queue stays intact and the
+   * composer offers "resume"/"clear" instead of silently firing the next message.
+   */
+  queuePaused?: boolean
+  /**
+   * Transient bridge flag: set when a turn ends abnormally (`error` event or
+   * `stopGeneration`), consumed by the next `message_complete` to decide whether
+   * to pause the queue. Cleared whenever a fresh turn starts.
+   */
+  pendingQueuePause?: boolean
 }
 
 const DEFAULT_SESSION_STATE: PerSessionState = {
@@ -243,6 +262,8 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   composerDraft: null,
   repositoryLaunchDraft: null,
   queuedUserMessages: [],
+  queuePaused: false,
+  pendingQueuePause: false,
 }
 
 export function createDefaultSessionState(): PerSessionState {
@@ -251,6 +272,8 @@ export function createDefaultSessionState(): PerSessionState {
     messages: [],
     tokenUsage: { input_tokens: 0, output_tokens: 0 },
     queuedUserMessages: [],
+    queuePaused: false,
+    pendingQueuePause: false,
   }
 }
 
@@ -389,10 +412,14 @@ type ChatStore = {
   queueUserMessage: (
     sessionId: string,
     message: Omit<QueuedUserMessage, 'id' | 'createdAt'>,
-  ) => string
+  ) => string | null
   updateQueuedUserMessage: (sessionId: string, messageId: string, content: string) => void
   removeQueuedUserMessage: (sessionId: string, messageId: string) => void
   sendQueuedUserMessage: (sessionId: string, messageId: string) => void
+  /** Resume auto-send after an abnormal turn end paused the queue. */
+  resumeQueuedMessages: (sessionId: string) => void
+  /** Discard every queued message and lift the paused state. */
+  clearQueuedMessages: (sessionId: string) => void
   clearMessages: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
@@ -2924,6 +2951,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             elapsedSeconds: 0,
             suppressNextTaskNotificationResponse: false,
             replaceHistoryOnCompletion: false,
+            queuePaused: false,
+            pendingQueuePause: false,
             streamingText: '',
             streamingResponseChars: 0,
             statusVerb: isDirectAgentSession ? '' : randomSpinnerVerb(),
@@ -3131,6 +3160,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             stoppingBackgroundTaskIds,
             stopAllSubagentsRequested: true,
             elapsedTimer: null,
+            // A user stop ends the turn abnormally: don't auto-fire the queue on
+            // the interrupt result that follows. Pause it and let the user decide.
+            pendingQueuePause: true,
           },
         },
       }
@@ -3925,6 +3957,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   queueUserMessage: (sessionId, message) => {
+    const existing = get().sessions[sessionId]?.queuedUserMessages ?? []
+    if (existing.length >= MAX_QUEUED_USER_MESSAGES) return null
     const id = `queued-user-${Date.now()}-${Math.random().toString(36).slice(2)}`
     set((state) => {
       const session = state.sessions[sessionId] ?? createDefaultSessionState()
@@ -4017,6 +4051,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
+  resumeQueuedMessages: (sessionId) => {
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, () => ({
+        queuePaused: false,
+        pendingQueuePause: false,
+      })),
+    }))
+    for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
+      get().sendQueuedUserMessage(sessionId, queuedMessage.id)
+    }
+  },
+
+  clearQueuedMessages: (sessionId) => {
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, () => ({
+        queuedUserMessages: [],
+        queuePaused: false,
+        pendingQueuePause: false,
+      })),
+    }))
+  },
+
   clearMessages: (sessionId) => {
     advanceHistoryLifecycle(sessionId)
     clearPendingTaskToolUseIds(sessionId)
@@ -4053,6 +4109,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     const update = (updater: (session: PerSessionState) => Partial<PerSessionState>) => {
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, updater) }))
+    }
+    /**
+     * Called at the terminal `message_complete` boundary. Normally it fires every
+     * queued message in order. When the turn that just ended was flagged abnormal
+     * (`pendingQueuePause`, set by an `error` event or a user stop) and messages are
+     * still waiting, it pauses the queue instead so the user chooses resume/clear
+     * rather than having the next prompt fired into a broken or interrupted turn.
+     */
+    const flushOrPauseQueue = () => {
+      const current = get().sessions[sessionId]
+      if (!current) return
+      const queued = current.queuedUserMessages ?? []
+      if (current.pendingQueuePause && queued.length > 0) {
+        update(() => ({ queuePaused: true, pendingQueuePause: false }))
+        return
+      }
+      if (current.queuePaused || current.pendingQueuePause) {
+        update(() => ({ queuePaused: false, pendingQueuePause: false }))
+      }
+      for (const queuedMessage of queued) {
+        get().sendQueuedUserMessage(sessionId, queuedMessage.id)
+      }
     }
     const ensureElapsedTimer = () => {
       const session = get().sessions[sessionId]
@@ -4980,9 +5058,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             sessionId,
             session.replaceHistoryOnCompletion === true,
           )
-          for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
-            get().sendQueuedUserMessage(sessionId, queuedMessage.id)
-          }
+          flushOrPauseQueue()
           break
         }
         const completedAt = Date.now()
@@ -5035,9 +5111,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           sessionId,
           session.replaceHistoryOnCompletion === true,
         )
-        for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
-          get().sendQueuedUserMessage(sessionId, queuedMessage.id)
-        }
+        flushOrPauseQueue()
         break
       }
 
@@ -5096,6 +5170,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             apiRetry: null,
             streamingFallback: null,
             suppressNextTaskNotificationResponse: false,
+            // The turn ended in a runtime error. The server emits `error` right
+            // before the terminal `message_complete`; flag it so that boundary
+            // pauses the queue instead of firing the next prompt into the failure.
+            pendingQueuePause: true,
             historyMutationEpoch: (s.historyMutationEpoch ?? 0) + 1,
           }
         })

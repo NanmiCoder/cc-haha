@@ -28,6 +28,14 @@ export type Model1mSupport = {
 
 export type ModelContextWindows = Record<string, number>
 
+/**
+ * Per-provider NETWORK egress proxy override (mirrors the server enum):
+ * `inherit` follows the global proxy mode (absent means inherit), `on` forces
+ * the proxy, `off` forces a direct connection. Unrelated to the local
+ * protocol-transform proxy (providerNeedsProxy).
+ */
+export type ProviderUseProxy = 'inherit' | 'on' | 'off'
+
 export type ImageGenerationConfig = {
   model: string
   baseUrl?: string
@@ -61,6 +69,7 @@ export type SavedProvider = {
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
+  useProxy?: ProviderUseProxy
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
   notes?: string
@@ -81,6 +90,7 @@ export type CreateProviderInput = {
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
+  useProxy?: ProviderUseProxy
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
   notes?: string
@@ -100,6 +110,8 @@ export type UpdateProviderInput = {
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
+  /** 'inherit' clears the stored override server-side (absent === inherit). */
+  useProxy?: ProviderUseProxy
   requestCompatibility?: RequestCompatibility | null
   imageGeneration?: ImageGenerationConfig | null
   notes?: string

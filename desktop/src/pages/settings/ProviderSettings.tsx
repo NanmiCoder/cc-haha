@@ -16,8 +16,9 @@ import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
 import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Tooltip } from '@/components/ui/Tooltip'
-import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode } from '../../types/provider'
+import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode, ProviderUseProxy } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCompactWindowErrorKey, getModelContextWindowErrorKey, MODEL_SLOTS, parseAutoCompactWindowInput, parseModelContextWindowsInput, type ModelContextInputs, type ModelSlot } from '../../lib/providerModelContext'
 import type { ProviderPreset } from '../../types/providerPreset'
@@ -1045,6 +1046,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const [toolSearchConfirmOpen, setToolSearchConfirmOpen] = useState(false)
   const [disableExperimentalBetas, setDisableExperimentalBetas] = useState(provider?.disableExperimentalBetas ?? false)
   const [supportsNestedToolResultMedia, setSupportsNestedToolResultMedia] = useState(provider?.supportsNestedToolResultMedia ?? true)
+  const [useProxy, setUseProxy] = useState<ProviderUseProxy>(provider?.useProxy ?? 'inherit')
   const [imageGeneration, setImageGeneration] = useState<ImageGenerationFormValue>({
     enabled: Boolean(initialImageGeneration),
     model: initialImageGeneration?.model ?? '',
@@ -1554,6 +1556,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           toolSearchEnabled,
           ...(disableExperimentalBetas && { disableExperimentalBetas }),
           supportsNestedToolResultMedia,
+          ...(useProxy !== 'inherit' && { useProxy }),
           ...(storedImageGeneration !== undefined && { imageGeneration: storedImageGeneration }),
           notes: notes.trim() || undefined,
         })
@@ -1573,6 +1576,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           toolSearchEnabled,
           disableExperimentalBetas,
           supportsNestedToolResultMedia,
+          useProxy,
           imageGeneration: storedImageGeneration ?? null,
           notes: notes.trim() || undefined,
         }
@@ -1607,6 +1611,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         apiFormat === provider.apiFormat &&
         authStrategy === provider.authStrategy &&
         supportsNestedToolResultMedia === (provider.supportsNestedToolResultMedia ?? true) &&
+        useProxy === (provider.useProxy ?? 'inherit') &&
         JSON.stringify(parseCompatibilityForm(compatibility)) === JSON.stringify(provider.requestCompatibility)
       if (savedConfigUnchanged && provider) {
         result = await useProviderStore.getState().testProvider(provider.id, {
@@ -1827,6 +1832,27 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
             </div>
           </div>
         </label>
+
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-3">
+          <div className="text-sm font-medium text-[var(--color-text-primary)]">
+            {t('settings.providers.useProxy')}
+          </div>
+          <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+            {t('settings.providers.useProxyDesc')}
+          </div>
+          <SegmentedControl<ProviderUseProxy>
+            className="mt-2"
+            size="sm"
+            items={[
+              { value: 'inherit', label: t('settings.providers.useProxyInherit') },
+              { value: 'on', label: t('settings.providers.useProxyOn') },
+              { value: 'off', label: t('settings.providers.useProxyOff') },
+            ]}
+            value={useProxy}
+            onChange={setUseProxy}
+            label={t('settings.providers.useProxy')}
+          />
+        </div>
 
         <div className="flex flex-col gap-1">
           <label htmlFor="provider-api-key" className="text-sm font-medium text-[var(--color-text-primary)]">

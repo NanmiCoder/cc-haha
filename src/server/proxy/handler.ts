@@ -32,6 +32,8 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
+  resolveEffectiveProxyMode,
+  type NetworkProxyMode,
   type NetworkSettings,
 } from '../services/networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
@@ -231,6 +233,9 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
   const networkSettings = await loadNetworkSettings()
+  // Per-provider NETWORK egress override: fold config.useProxy into the global
+  // proxy mode once so every upstream fetch below honors it.
+  const effectiveProxyMode = resolveEffectiveProxyMode(networkSettings, config.useProxy)
   const traceContext = buildProxyTraceContext(req, config, body)
   const promptCacheKey = resolvePromptCacheKey(body, req.headers.get('x-claude-code-session-id'))
   const requestOptions: RequestCompatibilityOptions = {
@@ -259,12 +264,12 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
           { status: 400 },
         )
       }
-      return await handleAnthropicCompatible(body, baseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext)
+      return await handleAnthropicCompatible(body, baseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext, effectiveProxyMode)
     }
     if (config.apiFormat === 'openai_chat') {
-      return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions)
+      return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, effectiveProxyMode)
     }
-    return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, promptCacheKey, requestOptions)
+    return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, promptCacheKey, requestOptions, effectiveProxyMode)
   } catch (err) {
     if (traceContext && !wasTraceErrorRecorded(err) && !recordedTraceErrorContexts.has(traceContext)) {
       void recordProxyTrace({
@@ -451,10 +456,11 @@ async function handleAnthropicCompatible(
   isStream: boolean,
   networkSettings: NetworkSettings,
   traceContext: ProxyTraceContext | null,
+  effectiveProxyMode?: NetworkProxyMode,
 ): Promise<Response> {
   const transformed = hoistToolResultMediaForCompatibility(body)
   const url = `${normalizeAnthropicBaseUrl(baseUrl)}/v1/messages`
-  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url, effectiveProxyMode)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -667,6 +673,7 @@ async function handleOpenaiChat(
   networkSettings: NetworkSettings,
   traceContext: ProxyTraceContext | null,
   requestOptions: RequestCompatibilityOptions = {},
+  effectiveProxyMode?: NetworkProxyMode,
 ): Promise<Response> {
   const knownDeepSeekHost = shouldUseDeepSeekReasoningCompat(baseUrl)
   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
@@ -685,7 +692,7 @@ async function handleOpenaiChat(
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
   }
-  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url, effectiveProxyMode)
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
   const traceCallId = traceContext
@@ -879,6 +886,7 @@ async function handleOpenaiResponses(
   traceContext: ProxyTraceContext | null,
   promptCacheKey?: string,
   requestOptions: RequestCompatibilityOptions = {},
+  effectiveProxyMode?: NetworkProxyMode,
 ): Promise<Response> {
   const transformed = anthropicToOpenaiResponses(body, { ...requestOptions, cacheKey: promptCacheKey })
   if (traceContext) {
@@ -890,7 +898,7 @@ async function handleOpenaiResponses(
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
   }
-  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url, effectiveProxyMode)
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
   const traceCallId = traceContext

@@ -14,6 +14,9 @@ import {
   getNetworkProxyUrl,
   loadNetworkSettings,
   normalizeNetworkSettings,
+  resolveEffectiveProxyMode,
+  type NetworkProxyMode,
+  type NetworkSettings,
 } from '../services/networkSettings.js'
 import { SettingsService } from '../services/settingsService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
@@ -320,6 +323,82 @@ describe('network settings', () => {
       https_proxy: '',
       ALL_PROXY: '',
       all_proxy: '',
+    })
+  })
+
+  describe('resolveEffectiveProxyMode (provider override × global mode)', () => {
+    const settingsFor = (mode: NetworkProxyMode, url = ''): NetworkSettings =>
+      normalizeNetworkSettings({ network: { proxy: { mode, url } } })
+
+    // inherit (and a missing/unknown override) always mirrors the global mode.
+    it.each([
+      ['direct', 'inherit', 'direct'],
+      ['system', 'inherit', 'system'],
+      ['manual', 'inherit', 'manual'],
+    ] as const)('inherit follows the global %s mode', (globalMode, override, expected) => {
+      expect(resolveEffectiveProxyMode(settingsFor(globalMode, 'http://127.0.0.1:7890'), override)).toBe(expected)
+    })
+
+    it('treats a missing override as inherit', () => {
+      expect(resolveEffectiveProxyMode(settingsFor('manual', 'http://127.0.0.1:7890'), undefined)).toBe('manual')
+      expect(resolveEffectiveProxyMode(settingsFor('system'), null)).toBe('system')
+    })
+
+    // off forces direct regardless of the global mode.
+    it.each([
+      ['direct', 'direct'],
+      ['system', 'direct'],
+      ['manual', 'direct'],
+    ] as const)('off bypasses the global %s mode', (globalMode, expected) => {
+      expect(resolveEffectiveProxyMode(settingsFor(globalMode, 'http://127.0.0.1:7890'), 'off')).toBe(expected)
+    })
+
+    // on keeps an already-proxied global mode, and falls back to system when
+    // the global mode is direct (no manual URL configured).
+    it.each([
+      ['direct', '', 'system'],
+      ['system', '', 'system'],
+      ['manual', 'http://127.0.0.1:7890', 'manual'],
+    ] as const)('on forces a proxy against the global %s mode', (globalMode, url, expected) => {
+      expect(resolveEffectiveProxyMode(settingsFor(globalMode, url), 'on')).toBe(expected)
+    })
+
+    it('on prefers a manual URL when a direct global setting still carries one', () => {
+      // normalizeNetworkSettings clears the URL under a non-manual mode, so a
+      // direct-mode fallback normally lands on 'system'. A hand-built settings
+      // object that keeps a URL under 'direct' resolves to 'manual'.
+      const settings: NetworkSettings = {
+        aiRequestTimeoutMs: DEFAULT_AI_REQUEST_TIMEOUT_MS,
+        proxy: { mode: 'direct', url: 'http://127.0.0.1:7890' },
+      }
+      expect(resolveEffectiveProxyMode(settings, 'on')).toBe('manual')
+    })
+
+    it('drives buildNetworkEnvironment through the effective mode without mutating the global setting', () => {
+      const globalManual = settingsFor('manual', 'http://127.0.0.1:7890')
+      // A provider forced 'off' goes direct even though the global mode is manual.
+      expect(buildNetworkEnvironment(globalManual, {}, resolveEffectiveProxyMode(globalManual, 'off')))
+        .toMatchObject({ HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', all_proxy: '' })
+      // The global setting object is untouched.
+      expect(globalManual.proxy.mode).toBe('manual')
+
+      const globalDirect = settingsFor('direct')
+      // A provider forced 'on' against a direct global falls back to the system
+      // resolver; with a bridge URL present it egresses through that proxy.
+      const effective = resolveEffectiveProxyMode(globalDirect, 'on')
+      expect(effective).toBe('system')
+      expect(buildNetworkEnvironment(globalDirect, { [SYSTEM_PROXY_URL_ENV]: 'http://127.0.0.1:1183' }, effective))
+        .toMatchObject({ HTTP_PROXY: 'http://127.0.0.1:1183', ALL_PROXY: 'http://127.0.0.1:1183' })
+    })
+
+    it('degrades a forced-on system fallback to direct when the resolver failed instead of throwing', () => {
+      const globalDirect = settingsFor('direct')
+      const env = { [SYSTEM_PROXY_ERROR_ENV]: 'local bridge could not bind' }
+      // The borrowed system fallback must not surface an error the user never
+      // asked for by choosing system mode; it returns null (direct).
+      expect(getNetworkProxyUrl(globalDirect, env, 'system')).toBeNull()
+      // A genuine user-selected system mode still throws.
+      expect(() => getNetworkProxyUrl(settingsFor('system'), env)).toThrow('local bridge could not bind')
     })
   })
 })

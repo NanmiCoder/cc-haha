@@ -7,6 +7,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { CronService } from '../services/cronService.js'
+import { buildOneShotCron } from '../services/scheduledReservation.js'
 import { SearchService } from '../services/searchService.js'
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
@@ -138,6 +139,74 @@ describe('CronService', () => {
     await expect(
       service.createTask({ cron: '* * * * *', prompt: '' }),
     ).rejects.toThrow()
+  })
+
+  it('creates a one-shot reservation inside the 48h window', async () => {
+    const target = new Date(Date.now() + 6 * 60 * 60 * 1000)
+    target.setSeconds(0, 0)
+    const task = await service.createTask({
+      cron: buildOneShotCron(target),
+      prompt: 'send later today',
+      recurring: false,
+    })
+    expect(task.recurring).toBe(false)
+    expect(task.cron).toBe(buildOneShotCron(target))
+  })
+
+  it('rejects a one-shot reservation beyond the 48h window', async () => {
+    const target = new Date(Date.now() + 72 * 60 * 60 * 1000)
+    target.setSeconds(0, 0)
+    await expect(
+      service.createTask({
+        cron: buildOneShotCron(target),
+        prompt: 'too far out',
+        recurring: false,
+      }),
+    ).rejects.toThrow(/48 hours/)
+  })
+
+  it('rejects a one-shot reservation whose target is in the past', async () => {
+    const target = new Date(Date.now() - 60 * 60 * 1000)
+    target.setSeconds(0, 0)
+    await expect(
+      service.createTask({
+        cron: buildOneShotCron(target),
+        prompt: 'in the past',
+        recurring: false,
+      }),
+    ).rejects.toThrow(/48 hours/)
+  })
+
+  it('does not apply the window guard to recurring crons', async () => {
+    // A pinned "yearly" cron with recurring unset is a normal recurring task and
+    // must keep working (backward compatibility).
+    const task = await service.createTask({
+      cron: '0 9 1 1 *',
+      prompt: 'new year check',
+      recurring: true,
+    })
+    expect(task.cron).toBe('0 9 1 1 *')
+  })
+
+  it('re-validates the window when a one-shot reservation is rescheduled', async () => {
+    const soon = new Date(Date.now() + 60 * 60 * 1000)
+    soon.setSeconds(0, 0)
+    const created = await service.createTask({
+      cron: buildOneShotCron(soon),
+      prompt: 'reschedulable',
+      recurring: false,
+    })
+
+    const tooFar = new Date(Date.now() + 72 * 60 * 60 * 1000)
+    tooFar.setSeconds(0, 0)
+    await expect(
+      service.updateTask(created.id, { cron: buildOneShotCron(tooFar) }),
+    ).rejects.toThrow(/48 hours/)
+
+    // Toggling only `enabled` must not trip the guard even though the pinned
+    // target may already be in the past after firing.
+    const disabled = await service.updateTask(created.id, { enabled: false })
+    expect(disabled.enabled).toBe(false)
   })
 
   it('should retry the atomic write when rename returns ENOENT', async () => {

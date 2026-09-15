@@ -10,6 +10,10 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
+import {
+  isWithinReservationWindow,
+  parseOneShotCronTarget,
+} from './scheduledReservation.js'
 
 export type TaskNotificationConfig = {
   enabled: boolean
@@ -69,6 +73,7 @@ export class CronService {
     if (!task.cron || !task.prompt) {
       throw ApiError.badRequest('Fields "cron" and "prompt" are required')
     }
+    this.assertReservationWithinWindow(task.cron, task.recurring, Date.now())
 
     const data = await this.readTasksFile()
     const newTask: CronTask = {
@@ -92,11 +97,22 @@ export class CronService {
 
     // 不允许修改 id 和 createdAt
     const { id: _id, createdAt: _ca, ...safeUpdates } = updates
-    data.tasks[index] = {
+    const merged: CronTask = {
       ...data.tasks[index],
       ...safeUpdates,
       permissionMode: 'bypassPermissions',
     }
+    // Only re-validate the reservation window when the schedule itself is
+    // being changed. Toggling `enabled` on an already-fired one-shot (whose
+    // target is now in the past) must not trip the 48h guard.
+    if (safeUpdates.cron !== undefined || safeUpdates.recurring !== undefined) {
+      this.assertReservationWithinWindow(
+        merged.cron,
+        merged.recurring,
+        Date.now(),
+      )
+    }
+    data.tasks[index] = merged
     await this.writeTasksFile(data)
     return data.tasks[index]
   }
@@ -126,6 +142,26 @@ export class CronService {
   // ---------------------------------------------------------------------------
   // 内部: 文件读写
   // ---------------------------------------------------------------------------
+
+  /**
+   * 一次性预约（`recurring: false` 且 cron 可解析为钉死的目标时间）必须落在
+   * now + 48h 窗口内且在未来。普通 recurring cron（无法解析为一次性目标）不
+   * 受此限制，保持向后兼容。
+   */
+  private assertReservationWithinWindow(
+    cron: string,
+    recurring: boolean | undefined,
+    nowMs: number,
+  ): void {
+    if (recurring !== false) return
+    const target = parseOneShotCronTarget(cron, new Date(nowMs))
+    if (!target) return
+    if (!isWithinReservationWindow(target.getTime(), nowMs)) {
+      throw ApiError.badRequest(
+        'One-time scheduled tasks must run in the future and within 48 hours',
+      )
+    }
+  }
 
   /** 读取任务 JSON 文件。文件不存在时返回空列表。 */
   private async readTasksFile(): Promise<TasksFile> {

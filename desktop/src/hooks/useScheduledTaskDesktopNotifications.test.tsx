@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { useScheduledTaskDesktopNotifications } from './useScheduledTaskDesktopNotifications'
+import { useSettingsStore } from '../stores/settingsStore'
 
 const { listMock, getRecentRunsMock, notifyDesktopMock, serverReadyMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
@@ -1364,5 +1365,49 @@ describe('useScheduledTaskDesktopNotifications', () => {
       dedupeKey: 'scheduled-task:completed-between-initial-snapshots',
     })))
     expect(completionQueryCount).toBe(2)
+  })
+
+  it('notifies a missed one-shot reservation through the desktop path', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    listMock.mockResolvedValue({
+      tasks: [{
+        id: 'task-1',
+        name: 'Daily review',
+        cron: '0 10 15 6 *',
+        prompt: 'review',
+        enabled: false,
+        createdAt: 1,
+        recurring: false,
+        notification: { enabled: true, channels: ['desktop'] },
+      }],
+    })
+    getRecentRunsMock.mockImplementation((_limit, options) => {
+      if (options?.completedAfterMs !== undefined || options?.nonterminalOnly) {
+        return Promise.resolve({ runs: [] })
+      }
+      return Promise.resolve({
+        runs: [{
+          id: 'run-missed',
+          taskId: 'task-1',
+          taskName: 'Daily review',
+          startedAt: '2026-05-03T00:01:00.000Z',
+          completedAt: '2026-05-03T00:01:00.000Z',
+          status: 'missed',
+          prompt: 'review',
+        }],
+      })
+    })
+
+    render(<Harness />)
+    await vi.waitFor(() => expect(getRecentRunsMock).toHaveBeenCalledTimes(2))
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(notifyDesktopMock).toHaveBeenCalledTimes(1))
+    expect(notifyDesktopMock).toHaveBeenCalledWith({
+      dedupeKey: 'scheduled-task:run-missed',
+      title: 'Missed reservation: Daily review',
+      body: 'A one-time scheduled send was missed while the app was closed. Run it now or reschedule it.',
+      target: { type: 'scheduled' },
+    })
   })
 })

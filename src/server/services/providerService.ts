@@ -45,6 +45,7 @@ import {
   normalizeImageGeneration,
   normalizeModelMapping,
   normalizeProvidersIndex,
+  normalizeUseProxy,
   providerNeedsProxy,
   resolveProviderApiKey,
 } from './providerRuntimeEnv.js'
@@ -64,6 +65,7 @@ import type {
   ProviderTestStepResult,
   ApiFormat,
   ProviderAuthStrategy,
+  ProviderUseProxy,
   RequestCompatibility,
 } from '../types/provider.js'
 import {
@@ -117,6 +119,7 @@ function mergeSavedOrderIntoDisplayOrder(providerOrder: string[], savedOrder: st
 
 function buildSavedProvider(input: CreateProviderInput): SavedProvider {
   const imageGeneration = normalizeImageGeneration(input.imageGeneration)
+  const useProxy = normalizeUseProxy(input.useProxy)
   return {
     id: crypto.randomUUID(),
     presetId: input.presetId,
@@ -133,6 +136,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     toolSearchEnabled: input.toolSearchEnabled ?? false,
     ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
     ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
+    ...(useProxy !== undefined && { useProxy }),
     ...(input.requestCompatibility !== undefined && { requestCompatibility: input.requestCompatibility }),
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.notes !== undefined && { notes: input.notes }),
@@ -310,6 +314,7 @@ export class ProviderService {
       ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
       ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
       ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
+      ...(input.useProxy !== undefined && input.useProxy !== 'inherit' && { useProxy: input.useProxy }),
       ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
       ...(input.notes !== undefined && { notes: input.notes }),
     }
@@ -327,6 +332,9 @@ export class ProviderService {
     }
     if (input.disableExperimentalBetas === false) {
       delete updated.disableExperimentalBetas
+    }
+    if (input.useProxy === 'inherit') {
+      delete updated.useProxy
     }
     if (imageGeneration === null) {
       delete updated.imageGeneration
@@ -586,6 +594,7 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
+    useProxy?: ProviderUseProxy
     requestCompatibility?: RequestCompatibility
   } | null> {
     const toProxyConfig = (provider: SavedProvider) => {
@@ -598,6 +607,7 @@ export class ProviderService {
         apiFormat: provider.apiFormat ?? 'anthropic',
         supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia ?? true,
         authStrategy: provider.authStrategy ?? getPresetAuthStrategy(provider.presetId),
+        ...(provider.useProxy !== undefined && { useProxy: provider.useProxy }),
         ...(provider.requestCompatibility !== undefined && { requestCompatibility: provider.requestCompatibility }),
       }
     }
@@ -623,9 +633,28 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
+    useProxy?: ProviderUseProxy
     requestCompatibility?: RequestCompatibility
   } | null> {
     return this.getProviderForProxy()
+  }
+
+  /**
+   * The NETWORK proxy override of the provider a request will actually egress
+   * through: an explicit provider id when given, otherwise the active
+   * provider. `null` (Claude Official) and the built-in OAuth providers have
+   * no override and return undefined (inherit the global proxy mode).
+   */
+  async getProviderUseProxyForRouting(
+    providerId?: string | null,
+  ): Promise<ProviderUseProxy | undefined> {
+    if (providerId === null) return undefined
+    try {
+      const config = await this.getProviderForProxy(providerId ?? undefined)
+      return normalizeUseProxy(config?.useProxy)
+    } catch {
+      return undefined
+    }
   }
 
   // --- Test ---

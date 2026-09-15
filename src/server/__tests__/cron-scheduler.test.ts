@@ -11,10 +11,14 @@ import {
   cronMatches,
   extractAssistantText,
   fieldMatches,
+  findMissedOneShotTasks,
+  isRateLimitedRunOutput,
+  computeRunRetryDelayMs,
   CronScheduler,
   type TaskRun,
 } from '../services/cronScheduler.js'
-import { CronService } from '../services/cronService.js'
+import { CronService, type CronTask } from '../services/cronService.js'
+import { buildOneShotCron } from '../services/scheduledReservation.js'
 import { resetScheduledRunReadModelForTests } from '../services/localIndex/scheduledRunReadModel.js'
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
@@ -778,5 +782,294 @@ describe('Scheduled Tasks API — runs endpoints', () => {
     expect(resp.status).toBe(200)
     expect(body.runs).toHaveLength(1)
     expect(body.runs[0].taskId).toBe('task-a')
+  })
+})
+
+// ─── One-shot missed detection (pure) ────────────────────────────────────────
+
+describe('findMissedOneShotTasks', () => {
+  const now = new Date(2026, 5, 15, 12, 0, 0)
+
+  function oneShot(overrides: Partial<CronTask> = {}): CronTask {
+    return {
+      id: 'task-1',
+      cron: '0 0 1 1 *',
+      prompt: 'send it',
+      createdAt: Date.now(),
+      recurring: false,
+      ...overrides,
+    }
+  }
+
+  it('flags an enabled one-shot whose pinned target passed without firing', () => {
+    const target = new Date(2026, 5, 15, 10, 0, 0) // 2h before now
+    const task = oneShot({
+      cron: buildOneShotCron(target),
+      createdAt: target.getTime() - 60_000,
+    })
+    expect(findMissedOneShotTasks([task], now).map((t) => t.id)).toEqual(['task-1'])
+  })
+
+  it('does not flag a one-shot whose target is still in the future', () => {
+    const target = new Date(2026, 5, 15, 14, 0, 0) // 2h after now
+    const task = oneShot({
+      cron: buildOneShotCron(target),
+      createdAt: now.getTime() - 60_000,
+    })
+    expect(findMissedOneShotTasks([task], now)).toEqual([])
+  })
+
+  it('does not flag a one-shot that already fired at/after its target', () => {
+    const target = new Date(2026, 5, 15, 10, 0, 0)
+    const task = oneShot({
+      cron: buildOneShotCron(target),
+      createdAt: target.getTime() - 60_000,
+      lastFiredAt: target.toISOString(),
+    })
+    expect(findMissedOneShotTasks([task], now)).toEqual([])
+  })
+
+  it('ignores disabled, recurring, and non-pinned one-shot tasks', () => {
+    const target = new Date(2026, 5, 15, 10, 0, 0)
+    const disabled = oneShot({
+      id: 'disabled',
+      cron: buildOneShotCron(target),
+      createdAt: target.getTime() - 60_000,
+      enabled: false,
+    })
+    const recurring = oneShot({
+      id: 'recurring',
+      cron: buildOneShotCron(target),
+      createdAt: target.getTime() - 60_000,
+      recurring: true,
+    })
+    const everyMinute = oneShot({
+      id: 'every-minute',
+      cron: '* * * * *',
+      createdAt: target.getTime() - 60_000,
+    })
+    expect(findMissedOneShotTasks([disabled, recurring, everyMinute], now)).toEqual([])
+  })
+})
+
+// ─── Rate-limit detection & backoff (pure) ───────────────────────────────────
+
+describe('isRateLimitedRunOutput', () => {
+  it('detects 429 and rate-limit phrasing', () => {
+    expect(isRateLimitedRunOutput('HTTP 429 Too Many Requests')).toBe(true)
+    expect(isRateLimitedRunOutput('Error: rate limit exceeded')).toBe(true)
+    expect(isRateLimitedRunOutput('anthropic overloaded, retry later')).toBe(true)
+    expect(isRateLimitedRunOutput('{"error":{"type":"rate_limit_error"}}')).toBe(true)
+  })
+
+  it('returns false for ordinary output', () => {
+    expect(isRateLimitedRunOutput('')).toBe(false)
+    expect(isRateLimitedRunOutput('all good, exit 0')).toBe(false)
+    expect(isRateLimitedRunOutput('permission denied')).toBe(false)
+  })
+})
+
+describe('computeRunRetryDelayMs', () => {
+  it('backs off roughly 2s / 4s / 8s with a small bounded jitter', () => {
+    expect(computeRunRetryDelayMs(1)).toBeGreaterThanOrEqual(2000)
+    expect(computeRunRetryDelayMs(1)).toBeLessThan(2200)
+    expect(computeRunRetryDelayMs(2)).toBeGreaterThanOrEqual(4000)
+    expect(computeRunRetryDelayMs(2)).toBeLessThan(4400)
+    expect(computeRunRetryDelayMs(3)).toBeGreaterThanOrEqual(8000)
+    expect(computeRunRetryDelayMs(3)).toBeLessThan(8800)
+  })
+
+  it('caps the base delay beyond the third attempt', () => {
+    expect(computeRunRetryDelayMs(4)).toBeLessThan(8800)
+    expect(computeRunRetryDelayMs(99)).toBeLessThan(8800)
+  })
+})
+
+// ─── Missed detection integration ────────────────────────────────────────────
+
+describe('CronScheduler missed one-shot detection', () => {
+  let cronService: CronService
+  let scheduler: CronScheduler
+
+  beforeEach(async () => {
+    tmpDir = await createTmpDir()
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.CC_HAHA_LOCAL_INDEX = 'off'
+    cronService = new CronService()
+    scheduler = new CronScheduler(cronService)
+  })
+
+  afterEach(async () => {
+    scheduler.stop()
+    if (originalConfigDir) {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalLocalIndexMode) {
+      process.env.CC_HAHA_LOCAL_INDEX = originalLocalIndexMode
+    } else {
+      delete process.env.CC_HAHA_LOCAL_INDEX
+    }
+    await cleanupTmpDir(tmpDir)
+  })
+
+  it('disables a missed reservation and records a "missed" run', async () => {
+    // Seed the tasks file directly: a past-target reservation cannot be created
+    // through createTask (the 48h window guard rejects it), which is exactly the
+    // "server was down at the target time" scenario this detects.
+    const target = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    target.setSeconds(0, 0)
+    const missedTask: CronTask = {
+      id: 'missed-1',
+      name: 'Reservation',
+      cron: buildOneShotCron(target),
+      prompt: 'send the report',
+      createdAt: target.getTime() - 60_000,
+      recurring: false,
+      enabled: true,
+      permissionMode: 'bypassPermissions',
+    }
+    await fs.writeFile(
+      path.join(tmpDir, 'scheduled_tasks.json'),
+      JSON.stringify({ tasks: [missedTask] }, null, 2) + '\n',
+      'utf-8',
+    )
+
+    await scheduler.detectMissedOneShotTasks()
+
+    const tasks = await cronService.listTasks()
+    expect(tasks.find((t) => t.id === 'missed-1')?.enabled).toBe(false)
+
+    const runs = await scheduler.getTaskRuns('missed-1')
+    expect(runs).toHaveLength(1)
+    expect(runs[0].status).toBe('missed')
+    expect(runs[0].prompt).toBe('send the report')
+  })
+
+  it('leaves a future reservation enabled with no missed run', async () => {
+    const target = new Date(Date.now() + 2 * 60 * 60 * 1000)
+    target.setSeconds(0, 0)
+    const futureTask: CronTask = {
+      id: 'future-1',
+      cron: buildOneShotCron(target),
+      prompt: 'later',
+      createdAt: Date.now(),
+      recurring: false,
+      enabled: true,
+      permissionMode: 'bypassPermissions',
+    }
+    await fs.writeFile(
+      path.join(tmpDir, 'scheduled_tasks.json'),
+      JSON.stringify({ tasks: [futureTask] }, null, 2) + '\n',
+      'utf-8',
+    )
+
+    await scheduler.detectMissedOneShotTasks()
+
+    const tasks = await cronService.listTasks()
+    expect(tasks.find((t) => t.id === 'future-1')?.enabled).toBe(true)
+    expect(await scheduler.getTaskRuns('future-1')).toHaveLength(0)
+  })
+})
+
+// ─── Rate-limit retry integration ────────────────────────────────────────────
+
+describe('CronScheduler rate-limit retry', () => {
+  let cronService: CronService
+  let scheduler: CronScheduler
+
+  beforeEach(async () => {
+    tmpDir = await createTmpDir()
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
+    process.env.CC_HAHA_LOCAL_INDEX = 'off'
+    cronService = new CronService()
+    scheduler = new CronScheduler(cronService)
+  })
+
+  afterEach(async () => {
+    scheduler.stop()
+    if (originalConfigDir) {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalClaudeCliPath) {
+      process.env.CLAUDE_CLI_PATH = originalClaudeCliPath
+    } else {
+      delete process.env.CLAUDE_CLI_PATH
+    }
+    if (originalDisableTerminalShellEnv) {
+      process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = originalDisableTerminalShellEnv
+    } else {
+      delete process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
+    }
+    if (originalLocalIndexMode) {
+      process.env.CC_HAHA_LOCAL_INDEX = originalLocalIndexMode
+    } else {
+      delete process.env.CC_HAHA_LOCAL_INDEX
+    }
+    await cleanupTmpDir(tmpDir)
+  })
+
+  async function createCountingCli(
+    dir: string,
+    counterPath: string,
+    mode: 'rate-limited' | 'plain-failure',
+  ): Promise<string> {
+    const cliPath = path.join(dir, `counting-cli-${mode}.ts`)
+    const stderr =
+      mode === 'rate-limited'
+        ? 'HTTP 429 rate limit exceeded'
+        : 'generic failure, not throttled'
+    await fs.writeFile(
+      cliPath,
+      [
+        "import { appendFileSync } from 'node:fs'",
+        `appendFileSync(${JSON.stringify(counterPath)}, 'attempt\\n')`,
+        `console.error(${JSON.stringify(stderr)})`,
+        'process.exit(1)',
+      ].join('\n') + '\n',
+      'utf-8',
+    )
+    return cliPath
+  }
+
+  async function readAttemptCount(counterPath: string): Promise<number> {
+    const raw = await fs.readFile(counterPath, 'utf-8').catch(() => '')
+    return raw.split('\n').filter((line) => line.trim().length > 0).length
+  }
+
+  it('retries a rate-limited run up to maxRunAttempts and never sleeps for real', async () => {
+    const counterPath = path.join(tmpDir, 'attempts.txt')
+    process.env.CLAUDE_CLI_PATH = await createCountingCli(tmpDir, counterPath, 'rate-limited')
+    const task = await cronService.createTask({
+      cron: '* * * * *',
+      prompt: 'throttled send',
+      recurring: true,
+    })
+
+    const sleep = async () => {}
+    const run = await scheduler.executeTask(task, { maxRunAttempts: 3, sleep, minRetryRuntimeMs: 0 })
+
+    expect(run.status).toBe('failed')
+    expect(await readAttemptCount(counterPath)).toBe(3)
+  })
+
+  it('does not retry a plain (non-429) failure', async () => {
+    const counterPath = path.join(tmpDir, 'attempts-plain.txt')
+    process.env.CLAUDE_CLI_PATH = await createCountingCli(tmpDir, counterPath, 'plain-failure')
+    const task = await cronService.createTask({
+      cron: '* * * * *',
+      prompt: 'plain failure',
+      recurring: true,
+    })
+
+    const sleep = async () => {}
+    const run = await scheduler.executeTask(task, { maxRunAttempts: 3, sleep })
+
+    expect(run.status).toBe('failed')
+    expect(await readAttemptCount(counterPath)).toBe(1)
   })
 })

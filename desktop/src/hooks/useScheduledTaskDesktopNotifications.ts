@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { tasksApi } from '../api/tasks'
 import { notifyDesktop } from '../lib/desktopNotifications'
 import { whenDesktopServerReady } from '../lib/desktopRuntime'
+import { t } from '../i18n'
 import type { CronTask, TaskRun } from '../types/task'
 
 const POLL_INTERVAL_MS = 30_000
@@ -28,7 +29,8 @@ type NotificationScanState = {
 }
 
 function isTerminalRun(run: TaskRun): boolean {
-  return run.status === 'completed' || run.status === 'failed' || run.status === 'timeout'
+  return run.status === 'completed' || run.status === 'failed' ||
+    run.status === 'timeout' || run.status === 'missed'
 }
 
 function hasDesktopNotification(task: CronTask | undefined): boolean {
@@ -173,6 +175,16 @@ function completedAfterInitialization(run: TaskRun, initializedAtMs: number): bo
 }
 
 function formatTaskRunNotification(run: TaskRun): { title: string; body: string } {
+  // A missed one-shot reservation is not a run outcome — the server never
+  // spawned it. Surface dedicated, translated copy telling the user it can be
+  // run now or rescheduled rather than reusing the completed/failed wording.
+  if (run.status === 'missed') {
+    return {
+      title: t('scheduledTask.missedNotificationTitle', { name: run.taskName || run.taskId }),
+      body: t('scheduledTask.missedNotificationBody'),
+    }
+  }
+
   const status = run.status === 'completed'
     ? '完成'
     : run.status === 'failed'

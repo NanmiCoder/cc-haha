@@ -3,7 +3,7 @@ import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '../../i18n'
-import { useChatStore, type RepositoryLaunchDraftState } from '../../stores/chatStore'
+import { useChatStore, MAX_QUEUED_USER_MESSAGES, type RepositoryLaunchDraftState } from '../../stores/chatStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -195,6 +195,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     updateQueuedUserMessage,
     removeQueuedUserMessage,
     sendQueuedUserMessage,
+    resumeQueuedMessages,
+    clearQueuedMessages,
     setPreparingTurn,
   } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -212,6 +214,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const composerPrefill = sessionState?.composerPrefill ?? null
   const composerInsertion = sessionState?.composerInsertion ?? null
   const queuedUserMessages = sessionState?.queuedUserMessages ?? []
+  const queuePaused = sessionState?.queuePaused === true
+  const queueFull = queuedUserMessages.length >= MAX_QUEUED_USER_MESSAGES
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
@@ -877,12 +881,21 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
 
     const targetChatState = useChatStore.getState().sessions[targetSessionId]?.chatState ?? 'idle'
     if (!isMemberSession && targetChatState !== 'idle') {
-      queueUserMessage(targetSessionId, {
+      const queuedId = queueUserMessage(targetSessionId, {
         content: contentForModel,
         attachments: [...uploadAttachmentPayload, ...workspaceAttachmentPayload],
         displayContent,
         displayAttachments: visibleAttachmentPayload,
       })
+      if (queuedId === null) {
+        // Queue is at its cap. Keep the composer text so nothing is lost and tell
+        // the user why the message did not get queued.
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: t('chat.pendingMessageQueueFull', { count: MAX_QUEUED_USER_MESSAGES }),
+        })
+        return
+      }
     } else {
       sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
         displayContent,
@@ -1239,6 +1252,43 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               data-testid="pending-user-message-list"
               className={`flex flex-col gap-1.5 ${isHeroComposer ? '' : 'mb-2'}`}
             >
+              {queuePaused && (
+                <div
+                  data-testid="pending-user-message-paused"
+                  role="status"
+                  className={[
+                    'flex items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5',
+                    'border border-[var(--color-warning-container)] bg-[var(--color-warning-container)]',
+                    'text-xs text-[var(--color-on-warning-container)]',
+                  ].join(' ')}
+                >
+                  <span className="min-w-0 flex-1">{t('chat.pendingMessageQueuePaused')}</span>
+                  <Button
+                    variant="tonal"
+                    size="sm"
+                    className="shrink-0 font-semibold"
+                    onClick={() => activeTabId && resumeQueuedMessages(activeTabId)}
+                  >
+                    {t('chat.pendingMessageResumeQueue')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => activeTabId && clearQueuedMessages(activeTabId)}
+                  >
+                    {t('chat.pendingMessageClearQueue')}
+                  </Button>
+                </div>
+              )}
+              {queueFull && (
+                <div
+                  data-testid="pending-user-message-full"
+                  className="px-1 text-[11px] text-[var(--color-text-tertiary)]"
+                >
+                  {t('chat.pendingMessageQueueFull', { count: MAX_QUEUED_USER_MESSAGES })}
+                </div>
+              )}
               {queuedUserMessages.map((message) => {
                 const isEditing = editingQueuedMessageId === message.id
                 return (
@@ -1301,17 +1351,20 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                         <span className="min-w-0 flex-1 truncate font-medium" title={message.displayContent}>
                           {message.displayContent}
                         </span>
-                        {/* The accent action of the three, per the handoff. */}
+                        {/* The accent action of the three: jump the queue. While a
+                            turn is running this injects the queued prompt into the
+                            live conversation context immediately (↑) instead of
+                            waiting for the turn to finish. */}
                         <Button
                           variant="link"
                           size="sm"
                           onClick={() => sendQueuedUserMessage(activeTabId, message.id)}
-                          aria-label={t('chat.pendingMessageGuideNow')}
-                          title={t('chat.pendingMessageGuideNow')}
+                          aria-label={t('chat.pendingMessageJumpQueueNow')}
+                          title={t('chat.pendingMessageJumpQueueNow')}
                           className="shrink-0 font-semibold"
-                          icon={<span className="material-symbols-outlined text-[15px]" aria-hidden="true">subdirectory_arrow_right</span>}
+                          icon={<span className="material-symbols-outlined text-[15px]" aria-hidden="true">arrow_upward</span>}
                         >
-                          {t('chat.pendingMessageGuide')}
+                          {t('chat.pendingMessageJumpQueue')}
                         </Button>
                         <IconButton
                           icon="edit"

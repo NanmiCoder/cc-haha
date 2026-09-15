@@ -259,9 +259,10 @@ export function paginateScheduledRunRecords(
       'completed',
       'failed',
       'timeout',
+      'missed',
     ].includes(item.run.status))
     .filter(item => options.completedAfterMs === undefined || (
-      ['completed', 'failed', 'timeout'].includes(item.run.status) &&
+      ['completed', 'failed', 'timeout', 'missed'].includes(item.run.status) &&
       Number.isFinite(Date.parse(item.run.completedAt ?? item.run.startedAt)) &&
       Date.parse(item.run.completedAt ?? item.run.startedAt) >= options.completedAfterMs
     ))
@@ -413,11 +414,11 @@ export function openScheduledRunIndex(options?: {
         bindings.push(options.taskId)
       }
       if (options.nonterminalOnly) {
-        where.push("status NOT IN ('completed', 'failed', 'timeout')")
+        where.push("status NOT IN ('completed', 'failed', 'timeout', 'missed')")
       }
       if (options.completedAfterMs !== undefined) {
         where.push(`(
-          status IN ('completed', 'failed', 'timeout') AND
+          status IN ('completed', 'failed', 'timeout', 'missed') AND
           completed_at_ms >= ?
         )`)
         bindings.push(options.completedAfterMs)

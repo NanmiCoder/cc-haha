@@ -48,7 +48,7 @@ export type TaskRun = {
   taskName: string
   startedAt: string
   completedAt?: string
-  status: 'running' | 'completed' | 'failed' | 'timeout'
+  status: 'running' | 'completed' | 'failed' | 'timeout' | 'missed'
   prompt: string
   output?: string
   error?: string
