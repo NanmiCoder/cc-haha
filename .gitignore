@@ -82,3 +82,6 @@ graphify-out/
 
 # Computer Use native helper build output (SwiftPM)
 native/cu-helper/.build/
+
+# CodeBuddy local memory
+.codebuddy/
