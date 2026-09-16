@@ -63,7 +63,8 @@ import {
 } from './services/nativeAppearance'
 import { resolveRendererEntry } from './services/rendererEntry'
 import { installRendererLifecycle } from './services/rendererLifecycle'
-import { writeWindowSmokeSnapshot } from './services/windowSmoke'
+import { writeWindowSmokeScreenshot, writeWindowSmokeSnapshot } from './services/windowSmoke'
+import { installPackagedSmokeQuitWatcher } from './services/packagedSmoke'
 import { loadAndRevealMainWindow } from './services/windowStartup'
 import {
   PetWindowController,
@@ -76,6 +77,10 @@ import {
   writeLocalePreference,
 } from './services/localePreference'
 import type { Locale } from '../src/i18n/locale'
+import {
+  createManagedResourcesModule,
+  type ManagedResourcesModule,
+} from './services/managedResources'
 import {
   createCustomPetCatalogLoader,
   createCustomPetFromAtlas,
@@ -112,6 +117,7 @@ let isQuitting = false
 let quitCleanupStarted = false
 let quitCleanupFinished = false
 let trayController: TrayController | null = null
+let managedResourcesModule: ManagedResourcesModule | null = null
 
 // Must run before anything logs: a Finder/Dock launch inherits unreadable
 // stdio, and an unguarded write failure there surfaces as a crash dialog.
@@ -908,6 +914,18 @@ async function createMainWindow() {
     workspaceBrowserService?.closeAll()
   })
 
+  managedResourcesModule?.cleanup()
+  managedResourcesModule = createManagedResourcesModule({
+    getMainWindow: () => mainWindow,
+    activeConfigDir: getAppMode(app).activeConfigDir || undefined,
+    getServerUrl: () => getServerRuntime().getServerUrl(),
+    getLocalAccessToken: () => getServerRuntime().getLocalAccessToken(),
+    dialogService: {
+      showSaveDialog: (win, opts) => dialog.showSaveDialog(win, opts),
+      showOpenDialog: (win, opts) => dialog.showOpenDialog(win, opts),
+    },
+  })
+
   installWindowLifecycle({
     app,
     window: mainWindow,
@@ -960,6 +978,9 @@ async function createMainWindow() {
   })
   refreshWindowsDragHitTest(mainWindow, process.platform)
   writeWindowSmokeSnapshot(mainWindow, 'after-final-show')
+  await writeWindowSmokeScreenshot(mainWindow).catch(error => {
+    console.error(`[desktop] failed to capture packaged smoke screenshot: ${sanitizeHostDiagnostic(error instanceof Error ? error.message : String(error))}`)
+  })
 }
 
 if (!acquireSingleInstanceLock(app, () => mainWindow)) {
@@ -998,6 +1019,7 @@ app.whenReady().then(async () => {
     })
   }
   await createMainWindow()
+  installPackagedSmokeQuitWatcher(app)
   scheduleNotificationSmoke({
     env: process.env,
     NotificationClass: Notification,
@@ -1030,6 +1052,7 @@ app.on('before-quit', event => {
     preview: () => { previewService?.close() },
     workspaceBrowser: () => { workspaceBrowserService?.closeAll() },
     pet: () => { petWindowController?.dispose() },
+    managedResources: () => { managedResourcesModule?.cleanup() },
   }
   // A destroyed native view or PTY can throw during cleanup. Keep going so a
   // failed resource cannot leave every later quit blocked by cleanupStarted.
@@ -1042,6 +1065,7 @@ app.on('before-quit', event => {
   }
   trayController = null
   petWindowController = null
+  managedResourcesModule = null
   // Keep Electron (and the server's stdout/stderr pipes) alive until the server
   // has waited for its CLI children to finish their graceful cleanup. The CLI
   // owns the launchd-reparented Computer Use helper, so exiting the host first

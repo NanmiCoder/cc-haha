@@ -1,0 +1,620 @@
+{
+  "fixtureVersion": 1,
+  "resourceDocument": {
+    "schemaVersion": 2,
+    "revision": 1,
+    "tags": [
+      {
+        "id": "30000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "namespace": "host",
+        "name": "production",
+        "normalizedName": "production",
+        "colorToken": null
+      },
+      {
+        "id": "30000000-0000-4000-8000-000000000002",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "namespace": "concept",
+        "name": "core",
+        "normalizedName": "core",
+        "colorToken": null
+      },
+      {
+        "id": "30000000-0000-4000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "namespace": "database",
+        "name": "primary",
+        "normalizedName": "primary",
+        "colorToken": null
+      },
+      {
+        "id": "30000000-0000-4000-8000-000000000004",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "namespace": "redis",
+        "name": "cache",
+        "normalizedName": "cache",
+        "colorToken": null
+      }
+    ],
+    "hosts": [
+      {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "name": "doc-target-1",
+        "address": "192.0.2.10",
+        "port": 22,
+        "username": "FAKE_ONLY_DO_NOT_USE_USER",
+        "auth": {
+          "type": "password",
+          "credentialId": "50000000-0000-4000-8000-000000000001"
+        },
+        "tagIds": ["30000000-0000-4000-8000-000000000001"],
+        "initialDirectory": "/opt/example",
+        "applications": [],
+        "notes": "FAKE_ONLY_DO_NOT_USE_NOTE"
+      }
+    ],
+    "concepts": [
+      {
+        "id": "20000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "title": "Concept Root",
+        "summary": "FAKE_ONLY_DO_NOT_USE_SUMMARY",
+        "bodyMarkdown": "FAKE_ONLY_DO_NOT_USE_BODY",
+        "tagIds": ["30000000-0000-4000-8000-000000000002"],
+        "dependsOnIds": ["20000000-0000-4000-8000-000000000002"],
+        "referenceIds": []
+      },
+      {
+        "id": "20000000-0000-4000-8000-000000000002",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "title": "Concept Dependency",
+        "summary": "FAKE_ONLY_DO_NOT_USE_SUMMARY",
+        "bodyMarkdown": "FAKE_ONLY_DO_NOT_USE_BODY",
+        "tagIds": ["30000000-0000-4000-8000-000000000002"],
+        "dependsOnIds": [],
+        "referenceIds": []
+      }
+    ],
+    "dataConnections": [
+      {
+        "id": "40000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "name": "doc-mysql",
+        "address": "192.0.2.20",
+        "port": 3306,
+        "username": "FAKE_ONLY_DO_NOT_USE_USER",
+        "credentialId": "50000000-0000-4000-8000-000000000001",
+        "tagIds": ["30000000-0000-4000-8000-000000000003"],
+        "relatedHostId": "10000000-0000-4000-8000-000000000001",
+        "environment": "unspecified",
+        "tls": {
+          "enabled": false,
+          "serverName": null,
+          "caCertificate": null,
+          "clientCertificate": null,
+          "clientKeyCredentialId": null
+        },
+        "description": "FAKE_ONLY_DO_NOT_USE_DESCRIPTION",
+        "accessInstructions": "FAKE_ONLY_DO_NOT_USE_INSTRUCTIONS",
+        "kind": "database",
+        "engine": "mysql",
+        "database": "FAKE_ONLY_DO_NOT_USE_DB",
+        "schema": null,
+        "mode": "inspection"
+      },
+      {
+        "id": "40000000-0000-4000-8000-000000000002",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "name": "doc-postgres",
+        "address": "192.0.2.30",
+        "port": 5432,
+        "username": "FAKE_ONLY_DO_NOT_USE_USER",
+        "credentialId": "50000000-0000-4000-8000-000000000001",
+        "tagIds": ["30000000-0000-4000-8000-000000000003"],
+        "relatedHostId": "10000000-0000-4000-8000-000000000001",
+        "environment": "unspecified",
+        "tls": {
+          "enabled": false,
+          "serverName": null,
+          "caCertificate": null,
+          "clientCertificate": null,
+          "clientKeyCredentialId": null
+        },
+        "description": "FAKE_ONLY_DO_NOT_USE_DESCRIPTION",
+        "accessInstructions": "FAKE_ONLY_DO_NOT_USE_INSTRUCTIONS",
+        "kind": "database",
+        "engine": "postgresql",
+        "database": "FAKE_ONLY_DO_NOT_USE_DB",
+        "schema": "public",
+        "mode": "inspection"
+      },
+      {
+        "id": "40000000-0000-4000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "name": "doc-redis",
+        "address": "192.0.2.40",
+        "port": 6379,
+        "username": null,
+        "credentialId": null,
+        "tagIds": ["30000000-0000-4000-8000-000000000004"],
+        "relatedHostId": "10000000-0000-4000-8000-000000000001",
+        "environment": "unspecified",
+        "tls": {
+          "enabled": false,
+          "serverName": null,
+          "caCertificate": null,
+          "clientCertificate": null,
+          "clientKeyCredentialId": null
+        },
+        "description": "FAKE_ONLY_DO_NOT_USE_DESCRIPTION",
+        "accessInstructions": "FAKE_ONLY_DO_NOT_USE_INSTRUCTIONS",
+        "kind": "redis",
+        "topology": "standalone",
+        "databaseIndex": 0,
+        "keyPrefixDescription": ""
+      }
+    ],
+    "credentials": [
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "kind": "ssh-password",
+        "label": "FAKE_ONLY_DO_NOT_USE_LABEL",
+        "backend": "electron-safe-storage-v1",
+        "ciphertextBase64": "RkFLRQ=="
+      }
+    ],
+    "knownHostKeys": []
+  },
+  "selection": {
+    "schemaVersion": 2,
+    "hostRefs": [
+      { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+    ],
+    "conceptRootRefs": [
+      { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+    ],
+    "dependencyRefs": [
+      { "id": "20000000-0000-4000-8000-000000000002", "revision": 1 }
+    ],
+    "databaseRefs": [
+      { "id": "40000000-0000-4000-8000-000000000001", "revision": 1 },
+      { "id": "40000000-0000-4000-8000-000000000002", "revision": 1 }
+    ],
+    "redisRefs": [
+      { "id": "40000000-0000-4000-8000-000000000003", "revision": 1 }
+    ],
+    "credentialRefs": [],
+    "sourceTags": [
+      {
+        "namespace": "host",
+        "id": "30000000-0000-4000-8000-000000000001",
+        "labelAtSelection": "production",
+        "memberIds": ["10000000-0000-4000-8000-000000000001"]
+      },
+      {
+        "namespace": "concept",
+        "id": "30000000-0000-4000-8000-000000000002",
+        "labelAtSelection": "core",
+        "memberIds": [
+          "20000000-0000-4000-8000-000000000001",
+          "20000000-0000-4000-8000-000000000002"
+        ]
+      },
+      {
+        "namespace": "database",
+        "id": "30000000-0000-4000-8000-000000000003",
+        "labelAtSelection": "primary",
+        "memberIds": [
+          "40000000-0000-4000-8000-000000000001",
+          "40000000-0000-4000-8000-000000000002"
+        ]
+      },
+      {
+        "namespace": "redis",
+        "id": "30000000-0000-4000-8000-000000000004",
+        "labelAtSelection": "cache",
+        "memberIds": ["40000000-0000-4000-8000-000000000003"]
+      }
+    ],
+    "directHostIds": [],
+    "directConceptIds": ["20000000-0000-4000-8000-000000000002"],
+    "directDatabaseIds": [],
+    "directRedisIds": [],
+    "includePasswords": false
+  },
+  "publicManifest": {
+    "schemaVersion": 2,
+    "requestId": "60000000-0000-4000-8000-000000000001",
+    "selection": {
+      "schemaVersion": 2,
+      "hostRefs": [
+        { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+      ],
+      "conceptRootRefs": [
+        { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+      ],
+      "dependencyRefs": [
+        { "id": "20000000-0000-4000-8000-000000000002", "revision": 1 }
+      ],
+      "databaseRefs": [
+        { "id": "40000000-0000-4000-8000-000000000001", "revision": 1 },
+        { "id": "40000000-0000-4000-8000-000000000002", "revision": 1 }
+      ],
+      "redisRefs": [
+        { "id": "40000000-0000-4000-8000-000000000003", "revision": 1 }
+      ],
+      "credentialRefs": [],
+      "sourceTags": [
+        {
+          "namespace": "host",
+          "id": "30000000-0000-4000-8000-000000000001",
+          "labelAtSelection": "production",
+          "memberIds": ["10000000-0000-4000-8000-000000000001"]
+        },
+        {
+          "namespace": "concept",
+          "id": "30000000-0000-4000-8000-000000000002",
+          "labelAtSelection": "core",
+          "memberIds": [
+            "20000000-0000-4000-8000-000000000001",
+            "20000000-0000-4000-8000-000000000002"
+          ]
+        },
+        {
+          "namespace": "database",
+          "id": "30000000-0000-4000-8000-000000000003",
+          "labelAtSelection": "primary",
+          "memberIds": [
+            "40000000-0000-4000-8000-000000000001",
+            "40000000-0000-4000-8000-000000000002"
+          ]
+        },
+        {
+          "namespace": "redis",
+          "id": "30000000-0000-4000-8000-000000000004",
+          "labelAtSelection": "cache",
+          "memberIds": ["40000000-0000-4000-8000-000000000003"]
+        }
+      ],
+      "directHostIds": [],
+      "directConceptIds": ["20000000-0000-4000-8000-000000000002"],
+      "directDatabaseIds": [],
+      "directRedisIds": [],
+      "includePasswords": false
+    },
+    "hosts": [
+      {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "name": "doc-target-1",
+        "address": "192.0.2.10",
+        "port": 22
+      }
+    ],
+    "concepts": [
+      {
+        "id": "20000000-0000-4000-8000-000000000001",
+        "title": "Concept Root",
+        "includedAs": "root"
+      },
+      {
+        "id": "20000000-0000-4000-8000-000000000002",
+        "title": "Concept Dependency",
+        "includedAs": "dependency"
+      }
+    ],
+    "databases": [
+      {
+        "id": "40000000-0000-4000-8000-000000000001",
+        "name": "doc-mysql",
+        "engine": "mysql",
+        "address": "192.0.2.20",
+        "port": 3306,
+        "database": "FAKE_ONLY_DO_NOT_USE_DB",
+        "schema": null
+      },
+      {
+        "id": "40000000-0000-4000-8000-000000000002",
+        "name": "doc-postgres",
+        "engine": "postgresql",
+        "address": "192.0.2.30",
+        "port": 5432,
+        "database": "FAKE_ONLY_DO_NOT_USE_DB",
+        "schema": "public"
+      }
+    ],
+    "redisConnections": [
+      {
+        "id": "40000000-0000-4000-8000-000000000003",
+        "name": "doc-redis",
+        "address": "192.0.2.40",
+        "port": 6379,
+        "topology": "standalone",
+        "databaseIndex": 0
+      }
+    ],
+    "resolvedAt": "2026-09-01T00:00:00.000Z",
+    "containsSecrets": false,
+    "secretFieldCount": 0,
+    "estimatedTokens": 256
+  },
+  "ticketWire": {
+    "stageContextRequest": {
+      "schemaVersion": 1,
+      "sessionId": "70000000-0000-4000-8000-000000000001",
+      "requestId": "60000000-0000-4000-8000-000000000001",
+      "runtimeRevision": 1,
+      "contentBinding": "0000000000000000000000000000000000000000000000000000000000000000",
+      "contextBinding": "0000000000000000000000000000000000000000000000000000000000000000",
+      "publicManifest": {
+        "schemaVersion": 2,
+        "requestId": "60000000-0000-4000-8000-000000000001",
+        "selection": {
+          "schemaVersion": 2,
+          "hostRefs": [
+            { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+          ],
+          "conceptRootRefs": [
+            { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+          ],
+          "dependencyRefs": [
+            { "id": "20000000-0000-4000-8000-000000000002", "revision": 1 }
+          ],
+          "databaseRefs": [
+            { "id": "40000000-0000-4000-8000-000000000001", "revision": 1 },
+            { "id": "40000000-0000-4000-8000-000000000002", "revision": 1 }
+          ],
+          "redisRefs": [
+            { "id": "40000000-0000-4000-8000-000000000003", "revision": 1 }
+          ],
+          "credentialRefs": [],
+          "sourceTags": [
+            {
+              "namespace": "host",
+              "id": "30000000-0000-4000-8000-000000000001",
+              "labelAtSelection": "production",
+              "memberIds": ["10000000-0000-4000-8000-000000000001"]
+            },
+            {
+              "namespace": "concept",
+              "id": "30000000-0000-4000-8000-000000000002",
+              "labelAtSelection": "core",
+              "memberIds": [
+                "20000000-0000-4000-8000-000000000001",
+                "20000000-0000-4000-8000-000000000002"
+              ]
+            },
+            {
+              "namespace": "database",
+              "id": "30000000-0000-4000-8000-000000000003",
+              "labelAtSelection": "primary",
+              "memberIds": [
+                "40000000-0000-4000-8000-000000000001",
+                "40000000-0000-4000-8000-000000000002"
+              ]
+            },
+            {
+              "namespace": "redis",
+              "id": "30000000-0000-4000-8000-000000000004",
+              "labelAtSelection": "cache",
+              "memberIds": ["40000000-0000-4000-8000-000000000003"]
+            }
+          ],
+          "directHostIds": [],
+          "directConceptIds": ["20000000-0000-4000-8000-000000000002"],
+          "directDatabaseIds": [],
+          "directRedisIds": [],
+          "includePasswords": false
+        },
+        "hosts": [
+          {
+            "id": "10000000-0000-4000-8000-000000000001",
+            "name": "doc-target-1",
+            "address": "192.0.2.10",
+            "port": 22
+          }
+        ],
+        "concepts": [
+          {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "title": "Concept Root",
+            "includedAs": "root"
+          },
+          {
+            "id": "20000000-0000-4000-8000-000000000002",
+            "title": "Concept Dependency",
+            "includedAs": "dependency"
+          }
+        ],
+        "databases": [
+          {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "name": "doc-mysql",
+            "engine": "mysql",
+            "address": "192.0.2.20",
+            "port": 3306,
+            "database": "FAKE_ONLY_DO_NOT_USE_DB",
+            "schema": null
+          },
+          {
+            "id": "40000000-0000-4000-8000-000000000002",
+            "name": "doc-postgres",
+            "engine": "postgresql",
+            "address": "192.0.2.30",
+            "port": 5432,
+            "database": "FAKE_ONLY_DO_NOT_USE_DB",
+            "schema": "public"
+          }
+        ],
+        "redisConnections": [
+          {
+            "id": "40000000-0000-4000-8000-000000000003",
+            "name": "doc-redis",
+            "address": "192.0.2.40",
+            "port": 6379,
+            "topology": "standalone",
+            "databaseIndex": 0
+          }
+        ],
+        "resolvedAt": "2026-09-01T00:00:00.000Z",
+        "containsSecrets": false,
+        "secretFieldCount": 0,
+        "estimatedTokens": 256
+      },
+      "modelContext": "FAKE_ONLY_DO_NOT_USE_MODEL_CONTEXT"
+    },
+    "contextTicket": {
+      "ticketId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "sidecarInstanceId": "80000000-0000-4000-8000-000000000001",
+      "expiresAt": "2026-09-01T00:02:00.000Z",
+      "publicManifest": {
+        "schemaVersion": 2,
+        "requestId": "60000000-0000-4000-8000-000000000001",
+        "selection": {
+          "schemaVersion": 2,
+          "hostRefs": [
+            { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+          ],
+          "conceptRootRefs": [
+            { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+          ],
+          "dependencyRefs": [
+            { "id": "20000000-0000-4000-8000-000000000002", "revision": 1 }
+          ],
+          "databaseRefs": [
+            { "id": "40000000-0000-4000-8000-000000000001", "revision": 1 },
+            { "id": "40000000-0000-4000-8000-000000000002", "revision": 1 }
+          ],
+          "redisRefs": [
+            { "id": "40000000-0000-4000-8000-000000000003", "revision": 1 }
+          ],
+          "credentialRefs": [],
+          "sourceTags": [
+            {
+              "namespace": "host",
+              "id": "30000000-0000-4000-8000-000000000001",
+              "labelAtSelection": "production",
+              "memberIds": ["10000000-0000-4000-8000-000000000001"]
+            },
+            {
+              "namespace": "concept",
+              "id": "30000000-0000-4000-8000-000000000002",
+              "labelAtSelection": "core",
+              "memberIds": [
+                "20000000-0000-4000-8000-000000000001",
+                "20000000-0000-4000-8000-000000000002"
+              ]
+            },
+            {
+              "namespace": "database",
+              "id": "30000000-0000-4000-8000-000000000003",
+              "labelAtSelection": "primary",
+              "memberIds": [
+                "40000000-0000-4000-8000-000000000001",
+                "40000000-0000-4000-8000-000000000002"
+              ]
+            },
+            {
+              "namespace": "redis",
+              "id": "30000000-0000-4000-8000-000000000004",
+              "labelAtSelection": "cache",
+              "memberIds": ["40000000-0000-4000-8000-000000000003"]
+            }
+          ],
+          "directHostIds": [],
+          "directConceptIds": ["20000000-0000-4000-8000-000000000002"],
+          "directDatabaseIds": [],
+          "directRedisIds": [],
+          "includePasswords": false
+        },
+        "hosts": [
+          {
+            "id": "10000000-0000-4000-8000-000000000001",
+            "name": "doc-target-1",
+            "address": "192.0.2.10",
+            "port": 22
+          }
+        ],
+        "concepts": [
+          {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "title": "Concept Root",
+            "includedAs": "root"
+          },
+          {
+            "id": "20000000-0000-4000-8000-000000000002",
+            "title": "Concept Dependency",
+            "includedAs": "dependency"
+          }
+        ],
+        "databases": [
+          {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "name": "doc-mysql",
+            "engine": "mysql",
+            "address": "192.0.2.20",
+            "port": 3306,
+            "database": "FAKE_ONLY_DO_NOT_USE_DB",
+            "schema": null
+          },
+          {
+            "id": "40000000-0000-4000-8000-000000000002",
+            "name": "doc-postgres",
+            "engine": "postgresql",
+            "address": "192.0.2.30",
+            "port": 5432,
+            "database": "FAKE_ONLY_DO_NOT_USE_DB",
+            "schema": "public"
+          }
+        ],
+        "redisConnections": [
+          {
+            "id": "40000000-0000-4000-8000-000000000003",
+            "name": "doc-redis",
+            "address": "192.0.2.40",
+            "port": 6379,
+            "topology": "standalone",
+            "databaseIndex": 0
+          }
+        ],
+        "resolvedAt": "2026-09-01T00:00:00.000Z",
+        "containsSecrets": false,
+        "secretFieldCount": 0,
+        "estimatedTokens": 256
+      }
+    },
+    "userMessage": {
+      "type": "user_message",
+      "content": "FAKE_ONLY_DO_NOT_USE_USER_MESSAGE_BODY",
+      "requestId": "60000000-0000-4000-8000-000000000001",
+      "contextTicket": {
+        "ticketId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "sidecarInstanceId": "80000000-0000-4000-8000-000000000001"
+      }
+    }
+  }
+}

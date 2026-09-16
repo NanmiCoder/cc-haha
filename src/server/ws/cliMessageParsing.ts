@@ -20,6 +20,7 @@ import {
   getCommandMetadataDisplayText,
   shouldHideCommandMetadataContent,
 } from '../../utils/commandMetadata.js'
+import { projectManagedContextContent } from '../../services/managedContext/blockFormat.js'
 
 export function extractAssistantStreamTextForTitle(cliMsg: any): string | null {
   const event = cliMsg?.event
@@ -338,7 +339,9 @@ function hasToolResultBlock(content: unknown): boolean {
 
 export function extractReplayUserText(cliMsg: any): string | null {
   if (cliMsg?.isReplay !== true) return null
-  const content = cliMsg.message?.content
+  const projected = projectManagedContextContent(cliMsg.message?.content)
+  if (!projected.ok) return null
+  const content = projected.content
   const commandDisplayText = getCommandMetadataDisplayText(content)
   if (commandDisplayText) return commandDisplayText
   if (shouldHideCommandMetadataContent(content)) return null

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "selections": {
+    "70000000-0000-4000-8000-000000000001": {
+      "schemaVersion": 1,
+      "hostRefs": [
+        { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+      ],
+      "conceptRootRefs": [
+        { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+      ],
+      "dependencyRefs": [],
+      "credentialRefs": [],
+      "sourceTags": [
+        {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "labelAtSelection": "FAKE_ONLY_HOST_TAG",
+          "memberIds": ["10000000-0000-4000-8000-000000000001"]
+        }
+      ],
+      "includePasswords": false,
+      "futureSelectionField": { "keep": "FAKE_ONLY_V1_UNKNOWN" }
+    }
+  },
+  "futureWrapperField": "FAKE_ONLY_V1_UNKNOWN"
+}

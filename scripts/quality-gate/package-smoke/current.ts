@@ -35,7 +35,7 @@ if (import.meta.main) {
     args.push('--arch', arch)
   }
 
-  const result = spawnSync('bun', args, {
+  const result = spawnSync(process.execPath, args, {
     stdio: 'inherit',
   })
   process.exit(result.status ?? 1)

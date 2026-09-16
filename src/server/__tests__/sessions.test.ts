@@ -2697,6 +2697,10 @@ describe('SessionService', () => {
 
   it('should reject a branch name past the length cap', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
+    // Isolate the product's 200-character policy from Git for Windows' legacy
+    // MAX_PATH handling. Without this, the deeply nested temp fixture rejects a
+    // syntactically valid 200-character ref before the application boundary is tested.
+    if (process.platform === 'win32') git(workDir, 'config', 'core.longpaths', 'true')
 
     await expect(createRepositoryBranch(workDir, { name: 'a'.repeat(201) }))
       .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })

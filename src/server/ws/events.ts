@@ -4,6 +4,8 @@
  * 定义客户端与服务器之间 WebSocket 通信的消息类型。
  */
 
+import type { PublicContextManifestV2 } from '../../services/managedContext/types.js'
+
 // ============================================================================
 // Client → Server
 // ============================================================================
@@ -19,7 +21,18 @@ export type PermissionMode =
 export type ClientMessage =
   | { type: 'prewarm_session' }
   | { type: 'sync_state' }
-  | { type: 'user_message'; content: string; attachments?: AttachmentRef[] }
+  | {
+      type: 'user_message'
+      content: string
+      attachments?: AttachmentRef[]
+      /**
+       * M7-B §8.1 request identity. Both fields are present only when a context
+       * selection exists; a no-selection frame stays byte-identical to the
+       * pre-M7 frame (pinned by contract.emptySelection / check:chat-contract).
+       */
+      requestId?: string
+      contextTicket?: { ticketId: string; sidecarInstanceId: string }
+    }
   | {
       type: 'permission_response'
       requestId: string
@@ -56,7 +69,7 @@ export type AttachmentRef = {
 export const RUNTIME_CONFIG_APPLIED_EVENT = 'runtime_config_applied' as const
 
 export type ServerMessage =
-  | { type: 'connected'; sessionId: string }
+  | { type: 'connected'; sessionId: string; runtimeRevision: number }
   | {
       type: 'session_state'
       turnState: 'running' | 'idle'
@@ -102,6 +115,28 @@ export type ServerMessage =
   | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /**
+   * M7-B §8.3 receipt ack: exactly one is emitted for every `user_message`
+   * that carried a `requestId` (a no-selection frame emits none). `replayed`
+   * is true when the SDK was not called again for this requestId.
+   */
+  | {
+      type: 'user_message_accepted'
+      requestId: string
+      /** `dispatching` means a previous identical frame is still in flight. */
+      status: 'accepted' | 'observed' | 'dispatching'
+      replayed: boolean
+      ticketId: string | null
+      manifest: PublicContextManifestV2 | null
+    }
+  /** M7-B §8.3 structured refusal; `retryable` says whether to prepare again. */
+  | {
+      type: 'user_message_rejected'
+      requestId: string
+      code: string
+      retryable: boolean
+      message: string
+    }
+  /**
    * `text` is a fragment when the CLI streams `thinking_delta`, and a whole block when
    * it hands over a finished `thinking` block. The client has to concatenate the first
    * kind and separate the second, so the emit site says which it is instead of leaving
@@ -114,6 +149,12 @@ export type ServerMessage =
       providerId: string | null
       modelId: string
       effortLevel?: string
+      /**
+       * M7-B §8.1: the server revision the applied runtime produced. Clients
+       * stage context against this number; a later change makes the ticket
+       * stale instead of letting it send a mismatched runtime.
+       */
+      runtimeRevision?: number
     }
   // CLI 是权限模式的唯一真相来源。当 CLI 内部 mode 变化（如 ExitPlanMode 后
   // 恢复到进入 plan 前的模式、Shift+Tab 切换）时，把新模式回传给前端，让桌面端

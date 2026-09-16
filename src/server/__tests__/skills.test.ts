@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { getCwdState, setCwdState } from '../../bootstrap/state.js'
 import { enableConfigs } from '../../utils/config.js'
 import { invalidateComputerUseSkillGate } from '../../utils/computerUse/skillGate.js'
@@ -798,8 +799,8 @@ describe('Skills API', () => {
       await fs.writeFile(
         scriptPath,
         [
-          `import { getCompiledInCommands } from '${path.join(repoRoot, 'src', 'commands.js')}'`,
-          `import { enableConfigs } from '${path.join(repoRoot, 'src', 'utils', 'config.js')}'`,
+          `import { getCompiledInCommands } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, 'src', 'commands.js')).href)}`,
+          `import { enableConfigs } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, 'src', 'utils', 'config.js')).href)}`,
           'enableConfigs()',
           'console.log(JSON.stringify(getCompiledInCommands().map(c => c.name)))',
         ].join('\n'),
@@ -808,15 +809,20 @@ describe('Skills API', () => {
       const env = { ...process.env, HOME: tmpHome, USERPROFILE: tmpHome }
       delete env.ANTHROPIC_API_KEY
       delete env.CLAUDE_CODE_OAUTH_TOKEN
-      const proc = Bun.spawn(['bun', 'run', scriptPath], {
+      const proc = Bun.spawn([process.execPath, '--no-env-file', 'run', scriptPath], {
         env,
         stdout: 'pipe',
         stderr: 'pipe',
       })
-      const stdout = await new Response(proc.stdout).text()
-      await proc.exited
-
-      const lastLine = stdout.trim().split('\n').at(-1) ?? '[]'
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      expect(exitCode).toBe(0)
+      expect(stderr).not.toContain('SyntaxError')
+      const lastLine = stdout.trim().split('\n').at(-1) ?? ''
+      expect(lastLine.length).toBeGreaterThan(0)
       expect(JSON.parse(lastLine)).toContain('simplify')
     })
 

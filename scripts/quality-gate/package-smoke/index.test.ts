@@ -667,7 +667,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/windows-x64')).toBe(true)
+    expect(report.artifactsDir.replaceAll('\\', '/').endsWith('desktop/build-artifacts/windows-x64')).toBe(true)
   })
 
   test('passes Windows arm64 checks only when arm64 sidecar and node-pty native module are present', async () => {
@@ -798,7 +798,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/linux-x64')).toBe(true)
+    expect(report.artifactsDir.replaceAll('\\', '/').endsWith('desktop/build-artifacts/linux-x64')).toBe(true)
   })
 
   test('accepts Linux architecture-specific update metadata from arm64 builds', async () => {
@@ -872,7 +872,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.passedChecks.some((check) => check.path.includes('linux-arm64-unpacked/resources/app.asar'))).toBe(true)
+    expect(report.passedChecks.some((check) => check.path.replaceAll('\\', '/').includes('linux-arm64-unpacked/resources/app.asar'))).toBe(true)
     expect(report.packagedArtifacts.some((artifact) => artifact.label === 'Linux RPM package')).toBe(true)
   })
 

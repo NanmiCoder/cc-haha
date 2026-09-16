@@ -4,6 +4,8 @@ import {
   shouldHideCommandMetadataContent,
 } from '../../../utils/commandMetadata.js'
 import type { SearchContentDatabase } from './searchContentDatabase.js'
+import { shouldSuppressSearchContentCapture } from '../../../services/managedContext/sensitivityPolicy.js'
+import { projectManagedContextContent } from '../../../services/managedContext/blockFormat.js'
 import {
   normalizeSearchContent,
   type SearchContentDocumentWrite,
@@ -22,7 +24,7 @@ import {
   type SourceFingerprint,
 } from './sourceFingerprint.js'
 
-export const SEARCH_CONTENT_PARSER_VERSION = 1
+export const SEARCH_CONTENT_PARSER_VERSION = 2
 export const SEARCH_CONTENT_MAX_JSONL_LINE_BYTES = 16 * 1024 * 1024
 export const SEARCH_CONTENT_LINE_TOO_LARGE =
   'SEARCH_CONTENT_JSONL_LINE_TOO_LARGE' as const
@@ -103,7 +105,12 @@ export function extractSearchableSegments(
 ): SearchableSegment[] {
   if (entry.type !== 'user' && entry.type !== 'assistant') return []
 
-  const content = entry.message?.content
+  const rawContent = entry.message?.content
+  const projected = entry.type === 'user' || entry.message?.role === 'user'
+    ? projectManagedContextContent(rawContent)
+    : { ok: true as const, content: rawContent, hadManagedContext: false }
+  if (!projected.ok) return []
+  const content = projected.content
   const commandDisplayText = getCommandMetadataDisplayText(content)
   if (commandDisplayText) {
     return [{ role: 'user', text: commandDisplayText }]
@@ -181,6 +188,11 @@ function parseCompleteLine(options: {
   bytes: Buffer
   byteStart: number
   jsonlLine: number
+  /**
+   * §8.4: a sensitive session keeps only the user-visible projection — the
+   * assistant/tool full text is not indexed.
+   */
+  safeProjectionOnly?: boolean
 }): SearchContentDocumentWrite[] {
   let end = options.bytes.length - 1
   if (end > 0 && options.bytes[end - 1] === 13) end -= 1
@@ -194,17 +206,21 @@ function parseCompleteLine(options: {
   const entry = parsed as SearchableTranscriptEntry
   const messageId = typeof entry.uuid === 'string' ? entry.uuid : null
   const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : null
-  return extractSearchableSegments(entry).map((segment, segmentIndex) => ({
-    jsonlLine: options.jsonlLine,
-    byteStart: options.byteStart,
-    byteLength: options.bytes.length,
-    segmentIndex,
-    role: segment.role,
-    messageId,
-    timestamp,
-    body: segment.text,
-    normalizedBody: normalizeSearchContent(segment.text),
-  }))
+  const segments = extractSearchableSegments(entry)
+  return segments
+    .map((segment, segmentIndex) => ({ segment, segmentIndex }))
+    .filter(({ segment }) => !options.safeProjectionOnly || segment.role === 'user')
+    .map(({ segment, segmentIndex }) => ({
+      jsonlLine: options.jsonlLine,
+      byteStart: options.byteStart,
+      byteLength: options.bytes.length,
+      segmentIndex,
+      role: segment.role,
+      messageId,
+      timestamp,
+      body: segment.text,
+      normalizedBody: normalizeSearchContent(segment.text),
+    }))
 }
 
 async function readCompleteLines(options: {
@@ -214,6 +230,8 @@ async function readCompleteLines(options: {
   startingLine: number
   signal?: AbortSignal
   maxJsonlLineBytes: number
+  /** §8.4 sensitivity policy: keep only the user-visible projection. */
+  safeProjectionOnly?: boolean
 }): Promise<{
   documents: SearchContentDocumentWrite[]
   indexedBytes: number
@@ -270,6 +288,7 @@ async function readCompleteLines(options: {
         bytes: lineBytes,
         byteStart: lineStart,
         jsonlLine,
+        safeProjectionOnly: options.safeProjectionOnly,
       }))
       lineStart += lineBytes.length
       pendingParts.length = 0
@@ -375,6 +394,7 @@ export function createSearchContentProjector(
           startingLine,
           signal: options.signal,
           maxJsonlLineBytes,
+          safeProjectionOnly: shouldSuppressSearchContentCapture(candidate.ownerSessionId),
         })
         const after = await handle.stat()
         if (!snapshotMatchesFingerprint(after, readSnapshot)) {

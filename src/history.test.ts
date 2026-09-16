@@ -96,10 +96,11 @@ describe('prompt history persistence', () => {
 
     await waitFor(() => appendCalls === 1)
     const historyPath = join(configDir, 'history.jsonl')
+    // The first partial append already contains the sentinel, but is rolled
+    // back before the retry. Observe a complete retry, not that transient prefix.
     await waitFor(async () => {
-      const contents = await fsPromises
-        .readFile(historyPath, 'utf8')
-        .catch(() => '')
+      if (appendCalls < 2) return false
+      const contents = await realReadFile(historyPath, 'utf8').catch(() => '')
       // The failed append already contains the sentinel before rollback.
       // Wait for the retry's complete JSONL record, not that transient prefix.
       if (!contents.endsWith('\n')) return false
@@ -112,8 +113,10 @@ describe('prompt history persistence', () => {
       }
     })
 
-    const contents = await fsPromises.readFile(historyPath, 'utf8')
+    const contents = await realReadFile(historyPath, 'utf8')
+    expect(appendCalls).toBe(2)
     expect(contents.match(/FIRST_SENTINEL/g)).toHaveLength(1)
+    expect(JSON.parse(contents.trim()).display).toBe('FIRST_SENTINEL_你好😀')
 
     behavior = 'full-then-error'
     behaviorCalls = 0

@@ -20,6 +20,10 @@ const browserCapabilities: DesktopHostCapabilities = {
   updates: false,
   windowControls: false,
   zoom: false,
+  hostManagement: false,
+  conceptKnowledge: false,
+  conversationContext: false,
+  dataConnections: false,
 }
 
 function unsupported(feature: string): never {
@@ -370,5 +374,211 @@ export const browserHost: DesktopHost = {
     // No native chrome to keep in sync in a browser tab; the CSS theme is the
     // whole story there, so reporting it is a no-op rather than an error.
     async setApplied() {},
+  },
+  hostManagement: {
+    async getCapabilities() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async listHosts() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async getHost() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveHost() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteHost() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async listTags() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveTag() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteTag() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveApplication() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteApplication() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveCredential() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteCredential() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async revealCredential() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async provideTemporaryCredential() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async exportMetadata() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async importMetadata() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async createConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async startConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async answerHostKey() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async writeConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async resizeConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async ackOutput() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async disconnect() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async onEvent(): Promise<() => void> {
+      return noopUnlisten
+    },
+    // SFTP browsing, transfers and remote editing (M4): a plain browser tab has
+    // no native bridge, so each method resolves to the same explicit UNAVAILABLE
+    // result. None of them touches the network or the local filesystem.
+    async mintUploadToken() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async mintDownloadToken() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async resolveLocalToken() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async revokeLocalToken() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async sftpList() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async sftpStat() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferStartDownload() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferStartUpload() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferUploadFolder() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferDownloadFolder() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferCancel() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async transferGet() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async remoteEditOpen() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async remoteEditSave() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async hostTools() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async applicationOperation() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async remoteEditClose() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+  },
+  conceptKnowledge: {
+    async listConcepts() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async getConcept() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveConcept() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteConcept() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+  },
+  dataConnections: {
+    async list() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async get() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async save() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async delete() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async testConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async openConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async closeConnection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async listDatabases() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async listSchemas() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async listTables() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async describeTable() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async previewTable() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async executeQuery() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async cancelQuery() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async scanKeys() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async readKey() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+  },
+  conversationContext: {
+    async getSelection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async saveSelection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async deleteSelection() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
+    async prepareSubmission() {
+      return { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    },
   },
 }

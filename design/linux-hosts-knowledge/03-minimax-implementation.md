@@ -100,8 +100,9 @@
 - M2.2：右上主机图标→单例工作台，主机新增/编辑、应用列表、凭据输入、多个已有标签选择与新建。
 - M2.3：标签管理、namespace 唯一性、实体删除引用提示、元数据 JSON 导入导出。
 - M2.4：页签恢复 allowlist 与迁移，窗口关闭资源清理入口；此阶段主机列表可显示未连接，不显示伪终端成功。
+- M2.5：Windows 10/11 已保存密码查看必须先完成当前 Windows 帐户密码再认证；系统密码仅在 Win32 Credential UI/LogonUser 边界内输入和验证，不进入 renderer/main 业务对象、不持久化。只允许查看 password 类凭据，SSH/TLS 私钥禁止通过查看接口返回；验证成功后的业务密码仅在 renderer 临时状态显示 15 秒，不默认复制到剪贴板。
 
-通过条件：真实表单操作经 API/IPC fake boundary 到真实 repository，再刷新看到同一资料；重复点击图标不新增页签；重开不丢主机；跨窗口调用被拒；五语言 keys 齐全、六主题 token 可解析。
+通过条件：真实表单操作经 API/IPC fake boundary 到真实 repository，再刷新看到同一资料；重复点击图标不新增页签；重开不丢主机；跨窗口调用被拒；五语言 keys 齐全、六主题 token 可解析。密码查看在 Windows 再认证失败/取消时不得调用 vault decrypt，私钥查看在认证前即拒绝；成功时返回带 15 秒 deadline 的 password DTO，UI 到期后移除明文。
 
 ### M3 — 真正的 SSH 控制台
 
@@ -112,10 +113,11 @@
 - M3.1：allocate→subscribe→start、连接状态机、SSH 认证、host key challenge、超时/取消/generation。
 - M3.2：PTY shell 输入输出、UTF-8、resize、Ctrl+C/复制、xterm ack 与高低水位背压。
 - M3.3：多主机/同主机多连接、切页保活、重连新 generation、退出及 renderer 生命周期清理。
+- M3.4：主机详情把“终端”和“远程文件”作为明确同级页签；终端默认选中、未连接时仍有稳定可见高度与目标 `user@host:port`，点击连接后直接进入 xterm PTY，而不是依赖无尺寸占位容器。
 
 fixture：loopback `ssh2.Server`，固定测试 key、假密码、独立端口；可编排初始 banner、分片 UTF-8、认证失败和断连。不连接用户主机。
 
-通过条件：首个 banner 不丢、多终端输出不串、隐藏/恢复只保活一次、迟到回调不能复活关闭连接、已变更 key 不进入密码认证、持续输出背压可恢复、关闭无 socket/listener 泄漏。
+通过条件：主机详情默认可见真实终端工作区并可直接发起 SSH；首个 banner 不丢、多终端输出不串、隐藏/恢复只保活一次、迟到回调不能复活关闭连接、已变更 key 不进入密码认证、持续输出背压可恢复、关闭无 socket/listener 泄漏。
 
 ### M4 — SFTP 与远程文件编辑
 
@@ -235,7 +237,7 @@ M7 的 composition root 将 `allowSecretDisclosure` 设为 false，capability �
 | A04 | `/hh ` 过滤中文标签；IME Enter不确认，选中Enter不发送 | parser + real input events |
 | A05 | 首页选引用→新建/替换session→第一条模型输入含全部资料 | join test/mock SDK |
 | A06 | SSH首次key确认、key变化拒绝；假密码连接成功/失败 | loopback SSH protocol |
-| A07 | 两终端+分片中文+初始banner+resize+Ctrl+C+保活 | runtime integration + smoke |
+| A07 | 主机详情默认“终端”页签可见且可直接连接；两终端+分片中文+初始banner+resize+Ctrl+C+保活 | rendered terminal + runtime integration + smoke |
 | A08 | 流式目录传输、覆盖冲突、取消、Windows非法名 | temp local FS + SFTP fixture |
 | A09 | UTF-8保存成功；外部修改冲突；无原子覆盖拒绝 | edit service→SFTP integration |
 | A10 | C依赖A/B、共同D；去重/顺序/环路/参考不展开 | repository action→resolver |
@@ -249,6 +251,7 @@ M7 的 composition root 将 `allowSecretDisclosure` 设为 false，capability �
 | A18 | 旧数据升级、损坏保护、未知字段、高版本只读 | persistence fixtures |
 | A19 | 五语言/六主题/键盘焦点/组件可达；小屏主机概念仍相邻 | contracts + rendered smoke |
 | A20 | Windows 10/11 独立输出启动并连接测试服务；退出无残留 | packaged Electron smoke |
+| A21 | 已保存 SSH/应用/数据库/Redis 密码→输入当前 Windows 帐户密码→验证成功后仅显示 15 秒；取消/错误密码不 decrypt，私钥不可查看，无默认复制/持久化 | Win32 helper compile + IPC security + rendered timer tests |
 
 ## 6. 检查命令与执行规则
 

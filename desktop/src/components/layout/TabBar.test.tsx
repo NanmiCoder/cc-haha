@@ -2888,4 +2888,35 @@ describe('TabBar', () => {
     expect(screen.getAllByLabelText('Session running')).toHaveLength(3)
     expect(screen.getByText('Idle').closest('[data-dragging]')?.querySelector('[aria-label="Session running"]')).toBeNull()
   })
+
+  it('renders a hosts tab with translated title and clicking hosts button activates or creates it', async () => {
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { TabBar } = await import('./TabBar')
+
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: {
+        ...browserHost.capabilities,
+        hostManagement: true,
+      },
+    }
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: '__hosts__', title: '', type: 'hosts', status: 'idle' },
+      ],
+      activeTabId: '__hosts__',
+    })
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByText('managedResources.title')).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: 'managedResources.title' })
+    fireEvent.click(button)
+    expect(useTabStore.getState().activeTabId).toBe('__hosts__')
+  })
 })

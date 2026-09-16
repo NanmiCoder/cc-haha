@@ -481,7 +481,7 @@ describe('WebSocket handler session isolation', () => {
     handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: '/clear' }))
 
     const sent = ws.sent.map((payload) => JSON.parse(payload))
-    expect(sent).toContainEqual({ type: 'connected', sessionId })
+    expect(sent).toContainEqual({ type: 'connected', sessionId, runtimeRevision: expect.any(Number) })
     expect(sent).toContainEqual({
       type: 'permission_requests_snapshot',
       toolRequestIds: [],
@@ -540,7 +540,7 @@ describe('WebSocket handler session isolation', () => {
     handleWebSocket.open(second)
 
     expect(second.sent.map((payload) => JSON.parse(payload))).toEqual([
-      { type: 'connected', sessionId },
+      { type: 'connected', sessionId, runtimeRevision: expect.any(Number) },
       {
         type: 'computer_use_permission_request',
         requestId: request.requestId,

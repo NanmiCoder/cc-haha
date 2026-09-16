@@ -49,6 +49,10 @@ import type {
   SlashCommandOption,
   SlashCommandSource,
 } from '../types/slashCommand'
+import type { ManagedContextSubmission } from '../features/managed-resources/integration/chatSubmission'
+import { buildUserMessageFrame } from '../features/managed-resources/integration/userMessageFrame'
+import { recordManagedRuntimeRevision } from '../features/managed-resources/integration/runtimeRevision'
+import { prepareManagedUserMessage } from '../features/managed-resources/integration/prepareManagedUserMessage'
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
 
@@ -81,6 +85,11 @@ export type QueuedUserMessage = {
   displayContent: string
   displayAttachments?: AttachmentRef[]
   createdAt: number
+  /**
+   * U07/M6-B: the immutable context snapshot prepared when this item was
+   * queued, re-used as-is by the flush. Absent when nothing was selected.
+   */
+  managedContext?: ManagedContextSubmission
 }
 
 export type ComposerReferenceInsertion = {
@@ -338,7 +347,13 @@ type ChatStore = {
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
-    options?: { displayContent?: string; displayAttachments?: AttachmentRef[]; hideDisplayContent?: boolean },
+    options?: {
+      displayContent?: string
+      displayAttachments?: AttachmentRef[]
+      hideDisplayContent?: boolean
+      /** U07/M6-B: prepared context snapshot to store with this message. */
+      managedContext?: ManagedContextSubmission
+    },
   ) => void
   respondToPermission: (
     sessionId: string,
@@ -2902,6 +2917,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         attachments: isDirectAgentSession ? undefined : uiAttachments,
         timestamp: now,
         ...(isDirectAgentSession ? { pending: true } : {}),
+        ...(options?.managedContext ? { managedContext: options.managedContext } : {}),
       })
 
       if (!isDirectAgentSession && session.elapsedTimer) clearInterval(session.elapsedTimer)
@@ -3011,7 +3027,41 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         get().setSessionRuntime(sessionId, defaultSelection)
       }
     }
-    wsManager.send(sessionId, { type: 'user_message', content, attachments })
+    const managedSubmission = options?.managedContext ?? null
+    if (!managedSubmission) {
+      // Preserve the legacy no-selection path with no new promise, vault access,
+      // staging request or transport wait.
+      wsManager.send(sessionId, buildUserMessageFrame({ content, attachments, submission: null }))
+      return
+    }
+
+    void prepareManagedUserMessage({
+      sessionId,
+      content,
+      attachments,
+      submission: managedSubmission,
+    }).then((prepared) => {
+      if (!prepared.ok) {
+        get().handleServerMessage(sessionId, {
+          type: 'error',
+          code: prepared.error.code,
+          message: prepared.error.messageKey,
+        })
+        return
+      }
+      wsManager.send(sessionId, buildUserMessageFrame({
+        content,
+        attachments,
+        submission: managedSubmission,
+        ticket: prepared.data,
+      }))
+    }).catch((error) => {
+      get().handleServerMessage(sessionId, {
+        type: 'error',
+        code: 'CONTEXT_STAGE_UNAVAILABLE',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
@@ -3987,6 +4037,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         {
           displayContent: queuedMessage.displayContent,
           displayAttachments: queuedMessage.displayAttachments,
+          // The snapshot prepared when this item was queued — never a new one.
+          ...(queuedMessage.managedContext ? { managedContext: queuedMessage.managedContext } : {}),
         },
       )
       return
@@ -4010,10 +4062,60 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }),
     }))
 
-    wsManager.send(sessionId, {
-      type: 'user_message',
+    const managedSubmission = queuedMessage.managedContext ?? null
+    if (!managedSubmission) {
+      wsManager.send(sessionId, buildUserMessageFrame({
+        content: queuedMessage.content,
+        attachments: queuedMessage.attachments,
+        submission: null,
+      }))
+      return
+    }
+
+    void prepareManagedUserMessage({
+      sessionId,
       content: queuedMessage.content,
       attachments: queuedMessage.attachments,
+      submission: managedSubmission,
+    }).then((prepared) => {
+      if (!prepared.ok) {
+        set((state) => ({
+          sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+            messages: [
+              ...current.messages,
+              {
+                id: nextId(),
+                type: 'error',
+                message: prepared.error.messageKey,
+                code: prepared.error.code,
+                timestamp: Date.now(),
+              },
+            ],
+          })),
+        }))
+        return
+      }
+      wsManager.send(sessionId, buildUserMessageFrame({
+        content: queuedMessage.content,
+        attachments: queuedMessage.attachments,
+        submission: managedSubmission,
+        ticket: prepared.data,
+      }))
+    }).catch((error) => {
+      set((state) => ({
+        sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+          messages: [
+            ...current.messages,
+            {
+              id: nextId(),
+              type: 'error',
+              message: error instanceof Error ? error.message : String(error),
+              code: 'CONTEXT_STAGE_UNAVAILABLE',
+              timestamp: Date.now(),
+            },
+          ],
+        })),
+      }))
     })
   },
 
@@ -4075,6 +4177,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     switch (msg.type) {
       case 'connected':
+        recordManagedRuntimeRevision(sessionId, msg.runtimeRevision)
         // Team lifecycle broadcasts are transition-only. A reconnect must
         // reconcile against the durable workbench so missed update/delete or
         // same-name recreate events cannot leave a live cache authoritative.
@@ -4374,6 +4477,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
 
       case 'runtime_config_applied': {
+        recordManagedRuntimeRevision(sessionId, msg.runtimeRevision)
         const selected = useSessionRuntimeStore.getState().selections[sessionId]
         const matchesCurrentSelection = Boolean(selected) &&
           (selected?.providerId ?? null) === msg.providerId &&
@@ -5038,6 +5142,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
           get().sendQueuedUserMessage(sessionId, queuedMessage.id)
         }
+        break
+      }
+
+      case 'user_message_accepted': {
+        if (msg.manifest?.containsSecrets) {
+          useSessionStore.getState().updateSessionSensitivity(sessionId, true)
+        }
+        break
+      }
+
+      case 'user_message_rejected': {
         break
       }
 
@@ -7051,6 +7166,7 @@ function appendOptimisticQueuedUserMessage(
       ...(attachments ? { attachments } : {}),
       timestamp,
       optimisticQueued: true,
+      ...(message.managedContext ? { managedContext: message.managedContext } : {}),
     },
   ]
 }

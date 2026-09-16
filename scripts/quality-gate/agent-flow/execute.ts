@@ -419,7 +419,7 @@ export async function executeAgentFlow(options: {
     },
   })
 
-  const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {
+  const server = Bun.spawn([process.execPath, 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',

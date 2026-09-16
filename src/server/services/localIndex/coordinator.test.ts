@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { getEventListeners } from 'node:events'
 import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { LocalIndexDatabase } from './database.js'
 import {
   createLocalIndexCoordinator,
@@ -2173,7 +2173,7 @@ describe('discoverActivityTranscriptSources', () => {
 
     const result = await discoverActivityTranscriptSources(root, new AbortController().signal)
 
-    const names = result.candidates.map(candidate => candidate.path.split('/').pop()).sort()
+    const names = result.candidates.map(candidate => basename(candidate.path)).sort()
     // agent-wf.jsonl lives at subagents/workflows/<wf_id>/ — the level that used to be skipped
     // entirely, leaving every workflow agent's tokens and tool calls out of the stats.
     expect(names).toEqual([

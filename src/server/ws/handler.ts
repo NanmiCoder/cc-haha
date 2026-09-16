@@ -123,6 +123,14 @@ import type {
   SessionStreamState,
 } from './streamBlocks.js'
 
+import {
+  acknowledgeUserMessage,
+  failUserMessage,
+  prepareUserMessage,
+} from '../features/managedContext/wsBridge.js'
+import { shouldSuppressTitleGeneration } from '../../services/managedContext/sensitivityPolicy.js'
+import { serverRuntimeRevisions } from '../features/managedContext/runtimeRevision.js'
+
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
 
@@ -602,7 +610,8 @@ export const handleWebSocket = {
       bindClientSessionOutput(sessionId, ws)
     }
 
-    const msg: ServerMessage = { type: 'connected', sessionId }
+    const runtimeRevision = serverRuntimeRevisions.ensure(sessionId)
+    const msg: ServerMessage = { type: 'connected', sessionId, runtimeRevision }
     sendMessage(ws, msg)
     const toolRequestIds = replayPendingPermissionRequests(ws, sessionId)
     const computerUseRequestIds = replayPendingComputerUsePermissionRequests(ws, sessionId)
@@ -823,6 +832,45 @@ async function handleUserMessage(
     sessionStopRequested.has(sessionId) || agentStopRequestedSessions.has(sessionId)
   activeUserTurns.set(sessionId, activeTurn)
 
+  // M7-B §8.1–§8.3: resolve the request identity before any CLI start, title
+  // capture or SDK work. A frame without a requestId/ticket is a passthrough
+  // (byte-identical to the pre-M7 frame, no receipt, no disk write). A replay
+  // returns the original receipt and never calls the SDK again; a refusal is
+  // structured and never sends a stale selection.
+  const managedContext = await prepareUserMessage({ sessionId, frame: message })
+  if (managedContext.kind === 'replayed') {
+    const replayStatus =
+      managedContext.receipt.status === 'observed'
+        ? 'observed'
+        : managedContext.receipt.status === 'dispatching'
+          ? 'dispatching'
+          : 'accepted'
+    sendMessage(ws, {
+      type: 'user_message_accepted',
+      requestId: managedContext.requestId,
+      status: replayStatus,
+      replayed: true,
+      ticketId: managedContext.receipt.ticketId,
+      manifest: managedContext.receipt.manifest,
+    })
+    sendMessage(ws, { type: 'status', state: 'idle' })
+    clearActiveUserTurn(sessionId, activeTurn)
+    return
+  }
+  if (managedContext.kind === 'rejected') {
+    sendMessage(ws, {
+      type: 'user_message_rejected',
+      requestId: managedContext.requestId || message.requestId || '',
+      code: managedContext.code,
+      retryable: managedContext.retryable,
+      message: managedContext.message,
+    })
+    sendMessage(ws, { type: 'status', state: 'idle' })
+    failSessionChatActivity(sessionId)
+    clearActiveUserTurn(sessionId, activeTurn)
+    return
+  }
+
   const initialRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
   if (
     !initialRuntimeTransition.ok ||
@@ -856,7 +904,9 @@ async function handleUserMessage(
     }
     sessionTitleState.set(sessionId, titleState)
   }
-  const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
+  const titleInput = shouldSuppressTitleGeneration(sessionId)
+    ? null
+    : getTitleInputForUserMessage(message.content, desktopSlashCommand)
   let titleTurnNumber: number | null = null
   if (titleInput) {
     titleState.persistTitleSource &&= persistTitleSource
@@ -948,19 +998,38 @@ async function handleUserMessage(
   refreshDisconnectedTurnCleanupWatcher(sessionId)
 
   activeTurn.sendStarted = true
-  const sent = await conversationService.sendMessage(
-    sessionId,
-    message.content,
-    message.attachments,
-    {
-      canSend: () =>
-        activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled,
-      messageUuid: activeTurn.expectedReplayUuid,
-      onCommitted: () => {
-        activeTurn.messageSent = true
+  let sent = false
+  try {
+    sent = await conversationService.sendMessage(
+      sessionId,
+      message.content,
+      message.attachments,
+      {
+        canSend: () =>
+          activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled,
+        messageUuid: activeTurn.expectedReplayUuid,
+        onCommitted: () => {
+          activeTurn.messageSent = true
+        },
+        managedContextContent:
+          managedContext.kind === 'accepted' ? managedContext.contextText : null,
       },
-    },
-  )
+    )
+  } catch (err) {
+    // A throw after the receipt was written leaves the outcome unknown: never
+    // auto-resend it (a duplicate turn is worse than a stuck receipt).
+    if (managedContext.kind === 'accepted') {
+      await failUserMessage({
+        sessionId,
+        requestId: managedContext.requestId,
+        code: 'DISPATCH_THREW',
+        retryable: false,
+        ticketId: managedContext.ticketId,
+        deliveryUnknown: true,
+      }).catch(() => null)
+    }
+    throw err
+  }
   if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) {
     // Once onCommitted has run the SDK owns this turn and will still emit its
     // terminal result. Keep the completion callback long enough to consume
@@ -971,6 +1040,17 @@ async function handleUserMessage(
     discardActiveTitleTurn(sessionId, titleTurnNumber)
     if (!activeTurn.messageSent) {
       stopRuntimeStartedByCancelledAdmission(sessionId, activeTurn)
+      if (managedContext.kind === 'accepted') {
+        // The turn was revoked before the socket write: nothing reached the
+        // SDK, so the receipt is retryable and the staged snapshot is dropped.
+        await failUserMessage({
+          sessionId,
+          requestId: managedContext.requestId,
+          code: 'TURN_CANCELLED_BEFORE_DELIVERY',
+          retryable: true,
+          ticketId: managedContext.ticketId,
+        }).catch(() => null)
+      }
     }
     return
   }
@@ -979,6 +1059,15 @@ async function handleUserMessage(
     clearActiveUserTurn(sessionId, activeTurn)
     removeTitleOutputCallback?.()
     discardActiveTitleTurn(sessionId, titleTurnNumber)
+    if (managedContext.kind === 'accepted') {
+      await failUserMessage({
+        sessionId,
+        requestId: managedContext.requestId,
+        code: 'CLI_NOT_RUNNING',
+        retryable: true,
+        ticketId: managedContext.ticketId,
+      }).catch(() => null)
+    }
     sendMessage(ws, {
       type: 'error',
       message: 'CLI process is not running. The session may have ended or the process crashed.',
@@ -991,6 +1080,21 @@ async function handleUserMessage(
 
   userMessageSent = true
   activeTurn.messageSent = true
+  if (managedContext.kind === 'accepted') {
+    const receipt = await acknowledgeUserMessage({
+      sessionId,
+      requestId: managedContext.requestId,
+      ticketId: managedContext.ticketId,
+    }).catch(() => null)
+    sendMessage(ws, {
+      type: 'user_message_accepted',
+      requestId: managedContext.requestId,
+      status: receipt?.status === 'observed' ? 'observed' : 'accepted',
+      replayed: false,
+      ticketId: receipt?.ticketId ?? managedContext.ticketId,
+      manifest: receipt?.manifest ?? managedContext.manifest,
+    })
+  }
 }
 
 function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState): void {
@@ -1679,11 +1783,15 @@ async function persistSessionRuntimeConfig(
 function broadcastAppliedRuntimeConfig(sessionId: string): void {
   const runtime = runtimeOverrides.get(sessionId)
   if (!runtime) return
+  // M7-B §8.1: every applied runtime advances the session revision, so a ticket
+  // staged against an older revision can never be sent as if it still matched.
+  const runtimeRevision = serverRuntimeRevisions.bump(sessionId)
   sendToSession(sessionId, {
     type: RUNTIME_CONFIG_APPLIED_EVENT,
     providerId: runtime.providerId,
     modelId: runtime.modelId,
     ...(runtime.effort ? { effortLevel: runtime.effort } : {}),
+    runtimeRevision,
   })
 }
 
@@ -2351,6 +2459,8 @@ function triggerTitleGeneration(
 ): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle || state.hasExistingTranscript) return
+  // Secret-bearing managed context must never enter title generation.
+  if (shouldSuppressTitleGeneration(sessionId)) return
   // Titles summarize cumulative input. Once it includes a private turn, later
   // refreshes must remain in memory even if retention is enabled again.
   state.persistTitleSource &&= sessionService.shouldPersistSession()

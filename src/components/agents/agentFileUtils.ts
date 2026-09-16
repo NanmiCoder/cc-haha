@@ -515,7 +515,10 @@ async function writeFileAndFlush(
   flag: 'w' | 'wx' = 'w',
   rejectFinalSymlink = false,
 ): Promise<void> {
-  const openFlag = rejectFinalSymlink
+  // Windows does not support O_NOFOLLOW in fs.open and returns EINVAL. The
+  // repository-agent path has already been lstat/realpath checked above, so
+  // keep the extra kernel-level no-follow guard where the platform supports it.
+  const openFlag = rejectFinalSymlink && process.platform !== 'win32'
     ? fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
     : flag
   const handle = await open(filePath, openFlag)

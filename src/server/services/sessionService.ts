@@ -46,6 +46,7 @@ import {
 } from '../../services/tokenEstimation.js'
 import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
+import { projectManagedContextContent } from '../../services/managedContext/blockFormat.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
 import {
@@ -1768,6 +1769,13 @@ export class SessionService {
       type = 'system'
     }
 
+    let publicContent = msg.content
+    if (role === 'user' && type === 'user') {
+      const projected = projectManagedContextContent(msg.content)
+      if (!projected.ok) return null
+      publicContent = projected.content
+    }
+
     const usage = isForkInheritedUsageRecord(entry)
       ? undefined
       : normalizeMessageUsage(msg.usage)
@@ -1783,7 +1791,7 @@ export class SessionService {
     return {
       id: entry.uuid || crypto.randomUUID(),
       type,
-      content: msg.content,
+      content: publicContent,
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,

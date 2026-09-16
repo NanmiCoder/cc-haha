@@ -11,6 +11,15 @@ import {
   type ElectronIpcChannel,
 } from '../../../electron/ipc/channels'
 import { validateElectronIpcPayload } from '../../../electron/ipc/capabilities'
+import type { HostManagementEvent } from '../../features/managed-resources/types/resourceTypes'
+import type {
+  HostManagementResult,
+  ManagedLocalPathToken,
+  ManagedRemoteEditSnapshot,
+  ManagedTransferJob,
+  ManagedContextTicketRef,
+} from '../../features/managed-resources/api/hostManagementApi'
+import type { DataConnectionsHostApi } from '../../features/managed-resources/api/dataConnectionsApi'
 
 export type ElectronHostBridge = {
   invoke<T>(channel: ElectronIpcChannel, payload?: unknown): Promise<T>
@@ -24,6 +33,85 @@ export type ElectronHostBridge = {
 type ElectronUpdateMetadata = {
   version: string
   body?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// M4 renderer-facing projection
+//
+// The main process answers with the full service record. The renderer publishes
+// the narrower DTOs from the managed-resources API module, and this projection
+// is what actually keeps the internal `ownerId` and the local filesystem paths
+// (a transfer job's `localPath`, a token's owner) out of the renderer — a
+// narrower *type* alone would still let the runtime object carry them across.
+// ---------------------------------------------------------------------------
+
+type LocalPathTokenWire = ManagedLocalPathToken & { ownerId: string }
+
+type TransferJobWire = ManagedTransferJob & { ownerId: string; localPath: string }
+
+type RemoteEditSnapshotWire = {
+  edit: ManagedRemoteEditSnapshot['edit'] & { ownerId: string }
+  metadata: ManagedRemoteEditSnapshot['metadata']
+}
+
+function projectResult<TWire, TPublished>(
+  result: HostManagementResult<TWire>,
+  publish: (wire: TWire) => TPublished,
+): HostManagementResult<TPublished> {
+  return result.ok ? { ok: true, data: publish(result.data) } : result
+}
+
+function publishLocalPathToken(wire: LocalPathTokenWire): ManagedLocalPathToken {
+  return {
+    token: wire.token,
+    absolutePath: wire.absolutePath,
+    expiresAt: wire.expiresAt,
+    purpose: wire.purpose,
+  }
+}
+
+function publishTransferJob(wire: TransferJobWire): ManagedTransferJob {
+  return {
+    ...(wire.folder !== undefined ? { folder: wire.folder, entriesTotal: wire.entriesTotal, entriesCompleted: wire.entriesCompleted } : {}),
+    id: wire.id,
+    connectionId: wire.connectionId,
+    generation: wire.generation,
+    direction: wire.direction,
+    remotePath: wire.remotePath,
+    size: wire.size,
+    transferred: wire.transferred,
+    state: wire.state,
+    error: wire.error,
+    checksum: wire.checksum,
+    startedAt: wire.startedAt,
+    finishedAt: wire.finishedAt,
+  }
+}
+
+function publishRemoteEditSnapshot(wire: RemoteEditSnapshotWire): ManagedRemoteEditSnapshot {
+  return {
+    edit: {
+      id: wire.edit.id,
+      connectionId: wire.edit.connectionId,
+      generation: wire.edit.generation,
+      absolutePath: wire.edit.absolutePath,
+      baseRevision: wire.edit.baseRevision,
+      baseSha256: wire.edit.baseSha256,
+      baseSize: wire.edit.baseSize,
+      baseMtimeMs: wire.edit.baseMtimeMs,
+      text: wire.edit.text,
+      hasBom: wire.edit.hasBom,
+      dirty: wire.edit.dirty,
+      openedAt: wire.edit.openedAt,
+    },
+    metadata: {
+      size: wire.metadata.size,
+      mtimeMs: wire.metadata.mtimeMs,
+      mode: wire.metadata.mode,
+      lineEnding: wire.metadata.lineEnding,
+      hasBom: wire.metadata.hasBom,
+    },
+  }
 }
 
 function safeInvoke<T>(
@@ -40,6 +128,13 @@ function safeInvoke<T>(
 export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
   const invoke = <T>(channel: ElectronIpcChannel, payload?: unknown) =>
     safeInvoke<T>(bridge, channel, payload)
+  const invokeProjected = <TWire, TPublished>(
+    channel: ElectronIpcChannel,
+    payload: unknown,
+    publish: (wire: TWire) => TPublished,
+  ) =>
+    safeInvoke<HostManagementResult<TWire>>(bridge, channel, payload)
+      .then(result => projectResult(result, publish))
   const subscribe = <T>(channel: ElectronEventChannel, handler: (payload: T) => void) =>
     bridge.subscribe(channel, handler)
   const createUpdate = (metadata: ElectronUpdateMetadata): DesktopUpdate => ({
@@ -82,6 +177,10 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       updates: true,
       windowControls: true,
       zoom: true,
+      hostManagement: true,
+      conceptKnowledge: true,
+      conversationContext: true,
+      dataConnections: true,
     },
     runtime: {
       getServerUrl: () => invoke(ELECTRON_IPC_CHANNELS.runtimeGetServerUrl),
@@ -244,6 +343,127 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     },
     appearance: {
       setApplied: state => invoke(ELECTRON_IPC_CHANNELS.appearanceSetApplied, state),
+    },
+    hostManagement: {
+      getCapabilities: () => invoke(ELECTRON_IPC_CHANNELS.mrGetCapabilities),
+      listHosts: params => invoke(ELECTRON_IPC_CHANNELS.mrListHosts, params),
+      getHost: id => invoke(ELECTRON_IPC_CHANNELS.mrGetHost, { id }),
+      saveHost: input => invoke(ELECTRON_IPC_CHANNELS.mrSaveHost, input),
+      deleteHost: (id, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.mrDeleteHost, { id, expectedRevision }),
+      listTags: namespace => invoke(ELECTRON_IPC_CHANNELS.mrListTags, { namespace }),
+      saveTag: input => invoke(ELECTRON_IPC_CHANNELS.mrSaveTag, input),
+      deleteTag: (id, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.mrDeleteTag, { id, expectedRevision }),
+      saveApplication: input => {
+        if ('id' in input.application) {
+          const { id, ...changes } = input.application
+          return invoke(ELECTRON_IPC_CHANNELS.mrSaveApplication, {
+            mode: 'update', hostId: input.hostId, expectedHostRevision: input.expectedHostRevision,
+            applicationId: id, changes,
+          })
+        }
+        return invoke(ELECTRON_IPC_CHANNELS.mrSaveApplication, { mode: 'create', ...input })
+      },
+      deleteApplication: input => invoke(ELECTRON_IPC_CHANNELS.mrDeleteApplication, input),
+      saveCredential: input => invoke(ELECTRON_IPC_CHANNELS.mrSaveCredential, input),
+      deleteCredential: (id, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.mrDeleteCredential, { id, expectedRevision }),
+      revealCredential: id => invoke(ELECTRON_IPC_CHANNELS.mrRevealCredential, { id }),
+      provideTemporaryCredential: (hostId, secret) => invoke(ELECTRON_IPC_CHANNELS.mrProvideTemporaryCredential, { hostId, secret }),
+      exportMetadata: () => invokeProjected(
+        ELECTRON_IPC_CHANNELS.mrExportMetadata, undefined,
+        (wire: { exportedCount: number; filePath: string }) => ({ count: wire.exportedCount, filePath: wire.filePath }),
+      ),
+      importMetadata: () => invokeProjected(
+        ELECTRON_IPC_CHANNELS.mrImportMetadata, undefined,
+        (wire: { importedCount: number }) => ({ imported: true, count: wire.importedCount }),
+      ),
+      createConnection: input => invoke(ELECTRON_IPC_CHANNELS.mrCreateConnection, input),
+      startConnection: input => invoke(ELECTRON_IPC_CHANNELS.mrStartConnection, input),
+      answerHostKey: input => invoke(ELECTRON_IPC_CHANNELS.mrAnswerHostKey, input),
+      writeConnection: input => invoke(ELECTRON_IPC_CHANNELS.mrWriteConnection, input),
+      resizeConnection: input => invoke(ELECTRON_IPC_CHANNELS.mrResizeConnection, input),
+      ackOutput: input => invoke(ELECTRON_IPC_CHANNELS.mrAckOutput, input),
+      disconnect: input => invoke(ELECTRON_IPC_CHANNELS.mrDisconnect, input),
+      onEvent: handler => bridge.subscribe<HostManagementEvent>(ELECTRON_EVENT_CHANNELS.mrEvent, handler),
+      // SFTP browsing, transfers and remote editing (M4). One channel each, and
+      // never an `ownerId`: the main process binds the canonical owner, and the
+      // preload validator rejects the field set if anything else is added. The
+      // methods that answer with a service record project it down to the
+      // published DTO first.
+      mintUploadToken: fileName =>
+        invokeProjected(ELECTRON_IPC_CHANNELS.mrMintUploadToken, { fileName }, publishLocalPathToken),
+      mintDownloadToken: fileName =>
+        invokeProjected(ELECTRON_IPC_CHANNELS.mrMintDownloadToken, { fileName }, publishLocalPathToken),
+      resolveLocalToken: token => invoke(ELECTRON_IPC_CHANNELS.mrResolveLocalToken, { token }),
+      revokeLocalToken: token => invoke(ELECTRON_IPC_CHANNELS.mrRevokeLocalToken, { token }),
+      sftpList: (connectionId, generation, absolutePath) =>
+        invoke(ELECTRON_IPC_CHANNELS.mrSftpList, { connectionId, generation, absolutePath }),
+      sftpStat: (connectionId, generation, absolutePath) =>
+        invoke(ELECTRON_IPC_CHANNELS.mrSftpStat, { connectionId, generation, absolutePath }),
+      transferStartDownload: (jobId, connectionId, generation, remotePath, localToken) =>
+        invokeProjected(
+          ELECTRON_IPC_CHANNELS.mrTransferStartDownload,
+          { jobId, connectionId, generation, remotePath, localToken },
+          publishTransferJob,
+        ),
+      transferStartUpload: (jobId, connectionId, generation, remotePath, localToken) =>
+        invokeProjected(
+          ELECTRON_IPC_CHANNELS.mrTransferStartUpload,
+          { jobId, connectionId, generation, remotePath, localToken },
+          publishTransferJob,
+        ),
+      transferUploadFolder: input => invokeProjected(ELECTRON_IPC_CHANNELS.mrTransferUploadFolder, input, publishTransferJob),
+      transferDownloadFolder: input => invokeProjected(ELECTRON_IPC_CHANNELS.mrTransferDownloadFolder, input, publishTransferJob),      transferCancel: jobId => invoke(ELECTRON_IPC_CHANNELS.mrTransferCancel, { jobId }),
+      transferGet: jobId =>
+        invokeProjected(ELECTRON_IPC_CHANNELS.mrTransferGet, { jobId }, publishTransferJob),
+      remoteEditOpen: (connectionId, generation, absolutePath) =>
+        invokeProjected(
+          ELECTRON_IPC_CHANNELS.mrRemoteEditOpen,
+          { connectionId, generation, absolutePath },
+          publishRemoteEditSnapshot,
+        ),
+      remoteEditSave: (editId, baseRevision, text) =>
+        invokeProjected(
+          ELECTRON_IPC_CHANNELS.mrRemoteEditSave,
+          { editId, baseRevision, text },
+          publishRemoteEditSnapshot,
+        ),
+      remoteEditClose: editId => invoke(ELECTRON_IPC_CHANNELS.mrRemoteEditClose, { editId }),
+      hostTools: input => invoke(ELECTRON_IPC_CHANNELS.mrHostTools, input),
+      applicationOperation: input => invoke(ELECTRON_IPC_CHANNELS.mrApplicationOperation, input),
+    },
+    dataConnections: {
+      list: params => invoke(ELECTRON_IPC_CHANNELS.mrListDataConnections, params),
+      get: id => invoke(ELECTRON_IPC_CHANNELS.mrGetDataConnection, { id }),
+      save: input => invoke(ELECTRON_IPC_CHANNELS.mrSaveDataConnection, input),
+      delete: (id, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.mrDeleteDataConnection, { id, expectedRevision }),
+      testConnection: input => invoke(ELECTRON_IPC_CHANNELS.mrTestDataConnection, input),
+      openConnection: (connectionId, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.mrOpenDataSession, { connectionId, expectedRevision }),
+      closeConnection: (dataSessionId, generation) => invoke(ELECTRON_IPC_CHANNELS.mrCloseDataSession, { dataSessionId, generation }),
+      listDatabases: (dataSessionId, generation) => invoke(ELECTRON_IPC_CHANNELS.mrListDatabases, { dataSessionId, generation }),
+      listSchemas: (dataSessionId, generation) => invoke(ELECTRON_IPC_CHANNELS.mrListSchemas, { dataSessionId, generation }),
+      listTables: (dataSessionId, generation, schema) => invoke(ELECTRON_IPC_CHANNELS.mrListTables, { dataSessionId, generation, schema }),
+      describeTable: (dataSessionId, generation, schema, table) => invoke(ELECTRON_IPC_CHANNELS.mrDescribeTable, { dataSessionId, generation, schema, table }),
+      previewTable: input => invoke(ELECTRON_IPC_CHANNELS.mrPreviewTable, input),
+      executeQuery: input => invoke(ELECTRON_IPC_CHANNELS.mrExecuteQuery, input),
+      cancelQuery: (dataSessionId, generation, queryId) => invoke(ELECTRON_IPC_CHANNELS.mrCancelQuery, { dataSessionId, generation, queryId }),
+      scanKeys: input => invoke(ELECTRON_IPC_CHANNELS.mrScanRedisKeys, input),
+      readKey: input => invoke(ELECTRON_IPC_CHANNELS.mrReadRedisKey, input),
+    } satisfies DataConnectionsHostApi,
+    conceptKnowledge: {
+      listConcepts: () => invoke(ELECTRON_IPC_CHANNELS.mrListConcepts),
+      getConcept: id => invoke(ELECTRON_IPC_CHANNELS.mrGetConcept, { id }),
+      saveConcept: input => invoke(ELECTRON_IPC_CHANNELS.mrSaveConcept, input),
+      deleteConcept: (id, expectedRevision, removeReferenceEdges) =>
+        invoke(ELECTRON_IPC_CHANNELS.mrDeleteConcept, { id, expectedRevision, removeReferenceEdges }),
+    },
+    conversationContext: {
+      getSelection: sessionId => invoke(ELECTRON_IPC_CHANNELS.mrGetSelection, { sessionId }),
+      saveSelection: (sessionId, selection) => invoke(ELECTRON_IPC_CHANNELS.mrSaveSelection, { sessionId, selection }),
+      deleteSelection: sessionId => invoke(ELECTRON_IPC_CHANNELS.mrDeleteSelection, { sessionId }),
+      prepareSubmission: input => invoke<HostManagementResult<ManagedContextTicketRef>>(
+        ELECTRON_IPC_CHANNELS.mrPrepareContext,
+        input,
+      ),
     },
   }
 }

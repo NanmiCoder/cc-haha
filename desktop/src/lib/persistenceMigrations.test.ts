@@ -275,6 +275,52 @@ describe('desktop persistence migrations', () => {
       DESKTOP_PERSISTENCE_VERSION_KEY,
     ]))
   })
+
+  test('preserves persisted hosts tabs and merges duplicate hosts tabs', () => {
+    window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: 'session-1', title: 'Main Session', type: 'session' },
+        { sessionId: '__hosts__', title: '主机管理', type: 'hosts' },
+        { sessionId: '__hosts__', title: '主机管理 (duplicate)', type: 'hosts' },
+      ],
+      activeTabId: '__hosts__',
+    }))
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).toContain('cc-haha-open-tabs')
+    expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs') || '{}')).toEqual({
+      openTabs: [
+        { sessionId: 'session-1', title: 'Main Session', type: 'session' },
+        { sessionId: '__hosts__', title: '主机管理', type: 'hosts' },
+      ],
+      activeTabId: '__hosts__',
+    })
+  })
+
+  test('forward migrates schema version 1 fixture to the current version and deduplicates tabs', () => {
+    window.localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '1')
+    window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: 'session-old', title: 'Old Session', type: 'session' },
+        { sessionId: '__hosts__', title: '主机管理', type: 'hosts' },
+        { sessionId: '__hosts__', title: '主机管理 duplicate', type: 'hosts' },
+      ],
+      activeTabId: '__hosts__',
+    }))
+
+    const report = runDesktopPersistenceMigrations()
+    expect(report.migratedKeys).toContain('cc-haha-open-tabs')
+
+    expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs') || '{}')).toEqual({
+      openTabs: [
+        { sessionId: 'session-old', title: 'Old Session', type: 'session' },
+        { sessionId: '__hosts__', title: '主机管理', type: 'hosts' },
+      ],
+      activeTabId: '__hosts__',
+    })
+  })
   test('keeps a schema-1 install usable: no workspace key means nothing to migrate', () => {
     window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
       openTabs: [{ sessionId: 'session-1', title: 'Chat', type: 'session' }],

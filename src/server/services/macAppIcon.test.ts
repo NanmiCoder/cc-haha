@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
+import path from 'node:path'
 import {
   DEFAULT_ICON_SIZE,
   MAX_ICON_SIZE,
@@ -10,8 +11,8 @@ import {
   resolveAppIconPath,
 } from './macAppIcon.js'
 
-const APP = '/Applications/Example.app'
-const RESOURCES = `${APP}/Contents/Resources`
+const APP = path.join('/Applications', 'Example.app')
+const RESOURCES = path.join(APP, 'Contents', 'Resources')
 
 /**
  * Builds deps over a virtual bundle. Nothing here touches the filesystem or
@@ -27,7 +28,7 @@ function bundle(options: {
 }) {
   const resourceFiles = options.resourceFiles ?? []
   const present = new Set(
-    (options.present ?? resourceFiles).map(name => `${RESOURCES}/${name}`),
+    (options.present ?? resourceFiles).map(name => path.join(RESOURCES, name)),
   )
   const converted: Array<{ iconPath: string; size: number }> = []
 
@@ -86,7 +87,7 @@ describe('resolveAppIconPath', () => {
       resourceFiles: ['AppIcon.icns', 'Other.icns'],
     })
 
-    expect(await resolveAppIconPath(APP, deps)).toBe(`${RESOURCES}/AppIcon.icns`)
+    expect(await resolveAppIconPath(APP, deps)).toBe(path.join(RESOURCES, 'AppIcon.icns'))
   })
 
   test('falls back to the sole .icns when the declared file is missing', async () => {
@@ -97,7 +98,7 @@ describe('resolveAppIconPath', () => {
       present: ['Real.icns'],
     })
 
-    expect(await resolveAppIconPath(APP, deps)).toBe(`${RESOURCES}/Real.icns`)
+    expect(await resolveAppIconPath(APP, deps)).toBe(path.join(RESOURCES, 'Real.icns'))
   })
 
   test('skips document icons when guessing', async () => {
@@ -107,7 +108,7 @@ describe('resolveAppIconPath', () => {
       resourceFiles: ['ProjectDocument.icns', 'document.icns', 'Brand.icns'],
     })
 
-    expect(await resolveAppIconPath(APP, deps)).toBe(`${RESOURCES}/Brand.icns`)
+    expect(await resolveAppIconPath(APP, deps)).toBe(path.join(RESOURCES, 'Brand.icns'))
   })
 
   test('ignores non-icns resources', async () => {
@@ -116,7 +117,7 @@ describe('resolveAppIconPath', () => {
       resourceFiles: ['background.png', 'strings.plist', 'Brand.ICNS'],
     })
 
-    expect(await resolveAppIconPath(APP, deps)).toBe(`${RESOURCES}/Brand.ICNS`)
+    expect(await resolveAppIconPath(APP, deps)).toBe(path.join(RESOURCES, 'Brand.ICNS'))
   })
 
   test('returns null when the bundle ships no icon at all', async () => {
@@ -146,7 +147,7 @@ describe('readAppIconPng', () => {
 
     expect(png).toEqual(new Uint8Array([1, 2, 3]))
     expect(converted).toEqual([
-      { iconPath: `${RESOURCES}/AppIcon.icns`, size: MAX_ICON_SIZE },
+      { iconPath: path.join(RESOURCES, 'AppIcon.icns'), size: MAX_ICON_SIZE },
     ])
   })
 

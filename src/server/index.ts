@@ -537,7 +537,7 @@ export function startServer(port = PORT, host = HOST) {
           try {
             const response = await settleResponseOnRequestAbort(
               req,
-              handleApiRequest(req, url, { remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
+              handleApiRequest(req, url, { clientAddress, remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
             )
             return withCors(response, cors)
           } catch (error) {

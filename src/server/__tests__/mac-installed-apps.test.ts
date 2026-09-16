@@ -15,7 +15,7 @@ function entry(name: string, options: { directory?: boolean; symlink?: boolean }
   }
 }
 
-describe('macOS installed app enumeration', () => {
+describe.skipIf(process.platform !== 'darwin')('macOS installed app enumeration', () => {
   it('never descends into an app bundle after collecting it', async () => {
     const metadataReads: string[] = []
     const apps = await listInstalledMacApps({

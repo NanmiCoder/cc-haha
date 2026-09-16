@@ -3,6 +3,12 @@ import type {
   AppModeConfig as SettingsAppModeConfig,
 } from '../../types/settings'
 import type { Locale } from '../../i18n/locale'
+import type {
+  HostManagementHostApi,
+  ConceptKnowledgeHostApi,
+  ConversationContextHostApi,
+} from '../../features/managed-resources/api/hostManagementApi'
+import type { DataConnectionsHostApi } from '../../features/managed-resources/api/dataConnectionsApi'
 
 // Version 2 adds remote provider management and selected General settings.
 export const PUBLIC_ACCESS_CONSENT_VERSION = 2
@@ -21,6 +27,10 @@ export type DesktopHostCapability =
   | 'updates'
   | 'windowControls'
   | 'zoom'
+  | 'hostManagement'
+  | 'conceptKnowledge'
+  | 'conversationContext'
+  | 'dataConnections'
 
 export type DesktopHostCapabilities = Record<DesktopHostCapability, boolean>
 
@@ -539,6 +549,10 @@ export type DesktopHost = {
   appearance: {
     setApplied(state: AppliedAppearance): Promise<void>
   }
+  hostManagement: HostManagementHostApi
+  conceptKnowledge: ConceptKnowledgeHostApi
+  conversationContext: ConversationContextHostApi
+  dataConnections: DataConnectionsHostApi
 }
 
 declare global {

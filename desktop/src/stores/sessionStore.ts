@@ -75,6 +75,7 @@ type SessionStore = {
   renameSession: (id: string, title: string) => Promise<void>
   updateSessionTitle: (id: string, title: string) => void
   updateSessionMessageCount: (id: string, messageCount: number) => void
+  updateSessionSensitivity: (id: string, sensitiveContext: boolean) => void
   updateSessionPermissionMode: (id: string, mode: PermissionMode) => void
   setActiveSession: (id: string | null) => void
 }
@@ -453,6 +454,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set((s) => ({
       sessions: s.sessions.map((session) =>
         session.id === id ? { ...session, messageCount } : session,
+      ),
+    }))
+  },
+
+  updateSessionSensitivity: (id, sensitiveContext) => {
+    set((s) => ({
+      sessions: s.sessions.map((session) =>
+        session.id === id ? { ...session, sensitiveContext } : session,
       ),
     }))
   },

@@ -18,6 +18,7 @@ import {
   setTraceProjectionAfterIndexHookForTests,
   traceCaptureService,
   updateTraceCaptureSettings,
+  waitForTraceCaptureIdleForTests,
 } from '../services/traceCaptureService.js'
 import { sessionService } from '../services/sessionService.js'
 import { createDumpPromptsFetch } from '../../services/api/dumpPrompts.js'
@@ -41,6 +42,21 @@ async function waitForTrace(
   return traceCaptureService.getSessionTrace(sessionId)
 }
 
+async function removeTempDirWithWindowsRetry(directory: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rm(directory, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (process.platform !== 'win32' || !['EACCES', 'EBUSY', 'EPERM', 'ENOTEMPTY'].includes(code ?? '') || attempt >= 20) {
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-capture-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -51,6 +67,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // A readable trace can precede completion of its SQLite projection and file close.
+  await waitForTraceCaptureIdleForTests()
   clearTraceCaptureStateForTests()
   if (originalConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR
@@ -62,7 +80,7 @@ afterEach(async () => {
   } else {
     process.env.CC_HAHA_LOCAL_INDEX = originalLocalIndexMode
   }
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await removeTempDirWithWindowsRetry(tmpDir)
 })
 
 describe('trace capture service', () => {

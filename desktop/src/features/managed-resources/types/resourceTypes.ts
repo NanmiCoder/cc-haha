@@ -9,6 +9,7 @@
  */
 
 import type { DataConnection } from './dataConnectionTypes.js'
+export type { DataConnection }
 
 export type Id = string
 export type Revision = number
@@ -221,3 +222,52 @@ export type PublicContextManifestV2 = {
   secretFieldCount: number
   estimatedTokens: number
 }
+
+// ==========================================
+// SSH Connection & Terminal Events (M3)
+// ==========================================
+
+export type SshConnectionStatus =
+  | 'allocated'
+  | 'connecting'
+  | 'awaiting_host_key'
+  | 'authenticating'
+  | 'ready'
+  | 'closing'
+  | 'closed'
+  | 'disconnected'
+  | 'failed'
+
+export type SshHostKeyChallenge = {
+  challengeId: string
+  endpoint: string
+  algorithm: string
+  fingerprint: string
+}
+
+export type HostManagementEvent =
+  | {
+      type: 'connection-state'
+      connectionId: string
+      generation: number
+      status: SshConnectionStatus
+      error?: string
+      hostKeyChallenge?: SshHostKeyChallenge
+    }
+  | {
+      type: 'terminal-output'
+      connectionId: string
+      generation: number
+      seq: number
+      data: string // base64
+      byteLength: number
+    }
+  | {
+      type: 'connection-host-key-changed'
+      connectionId: string
+      generation: number
+      endpoint: string
+      algorithm: string
+      oldFingerprint: string
+      newFingerprint: string
+    }

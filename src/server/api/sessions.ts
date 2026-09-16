@@ -65,6 +65,7 @@ import { localIndexCoordinator } from '../services/localIndex/coordinator.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { isPetAccessAuthorized } from '../localAccessAuth.js'
 import { PET_SESSION_LIMIT } from '../petAccessPolicy.js'
+import { isSessionSensitivityMarked } from '../../services/managedContext/sensitivityPolicy.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
 
@@ -443,6 +444,10 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
   }
   return Response.json({
     ...result,
+    sessions: result.sessions.map((session) => ({
+      ...session,
+      sensitiveContext: isSessionSensitivityMarked(session.id),
+    })),
     index: localIndexCoordinator.getPublicStatus(),
   })
 }
@@ -452,7 +457,10 @@ async function getSession(sessionId: string): Promise<Response> {
   if (!detail) {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
-  return Response.json(detail)
+  return Response.json({
+    ...detail,
+    sensitiveContext: isSessionSensitivityMarked(sessionId),
+  })
 }
 
 async function getSessionMessages(sessionId: string): Promise<Response> {

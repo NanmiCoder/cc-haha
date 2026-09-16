@@ -5,6 +5,8 @@ export type ClaudeCliLauncher = {
   command: string
   kind: 'script' | 'sidecar' | 'binary'
   requiresAppRoot: boolean
+  /** Explicit Bun runtime for source-script launchers when the current process is Bun. */
+  scriptRuntime?: string
 }
 
 export function resolveBundledCliPathFromExecPath(
@@ -27,6 +29,12 @@ export function resolveBundledCliPathFromExecPath(
   return null
 }
 
+function bunRuntimeFromExecPath(execPath: string | undefined): string | undefined {
+  if (!execPath) return undefined
+  const execName = path.basename(execPath).toLowerCase()
+  return execName === 'bun' || execName === 'bun.exe' ? execPath : undefined
+}
+
 export function resolveClaudeCliLauncher(options?: {
   cliPath?: string | null
   execPath?: string
@@ -43,6 +51,7 @@ export function resolveClaudeCliLauncher(options?: {
       command,
       kind: 'script',
       requiresAppRoot: false,
+      scriptRuntime: bunRuntimeFromExecPath(options?.execPath ?? process.execPath),
     }
   }
 
@@ -76,7 +85,7 @@ export function buildClaudeCliArgs(
   appRoot: string | undefined = process.env.CLAUDE_APP_ROOT,
 ): string[] {
   if (launcher.kind === 'script') {
-    return ['bun', launcher.command, ...baseArgs]
+    return [launcher.scriptRuntime ?? 'bun', launcher.command, ...baseArgs]
   }
 
   if (launcher.kind === 'sidecar') {

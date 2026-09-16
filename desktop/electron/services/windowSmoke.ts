@@ -1,8 +1,9 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import type { BrowserWindow } from 'electron'
 
 export type WindowSmokeEnv = {
   CC_HAHA_ELECTRON_WINDOW_SMOKE_LOG?: string
+  CC_HAHA_ELECTRON_WINDOW_SMOKE_SCREENSHOT?: string
 }
 
 type WindowSmokeWindow = Pick<
@@ -43,4 +44,16 @@ export function writeWindowSmokeSnapshot(
     ts: new Date().toISOString(),
     ...payload,
   })}\n`)
+}
+
+export async function writeWindowSmokeScreenshot(
+  window: Pick<BrowserWindow, 'isDestroyed'> & {
+    webContents: Pick<BrowserWindow['webContents'], 'capturePage'>
+  },
+  env: WindowSmokeEnv = process.env,
+): Promise<void> {
+  const screenshotPath = env.CC_HAHA_ELECTRON_WINDOW_SMOKE_SCREENSHOT?.trim()
+  if (!screenshotPath || window.isDestroyed()) return
+  const image = await window.webContents.capturePage()
+  writeFileSync(screenshotPath, image.toPNG())
 }

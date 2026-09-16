@@ -347,7 +347,7 @@ describe('.agents/skills discovery', () => {
       expect(names).toContain('project-skill')
     })
 
-    it('skips a skill whose directory name could forge lines in the listing', async () => {
+    it.skipIf(process.platform === 'win32')('skips a skill whose directory name could forge lines in the listing', async () => {
       // The model sees the catalog as one `- name: description` line per skill,
       // and the directory name goes in verbatim. A name carrying a line break
       // therefore writes its own entries — and `.agents` is a directory other
