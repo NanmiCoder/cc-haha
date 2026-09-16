@@ -9,6 +9,8 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
+import type { Readable } from 'node:stream'
 import { ProviderService } from './providerService.js'
 import type { ProviderUseProxy } from '../types/provider.js'
 import { SettingsService } from './settingsService.js'
@@ -153,6 +155,65 @@ export function buildConversationCliSpawnOptions(
   } as const
 }
 
+/**
+ * Node child process carrying a Bun-style `exited` promise so the session
+ * lifecycle code can keep awaiting exit as a plain promise.
+ *
+ * node:child_process instead of Bun.spawn: Bun's windowsHide does not
+ * reliably pass CREATE_NO_WINDOW on Windows, so every CLI launch allocated a
+ * visible console window (oven-sh/bun#19916, #23427). Node's implementation
+ * is reliable.
+ */
+type CliChildProcess = ChildProcess & {
+  exited: Promise<number>
+  /** Async spawn failure (e.g. ENOENT — Node reports it as an 'error' event instead of Bun's synchronous throw). */
+  spawnError: Error | null
+}
+
+// Bun resolves `proc.exited` to the conventional 128+N code when the child is
+// killed by a signal (143 = SIGTERM, 137 = SIGKILL); Node reports
+// (code=null, signal) instead. Map signals back so cliExitSeverity's
+// kill-code allowlist keeps working.
+const SIGNAL_NUMBER: Record<string, number> = {
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGABRT: 6,
+  SIGKILL: 9,
+  SIGTERM: 15,
+}
+
+function spawnCliChildProcess(
+  args: string[],
+  spawnOptions: ReturnType<typeof buildConversationCliSpawnOptions>,
+): CliChildProcess {
+  const proc = nodeSpawn(args[0], args.slice(1), {
+    cwd: spawnOptions.cwd,
+    env: spawnOptions.env,
+    windowsHide: spawnOptions.windowsHide,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as CliChildProcess
+  proc.spawnError = null
+  proc.exited = new Promise<number>((resolve) => {
+    let settled = false
+    const settle = (code: number) => {
+      if (!settled) {
+        settled = true
+        resolve(code)
+      }
+    }
+    proc.once('exit', (code, signal) => {
+      const signalNumber = signal ? SIGNAL_NUMBER[signal] : undefined
+      settle(code ?? (signal ? 128 + (signalNumber ?? 0) : -1))
+    })
+    proc.once('error', (err) => {
+      proc.spawnError = err
+      settle(-1)
+    })
+  })
+  return proc
+}
+
 type AttachmentRef = {
   type: 'file' | 'image'
   name?: string
@@ -204,7 +265,7 @@ function networkRoutingFingerprint(
 }
 
 type SessionProcess = {
-  proc: ReturnType<typeof Bun.spawn>
+  proc: CliChildProcess
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
@@ -454,9 +515,9 @@ export class ConversationService {
     )
     const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
 
-    let proc: ReturnType<typeof Bun.spawn>
+    let proc: CliChildProcess
     try {
-      proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
+      proc = spawnCliChildProcess(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
     } catch (spawnErr) {
       void diagnosticsService.recordEvent({
         type: 'cli_spawn_failed',
@@ -538,6 +599,34 @@ export class ConversationService {
     if (startupGraceTimer) clearTimeout(startupGraceTimer)
 
     const startupExitCode = earlyExitCode ?? session.startupExitCode
+
+    if (proc.spawnError) {
+      // Node reports spawn failures (e.g. ENOENT) asynchronously as an
+      // 'error' event instead of Bun's synchronous throw — surface the same
+      // diagnostics + ConversationStartupError the catch block used to emit.
+      this.sessions.delete(sessionId)
+      const spawnErr = proc.spawnError
+      void diagnosticsService.recordEvent({
+        type: 'cli_spawn_failed',
+        severity: 'error',
+        sessionId,
+        summary: spawnErr instanceof Error ? spawnErr.message : String(spawnErr),
+        details: {
+          workDir,
+          permissionMode: options?.permissionMode || 'default',
+          providerId: options?.providerId ?? null,
+          model: options?.model ?? null,
+          error: spawnErr,
+        },
+      })
+      throw new ConversationStartupError(
+        `Failed to spawn CLI in ${launchWorkDir}: ${
+          spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
+        }`,
+        'CLI_SPAWN_FAILED',
+      )
+    }
+
     if (startupExitCode !== null) {
       await this.waitForProcessOutputDrain(session)
       const startupError = this.buildStartupError(sessionId, startupExitCode)
@@ -1397,20 +1486,19 @@ export class ConversationService {
 
   private async readProcessOutputStream(
     sessionId: string,
-    stream: ReadableStream | null | undefined,
+    stream: Readable | null | undefined,
     streamName: 'stdout' | 'stderr',
   ): Promise<void> {
     if (!stream) return
 
-    const reader = stream.getReader()
     const decoder = new TextDecoder()
 
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const text = decoder.decode(value, { stream: true })
+      // Node Readable async iteration instead of Bun's Web Streams reader.
+      // The try/catch below still swallows read failures (e.g. the stream
+      // being destroyed mid-read on kill) so they don't kill the session.
+      for await (const chunk of stream) {
+        const text = decoder.decode(chunk as Buffer, { stream: true })
         if (!text.trim()) continue
 
         const session = this.sessions.get(sessionId)

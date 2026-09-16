@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { spawn as nodeSpawn } from 'node:child_process'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -413,7 +414,19 @@ export class DiagnosticsService {
       return
     }
     if (process.platform === 'win32') {
-      Bun.spawn(['cmd', '/c', 'start', '', dir], { stdout: 'ignore', stderr: 'ignore' })
+      // node:child_process + windowsHide instead of Bun.spawn: Bun's
+      // windowsHide does not reliably pass CREATE_NO_WINDOW on Windows
+      // (oven-sh/bun#19916, #23427), so the cmd.exe wrapper flashed a console
+      // window. start itself launches explorer.exe (GUI, no flash) — this
+      // hides only the intermediate cmd.exe.
+      const proc = nodeSpawn('cmd', ['/c', 'start', '', dir], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      // Fire-and-forget: swallow async spawn errors (Node reports them as an
+      // 'error' event instead of Bun's synchronous throw) so they cannot
+      // crash the process.
+      proc.on('error', () => {})
       return
     }
     Bun.spawn(['xdg-open', dir], { stdout: 'ignore', stderr: 'ignore' })

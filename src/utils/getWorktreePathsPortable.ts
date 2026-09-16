@@ -14,7 +14,7 @@ export async function getWorktreePathsPortable(cwd: string): Promise<string[]> {
     const { stdout } = await execFileAsync(
       'git',
       ['worktree', 'list', '--porcelain'],
-      { cwd, timeout: 5000 },
+      { cwd, timeout: 5000, windowsHide: true },
     )
     if (!stdout) return []
     return stdout

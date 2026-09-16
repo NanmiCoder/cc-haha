@@ -174,6 +174,7 @@ async function runGit(
       timeout,
       maxBuffer: MAX_GIT_BUFFER_BYTES,
       env: { ...process.env, ...GIT_NO_PROMPT_ENV },
+      windowsHide: true,
     })
     return {
       stdout: String(stdout ?? ''),

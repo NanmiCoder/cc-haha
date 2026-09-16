@@ -1991,6 +1991,7 @@ export class ReviewService {
         maxBuffer: MAX_GIT_BUFFER_BYTES,
         encoding: 'utf8',
         env: this.buildGitEnv(),
+        windowsHide: true,
       })
       return { stdout: result.stdout, stderr: result.stderr, code: 0 }
     } catch (error) {

@@ -373,6 +373,7 @@ function ripGrepRaw(
       signal: abortSignal,
       timeout,
       killSignal: process.platform === 'win32' ? undefined : 'SIGKILL',
+      windowsHide: true,
     },
     callback,
   )
@@ -729,24 +730,45 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
   try {
     let test: { code: number; stdout: string }
 
-    // For embedded ripgrep, use Bun.spawn with argv0
+    // For embedded ripgrep, probe with the argv0 locator trick intact.
     if (config.argv0) {
-      // Only Bun embeds ripgrep.
-      // eslint-disable-next-line custom-rules/require-bun-typeof-guard
-      const proc = Bun.spawn([config.command, '--version'], {
+      // node:child_process instead of Bun.spawn: Bun's windowsHide does not
+      // reliably pass CREATE_NO_WINDOW on Windows (oven-sh/bun#19916,
+      // #23427). Node's spawn also supports the argv0 option, so the
+      // embedded-rg locator trick carries over unchanged.
+      const proc = spawn(config.command, ['--version'], {
         argv0: config.argv0,
-        stderr: 'ignore',
-        stdout: 'pipe',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
       })
 
-      // Bun's ReadableStream has .text() at runtime, but TS types don't reflect it
-      const [stdout, code] = await Promise.all([
-        (proc.stdout as unknown as Blob).text(),
-        proc.exited,
-      ])
+      // Node Readable events instead of Bun's Web Streams; exit via an
+      // event promise instead of Bun's `await proc.exited`.
+      const stdoutChunks: Buffer[] = []
+      proc.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
+      proc.stdout?.on('error', () => {})
+      // Startup failure (e.g. ENOENT) surfaces as an async 'error' event —
+      // rethrow so the outer catch marks ripgrep unavailable, like the
+      // previous synchronous spawn throw did.
+      const code = await new Promise<number>((resolve, reject) => {
+        let settled = false
+        proc.once('error', (err) => {
+          if (!settled) {
+            settled = true
+            reject(err)
+          }
+        })
+        proc.once('exit', (exitCode, signal) => {
+          if (!settled) {
+            settled = true
+            resolve(exitCode ?? (signal ? 128 : -1))
+          }
+        })
+      })
+
       test = {
         code,
-        stdout,
+        stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
       }
     } else {
       test = await execFileNoThrow(

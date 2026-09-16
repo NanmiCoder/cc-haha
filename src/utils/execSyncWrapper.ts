@@ -34,5 +34,9 @@ export function execSync_DEPRECATED(
   options?: ExecSyncOptions,
 ): Buffer | string {
   using _ = slowLogging`execSync: ${command.slice(0, 100)}`
-  return nodeExecSync(command, options)
+  // Default windowsHide to prevent console window flashes on Windows.
+  // Every CUI child (cmd.exe, where.exe) spawned from a GUI-subsystem parent
+  // (the Bun-compiled sidecar) allocates a visible console unless CREATE_NO_WINDOW
+  // is passed.  Node's execSync defaults windowsHide to false.
+  return nodeExecSync(command, { windowsHide: true, ...options })
 }

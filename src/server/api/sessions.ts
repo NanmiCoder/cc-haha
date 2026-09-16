@@ -25,6 +25,7 @@
  */
 
 import * as path from 'node:path'
+import { spawn as nodeSpawn } from 'node:child_process'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -1216,25 +1217,35 @@ function getGitInfoCommandTimeoutMs(): number {
 }
 
 async function runGitInfoCommand(workDir: string, args: string[]): Promise<string | null> {
-  let proc: Bun.Subprocess<'ignore', 'pipe', 'ignore'> | null = null
   let timeout: ReturnType<typeof setTimeout> | null = null
 
   try {
-    proc = Bun.spawn(['git', ...args], {
+    // node:child_process instead of Bun.spawn: Bun's windowsHide does not
+    // reliably pass CREATE_NO_WINDOW on Windows (oven-sh/bun#19916, #23427),
+    // so every git-info poll allocated a visible console window. Node's
+    // implementation is reliable.
+    const child = nodeSpawn('git', args, {
       cwd: workDir,
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'ignore',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
     })
 
-    const output = new Response(proc.stdout).text()
-      .then(async (text) => (await proc!.exited) === 0 ? text.trim() : null)
-      .catch(() => null)
+    const output = new Promise<string | null>((resolve) => {
+      // Node Readable events instead of Bun's `new Response(proc.stdout)`.
+      const chunks: Buffer[] = []
+      child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+      child.once('exit', (code) => {
+        resolve(code === 0 ? Buffer.concat(chunks).toString('utf-8').trim() : null)
+      })
+      // Startup failure (e.g. ENOENT) surfaces as an async 'error' event —
+      // resolve null like the previous catch did.
+      child.once('error', () => resolve(null))
+    })
 
     const timedOut = new Promise<null>((resolve) => {
       timeout = setTimeout(() => {
         try {
-          proc?.kill()
+          child.kill()
         } catch {
           // Process may already have exited.
         }

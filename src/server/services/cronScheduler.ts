@@ -8,6 +8,7 @@
  */
 
 import * as fs from 'fs/promises'
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -612,7 +613,7 @@ export class CronScheduler {
   private intervalId: Timer | null = null
   private runningTasks = new Map<
     string,
-    { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string }
+    { proc: ChildProcess; startedAt: number; runId: string }
   >()
   /** Track which minute each task last fired (prevents same-process duplicate within a minute). */
   private lastFiredMinuteKey = new Map<string, string>()
@@ -904,8 +905,9 @@ export class CronScheduler {
       return completedRun
     } catch (err) {
       // spawnTaskAttempt's finally already cleared its per-attempt timeout and
-      // removed the runningTasks entry when the proc matched. If Bun.spawn
-      // threw before the entry was set, delete is a harmless no-op.
+      // removed the runningTasks entry when the proc matched. If spawning
+      // failed before the entry was set (e.g. ENOENT rethrown from
+      // spawnTaskAttempt), delete is a harmless no-op.
       this.runningTasks.delete(task.id)
 
       const completedAt = new Date().toISOString()
@@ -949,17 +951,29 @@ export class CronScheduler {
     const { task, runId, inputPayload, cliArgs, workDir, childEnv, taskTimeoutMs } =
       params
     const attemptStartedAt = Date.now()
-    const proc = Bun.spawn(
-      cliArgs,
-      buildCronTaskSpawnOptions(workDir, childEnv),
-    )
+    // node:child_process instead of Bun.spawn: Bun's windowsHide does not
+    // reliably pass CREATE_NO_WINDOW on Windows, so every spawn allocated a
+    // visible console window (oven-sh/bun#19916, #23427). Node's
+    // implementation is reliable. buildCronTaskSpawnOptions keeps its
+    // documented Bun-style shape; map it onto Node spawn options here.
+    const spawnOptions = buildCronTaskSpawnOptions(workDir, childEnv)
+    const proc = nodeSpawn(cliArgs[0], cliArgs.slice(1), {
+      cwd: spawnOptions.cwd,
+      env: spawnOptions.env,
+      windowsHide: spawnOptions.windowsHide,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
 
     this.runningTasks.set(task.id, { proc, startedAt: attemptStartedAt, runId })
 
-    // Write prompt to stdin then close it
+    // Write prompt to stdin then close it. Unlike Bun's FileSink, a Node
+    // Writable reports write failures (e.g. EPIPE after the child died) as an
+    // async 'error' event instead of a synchronous throw — swallow it to keep
+    // the original "ignore write failures" semantics.
+    proc.stdin?.on('error', () => {})
     try {
-      proc.stdin.write(inputPayload)
-      proc.stdin.end()
+      proc.stdin?.write(inputPayload)
+      proc.stdin?.end()
     } catch {
       // If writing fails, the process may have already exited
     }
@@ -976,34 +990,55 @@ export class CronScheduler {
     }, taskTimeoutMs)
 
     try {
-      // Collect stdout
-      const stdoutChunks: string[] = []
-      if (proc.stdout) {
-        const reader = proc.stdout.getReader()
-        const decoder = new TextDecoder()
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            stdoutChunks.push(decoder.decode(value, { stream: true }))
+      // Collect stdout/stderr as they stream (Node Readable events instead of
+      // Bun's Web Streams). Eager collection keeps both pipes drained so the
+      // child cannot block on an unread pipe while we wait for its exit.
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      proc.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
+      proc.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
+      // Streams may be interrupted on kill — ignore, like the previous
+      // reader.read() try/catch did.
+      proc.stdout?.on('error', () => {})
+      proc.stderr?.on('error', () => {})
+
+      // Wait for exit. Unlike Bun's `await proc.exited`, a startup failure
+      // (e.g. ENOENT) surfaces as an 'error' event rather than a thrown
+      // spawn — rethrow it so executeTask's catch records the failed run.
+      const exitInfo = await new Promise<{
+        code: number | null
+        signal: NodeJS.Signals | null
+        spawnError: Error | null
+      }>((resolve) => {
+        let settled = false
+        proc.once('error', (err) => {
+          if (!settled) {
+            settled = true
+            resolve({ code: null, signal: null, spawnError: err })
           }
-        } catch {
-          // stream may be interrupted on kill
-        }
+        })
+        proc.once('exit', (code, signal) => {
+          if (!settled) {
+            settled = true
+            resolve({ code, signal, spawnError: null })
+          }
+        })
+      })
+
+      if (exitInfo.spawnError) {
+        throw exitInfo.spawnError
       }
 
-      // Wait for exit
-      const exitCode = await proc.exited
       const wasTimeout = Date.now() - attemptStartedAt >= taskTimeoutMs
-      const rawOutput = stdoutChunks.join('')
+      const rawOutput = Buffer.concat(stdoutChunks).toString('utf-8')
+      // Null exit code means the process was killed by a signal (non-Windows
+      // timeout path); record the conventional 128 failure code.
+      const exitCode = exitInfo.code ?? (exitInfo.signal ? 128 : -1)
 
+      // Preserve original semantics: stderr is only surfaced for non-zero exits
       let stderrText = ''
-      if (exitCode !== 0 && proc.stderr) {
-        try {
-          stderrText = await new Response(proc.stderr).text()
-        } catch {
-          // ignore
-        }
+      if (exitCode !== 0) {
+        stderrText = Buffer.concat(stderrChunks).toString('utf-8')
       }
 
       return { exitCode, rawOutput, stderrText, wasTimeout, durationMs: Date.now() - attemptStartedAt }

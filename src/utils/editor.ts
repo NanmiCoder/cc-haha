@@ -102,8 +102,14 @@ export function openFileInExternalEditor(
       // CreateProcess can't execute .cmd/.bat directly. Assemble quoted command
       // string; cmd.exe doesn't expand $() or backticks inside double quotes.
       // Quote each arg so paths with spaces survive the shell join.
+      // windowsHide keeps the intermediate cmd.exe wrapper from flashing a
+      // console window.
       const gotoStr = gotoArgv.map(a => `"${a}"`).join(' ')
-      child = spawn(`${editor} ${gotoStr}`, { ...detachedOpts, shell: true })
+      child = spawn(`${editor} ${gotoStr}`, {
+        ...detachedOpts,
+        shell: true,
+        windowsHide: true,
+      })
     } else {
       // POSIX: argv array with no shell — injection-safe. shell: true would
       // expand $() / backticks inside double quotes, and filePath is
@@ -135,11 +141,13 @@ export function openFileInExternalEditor(
       // On Windows use shell: true so cmd.exe builtins like `start` resolve.
       // shell: true joins args unquoted, so assemble the command string with
       // explicit quoting ourselves (matching promptEditor.ts:74). spawnSync
-      // returns errors in .error rather than throwing.
+      // returns errors in .error rather than throwing. windowsHide keeps the
+      // intermediate cmd.exe wrapper from flashing a console window.
       const lineArg = useGotoLine ? `+${line} ` : ''
       result = spawnSync(`${editor} ${lineArg}"${filePath}"`, {
         ...syncOpts,
         shell: true,
+        windowsHide: true,
       })
     } else {
       // POSIX: spawn directly (no shell), argv array is quote-safe.

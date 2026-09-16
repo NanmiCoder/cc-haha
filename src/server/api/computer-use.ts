@@ -10,6 +10,8 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { access, readFile, mkdir, writeFile, rm } from 'fs/promises'
 import { createHash } from 'crypto'
+import { spawn as nodeSpawn } from 'child_process'
+import type { Readable } from 'stream'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { diagnosticsService } from '../services/diagnosticsService.js'
@@ -125,16 +127,49 @@ async function runCommand(
   args: string[],
 ): Promise<{ ok: boolean; stdout: string; stderr: string; code: number }> {
   try {
-    const proc = Bun.spawn([cmd, ...args], {
-      stdout: 'pipe',
-      stderr: 'pipe',
+    // node:child_process instead of Bun.spawn: Bun's windowsHide does not
+    // reliably pass CREATE_NO_WINDOW on Windows (oven-sh/bun#19916, #23427),
+    // so every python/pip probe allocated a visible console window. Node's
+    // implementation is reliable. windowsHide is a no-op on macOS callers.
+    const proc = nodeSpawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: getPythonCommandEnv(),
+      windowsHide: true,
     })
+    // Node Readable events instead of Bun's `new Response(stream).text()`.
+    const collect = (stream: Readable | null) =>
+      new Promise<string>((resolve, reject) => {
+        if (!stream) {
+          resolve('')
+          return
+        }
+        const chunks: Buffer[] = []
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+        stream.once('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
+        stream.once('error', reject)
+      })
     const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
+      collect(proc.stdout),
+      collect(proc.stderr),
     ])
-    const code = await proc.exited
+    // Startup failure (e.g. ENOENT) surfaces as an async 'error' event —
+    // reject so the catch below returns the same failure shape as the
+    // previous synchronous Bun.spawn throw did.
+    const code = await new Promise<number>((resolve, reject) => {
+      let settled = false
+      proc.once('error', (err) => {
+        if (!settled) {
+          settled = true
+          reject(err)
+        }
+      })
+      proc.once('exit', (exitCode, signal) => {
+        if (!settled) {
+          settled = true
+          resolve(exitCode ?? (signal ? 128 : -1))
+        }
+      })
+    })
     return { ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code }
   } catch {
     return { ok: false, stdout: '', stderr: `Failed to run ${cmd}`, code: -1 }

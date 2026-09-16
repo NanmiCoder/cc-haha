@@ -1093,13 +1093,16 @@ async function detectRunningIDEsImpl(): Promise<IdeType[]> {
         }
       }
     } else if (platform === 'windows') {
-      // On Windows, use tasklist with findstr for multiple patterns
-      const result = await execa(
-        'tasklist | findstr /I "Code.exe Cursor.exe Windsurf.exe idea64.exe pycharm64.exe webstorm64.exe phpstorm64.exe rubymine64.exe clion64.exe goland64.exe rider64.exe datagrip64.exe appcode.exe dataspell64.exe aqua64.exe gateway64.exe fleet.exe studio64.exe"',
-        { shell: true, reject: false },
-      )
+      // On Windows, call tasklist directly (no shell) and filter in JS.
+      // shell:true would route through cmd.exe, whose child processes
+      // (tasklist/findstr) each allocate their own console window.
+      const result = await execa('tasklist', ['/FO', 'CSV', '/NH'], {
+        reject: false,
+        windowsHide: true,
+      })
       const stdout = result.stdout ?? ''
-
+      // CSV row format: "ImageName","PID","SessionName","SessionNum","MemUsage"
+      // Only ImageName is needed for keyword matching below.
       const normalizedStdout = stdout.toLowerCase()
 
       for (const [ide, config] of Object.entries(supportedIdeConfigs)) {

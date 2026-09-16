@@ -666,6 +666,9 @@ export function refreshAwsAuth(awsAuthRefresh: string): Promise<boolean> {
   return new Promise(resolve => {
     const refreshProc = exec(awsAuthRefresh, {
       timeout: AWS_AUTH_REFRESH_TIMEOUT_MS,
+      // exec goes through the shell (cmd.exe on Windows) — keep its console
+      // window hidden during the refresh.
+      windowsHide: true,
     })
     refreshProc.stdout!.on('data', data => {
       const output = data.toString().trim()
@@ -934,6 +937,9 @@ export function refreshGcpAuth(gcpAuthRefresh: string): Promise<boolean> {
   return new Promise(resolve => {
     const refreshProc = exec(gcpAuthRefresh, {
       timeout: GCP_AUTH_REFRESH_TIMEOUT_MS,
+      // exec goes through the shell (cmd.exe on Windows) — keep its console
+      // window hidden during the refresh.
+      windowsHide: true,
     })
     refreshProc.stdout!.on('data', data => {
       const output = data.toString().trim()
