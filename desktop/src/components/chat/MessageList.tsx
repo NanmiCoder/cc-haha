@@ -2121,7 +2121,7 @@ function VirtualSpacer({ height, position }: { height: number; position: 'top' |
       <div
         data-virtual-spacer={position}
         aria-hidden="true"
-        style={{ height }}
+        style={{ height, overflowAnchor: 'none' }}
       />
     )
   }
@@ -2139,7 +2139,11 @@ function VirtualSpacer({ height, position }: { height: number; position: 'top' |
   }
 
   return (
-    <div data-virtual-spacer={position} aria-hidden="true">
+    <div
+      data-virtual-spacer={position}
+      aria-hidden="true"
+      style={{ overflowAnchor: 'none' }}
+    >
       {chunks.map((chunk) => (
         <div
           key={chunk.key}
