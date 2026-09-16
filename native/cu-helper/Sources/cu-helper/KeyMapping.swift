@@ -147,6 +147,15 @@ public enum KeyMapping {
         }
 
         let keyCode = try keyCode(for: keyToken)
+        // XKeysym names denote the resulting key, including the modifier
+        // required to produce it. The official macOS receiver gets Shift for
+        // both `A` and `question`; dropping it changes the requested input.
+        if shiftedNamedKeys.contains(keyToken.lowercased()) {
+            flags.insert(.maskShift)
+        } else if keyToken.count == 1, let character = keyToken.first,
+                  let mapping = characterMapping(character) {
+            flags.formUnion(mapping.flags)
+        }
         return Chord(
             keyCode: keyCode,
             flags: flags,
@@ -195,13 +204,13 @@ public enum KeyMapping {
     /// not a modifier. Matches the xdotool + mac_helper alias vocabulary.
     public static func modifierFlag(for token: String) -> CGEventFlags? {
         switch token.lowercased() {
-        case "super", "cmd", "command", "meta", "win":
+        case "super", "super_l", "super_r", "cmd", "command", "meta", "meta_l", "meta_r", "win":
             return .maskCommand
-        case "ctrl", "control":
+        case "ctrl", "control", "control_l", "control_r":
             return .maskControl
-        case "shift":
+        case "shift", "shift_l", "shift_r":
             return .maskShift
-        case "alt", "option", "opt":
+        case "alt", "alt_l", "alt_r", "option", "opt":
             return .maskAlternate
         case "fn":
             return .maskSecondaryFn
@@ -237,8 +246,8 @@ public enum KeyMapping {
         put(kVK_Space, "space", "spacebar")
         put(kVK_Escape, "escape", "esc")
         // kVK_Delete is the Backspace (delete-left) key in Carbon naming.
-        put(kVK_Delete, "backspace", "back_space", "delete")
-        put(kVK_ForwardDelete, "forwarddelete", "forward_delete", "del", "deletef")
+        put(kVK_Delete, "backspace", "back_space")
+        put(kVK_ForwardDelete, "delete", "forwarddelete", "forward_delete", "del", "deletef")
 
         // ── Navigation ────────────────────────────────────────────────────
         put(kVK_UpArrow, "up", "uparrow", "up_arrow")
@@ -298,9 +307,26 @@ public enum KeyMapping {
         put(kVK_ANSI_Comma, "comma", "less")
         put(kVK_ANSI_Period, "period", "greater")
         put(kVK_ANSI_Slash, "slash", "question")
+        put(kVK_ANSI_1, "exclam")
+        put(kVK_ANSI_2, "at")
+        put(kVK_ANSI_3, "numbersign")
+        put(kVK_ANSI_4, "dollar")
+        put(kVK_ANSI_5, "percent")
+        put(kVK_ANSI_6, "asciicircum")
+        put(kVK_ANSI_7, "ampersand")
+        put(kVK_ANSI_8, "asterisk")
+        put(kVK_ANSI_9, "parenleft")
+        put(kVK_ANSI_0, "parenright")
 
         return t
     }()
+
+    private static let shiftedNamedKeys: Set<String> = [
+        "asciitilde", "underscore", "plus", "braceleft", "braceright",
+        "bar", "colon", "quotedbl", "less", "greater", "question",
+        "exclam", "at", "numbersign", "dollar", "percent", "asciicircum",
+        "ampersand", "asterisk", "parenleft", "parenright",
+    ]
 
     // MARK: - Layout reverse-map
 
@@ -311,13 +337,13 @@ public enum KeyMapping {
     /// output equals `ch`. Returns `nil` for characters not reachable on the
     /// active layout (the caller then throws `unknown_key`).
     ///
-    /// Note: only the bare keycode is returned — we do NOT fold in the shift/
-    /// option modifier that was needed to *produce* the glyph during the scan.
-    /// The injection layer types literal text via `keyboardSetUnicodeString`
-    /// (see Injection.type); `press_key` is for addressing physical keys and
-    /// chords, so returning the unshifted physical key is the correct behavior
-    /// for tokens like "/" or ";".
+    /// Callers needing a physical code use this compatibility wrapper. Chord
+    /// parsing also keeps the layout modifiers from `characterMapping`.
     static func keyCodeForCharacter(_ ch: Character) -> CGKeyCode? {
+        characterMapping(ch)?.keyCode
+    }
+
+    private static func characterMapping(_ ch: Character) -> (keyCode: CGKeyCode, flags: CGEventFlags)? {
         guard
             let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
             let layoutPtr = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData)
@@ -361,7 +387,10 @@ public enum KeyMapping {
                     if status == noErr, length > 0 {
                         let produced = String(utf16CodeUnits: chars, count: length)
                         if produced == target {
-                            return CGKeyCode(vk)
+                            var flags: CGEventFlags = []
+                            if mod & UInt32(shiftKey >> 8) != 0 { flags.insert(.maskShift) }
+                            if mod & UInt32(optionKey >> 8) != 0 { flags.insert(.maskAlternate) }
+                            return (CGKeyCode(vk), flags)
                         }
                     }
                 }

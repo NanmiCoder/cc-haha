@@ -20,8 +20,10 @@
  *   - delta.reasoning          (GLM-5, Cerebras, Groq — mapped to reasoning_content)
  */
 
+import { getOpenAIPolicyError } from '../../../services/openaiAuth/policyError.js'
 import type { OpenAIChatStreamChunk } from '../transform/types.js'
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
+import { getChatResponseError, parseCompleteChatToolArguments } from '../transform/openaiChatToAnthropic.js'
 import { openaiUsageToAnthropic } from '../transform/usage.js'
 
 // ─── Types ─────────────────────────────────────────────────
@@ -61,6 +63,7 @@ type StreamState = {
   // Holding pattern: hold message_delta until usage arrives
   // (some providers send finish_reason and usage in separate chunks)
   heldMessageDelta: SseEvent | null
+  finishReason: string | null
 }
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -83,6 +86,7 @@ function createState(model: string): StreamState {
     messageDeltaSent: false,
     messageStopSent: false,
     heldMessageDelta: null,
+    finishReason: null,
   }
 }
 
@@ -97,57 +101,115 @@ export function openaiChatStreamToAnthropic(
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  let buffer = ''
   const state = createState(model)
+  const reader = upstream.getReader()
+  let cancelled = false
 
   return new ReadableStream({
     async start(controller) {
-      const reader = upstream.getReader()
-      let errored = false
+      let buffer = ''
+      let dataLines: string[] = []
+      let eventName = ''
+      let ended = false
+
+      const dispatch = () => {
+        if (ended || dataLines.length === 0) {
+          eventName = ''
+          return
+        }
+        const data = dataLines.join('\n')
+        dataLines = []
+        if (data.trim() === '[DONE]') {
+          finalizeStream(state)
+          ended = true
+          return
+        }
+        let chunk: OpenAIChatStreamChunk
+        try {
+          chunk = JSON.parse(data)
+        } catch {
+          throw new Error('OpenAI Chat upstream sent malformed SSE JSON')
+        }
+        const policyError = getOpenAIPolicyError(chunk)
+        const upstreamError = getChatResponseError(chunk)
+        if (policyError || upstreamError || eventName === 'error') {
+          enqueue(state, 'error', {
+            type: 'error',
+            error: policyError
+              ? { type: 'permission_error', ...policyError }
+              : { type: 'api_error', message: upstreamError || 'OpenAI Chat upstream reported an error' },
+          })
+          ended = true
+          return
+        }
+        eventName = ''
+        processChunk(chunk, state)
+      }
+      const consumeLine = (line: string) => {
+        if (line === '') {
+          dispatch()
+          flushQueue(state, controller, encoder)
+          return
+        }
+        if (line.startsWith(':')) return
+        const colon = line.indexOf(':')
+        const field = colon < 0 ? line : line.slice(0, colon)
+        let value = colon < 0 ? '' : line.slice(colon + 1)
+        if (value.startsWith(' ')) value = value.slice(1)
+        if (field === 'data') dataLines.push(value)
+        if (field === 'event') eventName = value
+      }
+      const consumeBuffer = (eof = false) => {
+        while (!ended) {
+          const newline = buffer.search(/[\r\n]/)
+          if (newline < 0) break
+          // A trailing CR may be the first half of CRLF in the next byte chunk.
+          if (!eof && buffer[newline] === '\r' && newline === buffer.length - 1) break
+          const width = buffer[newline] === '\r' && buffer[newline + 1] === '\n' ? 2 : 1
+          const line = buffer.slice(0, newline)
+          buffer = buffer.slice(newline + width)
+          consumeLine(line)
+        }
+        if (eof && !ended) {
+          if (buffer) consumeLine(buffer)
+          buffer = ''
+          dispatch()
+        }
+      }
 
       try {
-        while (true) {
+        while (!ended && !cancelled) {
           const { done, value } = await reader.read()
+          if (cancelled) return
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+          consumeBuffer(done)
+          flushQueue(state, controller, encoder)
           if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed || trimmed.startsWith(':')) continue
-
-            if (trimmed === 'data: [DONE]') {
-              finalizeStream(state)
-              flushQueue(state, controller, encoder)
-              continue
-            }
-
-            if (!trimmed.startsWith('data: ')) continue
-            const jsonStr = trimmed.slice(6)
-
-            let chunk: OpenAIChatStreamChunk
-            try {
-              chunk = JSON.parse(jsonStr)
-            } catch {
-              continue
-            }
-
-            processChunk(chunk, state)
-            flushQueue(state, controller, encoder)
-          }
         }
-      } catch (err) {
-        errored = true
-        controller.error(err)
-      } finally {
-        if (!errored) {
-          finalizeStream(state)
+        if (!cancelled) {
+          if (!ended) finalizeStream(state)
           flushQueue(state, controller, encoder)
           controller.close()
         }
+      } catch (err) {
+        if (!cancelled) {
+          // A transport or conversion failure must never be followed by success.
+          state.queue.length = 0
+          enqueue(state, 'error', {
+            type: 'error',
+            error: { type: 'stream_error', message: err instanceof Error ? err.message : String(err) },
+          })
+          flushQueue(state, controller, encoder)
+          controller.close()
+        }
+      } finally {
+        await reader.cancel().catch(() => {})
+        reader.releaseLock()
       }
+    },
+    async cancel(reason) {
+      cancelled = true
+      await reader.cancel(reason)
     },
   })
 }
@@ -237,6 +299,10 @@ function closeAllToolBlocks(state: StreamState): void {
   }
 }
 
+function closeCurrentNonToolBlock(state: StreamState): void {
+  if (state.currentBlockType !== 'tool_use') closeCurrentBlock(state)
+}
+
 function closeAllOpenBlocks(state: StreamState): void {
   // Close current text/thinking block. Tool blocks are tracked separately
   // because providers can stream multiple tool calls in parallel.
@@ -293,38 +359,6 @@ function extractReasoning(delta: DeltaEx): { thinking: string; signature: string
   return null
 }
 
-/**
- * Determine what block type this chunk carries and whether it's a new block.
- * Priority (matches LiteLLM): tool_calls > text > reasoning > ignore
- */
-function detectBlockTransition(
-  delta: DeltaEx,
-  state: StreamState,
-): { type: ContentBlockType; isNew: boolean } | null {
-  // Priority 1: Tool calls
-  if (delta.tool_calls && delta.tool_calls.length > 0) {
-    const tc = delta.tool_calls[0]
-    // A tool call with function.name signals a NEW tool block
-    const isNew = state.currentBlockType !== 'tool_use' || !!(tc.function?.name)
-    return { type: 'tool_use', isNew }
-  }
-
-  // Priority 2: Text content
-  if (delta.content != null && delta.content !== '') {
-    const isNew = state.currentBlockType !== 'text' || !state.blockStartSent
-    return { type: 'text', isNew }
-  }
-
-  // Priority 3: Reasoning/thinking
-  const reasoning = extractReasoning(delta)
-  if (reasoning) {
-    const isNew = state.currentBlockType !== 'thinking' || !state.blockStartSent
-    return { type: 'thinking', isNew }
-  }
-
-  return null
-}
-
 // ─── Main chunk processing ─────────────────────────────────
 
 function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
@@ -343,32 +377,27 @@ function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
   state.model = chunk.model || state.model
   ensureMessageStart(state, chunk.id)
 
-  const delta = choice.delta as DeltaEx
-
-  // Detect what this chunk carries
-  const transition = detectBlockTransition(delta, state)
-
-  if (transition) {
-    // Handle block transition: close previous block if type changed
-    if (transition.isNew && state.blockStartSent && !state.blockStopSent) {
-      if (state.currentBlockType === 'tool_use' && transition.type !== 'tool_use') {
-        closeAllToolBlocks(state)
-      } else if (state.currentBlockType !== 'tool_use') {
-        closeCurrentBlock(state)
-      }
+  const delta = (choice.delta || {}) as DeltaEx
+  if (state.finishReason) {
+    if (chunk.usage) mergeUsageIntoHeldDelta(state, chunk.usage)
+    if (extractReasoning(delta) || delta.content || delta.tool_calls?.length) {
+      throw new Error('OpenAI Chat upstream sent content after finish_reason')
     }
+    return
+  }
 
-    switch (transition.type) {
-      case 'thinking':
-        handleThinking(delta, state)
-        break
-      case 'text':
-        handleText(delta, state)
-        break
-      case 'tool_use':
-        handleToolCalls(delta, state)
-        break
-    }
+  // One delta may carry reasoning, text and calls together. Preserve each part.
+  if (extractReasoning(delta)) {
+    if (state.currentBlockType !== 'thinking') closeCurrentNonToolBlock(state)
+    handleThinking(delta, state)
+  }
+  if (delta.content != null && delta.content !== '') {
+    if (state.currentBlockType !== 'text') closeCurrentNonToolBlock(state)
+    handleText(delta, state)
+  }
+  if (delta.tool_calls?.length) {
+    closeCurrentNonToolBlock(state)
+    handleToolCalls(delta, state)
   }
 
   // Handle finish_reason
@@ -383,7 +412,7 @@ function handleThinking(delta: DeltaEx, state: StreamState): void {
   const reasoning = extractReasoning(delta)
   if (!reasoning) return
 
-  if (state.currentBlockType !== 'thinking' || !state.blockStartSent) {
+  if (state.currentBlockType !== 'thinking' || !state.blockStartSent || state.blockStopSent) {
     openBlock(state, 'thinking', { type: 'thinking', thinking: '' })
   }
 
@@ -402,7 +431,7 @@ function handleThinking(delta: DeltaEx, state: StreamState): void {
 function handleText(delta: DeltaEx, state: StreamState): void {
   if (delta.content == null || delta.content === '') return
 
-  if (state.currentBlockType !== 'text' || !state.blockStartSent) {
+  if (state.currentBlockType !== 'text' || !state.blockStartSent || state.blockStopSent) {
     openBlock(state, 'text', { type: 'text', text: '' })
   }
 
@@ -416,6 +445,9 @@ function handleToolCalls(delta: DeltaEx, state: StreamState): void {
 
   for (const tc of delta.tool_calls) {
     const tcIndex = tc.index
+    if (!Number.isInteger(tcIndex) || tcIndex < 0) {
+      throw new Error('OpenAI Chat tool delta is missing a valid index')
+    }
 
     if (!state.toolBlocks.has(tcIndex)) {
       state.toolBlocks.set(tcIndex, {
@@ -424,8 +456,17 @@ function handleToolCalls(delta: DeltaEx, state: StreamState): void {
     }
 
     const block = state.toolBlocks.get(tcIndex)!
-    if (tc.id) block.id = tc.id
-    if (tc.function?.name) block.name += tc.function.name
+    if (tc.id) {
+      if (block.id && block.id !== tc.id) throw new Error('OpenAI Chat tool id changed within one index')
+      if ([...state.toolBlocks.values()].some(other => other !== block && other.id === tc.id)) {
+        throw new Error('OpenAI Chat tool id was reused for another index')
+      }
+      block.id = tc.id
+    }
+    if (tc.function?.name) {
+      if (block.started && block.name !== tc.function.name) throw new Error('OpenAI Chat tool name changed after its block started')
+      if (!block.started && block.name !== tc.function.name) block.name += tc.function.name
+    }
     const argumentsDelta = stringifyOpenAIToolArguments(tc.function?.arguments)
     if (argumentsDelta) block.argsBuffer += argumentsDelta
 
@@ -451,6 +492,9 @@ function handleToolCalls(delta: DeltaEx, state: StreamState): void {
         })
       }
     } else if (block.started && argumentsDelta) {
+      state.currentBlockType = 'tool_use'
+      state.currentBlockIndex = block.anthropicIndex
+      state.blockStopSent = false
       emitDelta(state, block.anthropicIndex, {
         type: 'input_json_delta', partial_json: argumentsDelta,
       })
@@ -465,12 +509,25 @@ function handleFinishReason(
   chunk: OpenAIChatStreamChunk,
   state: StreamState,
 ): void {
-  if (state.messageDeltaSent) return
+  if (state.finishReason) return
+  const stopReason = mapFinishReason(finishReason)
+  if (finishReason === 'content_filter' && state.toolBlocks.size > 0) {
+    throw new Error('OpenAI Chat upstream filtered a tool-call turn before it could be committed')
+  }
+  if (finishReason !== 'length' && finishReason !== 'content_filter') {
+    for (const block of state.toolBlocks.values()) {
+      if (!block.id.trim() || !block.name.trim()) throw new Error('OpenAI Chat tool call is missing its id or function name')
+      parseCompleteChatToolArguments(block.argsBuffer)
+    }
+    if (stopReason === 'tool_use' && state.toolBlocks.size === 0) {
+      throw new Error('OpenAI Chat upstream finished with tool_calls but supplied no tool calls')
+    }
+  }
+  state.finishReason = finishReason
 
   // CRITICAL: close ALL content blocks BEFORE message_delta
   closeAllOpenBlocks(state)
 
-  const stopReason = mapFinishReason(finishReason)
   const usage = chunk.usage
     ? openaiUsageToAnthropic(chunk.usage)
     : { output_tokens: 0 }
@@ -484,14 +541,9 @@ function handleFinishReason(
     },
   }
 
-  // If usage is available in the same chunk, emit immediately
-  if (chunk.usage) {
-    state.messageDeltaSent = true
-    state.queue.push(messageDelta)
-  } else {
-    // Hold message_delta, wait for usage chunk
-    state.heldMessageDelta = messageDelta
-  }
+  // Keep the terminal event until DONE/EOF so usage tails can update it and
+  // a late upstream failure cannot follow an already advertised success.
+  state.heldMessageDelta = messageDelta
 }
 
 function mergeUsageIntoHeldDelta(
@@ -502,14 +554,18 @@ function mergeUsageIntoHeldDelta(
 
   const data = state.heldMessageDelta.data as Record<string, unknown>
   data.usage = openaiUsageToAnthropic(usage)
-  state.messageDeltaSent = true
-  state.queue.push(state.heldMessageDelta)
-  state.heldMessageDelta = null
 }
 
 function finalizeStream(state: StreamState): void {
   if (state.messageStopSent) return
   state.messageStopSent = true
+  if (!state.finishReason) {
+    enqueue(state, 'error', {
+      type: 'error',
+      error: { type: 'stream_truncated', message: 'OpenAI Chat upstream stream ended without finish_reason' },
+    })
+    return
+  }
 
   ensureMessageStart(state)
 
@@ -523,16 +579,6 @@ function finalizeStream(state: StreamState): void {
     state.heldMessageDelta = null
   }
 
-  // Emit message_delta if never sent (e.g., stream ended without finish_reason)
-  if (!state.messageDeltaSent) {
-    state.messageDeltaSent = true
-    enqueue(state, 'message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
-      usage: { output_tokens: 0 },
-    })
-  }
-
   enqueue(state, 'message_stop', { type: 'message_stop' })
 }
 
@@ -544,6 +590,6 @@ function mapFinishReason(reason: string): string {
     case 'tool_calls': return 'tool_use'
     case 'length': return 'max_tokens'
     case 'content_filter': return 'end_turn'
-    default: return 'end_turn'
+    default: throw new Error(`OpenAI Chat upstream returned unknown finish_reason: ${reason}`)
   }
 }

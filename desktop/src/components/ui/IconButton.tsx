@@ -7,7 +7,7 @@ import { Spinner } from './Spinner'
 export type IconButtonSize = '2xs' | 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl'
 export type IconButtonTone = 'default' | 'secondary' | 'muted' | 'brand' | 'danger'
 /** Which surface this button sits on — decides its hover fill. */
-export type IconButtonSurface = 'default' | 'sidebar' | 'terminal'
+export type IconButtonSurface = 'default' | 'sidebar' | 'terminal' | 'media'
 
 export type IconButtonProps =
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'aria-label' | 'title'> & {
@@ -100,11 +100,8 @@ const REST_TEXT: Record<IconButtonTone, string> = {
  * Surfaces whose ground does not follow `--color-surface`, and so cannot use
  * the text colors above.
  *
- * The terminal panel is one warm-ink block in every palette (the handoff pins
- * it; only `ink-blue` swaps in a cool ground). Under the four paper themes
- * `--color-text-tertiary` is a dark warm grey — invisible on it — and
- * `--color-surface-hover` is a light cream, which flashes a pale square on the
- * dark bar. Both have to come from the `--color-terminal-*` set instead.
+ * Terminal controls follow the workspace, while media controls keep their
+ * dark surround. Each surface supplies its own text and hover tokens.
  *
  * Partial on purpose: `default` and `sidebar` fall through to the maps above,
  * so their output is unchanged.
@@ -116,6 +113,13 @@ const SURFACE_REST_TEXT: Partial<Record<IconButtonSurface, Record<IconButtonTone
     muted: 'text-[var(--color-terminal-muted)]',
     brand: 'text-[var(--color-terminal-cursor)]',
     danger: 'text-[var(--color-terminal-danger)]',
+  },
+  media: {
+    default: 'text-[var(--color-media-fg)]',
+    secondary: 'text-[var(--color-media-muted)]',
+    muted: 'text-[var(--color-media-muted)]',
+    brand: 'text-[var(--color-media-cursor)]',
+    danger: 'text-[var(--color-media-danger)]',
   },
 }
 
@@ -151,6 +155,13 @@ const HOVER_BG: Record<IconButtonSurface, Record<IconButtonTone, string>> = {
     brand: 'hover:bg-[var(--color-terminal-selection)]',
     danger: 'hover:bg-[var(--color-terminal-selection)]',
   },
+  media: {
+    default: 'hover:bg-[var(--color-media-selection)]',
+    secondary: 'hover:bg-[var(--color-media-selection)]',
+    muted: 'hover:bg-[var(--color-media-selection)]',
+    brand: 'hover:bg-[var(--color-media-selection)]',
+    danger: 'hover:bg-[var(--color-media-selection)]',
+  },
 }
 
 /** Hover text color. Muted and secondary brighten toward primary on hover. */
@@ -168,6 +179,13 @@ const SURFACE_HOVER_TEXT: Partial<Record<IconButtonSurface, Record<IconButtonTon
     default: '',
     secondary: 'hover:text-[var(--color-terminal-fg)]',
     muted: 'hover:text-[var(--color-terminal-fg)]',
+    brand: '',
+    danger: '',
+  },
+  media: {
+    default: '',
+    secondary: 'hover:text-[var(--color-media-fg)]',
+    muted: 'hover:text-[var(--color-media-fg)]',
     brand: '',
     danger: '',
   },
@@ -194,6 +212,7 @@ const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
   default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
   sidebar: 'bg-[var(--color-sidebar-item-hover)] text-[var(--color-text-primary)]',
   terminal: 'bg-[var(--color-terminal-selection)] text-[var(--color-terminal-fg)]',
+  media: 'bg-[var(--color-media-selection)] text-[var(--color-media-fg)]',
 }
 
 const BASE_CLASSES = [

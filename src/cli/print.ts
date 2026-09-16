@@ -235,7 +235,7 @@ import {
 import {
   filterMcpServersByPolicy,
   getMcpConfigByName,
-  isMcpServerDisabled,
+  isMcpServerDisabledForExecution,
   setMcpServerEnabled,
 } from 'src/services/mcp/config.js'
 import {
@@ -256,6 +256,7 @@ import {
   ElicitRequestSchema,
   ElicitationCompleteNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js'
+import { disableStaleMcpReconnect } from './mcpReconnectState.js'
 import { getMcpPrefix } from 'src/services/mcp/mcpStringUtils.js'
 import {
   commandBelongsToServer,
@@ -1455,12 +1456,24 @@ function runHeadlessStreaming(
 
       // Re-initialize all SDK MCP servers with current config
       const sdkSetup = await setupSdkMcpClients(
-        sdkMcpConfigs,
+        Object.fromEntries(Object.entries(sdkMcpConfigs).filter(([name]) =>
+          !isMcpServerDisabledForExecution(name),
+        )),
         (serverName, message) =>
           structuredIO.sendMcpMessage(serverName, message),
       )
-      sdkClients = sdkSetup.clients
-      sdkTools = sdkSetup.tools
+      const disabledSdkNames = new Set(sdkSetup.clients
+        .filter(client => isMcpServerDisabledForExecution(client.name))
+        .map(client => client.name))
+      sdkClients = sdkSetup.clients.map(client => {
+        if (!disabledSdkNames.has(client.name)) return client
+        if (client.type === 'connected') void client.cleanup()
+        return { name: client.name, type: 'disabled' as const, config: client.config }
+      })
+      sdkTools = sdkSetup.tools.filter(tool =>
+        !(tool.mcpInfo && disabledSdkNames.has(tool.mcpInfo.serverName)) &&
+        ![...disabledSdkNames].some(name => tool.name.startsWith(getMcpPrefix(name))),
+      )
 
       // Store SDK MCP tools in appState so subagents can access them via
       // assembleToolPool. Only tools are stored here — SDK clients are already
@@ -1514,6 +1527,20 @@ function runHeadlessStreaming(
         appState.toolPermissionContext.mode,
       ),
       'name',
+    )
+    const serverNames = uniq([
+      ...[
+        ...mcpClients, ...sdkClients, ...dynamicMcpState.clients, ...appState.mcp.clients,
+      ].map(client => client.name),
+      ...allTools.flatMap(tool => tool.mcpInfo ? [tool.mcpInfo.serverName] : []),
+    ])
+    const disabledServers = new Set(
+      serverNames.filter(name => isMcpServerDisabledForExecution(name)),
+    )
+    const disabledPrefixes = [...disabledServers].map(getMcpPrefix)
+    allTools = allTools.filter(tool =>
+      !(tool.mcpInfo && disabledServers.has(tool.mcpInfo.serverName)) &&
+      !disabledPrefixes.some(prefix => tool.name.startsWith(prefix)),
     )
     if (options.permissionPromptToolName) {
       allTools = allTools.filter(
@@ -1655,7 +1682,10 @@ function runHeadlessStreaming(
       ...currentMcpClients,
       ...sdkClients,
       ...dynamicMcpState.clients.filter(c => !existingNames.has(c.name)),
-    ].map(connection => {
+    ].map(current => {
+      const connection = isMcpServerDisabledForExecution(current.name)
+        ? { name: current.name, type: 'disabled' as const, config: current.config }
+        : current
       let config
       if (
         connection.config.type === 'sse' ||
@@ -3149,61 +3179,113 @@ function runHeadlessStreaming(
             sendControlResponseError(message, `Server not found: ${serverName}`)
           } else {
             const result = await reconnectMcpServerImpl(serverName, config)
-            // Update appState.mcp with the new client, tools, commands, and resources
-            const prefix = getMcpPrefix(serverName)
-            setAppState(prev => ({
-              ...prev,
-              mcp: {
-                ...prev.mcp,
-                clients: prev.mcp.clients.map(c =>
-                  c.name === serverName ? result.client : c,
-                ),
-                tools: [
-                  ...reject(prev.mcp.tools, t => t.name?.startsWith(prefix)),
-                  ...result.tools,
-                ],
-                commands: [
-                  ...reject(prev.mcp.commands, c =>
+            // If the server was disabled while the reconnect was in flight,
+            // close any fresh connection and keep the disabled state
+            if (isMcpServerDisabledForExecution(serverName)) {
+              if (result.client.type === 'connected') {
+                void result.client.cleanup()
+              }
+              const prefix = getMcpPrefix(serverName)
+              setAppState(prev => ({
+                ...prev,
+                mcp: {
+                  ...prev.mcp,
+                  clients: prev.mcp.clients.map(c =>
+                    c.name === serverName
+                      ? { name: serverName, type: 'disabled' as const, config }
+                      : c,
+                  ),
+                  tools: reject(prev.mcp.tools, t =>
+                    t.name?.startsWith(prefix),
+                  ),
+                  commands: reject(prev.mcp.commands, c =>
                     commandBelongsToServer(c, serverName),
                   ),
-                  ...result.commands,
+                  resources: omit(prev.mcp.resources, serverName),
+                },
+              }))
+              dynamicMcpState = {
+                ...dynamicMcpState,
+                clients: [
+                  ...dynamicMcpState.clients.filter(
+                    c => c.name !== serverName,
+                  ),
+                  { name: serverName, type: 'disabled' as const, config },
                 ],
-                resources:
-                  result.resources && result.resources.length > 0
-                    ? { ...prev.mcp.resources, [serverName]: result.resources }
-                    : omit(prev.mcp.resources, serverName),
-              },
-            }))
-            // Also update dynamicMcpState so run() picks up the new tools
-            // on the next turn (run() reads dynamicMcpState, not appState)
-            dynamicMcpState = {
-              ...dynamicMcpState,
-              clients: [
-                ...dynamicMcpState.clients.filter(c => c.name !== serverName),
-                result.client,
-              ],
-              tools: [
-                ...dynamicMcpState.tools.filter(
+                tools: dynamicMcpState.tools.filter(
                   t => !t.name?.startsWith(prefix),
                 ),
-                ...result.tools,
-              ],
-            }
-            if (result.client.type === 'connected') {
-              registerElicitationHandlers([result.client])
-              reregisterChannelHandlerAfterReconnect(result.client)
+              }
               sendControlResponseSuccess(message)
             } else {
-              const errorMessage =
-                result.client.type === 'failed'
-                  ? (result.client.error ?? 'Connection failed')
-                  : `Server status: ${result.client.type}`
-              sendControlResponseError(message, errorMessage)
+              // Update appState.mcp with the new client, tools, commands, and resources
+              const prefix = getMcpPrefix(serverName)
+              setAppState(prev => ({
+                ...prev,
+                mcp: {
+                  ...prev.mcp,
+                  clients: prev.mcp.clients.map(c =>
+                    c.name === serverName ? result.client : c,
+                  ),
+                  tools: [
+                    ...reject(prev.mcp.tools, t =>
+                      t.name?.startsWith(prefix),
+                    ),
+                    ...result.tools,
+                  ],
+                  commands: [
+                    ...reject(prev.mcp.commands, c =>
+                      commandBelongsToServer(c, serverName),
+                    ),
+                    ...result.commands,
+                  ],
+                  resources:
+                    result.resources && result.resources.length > 0
+                      ? {
+                          ...prev.mcp.resources,
+                          [serverName]: result.resources,
+                        }
+                      : omit(prev.mcp.resources, serverName),
+                },
+              }))
+              // Also update dynamicMcpState so run() picks up the new tools
+              // on the next turn (run() reads dynamicMcpState, not appState)
+              dynamicMcpState = {
+                ...dynamicMcpState,
+                clients: [
+                  ...dynamicMcpState.clients.filter(
+                    c => c.name !== serverName,
+                  ),
+                  result.client,
+                ],
+                tools: [
+                  ...dynamicMcpState.tools.filter(
+                    t => !t.name?.startsWith(prefix),
+                  ),
+                  ...result.tools,
+                ],
+              }
+              if (result.client.type === 'connected') {
+                registerElicitationHandlers([result.client])
+                reregisterChannelHandlerAfterReconnect(result.client)
+                sendControlResponseSuccess(message)
+              } else {
+                const errorMessage =
+                  result.client.type === 'failed'
+                    ? (result.client.error ?? 'Connection failed')
+                    : `Server status: ${result.client.type}`
+                sendControlResponseError(message, errorMessage)
+              }
             }
           }
         } else if (message.request.subtype === 'mcp_toggle') {
           const currentAppState = getAppState()
-          const { serverName, enabled } = message.request
+          const { serverName, alreadyPersisted } = message.request
+          // API requests already wrote project settings. A delayed control
+          // request must apply current state rather than undo a newer toggle.
+          const enabled = alreadyPersisted
+            ? !isMcpServerDisabledForExecution(serverName)
+            : message.request.enabled
           elicitationRegistered.delete(serverName)
           // Gate must match the client-lookup spread below (which
           // includes sdkClients and dynamicMcpState.clients). Same fix as
@@ -3217,79 +3299,119 @@ function runHeadlessStreaming(
               ?.config ??
             null
 
-          if (!config) {
-            sendControlResponseError(message, `Server not found: ${serverName}`)
-          } else if (!enabled) {
-            // Disabling: persist + disconnect (matches TUI toggleMcpServer behavior)
-            setMcpServerEnabled(serverName, false)
-            const client = [
-              ...mcpClients,
-              ...sdkClients,
-              ...dynamicMcpState.clients,
-              ...currentAppState.mcp.clients,
-            ].find(c => c.name === serverName)
-            if (client && client.type === 'connected') {
-              await clearServerCache(serverName, config)
-            }
-            // Update appState.mcp to reflect disabled status and remove tools/commands/resources
+          const markDisabled = (cfg: NonNullable<typeof config>) => {
             const prefix = getMcpPrefix(serverName)
+            const keepTool = (tool: Tool) =>
+              tool.mcpInfo?.serverName !== serverName && !tool.name?.startsWith(prefix)
+            tools = tools.filter(keepTool)
+            sdkTools = sdkTools.filter(keepTool)
+            const disabled = { name: serverName, type: 'disabled' as const, config: cfg }
+            mcpClients = mcpClients.map(client => client.name === serverName ? disabled : client)
+            sdkClients = sdkClients.map(client => client.name === serverName ? disabled : client)
+            dynamicMcpState = {
+              ...dynamicMcpState,
+              clients: [...dynamicMcpState.clients.filter(client => client.name !== serverName), disabled],
+              tools: dynamicMcpState.tools.filter(keepTool),
+            }
             setAppState(prev => ({
               ...prev,
               mcp: {
                 ...prev.mcp,
                 clients: prev.mcp.clients.map(c =>
                   c.name === serverName
-                    ? { name: serverName, type: 'disabled' as const, config }
+                    ? { name: serverName, type: 'disabled' as const, config: cfg }
                     : c,
                 ),
-                tools: reject(prev.mcp.tools, t => t.name?.startsWith(prefix)),
+                tools: prev.mcp.tools.filter(keepTool),
                 commands: reject(prev.mcp.commands, c =>
                   commandBelongsToServer(c, serverName),
                 ),
                 resources: omit(prev.mcp.resources, serverName),
               },
             }))
+          }
+
+          if (!config) {
+            sendControlResponseError(message, `Server not found: ${serverName}`)
+          } else if (!enabled) {
+            // Disabling: persist + disconnect (matches TUI toggleMcpServer behavior)
+            if (!alreadyPersisted) setMcpServerEnabled(serverName, false)
+            const sdkConnections = sdkClients.filter(client => client.name === serverName)
+            markDisabled(config)
+            // Pending transports also need invalidation: they may finish their
+            // handshake after the disabled state has already been published.
+            await Promise.all([
+              clearServerCache(serverName, config),
+              ...sdkConnections.map(client => client.type === 'connected' ? client.cleanup() : undefined),
+            ])
             sendControlResponseSuccess(message)
           } else {
             // Enabling: persist + reconnect
-            setMcpServerEnabled(serverName, true)
+            if (!alreadyPersisted) setMcpServerEnabled(serverName, true)
             const result = await reconnectMcpServerImpl(serverName, config)
-            // Update appState.mcp with the new client, tools, commands, and resources
-            // This ensures the LLM sees updated tools after enabling the server
-            const prefix = getMcpPrefix(serverName)
-            setAppState(prev => ({
-              ...prev,
-              mcp: {
-                ...prev.mcp,
-                clients: prev.mcp.clients.map(c =>
-                  c.name === serverName ? result.client : c,
-                ),
-                tools: [
-                  ...reject(prev.mcp.tools, t => t.name?.startsWith(prefix)),
-                  ...result.tools,
-                ],
-                commands: [
-                  ...reject(prev.mcp.commands, c =>
-                    commandBelongsToServer(c, serverName),
-                  ),
-                  ...result.commands,
-                ],
-                resources:
-                  result.resources && result.resources.length > 0
-                    ? { ...prev.mcp.resources, [serverName]: result.resources }
-                    : omit(prev.mcp.resources, serverName),
-              },
-            }))
-            if (result.client.type === 'connected') {
-              registerElicitationHandlers([result.client])
-              reregisterChannelHandlerAfterReconnect(result.client)
+            // If the server was disabled while the reconnect was in flight,
+            // close any fresh connection and keep the disabled state
+            if (isMcpServerDisabledForExecution(serverName)) {
+              if (result.client.type === 'connected') {
+                void result.client.cleanup()
+              }
+              markDisabled(config)
               sendControlResponseSuccess(message)
             } else {
-              const errorMessage =
-                result.client.type === 'failed'
-                  ? (result.client.error ?? 'Connection failed')
-                  : `Server status: ${result.client.type}`
-              sendControlResponseError(message, errorMessage)
+              // Update appState.mcp with the new client, tools, commands, and resources
+              // This ensures the LLM sees updated tools after enabling the server
+              const prefix = getMcpPrefix(serverName)
+              setAppState(prev => ({
+                ...prev,
+                mcp: {
+                  ...prev.mcp,
+                  clients: prev.mcp.clients.map(c =>
+                    c.name === serverName ? result.client : c,
+                  ),
+                  tools: [
+                    ...reject(prev.mcp.tools, t =>
+                      t.name?.startsWith(prefix),
+                    ),
+                    ...result.tools,
+                  ],
+                  commands: [
+                    ...reject(prev.mcp.commands, c =>
+                      commandBelongsToServer(c, serverName),
+                    ),
+                    ...result.commands,
+                  ],
+                  resources:
+                    result.resources && result.resources.length > 0
+                      ? {
+                          ...prev.mcp.resources,
+                          [serverName]: result.resources,
+                        }
+                      : omit(prev.mcp.resources, serverName),
+                },
+              }))
+              dynamicMcpState = {
+                ...dynamicMcpState,
+                clients: [...dynamicMcpState.clients.filter(client => client.name !== serverName), result.client],
+                tools: [
+                  ...dynamicMcpState.tools.filter(tool =>
+                    tool.mcpInfo?.serverName !== serverName && !tool.name?.startsWith(prefix),
+                  ),
+                  ...result.tools,
+                ],
+              }
+              mcpClients = mcpClients.map(client => client.name === serverName ? result.client : client)
+              sdkClients = sdkClients.map(client => client.name === serverName ? result.client : client)
+              if (result.client.type === 'connected') {
+                registerElicitationHandlers([result.client])
+                reregisterChannelHandlerAfterReconnect(result.client)
+                sendControlResponseSuccess(message)
+              } else {
+                const errorMessage =
+                  result.client.type === 'failed'
+                    ? (result.client.error ?? 'Connection failed')
+                    : `Server status: ${result.client.type}`
+                sendControlResponseError(message, errorMessage)
+              }
             }
           }
         } else if (message.request.subtype === 'channel_enable') {
@@ -3377,7 +3499,7 @@ function runHeadlessStreaming(
               const fullFlowPromise = oauthPromise
                 .then(async () => {
                   // Don't reconnect if the server was disabled during the OAuth flow
-                  if (isMcpServerDisabled(serverName)) {
+                  if (isMcpServerDisabledForExecution(serverName)) {
                     return
                   }
                   // Skip reconnect if the manual callback path was used —
@@ -3391,6 +3513,23 @@ function runHeadlessStreaming(
                     serverName,
                     config,
                   )
+                  // If the server was disabled while the reconnect was in
+                  // flight, close any fresh connection and keep the disabled
+                  // state
+                  if (isMcpServerDisabledForExecution(serverName)) {
+                    setAppState(prev => {
+                      const disabled = disableStaleMcpReconnect(
+                        serverName,
+                        config,
+                        result.client,
+                        prev.mcp,
+                        dynamicMcpState,
+                      )
+                      dynamicMcpState = disabled.dynamic
+                      return { ...prev, mcp: disabled.mcp }
+                    })
+                    return
+                  }
                   const prefix = getMcpPrefix(serverName)
                   setAppState(prev => ({
                     ...prev,
@@ -5551,8 +5690,8 @@ export async function reconcileMcpServers(
       await clearServerCache(name, config)
     }
 
-    // Remove tools from this server
-    const prefix = `mcp__${name}__`
+    // Plugin identities contain colons; tools use the normalized MCP prefix.
+    const prefix = getMcpPrefix(name)
     newTools = newTools.filter(t => !t.name.startsWith(prefix))
 
     // Remove from clients list
@@ -5622,7 +5761,7 @@ export async function reconcileMcpServers(
     // Remove old dynamic tools
     const nonDynamicTools = prev.mcp.tools.filter(t => {
       for (const serverName of allDynamicServerNames) {
-        if (t.name.startsWith(`mcp__${serverName}__`)) {
+        if (t.name.startsWith(getMcpPrefix(serverName))) {
           return false
         }
       }

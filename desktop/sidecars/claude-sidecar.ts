@@ -8,16 +8,112 @@
  *
  *   claude-sidecar server   --app-root <path> --host 127.0.0.1 --port 12345
  *   claude-sidecar cli      --app-root <path> [其它 CLI 参数...]
- *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat] [--dingtalk] [--whatsapp]
+ *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat]
+ *                           [--dingtalk] [--whatsapp] [--wecom] [--qq] [--slack]
  *
  * 任何模式都必须先做 process.env / process.argv 设置，再 await 进入相应的
  * 子模块树。原因：src/server/index.ts、src/entrypoints/cli.tsx、以及
  * adapters/feishu/index.ts 等顶层都会立即读 process.argv / process.env，
- * 必须在它们求值前 splice 掉 --app-root、mode、--feishu/--telegram 这些
+ * 必须在它们求值前 splice 掉 --app-root、mode 和各 adapter 的 flag 这些
  * launcher-only 参数。
  */
 
 import { parseLauncherArgs, resolveSidecarInvocation } from './launcherRouting'
+
+// The compiled Computer Use runtime relaunches this executable directly. Its
+// isolated worker has no app-root and must not load preload, CLI configuration,
+// providers, or any desktop mode before serving the JSON-only kernel protocol.
+if (process.argv[2] === '--computer-use-repl-worker') {
+  const { runComputerUseReplWorker } = await import('../../src/utils/computerUse/replWorker')
+  await runComputerUseReplWorker()
+  process.exit(0)
+}
+
+type AdapterConfigShape = Awaited<
+  ReturnType<typeof import('../../adapters/common/config.ts')['loadConfig']>
+>
+
+/**
+ * One row per IM adapter: its CLI flag, how to tell whether it is configured,
+ * and how to start it.
+ *
+ * Every adapter previously carried its own copy of the flag parse, the
+ * credential gate and the side-effect import. That is exactly the shape where
+ * the next copy forgets the gate — and a missing gate lets one unconfigured
+ * adapter's `process.exit(1)` take down every other adapter in the sidecar.
+ *
+ * Declared above the mode dispatch on purpose: `runAdapters` is hoisted and
+ * runs at module top level, so a table declared below it would still be in its
+ * temporal dead zone when the adapters mode reads it.
+ */
+const ADAPTERS: ReadonlyArray<{
+  flag: string
+  label: string
+  missingCredentials: string
+  isConfigured: (config: AdapterConfigShape) => boolean | Promise<boolean>
+  start: () => Promise<unknown>
+}> = [
+  {
+    flag: '--feishu',
+    label: 'Feishu',
+    missingCredentials: 'FEISHU_APP_ID / FEISHU_APP_SECRET missing',
+    isConfigured: (config) => Boolean(config.feishu.appId && config.feishu.appSecret),
+    // 副作用 import：feishu/index.ts 顶层会自动 new WSClient + start()
+    start: () => import('../../adapters/feishu/index.ts'),
+  },
+  {
+    flag: '--telegram',
+    label: 'Telegram',
+    missingCredentials: 'TELEGRAM_BOT_TOKEN missing',
+    isConfigured: (config) => Boolean(config.telegram.botToken),
+    start: () => import('../../adapters/telegram/index.ts'),
+  },
+  {
+    flag: '--wechat',
+    label: 'WeChat',
+    missingCredentials: 'no QR-bound WeChat account found',
+    isConfigured: (config) => Boolean(config.wechat.accountId && config.wechat.botToken),
+    start: () => import('../../adapters/wechat/index.ts'),
+  },
+  {
+    flag: '--dingtalk',
+    label: 'DingTalk',
+    missingCredentials: 'DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET missing',
+    isConfigured: (config) => Boolean(config.dingtalk.clientId && config.dingtalk.clientSecret),
+    start: () => import('../../adapters/dingtalk/index.ts'),
+  },
+  {
+    flag: '--whatsapp',
+    label: 'WhatsApp',
+    missingCredentials: 'no QR-linked WhatsApp account found',
+    isConfigured: async (config) => {
+      const { hasWhatsAppAuth } = await import('../../adapters/whatsapp/session.ts')
+      return hasWhatsAppAuth(config.whatsapp.authDir)
+    },
+    start: () => import('../../adapters/whatsapp/index.ts'),
+  },
+  {
+    flag: '--wecom',
+    label: 'WeCom',
+    missingCredentials: 'WECOM_BOT_ID / WECOM_BOT_SECRET missing',
+    isConfigured: (config) => Boolean(config.wecom.botId && config.wecom.secret),
+    start: () => import('../../adapters/wecom/index.ts'),
+  },
+  {
+    flag: '--qq',
+    label: 'QQ',
+    missingCredentials: 'QQ_APP_ID / QQ_APP_SECRET missing',
+    isConfigured: (config) => Boolean(config.qq.appId && config.qq.appSecret),
+    start: () => import('../../adapters/qq/index.ts'),
+  },
+  {
+    flag: '--slack',
+    label: 'Slack',
+    missingCredentials: 'SLACK_BOT_TOKEN / SLACK_APP_TOKEN missing',
+    isConfigured: (config) => Boolean(config.slack.botToken && config.slack.appToken),
+    start: () => import('../../adapters/slack/index.ts'),
+  },
+]
 
 const rawArgs = process.argv.slice(2)
 const invocation = resolveSidecarInvocation(rawArgs)
@@ -52,15 +148,12 @@ if (mode === 'adapters') {
 }
 
 async function runAdapters(rawArgs: string[]): Promise<void> {
-  // adapters 模式的参数解析独立于 server/cli —— 这里只接受 --feishu /
-  // --telegram / --wechat / --dingtalk / --whatsapp 选择启用哪个适配器，再加可选的 --app-root（透传给
+  // adapters 模式的参数解析独立于 server/cli —— 这里只接受 ADAPTERS 里的
+  // flag 选择启用哪个适配器，再加可选的 --app-root（透传给
   // adapters/common/config.ts 内的 process.env 读取）。
   let appRoot: string | null = process.env.CLAUDE_APP_ROOT ?? null
-  let enableFeishu = false
-  let enableTelegram = false
-  let enableWechat = false
-  let enableDingtalk = false
-  let enableWhatsApp = false
+  const enabled = new Set<string>()
+  const knownFlags = new Set(ADAPTERS.map((adapter) => adapter.flag))
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i]
@@ -69,32 +162,16 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
       i += 1
       continue
     }
-    if (arg === '--feishu') {
-      enableFeishu = true
-      continue
-    }
-    if (arg === '--telegram') {
-      enableTelegram = true
-      continue
-    }
-    if (arg === '--wechat') {
-      enableWechat = true
-      continue
-    }
-    if (arg === '--dingtalk') {
-      enableDingtalk = true
-      continue
-    }
-    if (arg === '--whatsapp') {
-      enableWhatsApp = true
+    if (arg && knownFlags.has(arg)) {
+      enabled.add(arg)
       continue
     }
     console.warn(`claude-sidecar adapters: ignoring unknown arg "${arg}"`)
   }
 
-  if (!enableFeishu && !enableTelegram && !enableWechat && !enableDingtalk && !enableWhatsApp) {
+  if (enabled.size === 0) {
     console.error(
-      'claude-sidecar adapters: must enable at least one of --feishu / --telegram / --wechat / --dingtalk / --whatsapp',
+      `claude-sidecar adapters: must enable at least one of ${[...knownFlags].join(' / ')}`,
     )
     process.exit(2)
   }
@@ -114,68 +191,17 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
   const config = loadConfig()
 
   let started = 0
-
-  if (enableFeishu) {
-    if (!config.feishu.appId || !config.feishu.appSecret) {
+  for (const adapter of ADAPTERS) {
+    if (!enabled.has(adapter.flag)) continue
+    if (!(await adapter.isConfigured(config))) {
       console.warn(
-        '[claude-sidecar] --feishu requested but FEISHU_APP_ID / FEISHU_APP_SECRET missing in env or ~/.claude/adapters.json — skipping',
+        `[claude-sidecar] ${adapter.flag} requested but ${adapter.missingCredentials} in env or ~/.claude/adapters.json — skipping`,
       )
-    } else {
-      console.log('[claude-sidecar] starting Feishu adapter')
-      // 副作用 import：feishu/index.ts 顶层会自动 new WSClient + start()
-      await import('../../adapters/feishu/index.ts')
-      started += 1
+      continue
     }
-  }
-
-  if (enableTelegram) {
-    if (!config.telegram.botToken) {
-      console.warn(
-        '[claude-sidecar] --telegram requested but TELEGRAM_BOT_TOKEN missing in env or ~/.claude/adapters.json — skipping',
-      )
-    } else {
-      console.log('[claude-sidecar] starting Telegram adapter')
-      // 副作用 import：telegram/index.ts 顶层会自动 bot.start()
-      await import('../../adapters/telegram/index.ts')
-      started += 1
-    }
-  }
-
-  if (enableWechat) {
-    if (!config.wechat.accountId || !config.wechat.botToken) {
-      console.warn(
-        '[claude-sidecar] --wechat requested but no QR-bound WeChat account found in env or ~/.claude/adapters.json — skipping',
-      )
-    } else {
-      console.log('[claude-sidecar] starting WeChat adapter')
-      await import('../../adapters/wechat/index.ts')
-      started += 1
-    }
-  }
-
-  if (enableDingtalk) {
-    if (!config.dingtalk.clientId || !config.dingtalk.clientSecret) {
-      console.warn(
-        '[claude-sidecar] --dingtalk requested but DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET missing in env or ~/.claude/adapters.json — skipping',
-      )
-    } else {
-      console.log('[claude-sidecar] starting DingTalk adapter')
-      await import('../../adapters/dingtalk/index.ts')
-      started += 1
-    }
-  }
-
-  if (enableWhatsApp) {
-    const { hasWhatsAppAuth } = await import('../../adapters/whatsapp/session.ts')
-    if (!hasWhatsAppAuth(config.whatsapp.authDir)) {
-      console.warn(
-        '[claude-sidecar] --whatsapp requested but no QR-linked WhatsApp account found in env or ~/.claude/adapters.json — skipping',
-      )
-    } else {
-      console.log('[claude-sidecar] starting WhatsApp adapter')
-      await import('../../adapters/whatsapp/index.ts')
-      started += 1
-    }
+    console.log(`[claude-sidecar] starting ${adapter.label} adapter`)
+    await adapter.start()
+    started += 1
   }
 
   if (started === 0) {
@@ -185,7 +211,7 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
     process.exit(1)
   }
 
-  // 让进程保持存活：两个 adapter 都通过 long-lived WebSocket（Lark WSClient
-  // / grammY long-polling）持有 event loop，自然不会退出。这里不需要额外
-  // setInterval 兜底。两个 adapter 自己注册的 SIGINT handler 都会触发。
+  // 让进程保持存活：每个 adapter 都通过 long-lived WebSocket（Lark WSClient
+  // / grammY long-polling / Socket Mode 等）持有 event loop，自然不会退出。
+  // 这里不需要额外 setInterval 兜底。adapter 自己注册的 SIGINT handler 都会触发。
 }

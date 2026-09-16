@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { withResolvers } from '../../utils/withResolvers.js'
 import { SearchService } from '../services/searchService.js'
 import { SessionService } from '../services/sessionService.js'
 import type { LocalIndexGateway } from '../services/localIndex/sessionIndex.js'
@@ -1061,6 +1062,7 @@ describe('SearchService.searchSessions', () => {
   it('propagates cancellation into the active ripgrep scan', async () => {
     const controller = new AbortController()
     let commandSignal: AbortSignal | undefined
+    const commandStarted = withResolvers<void>()
     ;(service as unknown as { commandExists: () => Promise<boolean> }).commandExists =
       async () => true
     ;(service as unknown as {
@@ -1072,6 +1074,7 @@ describe('SearchService.searchSessions', () => {
     }).runCommand = async (_command, _args, signal) => {
       commandSignal = signal
       return await new Promise<string>((_resolve, reject) => {
+        commandStarted.resolve()
         signal?.addEventListener('abort', () => {
           reject(new DOMException('The operation was aborted', 'AbortError'))
         }, { once: true })
@@ -1081,7 +1084,8 @@ describe('SearchService.searchSessions', () => {
     const pending = service.searchSessions('cancelled while running', {
       signal: controller.signal,
     })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    // Cancellation must happen during the scan, after asynchronous setup finishes.
+    await commandStarted.promise
     controller.abort()
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })

@@ -141,7 +141,7 @@ export function isPermissionExplainerEnabled(): boolean {
 }
 
 /**
- * Generate a permission explanation using Haiku with structured output.
+ * Generate a permission explanation using the selected model with structured output.
  * Returns null if the feature is disabled, request is aborted, or an error occurs.
  */
 export async function generatePermissionExplanation({
@@ -174,7 +174,7 @@ Explain this command in context.`
 
     const model = getMainLoopModel()
 
-    // Use sideQuery with forced tool choice for guaranteed structured output
+    // sideQuery adapts forced tool choice for models with required thinking.
     const response = await sideQuery({
       model,
       system: SYSTEM_PROMPT,
@@ -191,7 +191,9 @@ Explain this command in context.`
     )
 
     // Extract structured data from tool use block
-    const toolUseBlock = response.content.find(c => c.type === 'tool_use')
+    const toolUseBlock = response.content.find(c =>
+      c.type === 'tool_use' && c.name === EXPLAIN_COMMAND_TOOL.name,
+    )
     if (toolUseBlock && toolUseBlock.type === 'tool_use') {
       logForDebugging(
         `Permission explainer: tool input: ${jsonStringify(toolUseBlock.input).slice(0, 500)}`,

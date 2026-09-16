@@ -313,6 +313,47 @@ describe('CLI executor Codex engine — daemon payload alignment', () => {
     const text = await exec.engine!.listApps()
     expect(text).toBe('No running applications are available to control.')
   })
+
+  itEngine('preserves native inventory metadata without guessing running state', async () => {
+    const exec = await loadExecutor()
+    nextResult = [
+      { id: 'dev.test.Editor', displayName: 'Editor', isRunning: false, lastUsedDate: '2026-09-09T01:00:00Z', useCount: 4 },
+      { id: 'dev.test.Unknown' },
+    ]
+    expect(await exec.engine!.listAppsInfo!()).toEqual(nextResult)
+    expect(calls).toEqual([{ command: 'list_apps', payload: {} }])
+  })
+
+  itEngine('accepts the previous helper inventory while upgrading the host', async () => {
+    const exec = await loadExecutor()
+    nextResult = [{ bundleId: 'com.apple.finder', displayName: 'Finder' }]
+    expect(await exec.engine!.listAppsInfo!()).toEqual([
+      { id: 'com.apple.finder', displayName: 'Finder', isRunning: true },
+    ])
+  })
+})
+
+describe('Windows virtual cursor motion', () => {
+  test('the mouse-animation gate reaches every coordinate action', async () => {
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    const { createCliExecutor } = await import('./executor.js')
+    const exec = createCliExecutor({
+      getMouseAnimationEnabled: () => true,
+      getHideBeforeActionEnabled: () => false,
+    })
+
+    await exec.click(10, 20, 'left', 1, [])
+    await exec.moveMouse(30, 40)
+    await exec.scroll(50, 60, 0, -1)
+    await exec.drag({ x: 70, y: 80 }, { x: 90, y: 100 })
+
+    expect(calls.slice(-4)).toEqual([
+      { command: 'click', payload: { x: 10, y: 20, button: 'left', count: 1, modifiers: [], animate: true } },
+      { command: 'move_mouse', payload: { x: 30, y: 40, animate: true } },
+      { command: 'scroll', payload: { x: 50, y: 60, deltaX: 0, deltaY: -1, animate: true } },
+      { command: 'drag', payload: { from: { x: 70, y: 80 }, to: { x: 90, y: 100 }, animate: true } },
+    ])
+  })
 })
 
 describe('handleToolCall ↔ engine end-to-end (tool face → daemon payload)', () => {

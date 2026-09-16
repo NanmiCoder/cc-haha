@@ -103,3 +103,12 @@ export function readTerminalPalette(root?: HTMLElement): TerminalPalette {
   }
   return palette
 }
+
+/** Resolve custom properties before passing fonts to xterm's canvas renderer. */
+export function readTerminalFontFamily(root?: HTMLElement): string {
+  const element = root ?? (typeof document === 'undefined' ? null : document.documentElement)
+  const fallback = "'SFMono-Regular', Consolas, monospace"
+  if (!element || typeof getComputedStyle !== 'function') return fallback
+  const font = getComputedStyle(element).getPropertyValue('--font-mono').trim()
+  return font && !font.includes('var(') ? font : fallback
+}

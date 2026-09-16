@@ -120,6 +120,68 @@ describe('normalizeMessagesForAPI assistant fragment indexing', () => {
   })
 })
 
+describe('normalizeMessagesForAPI tool-result media', () => {
+  test('preserves nested images from restored messages at the API boundary', () => {
+    const image = {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: 'image/png' as const,
+        data: 'AAECAwQ=',
+      },
+    }
+    const message = createUserMessage({
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'read-1',
+          content: [image],
+        },
+      ],
+    })
+
+    const [normalized] = normalizeMessagesForAPI([message])
+
+    expect(normalized?.type).toBe('user')
+    if (normalized?.type === 'user') {
+      expect(normalized.message.content).toEqual([
+        {
+          type: 'tool_result',
+          tool_use_id: 'read-1',
+          content: [image],
+        },
+      ])
+    }
+  })
+
+  test('keeps parallel tool results contiguous and preserves their ownership', () => {
+    const imageA = {
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'A' },
+    }
+    const imageB = {
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'B' },
+    }
+    const message = createUserMessage({
+      content: [
+        { type: 'tool_result', tool_use_id: 'tool-a', content: [imageA] },
+        { type: 'tool_result', tool_use_id: 'tool-b', content: [imageB] },
+      ],
+    })
+
+    const [normalized] = normalizeMessagesForAPI([message])
+
+    expect(normalized?.type).toBe('user')
+    if (normalized?.type === 'user') {
+      expect(normalized.message.content).toEqual([
+        { type: 'tool_result', tool_use_id: 'tool-a', content: [imageA] },
+        { type: 'tool_result', tool_use_id: 'tool-b', content: [imageB] },
+      ])
+    }
+  })
+})
+
 describe('stripSignatureBlocksAfterModelChange', () => {
   test('removes protected thinking from history produced by another model', () => {
     const previous = assistant('response-a', [

@@ -29,7 +29,7 @@ const COORD_DESC: Record<CoordinateMode, { x: string; y: string }> = {
 };
 
 const FRONTMOST_GATE_DESC =
-  "The frontmost application must be in the session allowlist at the time of this call, or this tool returns an error and does nothing.";
+  "The target is resolved at call time and remains subject to product safety restrictions.";
 
 /**
  * Item schema for the `actions` array in `computer_batch`, `teach_step`, and
@@ -110,7 +110,7 @@ const BATCH_ACTION_ITEM_SCHEMA = {
  * -call time. Both should read the same frozen-at-load gate constant.
  *
  * `installedAppNames` — optional pre-sanitized list of app display names to
- * enumerate in the `request_access` description. The caller is responsible
+ * enumerate in platform-specific tool descriptions. The caller is responsible
  * for sanitization (length cap, character allowlist, sort, count cap) —
  * this function just splices the list into the description verbatim. Omit
  * to fall back to the generic "display names or bundle IDs" wording.
@@ -127,9 +127,7 @@ export function buildComputerUseTools(
 ): Tool[] {
   const coord = COORD_DESC[coordinateMode];
 
-  // Shared hint suffix for BOTH request_access and request_teach_access —
-  // they use the same resolveRequestedApps path, so the model should get
-  // the same enumeration for both.
+  // Teach mode uses this optional list to help the model name installed apps.
   const installedAppsHint =
     installedAppNames && installedAppNames.length > 0
       ? ` Available applications on this machine: ${installedAppNames.join(", ")}.`
@@ -153,57 +151,15 @@ export function buildComputerUseTools(
 
   const screenshotDesc =
     caps.screenshotFiltering === "native"
-      ? "Take a screenshot of the primary display. Applications not in the session allowlist are excluded at the compositor level — only granted apps and the desktop are visible."
-      : "Take a screenshot of the primary display. On this platform, screenshots are NOT filtered — all open windows are visible. Input actions targeting apps not in the session allowlist are rejected.";
+      ? "Take a screenshot of the primary display."
+      : "Take a screenshot of the primary display. On this platform, screenshots are NOT filtered — all open windows are visible.";
 
   return [
-    {
-      name: "request_access",
-      description:
-        "Request user permission to control a set of applications for this session. Must be called before any other tool in this server. " +
-        "The user sees a single dialog listing all requested apps and either allows the whole set or denies it. " +
-        "Call this again mid-session to add more apps; previously granted apps remain granted. " +
-        "Returns the granted apps, denied apps, and screenshot filtering capability.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          apps: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              "Application display names (e.g. \"Slack\", \"Calendar\") or bundle identifiers (e.g. \"com.tinyspeck.slackmacgap\"). Display names are resolved case-insensitively against installed apps." +
-              installedAppsHint,
-          },
-          reason: {
-            type: "string",
-            description:
-              "One-sentence explanation shown to the user in the approval dialog. Explain the task, not the mechanism.",
-          },
-          clipboardRead: {
-            type: "boolean",
-            description:
-              "Also request permission to read the user's clipboard (separate checkbox in the dialog).",
-          },
-          clipboardWrite: {
-            type: "boolean",
-            description:
-              "Also request permission to write the user's clipboard. When granted, multi-line `type` calls use the clipboard fast path.",
-          },
-          systemKeyCombos: {
-            type: "boolean",
-            description:
-              "Also request permission to send system-level key combos (quit app, switch app, lock screen). Without this, those specific combos are blocked.",
-          },
-        },
-        required: ["apps", "reason"],
-      },
-    },
-
     {
       name: "screenshot",
       description:
         screenshotDesc +
-        " Returns an error if the allowlist is empty. The returned image is what subsequent click coordinates are relative to.",
+        " The returned image is what subsequent click coordinates are relative to.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -400,7 +356,7 @@ export function buildComputerUseTools(
     {
       name: "open_application",
       description:
-        "Bring an application to the front, launching it if necessary. The target application must already be in the session allowlist — call request_access first.",
+        "Bring an installed application to the front, launching it if necessary. The application is resolved against the installed-app inventory before launch.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -434,17 +390,6 @@ export function buildComputerUseTools(
           },
         },
         required: ["display"],
-      },
-    },
-
-    {
-      name: "list_granted_applications",
-      description:
-        "List the applications currently in the session allowlist, plus the active grant flags and coordinate mode. No side effects.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {},
-        required: [],
       },
     },
 
@@ -575,7 +520,7 @@ export function buildComputerUseTools(
  * takes `coord` so `teach_step.anchor`'s description uses the same
  * frozen coordinate-mode phrasing as click coords, and `installedAppsHint`
  * so `request_teach_access.apps` gets the same enumeration as
- * `request_access.apps` (same resolution path → same hint).
+ * installed app references (same inventory → same hint).
  */
 function buildTeachTools(
   coord: { x: string; y: string },
@@ -620,12 +565,11 @@ function buildTeachTools(
     {
       name: "request_teach_access",
       description:
-        "Request permission to guide the user through a task step-by-step with on-screen tooltips. " +
-        "Use this INSTEAD OF request_access when the user wants to LEARN how to do something " +
+        "Start guiding the user through a task step-by-step with on-screen tooltips. " +
+        "Use this when the user wants to LEARN how to do something " +
         '(phrases like "teach me", "walk me through", "show me how", "help me learn"). ' +
-        "On approval the main Claude window hides and a fullscreen tooltip overlay appears. " +
+        "The main Claude window hides and a fullscreen tooltip overlay appears. " +
         "You then call teach_step repeatedly; each call shows one tooltip and waits for the user to click Next. " +
-        "Same app-allowlist semantics as request_access, but no clipboard/system-key flags. " +
         "Teach mode ends automatically when your turn ends.",
       inputSchema: {
         type: "object" as const,
@@ -640,7 +584,7 @@ function buildTeachTools(
           reason: {
             type: "string",
             description:
-              'What you will be teaching. Shown in the approval dialog as "Claude wants to guide you through {reason}". Keep it short and task-focused.',
+              "What you will be teaching. Keep it short and task-focused.",
           },
         },
         required: ["apps", "reason"],

@@ -100,7 +100,16 @@ describe('prompt history persistence', () => {
       const contents = await fsPromises
         .readFile(historyPath, 'utf8')
         .catch(() => '')
-      return contents.includes('FIRST_SENTINEL')
+      // The failed append already contains the sentinel before rollback.
+      // Wait for the retry's complete JSONL record, not that transient prefix.
+      if (!contents.endsWith('\n')) return false
+      try {
+        return contents.trimEnd().split('\n').some(line =>
+          JSON.parse(line).display === 'FIRST_SENTINEL_你好😀',
+        )
+      } catch {
+        return false
+      }
     })
 
     const contents = await fsPromises.readFile(historyPath, 'utf8')

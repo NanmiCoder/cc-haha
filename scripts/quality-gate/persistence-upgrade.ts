@@ -9,6 +9,26 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Connector installation state migrations',
+    command: ['bun', 'test', './src/server/services/connectorsPersistence.test.ts'],
+  },
+  {
+    title: 'Public browser device store migration',
+    command: ['bun', 'test', './src/server/publicAccess.test.ts', '--test-name-pattern', 'old store migration'],
+  },
+  {
+    title: 'Private ngrok credential store migration',
+    command: ['bun', 'run', 'test', '--', '--run', 'electron/services/publicAccess.test.ts', '-t', 'migrat'],
+    cwd: 'desktop',
+  },
+  {
+    title: 'Local index schema compatibility after protocol rollback',
+    command: [
+      'bun', 'test', './src/server/services/localIndex/database.test.ts',
+      '--test-name-pattern', 'frozen v[45]',
+    ],
+  },
+  {
     title: 'Server persistent JSON migrations',
     command: ['bun', 'test', './src/server/__tests__/persistence-upgrade.test.ts'],
   },

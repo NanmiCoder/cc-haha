@@ -180,10 +180,12 @@ public final class VirtualCursor {
         await runGlide(to: target, duration: duration)
     }
 
-    /// Action movement starts the owner-managed spring immediately but waits
-    /// only the foreground policy delay. Background/unrequested actions snap and
-    /// return without delay. The real OS cursor is never moved.
-    public func moveForAction(to p: CGPoint, targetPid: pid_t) async {
+    /// Start the owner-managed spring immediately. Coordinate gestures skip the
+    /// visual readability wait; indexed actions retain the visible policy delay.
+    /// Hidden/unrequested actions snap. The real OS cursor is never moved.
+    public func moveForAction(
+        to p: CGPoint, targetPid: pid_t, waitForVisualFeedback: Bool = true
+    ) async {
         let target = sanitized(p)
         if headless {
             motionState.snap(to: target)
@@ -203,6 +205,7 @@ public final class VirtualCursor {
         let decision = currentVisualDecision()
         await CursorActionTiming.perform(
             decision: decision,
+            waitForVisualFeedback: waitForVisualFeedback,
             startGlide: { [self] in
                 if !startGlide(to: target) {
                     snap(to: target)
@@ -276,7 +279,7 @@ public final class VirtualCursor {
     private var glideLastTick: CFTimeInterval = 0
 
     // Lazily-loaded raster ripple frames (nil => not bundled => procedural).
-    private static let rasterFrames: [CGImage]? = VirtualCursor.loadLensSequence()
+    private static let rasterFrames: [CGImage]? = VirtualCursor.loadLensSequence().frames
 
     // MARK: - Geometry helpers
 
@@ -850,22 +853,28 @@ public final class VirtualCursor {
 
     /// Load optional click-ripple PNG frames bundled under
     /// `Resources/LensSequence`. Frames are sorted by filename so `frame_000`,
-    /// `frame_001`, … animate in order. Returns nil when no bundle / no frames,
-    /// in which case `showClick` falls back to the procedural ring.
-    private static func loadLensSequence() -> [CGImage]? {
+    /// `frame_001`, … animate in order. Missing or unreadable optional frames
+    /// leave `frames` nil, so `showClick` uses the procedural ring. The resource
+    /// probe calls this same loader without creating a cursor or posting input.
+    static func loadLensSequence(from bundle: Bundle = .main) -> (directory: URL?, frames: [CGImage]?) {
         let fm = FileManager.default
 
-        // Resolve the LensSequence directory from the SwiftPM resource bundle.
-        // `Bundle.module` is synthesized because Package.swift declares
-        // `.copy("Resources/LensSequence")`. Fall back to scanning next to the
-        // executable for robustness in case the resource layout differs.
-        var directory: URL?
-        if let bundleURL = Bundle.module.url(forResource: "LensSequence", withExtension: nil) {
-            directory = bundleURL
-        } else if let resourceURL = Bundle.module.resourceURL?
-            .appendingPathComponent("LensSequence", isDirectory: true),
-            fm.fileExists(atPath: resourceURL.path) {
-            directory = resourceURL
+        // SwiftPM's generated Bundle.module accessor traps when its bundle is
+        // absent from the app root and the absolute build-machine path. Our
+        // signed app instead puts resources in Contents/Resources. Never invoke
+        // that accessor for optional visuals: discover only runtime-relative
+        // locations, including the sibling bundle of a bare SwiftPM executable.
+        let moduleName = "cu-helper_cc-haha-computer-use.bundle"
+        var candidates = [bundle.resourceURL, bundle.bundleURL, bundle.executableURL?.deletingLastPathComponent()]
+            .compactMap { $0 }
+            .map { $0.appendingPathComponent(moduleName, isDirectory: true)
+                .appendingPathComponent("LensSequence", isDirectory: true) }
+        if let resources = bundle.resourceURL {
+            candidates.append(resources.appendingPathComponent("LensSequence", isDirectory: true))
+        }
+        let directory = candidates.first { candidate in
+            var isDirectory: ObjCBool = false
+            return fm.fileExists(atPath: candidate.path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
 
         guard let dir = directory,
@@ -874,13 +883,13 @@ public final class VirtualCursor {
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
               )
-        else { return nil }
+        else { return (directory, nil) }
 
         let pngs = entries
             .filter { $0.pathExtension.lowercased() == "png" }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
-        guard !pngs.isEmpty else { return nil }
+        guard !pngs.isEmpty else { return (directory, nil) }
 
         var images: [CGImage] = []
         images.reserveCapacity(pngs.count)
@@ -890,7 +899,7 @@ public final class VirtualCursor {
             guard let cg = nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { continue }
             images.append(cg)
         }
-        return images.isEmpty ? nil : images
+        return (directory, images.isEmpty ? nil : images)
     }
 }
 

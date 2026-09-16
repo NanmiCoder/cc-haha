@@ -44,7 +44,7 @@ export type MentionComposerHandle = {
   setSelectionOffsets: (start: number, end?: number) => void
   /**
    * Content for the model: text with each mention pill serialized to
-   * `@"absolute path"`. Read from the live document, so literal text that
+   * file paths or explicit skill/plugin requests. Read from the live document, so literal text that
    * merely looks like a pill's token is never rewritten.
    */
   getModelContent: () => string
@@ -56,6 +56,7 @@ export type MentionComposerProps = {
   onChange: (text: string, mentions: ComposerMention[]) => void
   onKeyDown?: (event: KeyboardEvent) => boolean
   onPaste?: (event: ClipboardEvent) => boolean
+  onMentionClick?: (mention: ComposerMention) => void
   onCompositionStart?: () => void
   onCompositionEnd?: () => void
   placeholder?: string
@@ -149,7 +150,19 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
             new Plugin({
               key: new PluginKey('mention-composer-props'),
               props: {
-                handleKeyDown: (_view, event) => propsRef.current.onKeyDown?.(event) ?? false,
+                handleKeyDown: (_view, event) => {
+                  const chip = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-mention-kind]') : null
+                  if (chip && (event.key === 'Enter' || event.key === ' ')) {
+                    const mention = propsRef.current.mentions.find(item => item.kind === chip.dataset.mentionKind && item.id === chip.dataset.mentionId)
+                    if (mention) { event.preventDefault(); propsRef.current.onMentionClick?.(mention); return true }
+                  }
+                  return propsRef.current.onKeyDown?.(event) ?? false
+                },
+                handleClickOn: (_view, _pos, node, _nodePos, _event, direct) => {
+                  if (!direct || !['skill', 'plugin'].includes(node.attrs.kind)) return false
+                  propsRef.current.onMentionClick?.({ ...node.attrs, tokenOrdinal: 0 } as ComposerMention)
+                  return true
+                },
                 handlePaste: (editorView, event, _slice) => {
                   if (propsRef.current.onPaste?.(event)) return true
 

@@ -10,14 +10,14 @@ import {
 } from './preauthorizedConfig.js'
 
 describe('resolveStoredComputerUseConfig', () => {
-  test('keeps desktop grant flags disabled until explicitly granted', () => {
+  test('starts disabled and prepares full grants for explicit enablement', () => {
     expect(resolveStoredComputerUseConfig()).toEqual({
-      enabled: true,
+      enabled: false,
       authorizedApps: [],
       grantFlags: {
-        clipboardRead: false,
-        clipboardWrite: false,
-        systemKeyCombos: false,
+        clipboardRead: true,
+        clipboardWrite: true,
+        systemKeyCombos: true,
       },
       pythonPath: null,
     })
@@ -30,7 +30,7 @@ describe('resolveStoredComputerUseConfig', () => {
     })
   })
 
-  test('honors explicit grant flags without enabling unspecified grants', () => {
+  test('honors explicit grant flags while defaulting unspecified grants on', () => {
     expect(
       resolveStoredComputerUseConfig({
         grantFlags: {
@@ -38,12 +38,12 @@ describe('resolveStoredComputerUseConfig', () => {
         },
       }),
     ).toEqual({
-      enabled: true,
+      enabled: false,
       authorizedApps: [],
       grantFlags: {
         clipboardRead: true,
-        clipboardWrite: false,
-        systemKeyCombos: false,
+        clipboardWrite: true,
+        systemKeyCombos: true,
       },
       pythonPath: null,
     })
@@ -57,12 +57,12 @@ describe('resolveStoredComputerUseConfig', () => {
     try {
       await expect(loadStoredComputerUseConfigResult()).resolves.toEqual({
         config: {
-          enabled: true,
+          enabled: false,
           authorizedApps: [],
           grantFlags: {
-            clipboardRead: false,
-            clipboardWrite: false,
-            systemKeyCombos: false,
+            clipboardRead: true,
+            clipboardWrite: true,
+            systemKeyCombos: true,
           },
           pythonPath: null,
         },
@@ -116,7 +116,7 @@ describe('resolveStoredComputerUseConfig', () => {
     })
   })
 
-  test('derives least-privilege tiers and filters policy-denied pre-authorizations', () => {
+  test('legacy pre-authorizations no longer restrict app categories after global consent', () => {
     expect(
       buildPreAuthorizedAppGrants([
         {
@@ -141,17 +141,23 @@ describe('resolveStoredComputerUseConfig', () => {
         bundleId: 'com.google.Chrome',
         displayName: 'Google Chrome',
         grantedAt: 1234,
-        tier: 'read',
+        tier: 'full',
       },
       {
         bundleId: 'com.apple.Terminal',
         displayName: 'Terminal',
         grantedAt: 1234,
-        tier: 'click',
+        tier: 'full',
       },
       {
         bundleId: 'com.apple.Preview',
         displayName: 'Preview',
+        grantedAt: 1234,
+        tier: 'full',
+      },
+      {
+        bundleId: 'com.spotify.client',
+        displayName: 'Spotify',
         grantedAt: 1234,
         tier: 'full',
       },

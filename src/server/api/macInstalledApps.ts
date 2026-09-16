@@ -2,7 +2,6 @@ import type { Dirent } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { isIntrinsicAppDenied } from '../../vendor/computer-use-mcp/deniedApps.js'
 
 export type InstalledMacApp = {
   bundleId: string
@@ -21,7 +20,6 @@ type InstalledAppDependencies = {
   ) => Promise<{ bundleId: string; displayName: string } | null>
   maxDepth?: number
   entryLimit?: number
-  hostBundleId?: string
 }
 
 const STANDARD_APPLICATION_ROOTS = [
@@ -89,8 +87,6 @@ export async function listInstalledMacApps(
   const readMetadata = deps.readMetadata ?? readMetadataWithPlutil
   const maxDepth = deps.maxDepth ?? DEFAULT_MAX_DEPTH
   const entryLimit = deps.entryLimit ?? DEFAULT_ENTRY_LIMIT
-  const hostBundleId = deps.hostBundleId
-    ?? process.env.CC_HAHA_COMPUTER_USE_HOST_BUNDLE_ID
   const byBundleId = new Map<string, InstalledMacApp>()
 
   for (const configuredRoot of roots) {
@@ -144,7 +140,6 @@ export async function listInstalledMacApps(
 
         const metadata = await readMetadata(canonicalCandidate)
         if (!metadata?.bundleId || !metadata.displayName) continue
-        if (isIntrinsicAppDenied(metadata.bundleId, hostBundleId)) continue
         if (byBundleId.has(metadata.bundleId)) continue
         byBundleId.set(metadata.bundleId, {
           bundleId: metadata.bundleId,

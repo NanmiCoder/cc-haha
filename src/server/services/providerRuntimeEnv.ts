@@ -6,6 +6,7 @@ import {
   type ModelReasoningProviderKind,
 } from '../../shared/modelReasoning.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import { PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY } from '../../utils/managedEnvConstants.js'
 import {
   IMAGE_GENERATION_API_KEY_ENV_KEY,
   IMAGE_GENERATION_BASE_URL_ENV_KEY,
@@ -61,6 +62,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   ATTRIBUTION_HEADER_ENV_KEY,
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
@@ -215,6 +217,7 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
     disableExperimentalBetas: rawDisableExperimentalBetas,
     imageGeneration: rawImageGeneration,
     model1mSupport: rawModel1mSupport,
+    supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia,
     ...rest
   } = provider
   const rawProvider = provider as SavedProvider & Record<string, unknown>
@@ -226,6 +229,9 @@ export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
     runtimeKind: provider.runtimeKind ?? 'anthropic_compatible',
     models: normalizeModelMapping(provider.models),
     toolSearchEnabled: normalizeToolSearchEnabled(rawProvider.toolSearchEnabled),
+    ...(typeof rawSupportsNestedToolResultMedia === 'boolean'
+      ? { supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia }
+      : {}),
     ...(normalizeDisableExperimentalBetas(rawDisableExperimentalBetas) ? { disableExperimentalBetas: true } : {}),
     ...(model1mSupport !== undefined ? { model1mSupport } : {}),
     ...(imageGeneration !== undefined ? { imageGeneration } : {}),
@@ -367,6 +373,16 @@ function getProviderCapabilityEnv(
   }
 }
 
+export function resolveProviderApiKey(
+  provider: SavedProvider,
+  presetDefaultEnv: Record<string, string>,
+): string {
+  return provider.apiKey
+    || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN
+    || presetDefaultEnv.ANTHROPIC_API_KEY
+    || ''
+}
+
 export function buildProviderAuthEnv(
   provider: SavedProvider,
   presetDefaultEnv: Record<string, string>,
@@ -377,7 +393,7 @@ export function buildProviderAuthEnv(
   }
 
   const strategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
-  const key = provider.apiKey || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN || presetDefaultEnv.ANTHROPIC_API_KEY || ''
+  const key = resolveProviderApiKey(provider, presetDefaultEnv)
 
   switch (strategy) {
     case 'api_key':
@@ -405,6 +421,13 @@ export function getManagedEnvKeys(): string[] {
   return [...keys]
 }
 
+export function providerNeedsProxy(
+  apiFormat: ApiFormat,
+  supportsNestedToolResultMedia?: boolean,
+): boolean {
+  return apiFormat !== 'anthropic' || supportsNestedToolResultMedia === false
+}
+
 export function buildProviderManagedEnv(
   provider: SavedProvider,
   options?: { proxyPath?: string; serverPort?: number },
@@ -417,7 +440,10 @@ export function buildProviderManagedEnv(
   }
 
   const apiFormat: ApiFormat = provider.apiFormat ?? 'anthropic'
-  const needsProxy = apiFormat !== 'anthropic'
+  // Anthropic-format providers normally connect directly to the upstream. When
+  // the provider opts out of nested tool-result media, route through the proxy
+  // so images/documents are lifted out of tool_result before forwarding.
+  const needsProxy = providerNeedsProxy(apiFormat, provider.supportsNestedToolResultMedia)
   const proxyPath = options?.proxyPath ?? '/proxy'
   const serverPort = options?.serverPort ?? 3456
   const baseUrl = needsProxy
@@ -433,10 +459,14 @@ export function buildProviderManagedEnv(
 
   const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
   const providerCapabilityEnv = getProviderCapabilityEnv(provider, models)
+  const maxOutputTokens = provider.requestCompatibility?.maxOutputTokens
 
   return {
     ...providerCapabilityEnv,
     ...omitAuthEnv(presetDefaultEnv),
+    ...(typeof maxOutputTokens === 'number' && Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0 && {
+      [PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY]: String(maxOutputTokens),
+    }),
     ...(provider.autoCompactWindow !== undefined && {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(provider.autoCompactWindow),
     }),
@@ -505,7 +535,12 @@ export function activeProviderNeedsProxy(configDir: string): boolean {
     const provider = index.providers.find((entry) => entry.id === index.activeId)
     if (!provider) return false
 
-    return (provider.apiFormat ?? 'anthropic') !== 'anthropic'
+    // Keep in sync with buildProviderManagedEnv: anthropic-format providers
+    // that opt out of nested tool-result media also route through the proxy.
+    return providerNeedsProxy(
+      provider.apiFormat ?? 'anthropic',
+      provider.supportsNestedToolResultMedia,
+    )
   } catch {
     return false
   }

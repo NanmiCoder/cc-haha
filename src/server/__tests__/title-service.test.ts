@@ -37,6 +37,33 @@ describe('titleService', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
+  test('generates titles with a versioned Anthropic base URL (#1279)', async () => {
+    const paths: string[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        const requestPath = new URL(req.url).pathname
+        paths.push(requestPath)
+        if (requestPath !== '/anthropic/v1/messages') {
+          return Response.json({ error: 'Unknown endpoint' }, { status: 404 })
+        }
+        return Response.json({ content: [{ type: 'text', text: '{"title":"Endpoint compatibility"}' }] })
+      },
+    })
+    try {
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Versioned Anthropic', apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${server.port}/anthropic/v1/`, apiFormat: 'anthropic',
+        models: { main: 'test-model', haiku: 'test-model', sonnet: 'test-model', opus: 'test-model' },
+      })
+      expect(await generateTitle('Explain endpoint compatibility', provider.id)).toBe('Endpoint compatibility')
+      expect(paths).toEqual(['/anthropic/v1/messages'])
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test('sends disabled thinking for title generation by default', async () => {
     let requestBody: Record<string, unknown> | null = null
     const server = Bun.serve({

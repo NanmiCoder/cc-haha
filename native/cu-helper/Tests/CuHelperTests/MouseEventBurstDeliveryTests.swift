@@ -145,7 +145,7 @@ final class MouseEventBurstDeliveryTests: XCTestCase {
         XCTAssertEqual(releases, 1)
     }
 
-    func testCoordinateClickUsesTheTestedFactoryAndDisablesDragPacing() throws {
+    func testCoordinateClickUsesTheTestedFactoryAndExplicitlyUnpacedDelivery() throws {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/cu-helper/AXAction.swift"), encoding: .utf8)
@@ -154,7 +154,7 @@ final class MouseEventBurstDeliveryTests: XCTestCase {
         let body = String(source[start.upperBound..<end.lowerBound])
         XCTAssertTrue(body.contains("let events = try clickEvents("))
         XCTAssertTrue(body.contains("try await postMouseBurst("))
-        XCTAssertTrue(body.contains("pause: nil"), "click must not inherit drag's asynchronous pacing")
+        XCTAssertTrue(body.contains("pause: nil"), "coordinate click must not insert an artificial per-event delay")
     }
 
     @MainActor

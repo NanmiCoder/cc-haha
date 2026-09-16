@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react'
 import { useState } from 'react'
-import { saveAndVerifyH5Connection } from '../../lib/desktopRuntime'
+import { readStoredH5Connection, saveAndVerifyH5Connection } from '../../lib/desktopRuntime'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
@@ -23,6 +23,8 @@ export function H5ConnectionView({
   const [token, setToken] = useState('')
   const [error, setError] = useState(initialError ?? '')
   const [submitting, setSubmitting] = useState(false)
+  const remembered = readStoredH5Connection()
+  const canRetry = remembered.token && remembered.serverUrl === serverUrl.trim().replace(/\/$/, '')
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -95,6 +97,16 @@ export function H5ConnectionView({
           <Button type="submit" size="lg" className="w-full" loading={submitting}>
             {t('h5Connect.submit')}
           </Button>
+          {canRetry && <Button type="button" variant="secondary" className="w-full" disabled={submitting} onClick={async () => {
+            setSubmitting(true)
+            setError('')
+            try {
+              await saveAndVerifyH5Connection(serverUrl, remembered.token!)
+              onConnected()
+            } catch (retryError) {
+              setError(retryError instanceof Error ? retryError.message : t('h5Connect.failed'))
+            } finally { setSubmitting(false) }
+          }}>{t('common.retry')}</Button>}
         </form>
       </Card>
     </div>

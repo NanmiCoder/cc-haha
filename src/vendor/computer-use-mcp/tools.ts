@@ -1,19 +1,17 @@
 /**
- * MCP tool schemas for the computer-use server — Codex-compatible semantic
- * face (blueprint §7). Eleven tools, named verbatim after Codex's public
- * computer-use MCP:
+ * MCP schemas for CC-haha's macOS native semantic API and batch sequence:
  *
  *   list_apps, get_app_state, click, perform_secondary_action, set_value,
- *   select_text, scroll, drag, press_key, type_text, paste
+ *   select_text, scroll, drag, press_key, type_text, paste, sequence
  *
  * This replaces the prior 27-tool pixel face. The legacy `coordinateMode` /
  * `screenshotFiltering` parameters are accepted for call-site compatibility
- * but no longer influence the schema — the tool shapes are static.
+ * but no longer influence the semantic action schemas. Platform selection
+ * controls sequence availability; Windows keeps its separate pixel tool API.
  *
- * Param names mirror Codex exactly (verified against iFurySt's reverse-
- * engineered ToolDefinitions.swift and the 2026-04-17 tool-call samples):
- * `app`, `element_index`, `click_count`, `mouse_button`, `direction`, `pages`,
- * `value`, `action`, `key`, `text`.
+ * The original names came from a historical third-party reconstruction, not
+ * the current official Codex source. The current official interface uses a
+ * persistent JavaScript entry point; these MCP tools are our compatibility API.
  *
  * Three things here are load-bearing and easy to erode:
  *
@@ -83,11 +81,11 @@ function coordinateProp(axis: "x" | "y", role: string) {
 }
 
 /**
- * Build the Codex computer-use face.
+ * Build the native semantic tools and optional macOS batch tool.
  *
  * Signature is preserved from the legacy pixel builder so existing call sites
- * (`setup.ts`, host `mcpServer.ts`) keep compiling. All three parameters are
- * ignored — the tool list is static.
+ * (`setup.ts`, host `mcpServer.ts`) keep compiling. Only the platform capability
+ * affects this tool list; coordinate mode and installed-app hints are ignored.
  */
 export function buildComputerUseTools(
   _caps?: {
@@ -98,13 +96,34 @@ export function buildComputerUseTools(
   _coordinateMode?: CoordinateMode,
   _installedAppNames?: string[],
 ): Tool[] {
-  return [
+  const tools: Tool[] = [
+    {
+      name: 'js',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      description: 'Run JavaScript in a persistent, isolated Computer Use session. Use this for native app automation: let app = await cua.getApp("App Name"); then await app.click([x,y]), app.drag([x,y],[x,y]), app.pressKey("CMD+A"), or loops of known actions. App selection emits initial state and API guidance. Observe with app.getAXState(), app.getScreenshot(), or app.getAXStateAndScreenshot(); emit:false returns data without displaying it. Use nodeRepl.write(value) for text and await nodeRepl.emitImage(bytes) for images. Top-level variables persist between calls, including after ordinary script errors. Await all actions. Imports, Node APIs, filesystem and networking are unavailable. Timeout/cancellation resets bindings; observe before retrying partial work. Native apps only; browser DOM/tab APIs are not implemented.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['code'],
+        properties: {
+          code: { type: 'string', description: 'JavaScript with top-level await. Up to 256 KiB and 256 native calls per cell.' },
+          title: { type: 'string', description: 'Short description of the operation.' },
+          timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, default: 30000 },
+        },
+      },
+    },
+    {
+      name: 'js_reset',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      description: 'Reset the persistent Computer Use JavaScript session and discard all App handles and variables. Select an app again before continuing.',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    },
     {
       name: "list_apps",
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       description:
-        "List the running applications available to control, in alphabetical " +
-        "order. Each line is \"<App Name> — <bundle.id>\". Use this to discover " +
+        'List running and recently used applications, with running apps first. ' +
+        "Each line is \"<App Name> — <bundle.id>\". Discovery does not grant access. Use this to discover " +
         "the exact app name or bundle id to pass to get_app_state.",
       inputSchema: {
         type: "object" as const,
@@ -121,8 +140,8 @@ export function buildComputerUseTools(
         "Read the accessibility (AX) state of an application: an indented tree " +
         "of every interactive UI element, each tagged with the opaque handle to " +
         "pass as `element_index`, plus a screenshot of the app's key window. " +
-        "Call this first, and again after any action whose result you need to " +
-        "see — actions return a receipt, not a new state.",
+        "Call this first, then after one or more standalone actions before deciding what to do next. " +
+        "A sequence already returns its final state and screenshot; do not repeat an observation that is current.",
       inputSchema: {
         type: "object" as const,
         additionalProperties: false,
@@ -379,7 +398,8 @@ export function buildComputerUseTools(
         "named keys like \"Return\", \"Tab\", \"Escape\", \"BackSpace\", " +
         "\"Up\"/\"Down\"/\"Left\"/\"Right\", \"Prior\"/\"Next\" (page up/down), " +
         "\"Home\"/\"End\", \"F1\"–\"F12\", \"KP_0\"–\"KP_9\". \"super\" maps to " +
-        "Command. Call get_app_state afterwards to see the result.",
+        "Command. Space-separated macros support at most 128 chords, executed in order. " +
+        "Observe after the known action batch, using sequence or get_app_state.",
       inputSchema: {
         type: "object" as const,
         additionalProperties: false,
@@ -445,4 +465,53 @@ export function buildComputerUseTools(
       },
     },
   ];
+  if (_caps?.platform === "win32") {
+    return tools.filter(tool => !['js', 'js_reset'].includes(tool.name));
+  }
+  const variants = tools
+    .filter(tool => !["list_apps", "get_app_state", 'js', 'js_reset'].includes(tool.name))
+    .map(tool => {
+      const { app: _app, ...properties } = tool.inputSchema.properties ?? {};
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: { tool: { type: "string", const: tool.name }, ...properties },
+        required: [
+          "tool",
+          ...(tool.inputSchema.required ?? []).filter(key => key !== "app"),
+        ],
+      };
+    });
+  tools.push({
+    name: "sequence",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    description:
+      "Run a bounded sequence of known UI actions in order against ONE app, then return its real AX state and screenshot. " +
+      "Batch actions determined from the current observation, including repeated coordinates on a stable canvas, then inspect the final state. " +
+      "Do not force one model round trip per click. If a step needs a new decision or changes the prerequisite state, stop and re-observe before continuing. " +
+      "Each step uses tool plus that tool's arguments, without app. Stops on the first error or cancellation; never retries. " +
+      "At most 256 steps, 128 space-separated chords per press_key step, 2048 total chords, and a 60-second cooperative deadline " +
+      "(wait for the current native action to finish, then stop). " +
+      "No nested sequences, code, sleeps or per-step app changes. A failed or timed-out step may have partially executed; inspect state before retrying.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        app: APP_PROP,
+        steps: {
+          type: "array",
+          minItems: 1,
+          maxItems: 256,
+          items: { anyOf: variants },
+        },
+      },
+      required: ["app", "steps"],
+    },
+  });
+  return tools;
 }

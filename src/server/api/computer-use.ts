@@ -12,8 +12,6 @@ import { access, readFile, mkdir, writeFile, rm } from 'fs/promises'
 import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import type { AppGrant, CuPermissionRequest } from '../../vendor/computer-use-mcp/types.js'
-import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import { normalizeIconSize, readAppIconPng } from '../services/macAppIcon.js'
 import { listInstalledMacApps } from './macInstalledApps.js'
@@ -910,13 +908,8 @@ export type ComputerUseConfigPatch = {
   pythonPath?: string | null
 }
 
-type RequestAccessBody = {
-  sessionId?: string
-  request?: CuPermissionRequest
-}
-
 const DEFAULT_CONFIG: ComputerUseConfig = {
-  enabled: true,
+  enabled: false,
   authorizedApps: [],
   grantFlags: DEFAULT_DESKTOP_GRANT_FLAGS,
   pythonPath: null,
@@ -1040,56 +1033,6 @@ export async function openComputerUseSettings(
   return result.ok
     ? { ok: true }
     : { ok: false, message: result.stderr || `Failed to run ${command.cmd}` }
-}
-
-/**
- * Compute the AuthorizedApp entries to APPEND for a batch of runtime grants,
- * deduped by bundleId against the already-stored apps. Pure (no I/O) so it can
- * be unit-tested directly.
- *
- * Mapping: AppGrant.grantedAt (epoch ms) -> AuthorizedApp.authorizedAt (ISO
- * string). NOTE the stored schema (StoredAuthorizedApp) carries no `tier`, so
- * a runtime read/click-tier grant is reloaded as full-tier next session — a
- * pre-existing limitation of the stored schema, out of scope here.
- */
-export function computeRuntimeGrantAdditions(
-  existingApps: AuthorizedApp[],
-  granted: AppGrant[],
-): AuthorizedApp[] {
-  const existing = new Set(existingApps.map((app) => app.bundleId))
-  const additions: AuthorizedApp[] = []
-  // Dedupe against BOTH the stored set and within this batch, so a request
-  // listing the same bundleId twice can't double-append.
-  const seen = new Set(existing)
-  for (const grant of granted) {
-    if (!grant.bundleId || seen.has(grant.bundleId)) continue
-    seen.add(grant.bundleId)
-    additions.push({
-      bundleId: grant.bundleId,
-      displayName: grant.displayName,
-      authorizedAt: new Date(grant.grantedAt).toISOString(),
-    })
-  }
-  return additions
-}
-
-/**
- * Append newly-granted apps (from a runtime request_access approval) to the
- * persisted config. Best-effort: any failure is swallowed so it can never tank
- * the grant response the model is awaiting. Idempotent across repeat calls in a
- * long session because additions are deduped by bundleId.
- */
-async function persistRuntimeGrants(granted: AppGrant[]): Promise<void> {
-  if (!granted || granted.length === 0) return
-  try {
-    const config = await loadConfig()
-    const additions = computeRuntimeGrantAdditions(config.authorizedApps, granted)
-    if (additions.length === 0) return
-    config.authorizedApps = [...config.authorizedApps, ...additions]
-    await saveConfig(config)
-  } catch {
-    // best-effort — a config-write failure must NOT fail the grant response
-  }
 }
 
 async function listInstalledApps(): Promise<{ bundleId: string; displayName: string; path: string }[]> {
@@ -1351,36 +1294,13 @@ export async function handleComputerUseApi(
   }
 
   if (action === 'request-access' && req.method === 'POST') {
-    try {
-      const body = (await req.json()) as RequestAccessBody
-      if (!body.sessionId || !body.request?.requestId) {
-        return Response.json(
-          { error: 'BAD_REQUEST', message: 'sessionId and request are required' },
-          { status: 400 },
-        )
-      }
-
-      const response = await computerUseApprovalService.requestApproval(
-        body.sessionId,
-        body.request,
-      )
-
-      // Runtime auto-add: persist apps the user just granted into the stored
-      // config so they appear under "始终允许的应用" in Settings and survive
-      // into the next session. This is the SINGLE server-side runtime-grant
-      // ingress (no teach-access route exists), runs in the process that owns
-      // the config writer, and does NOT touch the per-session allowlist (that
-      // lives in the separate CLI subprocess). Best-effort: a config-write
-      // failure must never fail the grant the model is awaiting.
-      await persistRuntimeGrants(response.granted)
-
-      return Response.json(response)
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Computer Use approval failed'
-      const status = message.includes('not connected') ? 409 : 500
-      return Response.json({ error: 'COMPUTER_USE_APPROVAL_FAILED', message }, { status })
-    }
+    return Response.json(
+      {
+        error: 'APP_AUTHORIZATION_REMOVED',
+        message: 'Per-application Computer Use authorization is no longer required.',
+      },
+      { status: 410 },
+    )
   }
 
   return Response.json(

@@ -1,19 +1,30 @@
 ---
 title: Feishu Integration
 nav_title: Feishu
-description: Create a Feishu bot from the official template and drive Desktop sessions from a private chat with card-based approval.
+description: Scan a QR code in Settings to create a Feishu bot, then drive Desktop sessions from a private chat with card-based approval.
 order: 1
 ---
 
 # Feishu Integration
 
-Best for teams already on Feishu: an official template creates a bot with every required permission preconfigured, and permission requests arrive as interactive cards you can tap. Common commands can be exposed as a bot menu. It handles private (`p2p`) chats only, and changing the bot configuration means publishing a new version in the developer console.
+Best for teams already on Feishu: select **Scan to Create** in Settings, scan with Feishu, and the bot is created with its App ID and App Secret stored locally. Permission requests arrive as interactive cards you can tap, and common commands can be exposed as a bot menu. It handles private (`p2p`) chats only, and changing the bot menu means publishing a new version in the developer console.
 
-## Create the bot
+## Create the bot by scanning
 
-Open [Create a Feishu bot](https://open.feishu.cn/page/openclaw?form=multiAgent). This is the official OpenClaw template, with messaging, event subscription, and card callback permissions already granted — no scopes to add by hand. The **Create Feishu bot** button under **Settings → IM Adapters → Feishu** opens the same page.
+1. Open **Settings → IM Adapters** and select the **Feishu** tab.
+2. Select **Scan to Create**. A QR code appears.
+3. Scan it with Feishu. The confirmation page arrives pre-filled with the bot's name, description, and exactly the scopes, event subscriptions, and card callback this adapter calls — nothing extra is requested.
+4. On confirmation the App ID and App Secret are written to `~/.claude/adapters.json` and the adapter restarts.
 
-Choose a name, create the app, then keep its **App ID** and **App Secret** for the next step.
+The code is valid for 10 minutes; generate a new one if it lapses. Once bound, the button becomes **Scan Again** and an **Unbind Feishu bot** button appears next to it.
+
+Scanning only ever **creates** a new bot; it never binds an existing one, which would let this flow quietly rewrite the callback configuration of a bot you already run.
+
+Leave **Encrypt Key** and **Verification Token** empty: messages travel over the WebSocket connection, which does not use them.
+
+::: tip Creating one by hand also works
+If you would rather not scan, or want to reuse an existing bot, create one from the [official OpenClaw template](https://open.feishu.cn/page/openclaw?form=multiAgent) and paste its App ID and App Secret into the fields below the QR panel. Desktop also shows that entry point while no credentials are stored.
+:::
 
 ## Configure the bot menu
 
@@ -27,11 +38,13 @@ In the [Feishu developer console](https://open.feishu.cn/app?lang=en-US), open y
 
 Save the menu, then publish a new application version. Menu changes take effect only after publishing.
 
-## Enter credentials in Desktop
+## Entering credentials by hand
+
+A bot created by scanning needs none of this — its credentials are already stored. This is only for the template flow or for reusing an existing bot:
 
 1. Open **Settings → IM Adapters** and select the **Feishu** tab.
 2. Paste the values into **App ID** and **App Secret**.
-3. Leave **Encrypt Key** and **Verification Token** empty; the template bot does not need them.
+3. Leave **Encrypt Key** and **Verification Token** empty; the long-connection mode does not need them.
 4. Enable **Streaming Card Mode** if you want long replies to update one card in place.
 5. Select **Save**.
 
@@ -82,6 +95,10 @@ export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 
 ## Troubleshooting
 
+**Scanning does nothing.** The flow runs on `accounts.feishu.cn`; confirm your machine can reach it. International (Lark) tenants switch to `accounts.larksuite.com` automatically after confirmation — there is nothing to change by hand.
+
+**The code reports as expired.** It is valid for 10 minutes; select **Scan Again** for a new one.
+
 **No messages arrive.** Confirm the app is published — menu edits require a new version — and that the conversation is a private chat rather than a group.
 
 **Card buttons do nothing.** The card action capability usually did not ship with the published version. Publish again from the developer console.
@@ -92,4 +109,4 @@ export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 
 ## Source
 
-`adapters/feishu/index.ts`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.
+`adapters/feishu/index.ts` (runtime) and `adapters/feishu/registration.ts` (scan to create), plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.

@@ -13,6 +13,7 @@ describe('desktop host contract', () => {
       dialogs: false,
       notifications: false,
       previewWebview: false,
+      workspaceBrowser: false,
       shell: false,
       terminal: false,
       updates: false,
@@ -59,6 +60,47 @@ describe('desktop host contract', () => {
     await expect(browserHost.pets.focusMainWindow()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.pets.focusSession('session-1')).rejects.toThrow('desktop app runtime')
     await expect(browserHost.pets.onNavigateSession(vi.fn())).resolves.toEqual(expect.any(Function))
+  })
+
+  it('degrades the multi-page browser to resolved no-ops instead of throwing', async () => {
+    // `workspaceBrowserHost` gates on the capability and shows an "open
+    // externally" fallback, so a rejection here would only ever surface as an
+    // unhandled error behind that fallback.
+    expect(browserHost.capabilities.workspaceBrowser).toBe(false)
+    await expect(browserHost.browser.create('wb-1', { storageId: 'wsb-1' })).resolves.toBeUndefined()
+    await expect(browserHost.browser.navigate('wb-1', 'https://example.com')).resolves.toBeUndefined()
+    await expect(browserHost.browser.goBack('wb-1')).resolves.toBeUndefined()
+    await expect(browserHost.browser.goForward('wb-1')).resolves.toBeUndefined()
+    await expect(browserHost.browser.reload('wb-1', { ignoreCache: true })).resolves.toBeUndefined()
+    await expect(browserHost.browser.stop('wb-1')).resolves.toBeUndefined()
+    await expect(browserHost.browser.setBounds('wb-1', { x: 0, y: 0, width: 10, height: 10 })).resolves.toBeUndefined()
+    await expect(browserHost.browser.setVisible('wb-1', false)).resolves.toBeUndefined()
+    await expect(browserHost.browser.setZoom('wb-1', 1.25)).resolves.toBeUndefined()
+    await expect(browserHost.browser.find('wb-1', 'invoice')).resolves.toBeUndefined()
+    await expect(browserHost.browser.stopFind('wb-1')).resolves.toBeUndefined()
+    await expect(browserHost.browser.capture('wb-1', 'viewport')).resolves.toBeUndefined()
+    await expect(browserHost.browser.snapshot('wb-1')).resolves.toBeNull()
+    await expect(browserHost.browser.message('wb-1', { v: 1, type: 'exit-picker' })).resolves.toBeUndefined()
+    await expect(browserHost.browser.printToPdf('wb-1')).resolves.toBeUndefined()
+    await expect(browserHost.browser.showMenu('wb-1', {
+      x: 100,
+      y: 50,
+      zoomFactor: 1,
+      hasPage: false,
+      canOpenExternal: false,
+      labels: {
+        find: 'Find', print: 'Print', zoom: 'Zoom', zoomIn: 'Zoom in',
+        zoomOut: 'Zoom out', zoomReset: 'Reset zoom', capture: 'Capture',
+        pickElement: 'Pick element', downloads: 'Downloads', history: 'History',
+        openExternal: 'Open externally',
+      },
+    })).resolves.toBeNull()
+    await expect(browserHost.browser.close('wb-1')).resolves.toBeUndefined()
+
+    const handler = vi.fn()
+    const stop = await browserHost.browser.onEvent(handler)
+    expect(stop()).toBeUndefined()
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('accepts the applied appearance instead of rejecting it in a browser tab', async () => {

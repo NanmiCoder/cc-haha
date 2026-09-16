@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 
 type WorkflowJob = {
+  if?: string
+  'runs-on'?: string
+  'continue-on-error'?: boolean
   needs?: string | string[]
-  steps?: Array<{ name?: string; run?: string }>
+  steps?: Array<{ name?: string; run?: string; 'working-directory'?: string }>
 }
 
 function workflowJobs(workflow: string) {
@@ -62,12 +65,86 @@ describe('PR quality workflow', () => {
       'agent-flow-checks',
       'adapter-checks',
       'desktop-native-checks',
+      'macos-swift-checks',
       'persistence-checks',
       'docs-checks',
       'coverage-checks',
     ]) {
       expect(jobs[jobId].needs).toBe('scope-plan')
     }
+  })
+
+  test('installs imported workspace dependencies and ripgrep before runtime and coverage tests', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    for (const [job, command] of [
+      ['server-checks', 'bun run check:server'],
+      ['coverage-checks', 'bun run check:coverage'],
+      ['desktop-native-checks', 'bun run check:native'],
+    ]) {
+      const steps = jobs[job].steps ?? []
+      const check = steps.findIndex(step => step.run === command)
+      expect(check).toBeGreaterThanOrEqual(0)
+      for (const workspace of ['desktop', 'adapters']) {
+        const install = steps.findIndex(step =>
+          step['working-directory'] === workspace && step.run === 'bun install --frozen-lockfile',
+        )
+        expect(install).toBeGreaterThanOrEqual(0)
+        expect(install).toBeLessThan(check)
+      }
+      const ripgrep = steps.findIndex(step => step.run?.includes('apt-get install') && /\bripgrep\b/.test(step.run))
+      expect(ripgrep).toBeGreaterThanOrEqual(0)
+      expect(ripgrep).toBeLessThan(check)
+    }
+  })
+
+  test('requires macOS Swift checks alongside the selected Linux native packaging lane', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
+    const macos = jobs['macos-swift-checks']!
+    const linux = jobs['desktop-native-checks']!
+    const gate = jobs['pr-quality-gate']!
+    expect(macos['runs-on']).toBe('macos-latest')
+    expect(linux['runs-on']).toBe('ubuntu-22.04')
+    for (const job of [macos, linux]) {
+      expect(job.needs).toBe('scope-plan')
+      expect(job.if).toBe("needs.scope-plan.outputs.desktop_native_checks == 'true'")
+      expect(job['continue-on-error']).not.toBe(true)
+    }
+    expect(macos.steps?.some(step => step.run === 'bun run check:swift')).toBe(true)
+    expect(linux.steps?.some(step => step.run === 'bun run check:native')).toBe(true)
+    expect(gate.needs).toContain('macos-swift-checks')
+    expect(gate.needs).toContain('desktop-native-checks')
+    expect(packageJson.scripts['check:swift']).toBe('bun run scripts/pr/run-swift-checks.ts')
+    expect(packageJson.scripts['check:policy']).toContain('scripts/pr/run-swift-checks.test.ts')
+    expect(packageJson.scripts['check:policy']).toContain('scripts/quality-gate/package-smoke/index.test.ts')
+    for (const command of ['check:swift', 'build:sidecars', 'test:compiled-sidecar-smoke', 'check:electron', 'electron:package:dir', 'test:package-smoke:current']) {
+      expect(packageJson.scripts['check:native']).toContain(`bun run ${command}`)
+    }
+  })
+
+  test.each([
+    { selected: true, macos: 'success', linux: 'success', exit: 0 },
+    { selected: true, macos: 'failure', linux: 'success', exit: 1 },
+    { selected: true, macos: 'skipped', linux: 'success', exit: 1 },
+    { selected: true, macos: 'success', linux: 'failure', exit: 1 },
+    { selected: false, macos: 'skipped', linux: 'skipped', exit: 0 },
+    { selected: false, macos: 'success', linux: 'skipped', exit: 1 },
+  ])('enforces both native results in the stable gate: %j', scenario => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const gateScript = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
+    const script = gateScript.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
+      if (expression === 'needs.scope-plan.outputs.desktop_native_checks') return String(scenario.selected)
+      if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
+      if (expression === 'needs.macos-swift-checks.result') return scenario.macos
+      if (expression === 'needs.desktop-native-checks.result') return scenario.linux
+      if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
+      return 'skipped'
+    })
+    const result = Bun.spawnSync(['bash', '-c', script], {
+      env: { PATH: process.env.PATH ?? '' },
+      stdout: 'pipe', stderr: 'pipe',
+    })
+    expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
   })
 
   test('keeps coverage artifacts observable in CI', () => {

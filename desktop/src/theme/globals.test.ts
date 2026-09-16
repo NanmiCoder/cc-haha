@@ -397,6 +397,17 @@ describe('overlay opacity contract', () => {
   })
 })
 
+describe('desktop window drag', () => {
+  it('does not promote the sidebar shell into a compositing layer', () => {
+    // Electron drops -webkit-app-region hits on a macOS compositing layer, so
+    // a permanent will-change on this shell makes the traffic-light padding
+    // undraggable. The comment is allowed to mention the property; a real
+    // declaration is not.
+    const shellCss = getCssBetween('.sidebar-shell {', '.sidebar-shell[data-state="closed"] {')
+    expect(shellCss).not.toMatch(/will-change\s*:/)
+  })
+})
+
 describe('layering scale', () => {
   const scale = (() => {
     const start = normalizedCss.indexOf('/* ─── Layering scale')
@@ -488,17 +499,52 @@ describe('terminal palette tokens', () => {
     }
   })
 
-  it('defines the terminal ground once and lets ink-blue override it', () => {
-    // The handoff pins one warm-ink terminal panel across the paper themes;
-    // only ink-blue swaps in a cool ground, so it is the one override.
-    const root = getThemeBlock(':root')
-    expect(root).toContain('--color-terminal-cursor:')
-    expect(root).toContain('--color-terminal-selection:')
-    expect(root).toContain('--color-terminal-bg:')
+  function terminalTokens(theme: string) {
+    const blocks = [getThemeBlock(':root')]
+    if (theme === 'dark' || theme === 'ink-blue') {
+      blocks.push(getThemeBlock('[data-theme="dark"],\n[data-theme="ink-blue"]'))
+    }
+    blocks.push(getThemeBlock(`[data-theme="${theme}"]`))
+    const tokens = new Map(Array.from(blocks.join('\n').matchAll(/(--[\w-]+):\s*([^;]+);/g), (match) => [match[1]!, match[2]!.trim()]))
+    const resolve = (name: string): string => {
+      const value = tokens.get(name)
+      if (!value) throw new Error(`Missing ${name}`)
+      const alias = /^var\((--[\w-]+)\)$/.exec(value)
+      return alias ? resolve(alias[1]!) : value
+    }
+    return resolve
+  }
 
-    const inkBlue = getThemeBlock('[data-theme="ink-blue"]')
-    expect(inkBlue).toContain('--color-terminal-bg:')
-    expect(inkBlue).toContain('--color-terminal-selection:')
+  function contrast(foreground: string, background: string) {
+    const luminance = (hex: string) => {
+      const channels = hex.slice(1).match(/../g)!.map((part) => {
+        const channel = parseInt(part, 16) / 255
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+      })
+      return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722
+    }
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a)
+    return (values[0]! + 0.05) / (values[1]! + 0.05)
+  }
+
+  it.each(THEME_MODES)('integrates the terminal with the %s workspace and keeps output readable', (theme) => {
+    const token = terminalTokens(theme)
+    const background = token('--color-terminal-bg')
+    expect(background).toBe(token('--cc-bg'))
+    expect(token('--color-terminal-header')).toBe(background)
+    expect(token('--color-terminal-fg')).toBe(token('--cc-t1'))
+    for (const slot of ['fg', 'muted', 'accent', 'danger', 'warning']) {
+      expect(contrast(token(`--color-terminal-${slot}`), background), `${theme} ${slot}`).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(contrast(token('--color-terminal-fg'), token('--color-terminal-selection'))).toBeGreaterThanOrEqual(4.5)
+    for (const slot of ansiSlots.filter((slot) => !['black', 'white', 'bright-white'].includes(slot))) {
+      expect(contrast(token(`--color-terminal-ansi-${slot}`), background), `${theme} ANSI ${slot}`).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(token('--color-terminal-scrollbar')).toBe(token('--cc-bd2'))
+    expect(token('--color-terminal-scrollbar-hover')).toBe(token('--cc-t3'))
+    // Image viewing must remain independent when a terminal switches to paper.
+    expect(token('--color-media-bg')).toBe('#191713')
+    expect(contrast(token('--color-media-muted'), token('--color-media-bg'))).toBeGreaterThanOrEqual(4.5)
   })
 })
 

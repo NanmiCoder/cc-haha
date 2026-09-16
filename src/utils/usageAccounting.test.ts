@@ -95,6 +95,19 @@ describe('isBillableUsageRecord', () => {
 })
 
 describe('estimateCostUSD', () => {
+  it('uses the reduced Fable 5.1 cache-read rate without changing Fable 5', () => {
+    const cacheReads = tokens({ cacheReadInputTokens: ONE_MILLION })
+    expect(estimateCostUSD('claude-fable-5-1', cacheReads)).toBe(0.25)
+    expect(estimateCostUSD('anthropic/claude-fable-5-1-20260825', cacheReads)).toBe(0.25)
+    expect(estimateCostUSD('claude-fable-5', cacheReads)).toBe(1)
+    expect(estimateCostUSD('claude-fable-5-1', tokens({
+      inputTokens: ONE_MILLION,
+      outputTokens: ONE_MILLION,
+      cacheReadInputTokens: ONE_MILLION,
+      cacheCreationInputTokens: ONE_MILLION,
+    }))).toBe(72.75)
+  })
+
   it('bills each token bucket at its own rate', () => {
     const cost = estimateCostUSD('claude-opus-5', tokens({
       inputTokens: ONE_MILLION,

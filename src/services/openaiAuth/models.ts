@@ -7,6 +7,7 @@ export const OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT = 95
 export const OPENAI_CODEX_STANDARD_CONTEXT_WINDOW = 272_000
 export const OPENAI_CODEX_FRONTIER_CONTEXT_WINDOW = 372_000
 export const OPENAI_CODEX_LARGE_CONTEXT_WINDOW = 1_000_000
+export const OPENAI_CODEX_ASTRA_CONTEXT_WINDOW = 1_050_000
 export const OPENAI_CODEX_SPARK_CONTEXT_WINDOW = 128_000
 export const OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
   (OPENAI_CODEX_STANDARD_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
@@ -22,6 +23,10 @@ export const OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
 )
 export const OPENAI_CODEX_SPARK_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
   (OPENAI_CODEX_SPARK_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
+    100,
+)
+export const OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
+  (OPENAI_CODEX_ASTRA_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
     100,
 )
 
@@ -127,6 +132,15 @@ export const OPENAI_CODEX_MODEL_CATALOG: OpenAIModelCatalogEntry[] = [
     supportedReasoningEfforts: GPT_5_5_REASONING_EFFORTS,
     contextWindow: OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW,
   },
+  {
+    value: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    description: 'Frontier model for complex reasoning and agentic work',
+    descriptionForModel: 'GPT-6 Astra - complex reasoning and agentic work',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    contextWindow: OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW,
+  },
 ]
 
 export function isOpenAIReasoningEffort(
@@ -215,6 +229,9 @@ export function resolveOpenAICodexModel(model: string): string {
 
 export function getOpenAIModelDisplayName(model: string): string | null {
   switch (model.trim().toLowerCase()) {
+    case 'gpt-6':
+    case 'gpt-6-astra':
+      return 'GPT-6 Astra'
     case 'gpt-5.3-codex':
       return 'GPT-5.3 Codex'
     case 'gpt-5.6-sol':
@@ -254,6 +271,10 @@ export function getOpenAICodexContextWindowForModel(
   // Codex OAuth follows the Codex app model catalog, not the public API model
   // context limits. The catalog applies effective_context_window_percent=95,
   // and the runtime /context display reports this effective window.
+  if (normalized === 'gpt-6-astra' || normalized === 'gpt-6') {
+    return OPENAI_CODEX_ASTRA_EFFECTIVE_CONTEXT_WINDOW
+  }
+
   if (
     normalized === 'gpt-5.6-sol' ||
     normalized === 'gpt-5.6-terra' ||

@@ -40,6 +40,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clientMocks.postVerify.mockReset()
     clientMocks.defaultBaseUrl = 'http://127.0.0.1:3456'
     clientMocks.explicitDefaultBaseUrl = false
     vi.useRealTimers()
@@ -54,6 +55,21 @@ describe('desktopRuntime browser H5 bootstrap', () => {
   afterEach(() => {
     vi.useRealTimers()
     globalThis.fetch = originalFetch
+  })
+
+  it('keeps public cookie sessions same-origin despite legacy tokens and attacker URL parameters', async () => {
+    window.history.pushState({}, '', '/remote?serverUrl=https://attacker.example&h5Token=leak')
+    window.localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://attacker.example')
+    window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'old-secret')
+    clientMocks.explicitDefaultBaseUrl = true
+    clientMocks.defaultBaseUrl = 'https://configured.example'
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+
+    await expect(initializeDesktopServerUrl()).resolves.toBe(window.location.origin)
+    expect(clientMocks.setBaseUrl).toHaveBeenLastCalledWith(window.location.origin)
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith(null)
+    expect(globalThis.fetch).toHaveBeenCalledExactlyOnceWith(`${window.location.origin}/health`, { cache: 'no-store' })
+    expect(clientMocks.postVerify).not.toHaveBeenCalled()
   })
 
   it('treats IPv6 loopback as local', () => {
@@ -428,6 +444,78 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith(null)
     expect(clientMocks.postVerify).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe('http://192.168.0.102:28670')
+  })
+
+  it('keeps the saved pairing through transient verification failure and reconnects without scanning', async () => {
+    const server = 'https://paired.example/app'
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'remembered-token')
+    history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server))
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    clientMocks.postVerify.mockRejectedValueOnce(new TypeError('Network unavailable')).mockResolvedValueOnce({ ok: true })
+    await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'verify-failed' })
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('remembered-token')
+    await expect(initializeDesktopServerUrl()).resolves.toBe(server)
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('remembered-token')
+  })
+
+  it('keeps an existing valid pairing when the camera opens an older QR link', async () => {
+    const server = 'https://paired.example/app'
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'current-token')
+    history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server) + '&h5Token=old-qr-token&keep=yes')
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    clientMocks.postVerify.mockResolvedValueOnce({ ok: true })
+    await expect(initializeDesktopServerUrl()).resolves.toBe(server)
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('current-token')
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('current-token')
+    expect(location.search).not.toContain('h5Token')
+    expect(new URLSearchParams(location.search).get('keep')).toBe('yes')
+  })
+
+  it('can replace an expired stored token with a fresh camera QR token', async () => {
+    const server = 'https://paired.example/app'
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'expired-token')
+    history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server) + '&h5Token=fresh-token')
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    clientMocks.postVerify.mockRejectedValueOnce(Object.assign(new Error('Invalid token'), { status: 401 })).mockResolvedValueOnce({ ok: true })
+    await expect(initializeDesktopServerUrl()).resolves.toBe(server)
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('fresh-token')
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('fresh-token')
+  })
+
+  it('does not erase another server pairing when an unpaired QR destination is opened', async () => {
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example')
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'paired-token')
+    history.replaceState(null, '', '/?serverUrl=https%3A%2F%2Funpaired.example')
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'missing-token' })
+    expect(localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe('https://paired.example')
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('paired-token')
+  })
+
+  it('preserves the legacy stored pairing while the desktop is offline', async () => {
+    vi.useFakeTimers()
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example')
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'saved-token')
+    history.replaceState(null, '', '/?serverUrl=https%3A%2F%2Fpaired.example')
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Offline')) as typeof fetch
+    const result = expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'unreachable' })
+    await vi.runAllTimersAsync()
+    await result
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('saved-token')
+  })
+
+  it('forgets only a saved token explicitly rejected by its own server', async () => {
+    localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example')
+    localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'revoked-token')
+    history.replaceState(null, '', '/?serverUrl=https%3A%2F%2Fpaired.example')
+    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    clientMocks.postVerify.mockRejectedValueOnce(Object.assign(new Error('Invalid token'), { status: 401 }))
+    await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'invalid-token' })
+    expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBeNull()
+    expect(localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe('https://paired.example')
   })
 
   it('uses and persists an H5 token from the QR launch URL', async () => {

@@ -16,6 +16,7 @@ import {
   GROK_OFFICIAL_PROVIDER_ID,
 } from '../constants/grokOfficialProvider'
 import { BUNDLED_PROVIDER_PRESETS } from '../config/providerPresets'
+import { resolveProviderRuntimeModelId, resolveProviderSlotModelId } from '../lib/runtimeSelection'
 import type {
   SavedProvider,
   CreateProviderInput,
@@ -112,8 +113,8 @@ function mergeSavedOrderIntoProviderOrder(providerOrder: string[], savedOrder: s
 
 function providerModelIds(provider: SavedProvider): Set<string> {
   return new Set(
-    Object.values(provider.models)
-      .map((modelId) => modelId.trim())
+    (Object.keys(provider.models) as Array<keyof SavedProvider['models']>)
+      .map((slot) => resolveProviderSlotModelId(provider, slot))
       .filter(Boolean),
   )
 }
@@ -125,11 +126,12 @@ function resolveRuntimeRefreshSelection(
 ): RuntimeSelection | null {
   if (currentSelection?.providerId === provider.id) {
     const modelIds = providerModelIds(provider)
+    const modelId = resolveProviderRuntimeModelId(provider, currentSelection.modelId)
     return {
       providerId: provider.id,
-      modelId: modelIds.has(currentSelection.modelId)
-        ? currentSelection.modelId
-        : provider.models.main,
+      modelId: modelIds.has(modelId)
+        ? modelId
+        : resolveProviderSlotModelId(provider, 'main'),
       ...(currentSelection.effortLevel ? { effortLevel: currentSelection.effortLevel } : {}),
     }
   }
@@ -137,31 +139,38 @@ function resolveRuntimeRefreshSelection(
   if (!currentSelection && activeId === provider.id) {
     return {
       providerId: provider.id,
-      modelId: provider.models.main,
+      modelId: resolveProviderSlotModelId(provider, 'main'),
     }
   }
 
   return null
 }
 
-function refreshConnectedSessionsForProvider(provider: SavedProvider, activeId: string | null) {
+function refreshSessionsForProvider(provider: SavedProvider, activeId: string | null, onlyChanged = false) {
   const chatStore = useChatStore.getState()
   const runtimeStore = useSessionRuntimeStore.getState()
 
-  for (const [sessionId, session] of Object.entries(chatStore.sessions)) {
-    if (session.connectionState !== 'connected' || session.chatState !== 'idle') {
-      continue
-    }
+  const sessionIds = new Set([...Object.keys(chatStore.sessions), ...Object.keys(runtimeStore.selections)])
+  for (const sessionId of sessionIds) {
+    const session = chatStore.sessions[sessionId]
+    // Do not replace a running turn. Its next send reconciles the stored model
+    // against the current provider before submitting the prompt.
+    if (session && session.chatState !== 'idle') continue
+    const currentSelection = runtimeStore.selections[sessionId]
+    if (!currentSelection && session?.connectionState !== 'connected') continue
 
     const selection = resolveRuntimeRefreshSelection(
       provider,
       activeId,
-      runtimeStore.selections[sessionId],
+      currentSelection,
     )
     if (!selection) continue
+    if (onlyChanged && (!currentSelection || currentSelection.modelId === selection.modelId)) continue
 
     runtimeStore.setSelection(sessionId, selection)
-    chatStore.setSessionRuntime(sessionId, selection)
+    if (session?.connectionState === 'connected') {
+      chatStore.setSessionRuntime(sessionId, selection)
+    }
   }
 }
 
@@ -177,6 +186,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   fetchProviders: async () => {
     set({ isLoading: true, error: null })
     try {
+      const firstLoad = !get().hasLoadedProviders
       const { providers, activeId, providerOrder } = await providersApi.list()
       set({
         providers,
@@ -185,6 +195,9 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         hasLoadedProviders: true,
         isLoading: false,
       })
+      if (firstLoad) {
+        for (const provider of providers) refreshSessionsForProvider(provider, activeId, true)
+      }
     } catch (err) {
       set({
         isLoading: false,
@@ -211,7 +224,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         await settings.fetchAll()
       }
     }
-    refreshConnectedSessionsForProvider(provider, activeId)
+    refreshSessionsForProvider(provider, activeId)
     return provider
   },
 

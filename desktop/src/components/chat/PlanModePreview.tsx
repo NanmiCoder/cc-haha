@@ -127,6 +127,25 @@ export function buildPromptPermissionUpdates(allowedPrompts: AllowedPrompt[]): P
   ]
 }
 
+/** Modes the approval dialog can hand the session before implementation starts. */
+export type PlanApprovalMode = 'acceptEdits' | 'bypassPermissions'
+
+/**
+ * Approval with an explicit mode, mirroring the official CLI: every "yes" in
+ * its plan dialog carries a `setMode` update, so a session that entered plan
+ * mode without a previous mode to restore (e.g. it launched in plan mode) does
+ * not silently land on `default` and start prompting for every tool call.
+ */
+export function buildPlanApprovalPermissionUpdates(
+  mode: PlanApprovalMode,
+  allowedPrompts: AllowedPrompt[],
+): PermissionUpdate[] {
+  return [
+    { type: 'setMode', mode, destination: 'session' },
+    ...buildPromptPermissionUpdates(allowedPrompts),
+  ]
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>

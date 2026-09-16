@@ -15,6 +15,23 @@ import {
 } from './models.js'
 
 describe('openai auth model resolution', () => {
+  test('provides Astra fallback metadata and effective runtime context for its public alias', () => {
+    const astra = OPENAI_CODEX_MODEL_CATALOG.find((model) => model.value === 'gpt-6-astra')
+    expect(astra).toMatchObject({
+      label: 'GPT-6 Astra',
+      defaultReasoningEffort: 'medium',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      contextWindow: 997_500,
+    })
+    for (const model of ['gpt-6-astra', 'gpt-6']) {
+      expect(getOpenAICodexContextWindowForModel(model)).toBe(997_500)
+      expect(getOpenAIModelDisplayName(model)).toBe('GPT-6 Astra')
+      expect(resolveOpenAIReasoningEffort(model, 'max')).toBe('max')
+      expect(resolveOpenAIReasoningEffort(model, 'ultra')).toBe('medium')
+    }
+    expect(OPENAI_DEFAULT_MAIN_MODEL).toBe('gpt-5.6-sol')
+  })
+
   test('does not treat opus as an OpenAI Responses model', () => {
     expect(isOpenAIResponsesModel('opus')).toBe(false)
   })

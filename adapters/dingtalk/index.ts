@@ -20,6 +20,8 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
+import { syncImPermissionState } from '../common/permission-sync.js'
+import { SessionSelectionController } from '../common/session-selection.js'
 import { type RecentProject } from '../common/http-client.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import {
@@ -86,6 +88,21 @@ let accessTokenCache: { token: string; expiresAt: number } | null = null
 
 attachmentStore.gc().catch((err) => {
   console.warn('[DingTalk] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
+})
+
+const sessionSelectionController = new SessionSelectionController({
+  httpClient,
+  bridge,
+  sessionStore,
+  sendNotice: async (chatId, text) => { await sendText(chatId, text) },
+  onServerMessage: handleServerMessage,
+  clearTransientState: clearTransientChatState,
+  clearProjectSelection: (chatId) => { projectSelectionController.clear(chatId) },
+  isBusy: (chatId) => {
+    const runtime = getRuntimeState(chatId)
+    return runtime.state !== 'idle' || runtime.pendingPermissionCount > 0
+      || (pendingPermissions.get(chatId)?.size ?? 0) > 0
+  },
 })
 
 type ChatRuntimeState = {
@@ -302,6 +319,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
 }
 
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
+  sessionSelectionController.clear(chatId)
   try {
     bridge.resetSession(chatId)
     clearTransientChatState(chatId)
@@ -331,6 +349,7 @@ function formatProjectList(projects: RecentProject[]): string {
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
+  sessionSelectionController.clear(chatId)
   try {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
@@ -344,6 +363,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
 }
 
 function prepareNewSession(chatId: string): void {
+  sessionSelectionController.clear(chatId)
   bridge.resetSession(chatId)
   sessionStore.delete(chatId)
   clearTransientChatState(chatId)
@@ -352,10 +372,12 @@ function prepareNewSession(chatId: string): void {
 
 async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<void> {
   const runtime = getRuntimeState(chatId)
+  if (syncImPermissionState(chatId, msg, runtime, pendingPermissions)) return
 
   switch (msg.type) {
     case 'connected':
       break
+
     case 'status':
       runtime.state = msg.state
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
@@ -469,6 +491,8 @@ async function routeUserMessage(chatId: string, text: string, attachments: Attac
 
     if (!hasAttachments && handlePermissionCommand(chatId, trimmed)) return
 
+    if (!hasAttachments && await sessionSelectionController.handleInput(chatId, trimmed)) return
+
     const projectOutcome = !hasAttachments
       ? await projectSelectionController.handleInput(chatId, trimmed)
       : null
@@ -496,6 +520,7 @@ async function routeUserMessage(chatId: string, text: string, attachments: Attac
         await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
         return
       }
+      getRuntimeState(chatId).state = 'thinking'
       await sendText(chatId, '🧹 已清空当前会话上下文。')
       return
     }
@@ -518,7 +543,10 @@ async function routeUserMessage(chatId: string, text: string, attachments: Attac
     if (!ready) return
     const effectiveText = trimmed || (attachments.length > 0 ? '(用户发送了附件)' : '')
     if (!effectiveText && attachments.length === 0) return
-    if (!bridge.sendUserMessage(chatId, effectiveText, attachments.length ? attachments : undefined)) {
+    const sent = bridge.sendUserMessage(chatId, effectiveText, attachments.length ? attachments : undefined)
+    if (sent) {
+      getRuntimeState(chatId).state = 'thinking'
+    } else {
       await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
     }
   })
@@ -682,7 +710,9 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => void shutdown())
 }
 
-start().catch((err) => {
+if (import.meta.main || process.argv.includes('--dingtalk')) start().catch((err) => {
   console.error('[DingTalk] Fatal:', err instanceof Error ? err.message : err)
   process.exit(1)
 })
+
+export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, handleRobotMessage, prepareNewSession }

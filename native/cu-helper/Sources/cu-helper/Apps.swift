@@ -201,6 +201,19 @@ public enum Apps {
 
     // MARK: list_running_apps
 
+    /// Native discovery includes recently used apps even when they are closed.
+    /// Approval and exact process authorization are enforced when selecting or
+    /// controlling a target, not by making forbidden apps disappear here.
+    static func listApps() async throws -> [AppInventoryEntry] {
+        let recent = try await RecentAppCatalog.shared.entries()
+        let running = NSWorkspace.shared.runningApplications.compactMap { app -> AppRef? in
+            guard app.activationPolicy == .regular,
+                  let bundleId = app.bundleIdentifier, !bundleId.isEmpty else { return nil }
+            return AppRef(bundleId: bundleId, displayName: app.localizedName ?? bundleId)
+        }
+        return AppInventory.merge(running: running, recent: recent)
+    }
+
     /// Running applications that carry a bundle identifier, deduped and sorted
     /// case-insensitively by display name (matches mac_helper.running_apps).
     public static func listRunning() -> [AppRef] {

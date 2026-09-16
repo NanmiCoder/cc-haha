@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  FALLBACK_SLASH_COMMANDS,
   appendAgentSlashCommands,
   buildAgentSlashCommands,
   filterSlashCommands,
@@ -41,7 +42,7 @@ describe('composerUtils', () => {
     })
   })
 
-  it('merges fallback commands so built-in entries like /clear remain visible', () => {
+  it('merges fallback commands so built-in entries like /compact remain visible', () => {
     expect(
       mergeSlashCommands([
         { name: 'help', description: '' },
@@ -49,10 +50,20 @@ describe('composerUtils', () => {
     ).toEqual(
       expect.arrayContaining([
         { name: 'help', description: 'Show available desktop and agent commands' },
-        { name: 'clear', description: 'Clear conversation history' },
+        { name: 'compact', description: 'Compact conversation context' },
         { name: 'context', description: 'Show current context usage' },
       ]),
     )
+  })
+
+  it('never falls back to commands this desktop cannot run', () => {
+    // The headless CLI answers these with "Unknown skill", so offering them in
+    // the menu is a dead end. They regressing back in means the fallback list
+    // drifted away from what the session can actually execute.
+    const names = FALLBACK_SLASH_COMMANDS.map(command => command.name)
+    for (const dead of ['clear', 'vim', 'terminal-setup', 'permissions', 'commit', 'pr', 'bug', 'login', 'logout']) {
+      expect(names).not.toContain(dead)
+    }
   })
 
   it('keeps server-provided descriptions for non-built-in commands', () => {
@@ -164,6 +175,38 @@ describe('composerUtils', () => {
     ])
   })
 
+  it('opens on the commands the desktop owns instead of the CLI registration order', () => {
+    // The CLI lists its bundled skills first, so an unprioritised menu opens on
+    // `update-config` / `debug` / `batch`. Desktop-owned commands lead instead,
+    // and everything else keeps the order its source gave it.
+    const commands = [
+      { name: 'update-config', description: 'Configure' },
+      { name: 'debug', description: 'Debug' },
+      { name: 'compact', description: 'Compact conversation context' },
+      { name: 'help', description: 'Show available commands' },
+      { name: 'model', description: 'Switch AI model' },
+    ]
+    expect(filterSlashCommands(commands, '').map((command) => command.name)).toEqual([
+      'help',
+      'model',
+      'update-config',
+      'debug',
+      'compact',
+    ])
+  })
+
+  it('leaves match ranking alone once a query is typed', () => {
+    const commands = [
+      { name: 'help', description: 'Show available commands' },
+      { name: 'compact', description: 'Compact conversation context' },
+      { name: 'update-config', description: 'Compact the config' },
+    ]
+    expect(filterSlashCommands(commands, 'comp').map((command) => command.name)).toEqual([
+      'compact',
+      'update-config',
+    ])
+  })
+
   it('groups built-in app commands before personal skills without changing their relative order', () => {
     const groups = groupSlashCommands([
       { name: 'amazon-review-scraper', description: 'Collect Amazon reviews', kind: 'skill', source: 'user' },
@@ -247,9 +290,9 @@ describe('composerUtils', () => {
     const mockT = (key: string) => key
 
     const commands = getLocalizedFallbackCommands(mockT)
-    const clearCmd = commands.find((c) => c.name === 'clear')
-    expect(clearCmd?.description).toBe('Clear conversation history')
-    expect(clearCmd?.description).not.toBe('slashCmd.clear.description')
+    const contextCmd = commands.find((c) => c.name === 'context')
+    expect(contextCmd?.description).toBe('Show current context usage')
+    expect(contextCmd?.description).not.toBe('slashCmd.context.description')
 
     // Verify every command renders a human-readable description, never a raw key
     for (const cmd of commands) {
@@ -260,18 +303,28 @@ describe('composerUtils', () => {
   it('uses the localized description when the translation key resolves to a real string', () => {
     const mockT = (key: string) => {
       const map: Record<string, string> = {
-        'slashCmd.clear.description': '清空会话历史',
+        'slashCmd.context.description': '当前上下文用量',
       }
       return map[key] ?? key
     }
 
     const commands = getLocalizedFallbackCommands(mockT)
-    const clearCmd = commands.find((c) => c.name === 'clear')
-    expect(clearCmd?.description).toBe('清空会话历史')
+    const contextCmd = commands.find((c) => c.name === 'context')
+    expect(contextCmd?.description).toBe('当前上下文用量')
 
     // A command without a translated key should still fall back to English
     const mcpCmd = commands.find((c) => c.name === 'mcp')
     expect(mcpCmd?.description).toBe('Open available MCP tools for the current chat context')
     expect(mcpCmd?.description).not.toBe('slashCmd.mcp.description')
   })
+})
+
+it('orders plugin mentions between commands and skills without changing their canonical ids', () => {
+  const groups = groupSlashCommands([
+    { name: 'skill:video', description: 'Video', kind: 'skill' },
+    { name: 'plugin:hyperframes', description: 'HyperFrames', kind: 'plugin' },
+    { name: 'help', description: 'Help', kind: 'command' },
+  ])
+  expect(groups.plugins?.map(item => item.name)).toEqual(['plugin:hyperframes'])
+  expect(groups.ordered.map(item => item.name)).toEqual(['help', 'plugin:hyperframes', 'skill:video'])
 })

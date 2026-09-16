@@ -169,6 +169,12 @@ private enum HeldState {
 @MainActor
 public enum Injection {
 
+    #if DEBUG
+    /// Test-only observation of the exact immutable values used by the safety
+    /// check. It cannot replace either identity or change validation policy.
+    static var targetValidationObserver: ((ProvenProcessTarget, AXTreeProcessIdentity?) -> Void)?
+    #endif
+
     /// One shared event source per process, in the HID system state so the
     /// synthesized events inherit the real keyboard/modifier baseline. May be
     /// nil in extremely locked-down sandboxes; call sites throw `event_alloc`.
@@ -354,6 +360,9 @@ public enum Injection {
         _ target: ProvenProcessTarget
     ) throws -> ProvenProcessTarget {
         let currentIdentity = AXTree.currentProcessIdentity(pid: target.pid)
+        #if DEBUG
+        targetValidationObserver?(target, currentIdentity)
+        #endif
         guard target.validatedPid(currentIdentity: currentIdentity) != nil else {
             throw CUError(
                 "stale_process",

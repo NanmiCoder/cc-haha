@@ -262,6 +262,12 @@ export function shouldUseGlobalCacheScope(): boolean {
   )
 }
 
+function getEnvironmentBetas(): string[] {
+  return (process.env.ANTHROPIC_BETAS ?? '').split(',')
+    .map(beta => beta.trim())
+    .filter(Boolean)
+}
+
 export const getAllModelBetas = memoize((model: string): string[] => {
   const betaHeaders = []
   const isHaiku = getCanonicalName(model).includes('haiku')
@@ -389,13 +395,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
 
   // If ANTHROPIC_BETAS is set, split it by commas and add to betaHeaders.
   // This is an explicit user opt-in, so honor it regardless of model.
-  if (process.env.ANTHROPIC_BETAS) {
-    betaHeaders.push(
-      ...process.env.ANTHROPIC_BETAS.split(',')
-        .map(_ => _.trim())
-        .filter(Boolean),
-    )
-  }
+  betaHeaders.push(...getEnvironmentBetas())
   return betaHeaders
 })
 
@@ -430,7 +430,14 @@ export function getMergedBetas(
   options?: { isAgenticQuery?: boolean },
 ): string[] {
   if (getAPIProvider() === 'firstParty' && !isFirstPartyAnthropicBaseUrl()) {
-    return []
+    // Third-party Anthropic relays may require explicitly selected features
+    // (e.g. 1M context). Keep those opt-ins without enabling first-party defaults.
+    return [...new Set([
+      ...(!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) && has1mContext(model)
+        ? [CONTEXT_1M_BETA_HEADER] : []),
+      ...getEnvironmentBetas(),
+      ...(getSdkBetas() ?? []),
+    ])]
   }
 
   const baseBetas = [...getModelBetas(model)]

@@ -553,6 +553,10 @@ export async function handleSkillsApi(
     switch (sub) {
       case undefined:
         return await listSkills(url)
+      case 'mentions': {
+        const { listCapabilityMentions } = await import('../services/capabilityMentionService.js')
+        return Response.json(await listCapabilityMentions(url.searchParams.get('cwd') || getCwd()))
+      }
       case 'detail':
         return await getSkillDetail(url)
       default:

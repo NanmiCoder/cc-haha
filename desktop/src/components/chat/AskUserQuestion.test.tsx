@@ -327,6 +327,9 @@ describe('AskUserQuestion', () => {
       target: { value: '' },
     })
     fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+    // Picking a single-select option now advances on its own, so come back to
+    // Q1 before carrying on with the per-tab isolation assertions below.
+    fireEvent.click(screen.getByRole('button', { name: /Q1$/ }))
     fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
       target: { value: 'custom-q1' },
     })
@@ -430,6 +433,144 @@ describe('AskUserQuestion', () => {
     expect(screen.queryByPlaceholderText('Type your answer...')).toBeNull()
     expect(screen.queryByRole('button', { name: /submit/i })).toBeNull()
     expect(screen.getByText(/Tool permission request failed: AbortError/)).toBeTruthy()
+  })
+
+  describe('moving to the next question', () => {
+    const TWO_QUESTIONS = {
+      questions: [
+        {
+          header: 'Q1',
+          question: 'First question?',
+          options: [{ label: 'A1' }, { label: 'B1' }],
+        },
+        {
+          header: 'Q2',
+          question: 'Second question?',
+          options: [{ label: 'A2' }, { label: 'B2' }],
+        },
+      ],
+    }
+
+    const nextButton = () => screen.getByRole('button', { name: /next/i })
+    const typeCustomAnswer = (value: string) => fireEvent.change(
+      screen.getByPlaceholderText('Type your answer...'),
+      { target: { value } },
+    )
+
+    it('is not rendered for a single-question prompt', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [
+              { question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] },
+            ],
+          }}
+        />,
+      )
+
+      expect(screen.queryByRole('button', { name: /next/i })).toBeNull()
+    })
+
+    // ChatGPT gates its next arrow on the same condition: not being able to move
+    // on is what keeps a question from being skipped by accident.
+    it('is disabled until the question on screen is answered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      expect(nextButton()).toHaveProperty('disabled', true)
+
+      typeCustomAnswer('custom-q1')
+
+      expect(nextButton()).toHaveProperty('disabled', false)
+    })
+
+    it('shows the next question when clicked', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      fireEvent.click(nextButton())
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(screen.queryByText('First question?')).toBeNull()
+    })
+
+    it('advances on its own after a single-select pick, without submitting', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(sendMock).not.toHaveBeenCalled()
+    })
+
+    it('stays put on a multi-select pick', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [
+              {
+                header: 'Q1',
+                question: 'First question?',
+                multiSelect: true,
+                options: [{ label: 'A1' }, { label: 'B1' }],
+              },
+              {
+                header: 'Q2',
+                question: 'Second question?',
+                options: [{ label: 'A2' }],
+              },
+            ],
+          }}
+        />,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+
+      expect(screen.getByText('First question?')).toBeTruthy()
+      expect(screen.queryByText('Second question?')).toBeNull()
+    })
+
+    it('stays put when a pick is toggled back off', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Q1$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+
+      expect(screen.getByText('First question?')).toBeTruthy()
+    })
+
+    it('is not rendered on the last question', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      fireEvent.click(nextButton())
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /next/i })).toBeNull()
+    })
+
+    it('submits every answer after walking the questions', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...TWO_QUESTIONS,
+          answers: {
+            'First question?': 'A1',
+            'Second question?': 'A2',
+          },
+        },
+      })
+    })
   })
 
   describe('chat about this', () => {

@@ -159,7 +159,11 @@
 }
 
 .settings-terminal-host .xterm-viewport {
-  scrollbar-color: var(--color-outline-a72) transparent;
+  scrollbar-color: var(--color-terminal-scrollbar) transparent;
+}
+
+.settings-terminal-host .xterm-viewport:hover {
+  scrollbar-color: var(--color-terminal-scrollbar-hover) transparent;
 }
 
 .settings-terminal-host .xterm-screen {
@@ -576,13 +580,29 @@
 }
 
 /* ─── Terminal ANSI palette ───────────────────────────────────────
-   The embedded terminal stays dark under all three themes (that is what
-   the per-theme `--color-terminal-*` values encode — light/white/dark
-   differ only in hue, not in lightness), so the 16 ANSI slots are shared.
-   Split them into the theme blocks if a theme ever needs its own ramp.
-   Consumed by `lib/terminalTheme.ts`, which is the only place allowed to
-   turn these into an xterm ITheme object. */
+   ANSI foregrounds use separate light and dark ramps. Black/white retain
+   ANSI semantics for programs that explicitly paint their own backgrounds. */
 :root {
+  --color-terminal-ansi-black: #242424;
+  --color-terminal-ansi-red: #B42318;
+  --color-terminal-ansi-green: #226C3C;
+  --color-terminal-ansi-yellow: #795500;
+  --color-terminal-ansi-blue: #155DB5;
+  --color-terminal-ansi-magenta: #8642A0;
+  --color-terminal-ansi-cyan: #176A72;
+  --color-terminal-ansi-white: #D7D2D0;
+  --color-terminal-ansi-bright-black: #696158;
+  --color-terminal-ansi-bright-red: #A82018;
+  --color-terminal-ansi-bright-green: #1D6735;
+  --color-terminal-ansi-bright-yellow: #755000;
+  --color-terminal-ansi-bright-blue: #1258AB;
+  --color-terminal-ansi-bright-magenta: #7E3698;
+  --color-terminal-ansi-bright-cyan: #12656D;
+  --color-terminal-ansi-bright-white: #FFFFFF;
+}
+
+[data-theme="dark"],
+[data-theme="ink-blue"] {
   --color-terminal-ansi-black: #1F1F1F;
   --color-terminal-ansi-red: #FF6D67;
   --color-terminal-ansi-green: #7EF18A;
@@ -688,12 +708,11 @@
   --color-warning-container: #F8F0DC;
   --color-on-warning-container: #90641B;
 
-  /* Type roles. Headings are serif — that is the "墨" half of 「纸 · 墨 · 印」.
-     Only the latin cut of Noto Serif SC is self-hosted; CJK falls through to
-     the platform serif, which is what the handoff prototype does too. */
-  --font-headline: 'Noto Serif SC', 'Songti SC', 'Source Han Serif SC', 'Noto Serif CJK SC', 'SimSun', Georgia, serif;
-  --font-serif: var(--font-headline);
-  --font-body: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* Software chrome shares one sans-serif family. Keep the editorial serif
+     explicit for content that requests it, instead of inheriting it in tools. */
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-headline: var(--font-body);
+  --font-serif: 'Noto Serif SC', 'Songti SC', Georgia, serif;
   --font-label: var(--font-body);
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
@@ -721,19 +740,19 @@
   color-scheme: light;
 
   --cc-bg: #FFFFFF;
-  --cc-s0: #F6F6F3;
-  --cc-s1: #F0EFE9;
-  --cc-s2: #FAFAF8;
-  --cc-bd: #EBE9E2;
-  --cc-bd2: #D8D5CC;
+  --cc-s0: #F7F7F7;
+  --cc-s1: #F0F0F0;
+  --cc-s2: #FAFAFA;
+  --cc-bd: #EBEBEB;
+  --cc-bd2: #D6D6D6;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #918E87;
+  --cc-bd-strong: #8C8C8C;
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D9D5CC;
-  --cc-tab-sep: #E3DFD6;
-  --cc-t1: #1F1C17;
-  --cc-t2: #5D5850;
-  --cc-t3: #777269;
+  --cc-tab-edge: #DADADA;
+  --cc-tab-sep: #E3E3E3;
+  --cc-t1: #242424;
+  --cc-t2: #575757;
+  --cc-t3: #6E6E6E;
 
   --cc-ac: #96442B;
   --cc-ac2: #7C3620;
@@ -770,7 +789,7 @@
   --cc-diff-del-word: #F0CECB;
   --cc-diff-mark: #F4EDE2;
   --cc-diff-mark-gutter: #ECE1CE;
-  --cc-code: #F7F7F4;
+  --cc-code: #F8F8F8;
 
   --cc-heat-0: #F0EFE9;
   --cc-heat-1: #E8D6D0;
@@ -779,14 +798,14 @@
   --cc-heat-4: #9C4F38;
 
   --cc-shadow-card: 0 1px 3px rgba(30, 28, 22, 0.04), 0 6px 24px rgba(30, 28, 22, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(30, 28, 22, 0.05), 0 14px 44px rgba(30, 28, 22, 0.08);
+  --cc-shadow-composer: 0 1px 2px rgba(24, 24, 24, 0.04), 0 4px 16px rgba(24, 24, 24, 0.04);
   --cc-shadow-overlay: 0 8px 24px rgba(30, 28, 22, 0.10), 0 24px 64px rgba(30, 28, 22, 0.15);
 
   --cc-bg-rgb: 255, 255, 255;
-  --cc-s1-rgb: 240, 239, 233;
-  --cc-t1-rgb: 31, 28, 23;
-  --cc-t2-rgb: 93, 88, 80;
-  --cc-bd2-rgb: 216, 213, 204;
+  --cc-s1-rgb: 240, 240, 240;
+  --cc-t1-rgb: 36, 36, 36;
+  --cc-t2-rgb: 87, 87, 87;
+  --cc-bd2-rgb: 214, 214, 214;
   --cc-ac-rgb: 150, 68, 43;
   --cc-er-rgb: 199, 68, 54;
   --cc-scrim-rgb: 19, 17, 14;
@@ -1289,6 +1308,12 @@
   --color-info-container: var(--cc-info-soft);
   --color-on-info-container: var(--cc-info-ink);
 
+  /* Language identity is independent of the app's status/brand palette. */
+  --color-file-typescript-container: #DDEDFC;
+  --color-on-file-typescript-container: #215D96;
+  --color-file-javascript-container: #F7E8A2;
+  --color-on-file-javascript-container: #685615;
+
   /* Memory / goal surfaces keep a teal identity of their own */
   --color-memory-accent: var(--cc-teal);
   --color-memory-surface: var(--cc-teal-soft);
@@ -1427,18 +1452,29 @@
   --color-diff-syntax-type: #7E5520;
   --color-diff-syntax-punctuation: #5C504A;
 
-  /* Terminal. The handoff pins one warm-ink panel across every theme; the
-     ink-blue theme swaps in its own cool ground below. */
-  --color-terminal-header: #221F19;
-  --color-terminal-bg: #191713;
-  --color-terminal-border: #14120F;
-  --color-terminal-fg: #E4DCCA;
-  --color-terminal-cursor: #D07B52;
-  --color-terminal-selection: #4C4433;
-  --color-terminal-muted: #8B8069;
-  --color-terminal-accent: #84B383;
-  --color-terminal-danger: #E06B52;
-  --color-terminal-warning: #D3A34C;
+  /* The terminal belongs to the current workspace theme. */
+  --color-terminal-header: var(--cc-bg);
+  --color-terminal-bg: var(--cc-bg);
+  --color-terminal-border: var(--cc-bd);
+  --color-terminal-fg: var(--cc-t1);
+  --color-terminal-cursor: var(--cc-t1);
+  --color-terminal-selection: var(--cc-ac-soft);
+  --color-terminal-muted: var(--cc-t3);
+  --color-terminal-accent: var(--cc-ok-ink);
+  --color-terminal-danger: var(--cc-er-ink);
+  --color-terminal-warning: var(--cc-wn-ink);
+  --color-terminal-scrollbar: var(--cc-bd2);
+  --color-terminal-scrollbar-hover: var(--cc-t3);
+
+  /* Image viewing keeps a dark neutral surround independently of terminals. */
+  --color-media-bg: #191713;
+  --color-media-header: #221F19;
+  --color-media-border: #4C4433;
+  --color-media-fg: #E4DCCA;
+  --color-media-muted: #B5AA96;
+  --color-media-selection: #4C4433;
+  --color-media-cursor: #D07B52;
+  --color-media-danger: #E06B52;
 
   /* Find-in-page highlights. These paint over arbitrary page content, not
      over a brand-soft panel, so they get their own pair instead of borrowing
@@ -1478,6 +1514,11 @@
 /* Ink themes: lift the syntax ramp off the paper values. */
 [data-theme="dark"],
 [data-theme="ink-blue"] {
+  --color-file-typescript-container: #203B55;
+  --color-on-file-typescript-container: #92CAF7;
+  --color-file-javascript-container: #BFA453;
+  --color-on-file-javascript-container: #221C0C;
+
   --color-code-comment: #8F8683;
   --color-code-string: #A8CE8C;
   --color-code-keyword: #E9926B;
@@ -1509,16 +1550,6 @@
   --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.56);
   --shadow-button-primary: 0 2px 10px rgba(0, 0, 0, 0.4);
   --color-activity-tooltip-border: rgba(var(--cc-bg-rgb), 0.28);
-}
-
-/* Ink-blue runs a cool terminal ground rather than the shared warm ink. */
-[data-theme="ink-blue"] {
-  --color-terminal-header: #1B1F27;
-  --color-terminal-bg: #14171D;
-  --color-terminal-border: #101318;
-  --color-terminal-fg: #DDE1EB;
-  --color-terminal-selection: #434A5B;
-  --color-terminal-muted: #79808F;
 }
 
 /* ─── Material Symbols ─────────────────────────────────────────────
@@ -1726,6 +1757,36 @@ button, input, textarea, select, a, [role="button"] {
   margin-right: 1px;
 }
 
+.composer-mention--skill,
+.composer-mention--plugin {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  line-height: 1.35;
+  vertical-align: baseline;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.composer-mention--skill {
+  color: var(--color-on-info-container);
+  background: var(--color-info-container);
+}
+
+.composer-mention-brand-icon {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.composer-mention[role="button"]:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
 /* The editor reports `contenteditable="false"` when the workspace is gone;
    keep the old textarea's dimmed disabled look. */
 .composer-pm[contenteditable="false"] {
@@ -1769,7 +1830,9 @@ button, input, textarea, select, a, [role="button"] {
   flex-shrink: 0;
   overflow: hidden;
   transition: width var(--motion-sidebar-duration) var(--motion-sidebar-easing);
-  will-change: width;
+  /* Do not promote this shell with will-change. A permanent compositing
+     layer makes Electron drop -webkit-app-region hits on macOS, so the
+     title padding around the traffic lights cannot drag the window. */
 }
 
 .sidebar-shell[data-state="closed"] {

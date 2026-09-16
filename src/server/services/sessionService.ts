@@ -5,7 +5,7 @@
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
-import { createReadStream, type Stats } from 'node:fs'
+import { constants, createReadStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
@@ -13,7 +13,7 @@ import * as os from 'node:os'
 import { createInterface } from 'node:readline'
 import { ApiError } from '../middleware/errorHandler.js'
 import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
-import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
+import { migrateFileHistorySnapshot, type FileHistorySnapshot } from '../../utils/fileHistory.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
@@ -47,6 +47,7 @@ import {
 import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
 import {
   extractGoalCreationTitle,
   extractTranscriptUserTitle,
@@ -68,7 +69,17 @@ import type {
 } from './localIndex/sessionIndex.js'
 import type { LocalIndexStatus } from './localIndex/types.js'
 import { diagnosticsService } from './diagnosticsService.js'
-import { isForkInheritedUsageRecord } from '../../utils/usageAccounting.js'
+import {
+  isBillableUsageRecord,
+  isForkInheritedUsageRecord,
+  usageRecordKey,
+} from '../../utils/usageAccounting.js'
+import {
+  ProjectSessionHistory,
+  type ProjectHistoryOptions,
+  type ProjectHistoryPage,
+  type ProjectHistoryRow,
+} from './projectSessionHistory.js'
 
 // ============================================================================
 // Types
@@ -207,6 +218,15 @@ export type MessageEntry = {
   timestamp: string
   model?: string
   usage?: MessageUsage
+  /**
+   * Identity of the API response `usage` belongs to, when it has one.
+   *
+   * A single assistant reply is persisted as one line per content block, each repeating the
+   * whole `usage` object, so any consumer that totals usage must count a given key once.
+   * Computed here (rather than by each consumer) so the rule lives in one place; absent when
+   * the line carries no message id, which by the same convention means "always count it".
+   */
+  usageKey?: string
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean
@@ -250,6 +270,8 @@ export type TranscriptUsageSnapshot = {
   costDisplay: string
   hasUnknownModelCost: boolean
   totalAPIDuration: number
+  totalDecodeDuration: number
+  totalTtftDuration: number
   totalDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -345,6 +367,7 @@ type RawEntry = {
   snapshot?: {
     messageId?: string
     trackedFileBackups?: Record<string, unknown>
+    completedFileBackups?: Record<string, unknown>
     timestamp?: string
   }
   customTitle?: string
@@ -368,6 +391,35 @@ type TranscriptContextAccumulator = {
   estimatedTokensFromMessages: number
   estimatedTokensAfterUsage: number
   transcriptHasMediaInput: boolean
+}
+
+/**
+ * Whether this line's `usage` is the first sighting of its reply.
+ *
+ * Claude Code writes one JSONL line per content block of an assistant message and repeats the
+ * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
+ * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
+ * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
+ * inherited only the fork check and so reported inflated totals to the context panel.
+ *
+ * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
+ * agrees about what one session cost.
+ */
+function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+  const record = entry as unknown as Record<string, unknown>
+  const identity = {
+    version: record.version,
+    sessionId: record.sessionId,
+    requestId: record.requestId,
+    messageId: entry.message?.id,
+    forkedFrom: record.forkedFrom,
+  }
+  if (!isBillableUsageRecord(identity)) return false
+  const key = usageRecordKey(identity)
+  if (key === null) return true
+  if (countedKeys.has(key)) return false
+  countedKeys.add(key)
+  return true
 }
 
 function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
@@ -576,8 +628,45 @@ function getSharedSessionMutationState(
   return created
 }
 
+// Read-time evidence only: spreads preserve it, JSON serialization does not.
+// A malformed before map must not become indistinguishable from a valid {}.
+const malformedFileHistoryBefore = Symbol('malformed-file-history-before')
+
+export function hasMalformedFileHistoryBefore(snapshot: FileHistorySnapshot): boolean {
+  return (snapshot as FileHistorySnapshot & { [malformedFileHistoryBefore]?: true })[malformedFileHistoryBefore] === true
+}
+
 export class SessionService {
   private providerService = new ProviderService()
+  // Keep launch state available when retention disables or removes transcripts.
+  // Scope keys by config directory so test/embedded server instances cannot mix state.
+  private readonly memoryLaunchInfo = new Map<string, SessionLaunchInfo>()
+  // Creation or a valid runtime metadata update establishes a session lifetime
+  // independently of its transcript. Cleanup can remove that file before the
+  // next runtime update supplies memoryLaunchInfo.
+  private readonly knownSessionKeys = new Set<string>()
+  private readonly privateTitles = new Map<string, Set<string>>()
+
+  shouldPersistSession(): boolean {
+    return getSettings_DEPRECATED()?.cleanupPeriodDays !== 0
+  }
+
+  private memorySessionKey(sessionId: string): string {
+    return `${this.getConfigDir()}:${sessionId}`
+  }
+
+  private rememberPrivateTitle(sessionId: string, title: string): void {
+    const key = this.memorySessionKey(sessionId)
+    const titles = this.privateTitles.get(key) ?? new Set<string>()
+    titles.add(title)
+    this.privateTitles.set(key, titles)
+  }
+
+  private canPersistTitle(sessionId: string, title: string): boolean {
+    return this.shouldPersistSession() &&
+      !this.privateTitles.get(this.memorySessionKey(sessionId))?.has(title)
+  }
+
   private readonly pendingTaskNotificationWrites = new Map<
     string,
     Set<{
@@ -616,6 +705,7 @@ export class SessionService {
   private readonly sessionListSummaryCache = new Map<string, SessionListSummaryCacheEntry>()
   private readonly sessionListSummaryRequests = new Map<string, Promise<SessionListSummary>>()
   private activeSessionListCacheScope: string | null = null
+  private readonly projectHistory: ProjectSessionHistory
 
   constructor(
     localIndexGateway: LocalIndexGateway = localIndexCoordinator,
@@ -645,6 +735,25 @@ export class SessionService {
       })
     })
     this.targetedEntryReader = options.targetedEntryReader ?? readSessionEntriesByLocator
+    this.projectHistory = new ProjectSessionHistory({
+      now: this.now,
+      scope: () => this.getConfigDir(),
+      revision: () => this.projectHistoryRevision(),
+      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}`,
+      load: () => this.loadProjectHistoryRows(),
+      hydrate: async (row) => {
+        try {
+          await this.validateIndexedTranscriptPath(
+            row.transcriptPath, row.projectPath, row.id, await fs.realpath(this.getProjectsDir()),
+          )
+          return await this.hydrateIndexedSession(row)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          this.markIndexReadFailure()
+          throw new ApiError(409, 'Project history changed; retry from the first page', 'PROJECT_HISTORY_CHANGED')
+        }
+      },
+    })
   }
 
   private normalizeCacheCapacity(value: number | undefined, fallback: number): number {
@@ -1417,16 +1526,24 @@ export class SessionService {
     entry: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (!this.shouldPersistSession()) return
     const line = JSON.stringify(entry) + '\n'
-    if (signal) {
-      await fs.writeFile(filePath, line, {
-        encoding: 'utf-8',
-        flag: 'a',
-        signal,
-      })
-      return
+    // A delayed title/notification must not recreate a transcript removed by
+    // retention cleanup after lookup. Metadata relocation opts into creation.
+    let handle: fs.FileHandle
+    try {
+      handle = await fs.open(filePath, constants.O_WRONLY | constants.O_APPEND |
+        (entry.type === 'session-meta' ? constants.O_CREAT : 0))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
     }
-    await fs.appendFile(filePath, line, 'utf-8')
+    try {
+      if (!this.shouldPersistSession()) return
+      await handle.writeFile(line, { encoding: 'utf-8', signal })
+    } finally {
+      await handle.close()
+    }
   }
 
   private resolveWorkDirFromEntries(
@@ -1654,6 +1771,14 @@ export class SessionService {
     const usage = isForkInheritedUsageRecord(entry)
       ? undefined
       : normalizeMessageUsage(msg.usage)
+    const usageKey = usage
+      ? usageRecordKey({
+          version: entry.version,
+          sessionId: entry.sessionId,
+          requestId: entry.requestId,
+          messageId: entry.message?.id,
+        }) ?? undefined
+      : undefined
 
     return {
       id: entry.uuid || crypto.randomUUID(),
@@ -1663,6 +1788,7 @@ export class SessionService {
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
       ...(usage ? { usage } : {}),
+      ...(usageKey ? { usageKey } : {}),
       parentUuid: entry.parentUuid ?? undefined,
       parentToolUseId,
       isSidechain: entry.isSidechain,
@@ -2810,9 +2936,13 @@ export class SessionService {
     let firstUsageAt: number | null = null
     let lastUsageAt: number | null = null
 
+    const countedUsageKeys = new Set<string>()
+
     for (const entry of entries) {
       currentRuntimeHint = this.applyRuntimeContextMetadata(currentRuntimeHint, entry)
-      if (isForkInheritedUsageRecord(entry)) continue
+      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
+      // same class of over-count; `claimUsageRecord` rejects both.
+      if (!claimUsageRecord(entry, countedUsageKeys)) continue
       const usage = entry.message?.usage
       const model = entry.message?.model
       if (!usage || typeof model !== 'string') continue
@@ -2943,6 +3073,7 @@ export class SessionService {
     let lastUsageAt: number | null = null
 
     const contextState = createTranscriptContextAccumulator()
+    const countedUsageKeys = new Set<string>()
 
     await this.streamJsonlFile(found.filePath, (entry) => {
       if (typeof entry.message?.model === 'string') {
@@ -3025,9 +3156,9 @@ export class SessionService {
         ? usage.server_tool_use.web_search_requests
         : 0
 
-      // Inherited fork history still describes the current context, but its API usage belongs to
-      // the source session and must not be included in this fork's cumulative usage or cost.
-      if (isForkInheritedUsageRecord(entry)) return
+      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
+      // same class of over-count; `claimUsageRecord` rejects both.
+      if (!claimUsageRecord(entry, countedUsageKeys)) return
 
       if (
         inputTokens === 0 &&
@@ -3127,6 +3258,11 @@ export class SessionService {
           costDisplay: this.formatCost(totalCostUSD),
           hasUnknownModelCost,
           totalAPIDuration: 0,
+          // Generation timings live only in the CLI process (and the resume snapshot it
+          // writes to project config); a transcript has no per-response span to rebuild
+          // them from, so callers must treat 0 as "unknown" rather than "instant".
+          totalDecodeDuration: 0,
+          totalTtftDuration: 0,
           totalDuration:
             firstUsageAt !== null && lastUsageAt !== null
               ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
@@ -3164,9 +3300,75 @@ export class SessionService {
   // Public API
   // --------------------------------------------------------------------------
 
-  /**
-   * List all sessions, optionally filtered by project path.
-   */
+  /** Browse one logical project's history independently of the recent list. */
+  listProjectHistory(options: ProjectHistoryOptions): Promise<ProjectHistoryPage> {
+    return this.projectHistory.list(options)
+  }
+
+  private projectHistoryRevision(): string {
+    this.syncSharedMutationEpoch()
+    const scope = this.getConfigDir()
+    this.prepareSessionListCaches(scope)
+    const indexed = this.getUsableIndexMode() === 'on'
+    const status = indexed ? this.localIndexGateway.getPublicStatus() : null
+    return JSON.stringify([scope, this.sessionListCacheGeneration,
+      indexed && status?.state === 'ready' ? status.lastUpdatedAt : 'files'])
+  }
+
+  private async loadProjectHistoryRows(): Promise<ProjectHistoryRow[]> {
+    const scope = this.getConfigDir()
+    let indexedRows: IndexedSessionRow[] | null = null
+    if (this.getUsableIndexMode() === 'on' && this.localIndexGateway.getPublicStatus().state === 'ready') {
+      try {
+        indexedRows = []
+        // No await between index pages: a coordinator projection cannot shift
+        // the order while this synchronous metadata snapshot is collected.
+        for (let offset = 0; ; offset += 500) {
+          const page = this.localIndexGateway.listSessions({ limit: 500, offset })
+          if (!this.indexStatusRemainsUsable()) throw new Error('Index unavailable')
+          indexedRows.push(...page.sessions)
+          if (offset + page.sessions.length >= page.total) break
+          if (page.sessions.length === 0) throw new Error('Incomplete index page')
+        }
+      } catch {
+        this.markIndexReadFailure()
+        indexedRows = null
+      }
+    }
+    if (indexedRows === null) {
+      indexedRows = []
+      // Files remain authoritative in off/shadow/building mode. Summaries are
+      // streamed and shared with the existing list cache; messages never load.
+      for (const file of await this.discoverSessionFiles(undefined, scope)) {
+        try {
+          const stat = await fs.stat(file.filePath)
+          const summary = await this.getCachedSessionListSummary(file.filePath, file.projectDir, stat, scope)
+          indexedRows.push({ ...summary, id: file.sessionId, projectPath: file.projectDir, transcriptPath: file.filePath })
+        } catch { /* Ignore unreadable transcripts, like the normal list. */ }
+      }
+    }
+
+    const roots = new Map<string, string | null>()
+    const rows: ProjectHistoryRow[] = []
+    for (const row of indexedRows) {
+      // Thousands of sessions normally share a handful of workspaces. Resolve
+      // each candidate once, preserving the same worktree/git boundary as list.
+      const candidate = row.worktreeSession?.originalCwd || row.repository?.repoRoot || row.workDir || this.desanitizePath(row.projectPath)
+      const key = JSON.stringify([candidate, Boolean(row.workDir)])
+      let root = roots.get(key)
+      if (!roots.has(key)) {
+        root = await this.resolveProjectRootFromSessionMetadata({
+          worktreeSession: row.worktreeSession, repository: row.repository,
+          workDir: row.workDir, fallbackProjectDir: row.projectPath,
+        })
+        roots.set(key, root)
+      }
+      rows.push({ ...row, logicalProjectRoot: root || row.workDir || row.projectPath || 'unknown' })
+    }
+    return rows
+  }
+
+  /** List all sessions, optionally filtered by physical project path. */
   async listSessions(options?: {
     project?: string
     limit?: number
@@ -3546,6 +3748,30 @@ export class SessionService {
     return result
   }
 
+  /** Resolve one session's list metadata without materializing its messages. */
+  async getSessionSummary(sessionId: string): Promise<SessionListItem | null> {
+    this.syncSharedMutationEpoch()
+    const scope = this.getConfigDir()
+    this.prepareSessionListCaches(scope)
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    try {
+      const { filePath, projectDir } = found
+      const stat = await fs.stat(filePath)
+      const summary = await this.getCachedSessionListSummary(filePath, projectDir, stat, scope)
+      return await this.hydrateIndexedSession({
+        ...summary,
+        id: sessionId,
+        projectPath: projectDir,
+        transcriptPath: filePath,
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
   /**
    * Get full session detail including all messages.
    */
@@ -3611,6 +3837,13 @@ export class SessionService {
   ): Promise<SessionMessagesWithEvidence> {
     const found = await this.findSessionFile(sessionId)
     if (!found) {
+      // Retention-zero sessions intentionally have no transcript. The desktop
+      // still asks for turn checkpoints after each live reply; lack of saved
+      // evidence is not a missing session, nor proof of an empty history.
+      if (this.memoryLaunchInfo.has(this.memorySessionKey(sessionId)) ||
+        this.knownSessionKeys.has(this.memorySessionKey(sessionId))) {
+        return { messages: [], transcriptEvidenceComplete: false }
+      }
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
@@ -3849,6 +4082,7 @@ export class SessionService {
     permissionMode?: string,
   ): Promise<{ sessionId: string; workDir: string }> {
     // Default to user home directory when no workDir specified
+    const persist = this.shouldPersistSession()
     const resolvedWorkDir = workDir || os.homedir()
     const sessionId = crypto.randomUUID()
 
@@ -3875,7 +4109,7 @@ export class SessionService {
     const dirPath = path.join(this.getProjectsDir(), sanitized)
 
     // Ensure the project directory exists
-    await fs.mkdir(dirPath, { recursive: true })
+    if (persist && this.shouldPersistSession()) await fs.mkdir(dirPath, { recursive: true })
 
     const filePath = path.join(dirPath, `${sessionId}.jsonl`)
     const now = new Date().toISOString()
@@ -3904,7 +4138,17 @@ export class SessionService {
       timestamp: now,
     }
 
-    await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
+    if (!persist || !this.shouldPersistSession()) this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
+      filePath, projectDir: sanitized, workDir: absWorkDir,
+      repository: preparedWorkspace.repository, transcriptMessageCount: 0,
+      customTitle: null,
+      ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
+        ? { permissionMode } : {}),
+    })
+    if (persist && this.shouldPersistSession()) {
+      await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
+    }
+    this.knownSessionKeys.add(this.memorySessionKey(sessionId))
     this.invalidateSessionListCache()
 
     return { sessionId, workDir: absWorkDir }
@@ -3915,12 +4159,16 @@ export class SessionService {
    */
   async deleteSession(sessionId: string): Promise<void> {
     const found = await this.findSessionFile(sessionId)
-    if (!found) {
+    if (!found && !this.memoryLaunchInfo.has(this.memorySessionKey(sessionId)) &&
+      !this.knownSessionKeys.has(this.memorySessionKey(sessionId))) {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
-    await fs.unlink(found.filePath)
-    this.sessionListSummaryCache.delete(found.filePath)
+    if (found) await fs.unlink(found.filePath)
+    this.knownSessionKeys.delete(this.memorySessionKey(sessionId))
+    this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
+    this.privateTitles.delete(this.memorySessionKey(sessionId))
+    if (found) this.sessionListSummaryCache.delete(found.filePath)
     this.invalidateSessionListCache()
   }
 
@@ -3965,10 +4213,18 @@ export class SessionService {
       throw ApiError.badRequest('title is required')
     }
 
-    const found = await this.findSessionFile(sessionId)
-    if (!found) {
-      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    const persist = this.shouldPersistSession()
+    const info = await this.getSessionLaunchInfo(sessionId)
+    if (!info) throw ApiError.notFound(`Session not found: ${sessionId}`)
+    if (!persist || !this.shouldPersistSession() || this.memoryLaunchInfo.has(this.memorySessionKey(sessionId))) {
+      this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), { ...info, customTitle: title })
     }
+    if (!persist || !this.shouldPersistSession()) {
+      this.rememberPrivateTitle(sessionId, title)
+      return
+    }
+    const found = await this.findSessionFile(sessionId)
+    if (!found || !this.canPersistTitle(sessionId, title)) return
 
     const entry = {
       type: 'custom-title',
@@ -3983,9 +4239,13 @@ export class SessionService {
   /**
    * Append an AI-generated title entry to a session's JSONL file.
    */
-  async appendAiTitle(sessionId: string, title: string): Promise<void> {
+  async appendAiTitle(sessionId: string, title: string, persist = this.shouldPersistSession()): Promise<void> {
+    if (!persist || !this.shouldPersistSession()) {
+      this.rememberPrivateTitle(sessionId, title)
+      return
+    }
     const found = await this.findSessionFile(sessionId)
-    if (!found) return
+    if (!found || !this.canPersistTitle(sessionId, title)) return
 
     await this.appendJsonlEntry(found.filePath, {
       type: 'ai-title',
@@ -3996,6 +4256,8 @@ export class SessionService {
   }
 
   async getCustomTitle(sessionId: string): Promise<string | null> {
+    const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
+    if (memory?.customTitle) return memory.customTitle
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
@@ -4014,6 +4276,8 @@ export class SessionService {
    * First checks for stored session-meta entry, then falls back to desanitizePath.
    */
   async getSessionWorkDir(sessionId: string): Promise<string | null> {
+    const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
+    if (memory) return memory.workDir
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
@@ -4038,8 +4302,9 @@ export class SessionService {
    * Placeholder desktop-created sessions have zero transcript messages.
    */
   async getSessionLaunchInfo(sessionId: string): Promise<SessionLaunchInfo | null> {
+    const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
     const found = await this.findSessionFile(sessionId)
-    if (!found) return null
+    if (!found) return memory ? { ...memory, transcriptMessageCount: 0 } : null
 
     const entries = await this.readJsonlFile(found.filePath)
     const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || process.cwd()
@@ -4079,12 +4344,13 @@ export class SessionService {
       workDir,
       repository,
       worktreeSession,
-      transcriptMessageCount,
       customTitle,
       permissionMode,
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
       ...(effortLevel ? { effortLevel } : {}),
+      ...memory,
+      transcriptMessageCount,
     }
   }
 
@@ -4100,6 +4366,7 @@ export class SessionService {
     fallbackWorkDir?: string,
     preservedPermissionMode?: string,
   ): Promise<void> {
+    const persist = this.shouldPersistSession()
     const nextEpoch = (this.taskNotificationMutationEpochs.get(sessionId) ?? 0) + 1
     this.taskNotificationMutationEpochs.set(sessionId, nextEpoch)
     this.clearingTaskNotificationSessions.add(sessionId)
@@ -4109,6 +4376,23 @@ export class SessionService {
     try {
       await Promise.allSettled(pendingWrites.map((pending) => pending.promise))
 
+      if (!persist || !this.shouldPersistSession()) {
+        const storedInfo = await this.getSessionLaunchInfo(sessionId)
+        const workDir = fallbackWorkDir && normalizeDriveRootPathForPlatform(fallbackWorkDir)
+        const projectDir = workDir && this.sanitizePath(workDir)
+        const info = storedInfo ?? (workDir && projectDir ? {
+          filePath: path.join(this.getProjectsDir(), projectDir, `${sessionId}.jsonl`),
+          projectDir, workDir, transcriptMessageCount: 0, customTitle: null,
+        } : null)
+        if (info) {
+          this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
+            ...info, transcriptMessageCount: 0, customTitle: null,
+            ...(preservedPermissionMode && VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
+              ? { permissionMode: preservedPermissionMode } : {}),
+          })
+        }
+        return
+      }
       let found = await this.findSessionFile(sessionId)
       if (!found && fallbackWorkDir) {
         const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(fallbackWorkDir))
@@ -4155,6 +4439,8 @@ export class SessionService {
         timestamp: now,
       }
 
+      if (!this.shouldPersistSession()) return
+      this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
       await fs.writeFile(
         found.filePath,
         `${JSON.stringify(initialEntry)}\n${JSON.stringify(metaEntry)}\n`,
@@ -4191,6 +4477,36 @@ export class SessionService {
       effortLevel?: string
     }
   ): Promise<void> {
+    const persist = this.shouldPersistSession()
+    const storedInfo = await this.getSessionLaunchInfo(sessionId)
+    if (storedInfo) this.knownSessionKeys.add(this.memorySessionKey(sessionId))
+    const workDir = normalizeDriveRootPathForPlatform(metadata.workDir)
+    const projectDir = this.sanitizePath(workDir)
+    const previousInfo = storedInfo ?? (!persist ? {
+      filePath: path.join(this.getProjectsDir(), projectDir, `${sessionId}.jsonl`),
+      projectDir, workDir, transcriptMessageCount: 0, customTitle: null,
+    } : null)
+    if (previousInfo && (!persist || !this.shouldPersistSession() || this.memoryLaunchInfo.has(this.memorySessionKey(sessionId)))) {
+      const normalizedWorkDir = normalizeDriveRootPathForPlatform(metadata.workDir)
+      const projectDir = this.sanitizePath(normalizedWorkDir)
+      this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
+        ...previousInfo,
+        workDir: normalizedWorkDir, projectDir,
+        filePath: path.join(this.getProjectsDir(), projectDir, `${sessionId}.jsonl`),
+        ...(metadata.repository ? { repository: metadata.repository } : {}),
+        ...(metadata.customTitle ? { customTitle: metadata.customTitle } : {}),
+        ...(metadata.permissionMode && VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode)
+          ? { permissionMode: metadata.permissionMode } : {}),
+        ...(metadata.runtimeProviderId !== undefined ? { runtimeProviderId: metadata.runtimeProviderId } : {}),
+        ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
+        ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
+          ? { effortLevel: metadata.effortLevel } : {}),
+      })
+    }
+    if (!persist || !this.shouldPersistSession()) {
+      if (metadata.customTitle) this.rememberPrivateTitle(sessionId, metadata.customTitle)
+      return
+    }
     const matches = await this.findSessionFiles(sessionId)
     if (matches.length === 0) return
 
@@ -4209,9 +4525,8 @@ export class SessionService {
     const targetProjectDir = this.sanitizePath(normalizedWorkDir)
     const targetFilePath = path.join(this.getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
 
-    if (!metadata.customTitle) {
-      const launchInfo = await this.getSessionLaunchInfo(sessionId)
-      if (this.metadataMatchesLaunchInfo(launchInfo, {
+    if (!metadata.customTitle && !this.memoryLaunchInfo.has(this.memorySessionKey(sessionId))) {
+      if (this.metadataMatchesLaunchInfo(previousInfo, {
         ...metadata,
         workDir: normalizedWorkDir,
         repository,
@@ -4240,7 +4555,7 @@ export class SessionService {
       timestamp: new Date().toISOString(),
     })
 
-    if (metadata.customTitle) {
+    if (metadata.customTitle && this.canPersistTitle(sessionId, metadata.customTitle)) {
       await this.appendJsonlEntry(targetFilePath, {
         type: 'custom-title',
         customTitle: metadata.customTitle,
@@ -4377,17 +4692,22 @@ export class SessionService {
 
       if (!snapshotMessageId) continue
 
-      snapshotsByMessageId.set(snapshotMessageId, {
+      const beforeMapValid = !!entry.snapshot.trackedFileBackups && typeof entry.snapshot.trackedFileBackups === 'object' && !Array.isArray(entry.snapshot.trackedFileBackups)
+      snapshotsByMessageId.set(snapshotMessageId, migrateFileHistorySnapshot({
         messageId: snapshotMessageId as FileHistorySnapshot['messageId'],
-        trackedFileBackups:
-          entry.snapshot.trackedFileBackups &&
-          typeof entry.snapshot.trackedFileBackups === 'object'
-            ? (entry.snapshot.trackedFileBackups as FileHistorySnapshot['trackedFileBackups'])
+        trackedFileBackups: beforeMapValid ? entry.snapshot.trackedFileBackups as FileHistorySnapshot['trackedFileBackups'] : {},
+        ...(!beforeMapValid ? { [malformedFileHistoryBefore]: true } : {}),
+        // A corrupt completion marker must not become a legacy before-only
+        // record that can silently fall through to another turn's boundary.
+        ...(Object.prototype.hasOwnProperty.call(entry.snapshot, 'completedFileBackups') ? {
+          completedFileBackups: entry.snapshot.completedFileBackups && typeof entry.snapshot.completedFileBackups === 'object' && !Array.isArray(entry.snapshot.completedFileBackups)
+            ? entry.snapshot.completedFileBackups as FileHistorySnapshot['completedFileBackups']
             : {},
+        } : {}),
         timestamp: new Date(
           entry.snapshot.timestamp || entry.timestamp || new Date().toISOString(),
         ),
-      })
+      }))
     }
 
     return [...snapshotsByMessageId.values()]
@@ -4401,7 +4721,7 @@ export class SessionService {
       notification,
       notification.timestamp ?? new Date(this.now()).toISOString(),
     )
-    if (!normalized) return
+    if (!normalized || !this.shouldPersistSession()) return
     if (this.clearingTaskNotificationSessions.has(sessionId)) return
 
     const epoch = this.taskNotificationMutationEpochs.get(sessionId) ?? 0

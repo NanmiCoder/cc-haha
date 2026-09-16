@@ -64,32 +64,42 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
   }, [openWith, sessionId, t, target.href, workDir])
 
   return (
-    <section className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2.5 shadow-[var(--shadow-card)]">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
-        {isLocalhost ? (
-          <Globe size={17} strokeWidth={2.1} aria-hidden="true" />
-        ) : (
-          <span className="material-symbols-outlined text-[20px]" aria-hidden="true">{icon}</span>
-        )}
-      </span>
+    <section className="flex items-stretch overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[var(--shadow-card)]">
+      {/* The whole row body is the hit area, not just the trailing icon button:
+          the icon is a discoverability affordance. Everything inside is a span
+          because a `button` may only contain phrasing content. */}
+      <button
+        type="button"
+        onClick={handleOpen}
+        aria-label={t('assistantOutputs.openAria', { title: target.title })}
+        className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
+          {isLocalhost ? (
+            <Globe size={17} strokeWidth={2.1} aria-hidden="true" />
+          ) : (
+            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">{icon}</span>
+          )}
+        </span>
 
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-            {target.title}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+              {target.title}
+            </span>
+            <Badge bordered className="font-semibold uppercase tracking-[0.08em]">
+              {badge}
+            </Badge>
           </span>
-          <Badge bordered className="font-semibold uppercase tracking-[0.08em]">
-            {badge}
-          </Badge>
-        </div>
-        {showSubtitle && (
-          <div className="mt-1 truncate text-xs text-[var(--color-text-tertiary)]" title={subtitle}>
-            {subtitle}
-          </div>
-        )}
-      </div>
+          {showSubtitle && (
+            <span className="mt-1 truncate text-xs text-[var(--color-text-tertiary)]" title={subtitle}>
+              {subtitle}
+            </span>
+          )}
+        </span>
+      </button>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5 pr-3">
         <IconButton
           icon={<ExternalLink size={14} strokeWidth={2.2} aria-hidden="true" />}
           label={t('assistantOutputs.open')}

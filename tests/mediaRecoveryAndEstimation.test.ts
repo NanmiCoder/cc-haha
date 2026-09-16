@@ -70,6 +70,77 @@ describe('media error recovery', () => {
     expect(serialized).toContain('describe this screenshot')
     expect(serialized).toContain('continue with text only')
   })
+
+  test('keeps stripping while the failing model is still selected', () => {
+    const imageUser = createUserMessage({
+      content: [
+        { type: 'text', text: 'describe this screenshot' },
+        imageBlock('base64-image-payload'),
+      ],
+      uuid: '00000000-0000-4000-8000-000000000005',
+    })
+    const unsupported = createAssistantAPIErrorMessage({
+      content: 'localized display text',
+      error: 'invalid_request',
+      businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED,
+      sourceModel: 'nonvision-model',
+    })
+
+    const normalized = normalizeMessagesForAPI(
+      [imageUser, unsupported],
+      [],
+      'nonvision-model',
+    )
+
+    expect(JSON.stringify(normalized)).not.toContain('base64-image-payload')
+  })
+
+  test('replays the image after switching to a different model', () => {
+    const imageUser = createUserMessage({
+      content: [
+        { type: 'text', text: 'describe this screenshot' },
+        imageBlock('base64-image-payload'),
+      ],
+      uuid: '00000000-0000-4000-8000-000000000006',
+    })
+    const unsupported = createAssistantAPIErrorMessage({
+      content: 'localized display text',
+      error: 'invalid_request',
+      businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED,
+      sourceModel: 'nonvision-model',
+    })
+
+    const normalized = normalizeMessagesForAPI(
+      [imageUser, unsupported],
+      [],
+      'vision-model',
+    )
+
+    expect(JSON.stringify(normalized)).toContain('base64-image-payload')
+  })
+
+  test('legacy anchors without sourceModel strip regardless of current model', () => {
+    const imageUser = createUserMessage({
+      content: [
+        { type: 'text', text: 'describe this screenshot' },
+        imageBlock('base64-image-payload'),
+      ],
+      uuid: '00000000-0000-4000-8000-000000000007',
+    })
+    const unsupported = createAssistantAPIErrorMessage({
+      content: 'localized display text',
+      error: 'invalid_request',
+      businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED,
+    })
+
+    const normalized = normalizeMessagesForAPI(
+      [imageUser, unsupported],
+      [],
+      'vision-model',
+    )
+
+    expect(JSON.stringify(normalized)).not.toContain('base64-image-payload')
+  })
 })
 
 describe('media context estimation', () => {

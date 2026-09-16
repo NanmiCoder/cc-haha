@@ -13,11 +13,13 @@ import {
   getTotalCacheCreationInputTokens,
   getTotalCacheReadInputTokens,
   getTotalCostUSD,
+  getTotalDecodeDuration,
   getTotalDuration,
   getTotalInputTokens,
   getTotalLinesAdded,
   getTotalLinesRemoved,
   getTotalOutputTokens,
+  getTotalTtftDuration,
   getTotalToolDuration,
   getTotalWebSearchRequests,
   getUsageForModel,
@@ -73,6 +75,10 @@ export type SessionUsageSnapshot = {
   costDisplay: string
   hasUnknownModelCost: boolean
   totalAPIDuration: number
+  // Time the model spent emitting tokens, excluding prefill and tool execution. Zero when
+  // no streamed response reported a decode span (non-streaming fallback, aborted turn).
+  totalDecodeDuration: number
+  totalTtftDuration: number
   totalDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -100,6 +106,8 @@ type StoredCostState = {
   totalCostUSD: number
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
+  totalDecodeDuration: number
+  totalTtftDuration: number
   totalToolDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -142,6 +150,8 @@ export function getStoredSessionCosts(
     totalAPIDuration: projectConfig.lastAPIDuration ?? 0,
     totalAPIDurationWithoutRetries:
       projectConfig.lastAPIDurationWithoutRetries ?? 0,
+    totalDecodeDuration: projectConfig.lastDecodeDuration ?? 0,
+    totalTtftDuration: projectConfig.lastTtftDuration ?? 0,
     totalToolDuration: projectConfig.lastToolDuration ?? 0,
     totalLinesAdded: projectConfig.lastLinesAdded ?? 0,
     totalLinesRemoved: projectConfig.lastLinesRemoved ?? 0,
@@ -174,6 +184,8 @@ export function saveCurrentSessionCosts(fpsMetrics?: FpsMetrics): void {
     lastCost: getTotalCostUSD(),
     lastAPIDuration: getTotalAPIDuration(),
     lastAPIDurationWithoutRetries: getTotalAPIDurationWithoutRetries(),
+    lastDecodeDuration: getTotalDecodeDuration(),
+    lastTtftDuration: getTotalTtftDuration(),
     lastToolDuration: getTotalToolDuration(),
     lastDuration: getTotalDuration(),
     lastLinesAdded: getTotalLinesAdded(),
@@ -277,6 +289,8 @@ export function getSessionUsageSnapshot(): SessionUsageSnapshot {
     costDisplay: formatCost(getTotalCostUSD()),
     hasUnknownModelCost: hasUnknownModelCost(),
     totalAPIDuration: getTotalAPIDuration(),
+    totalDecodeDuration: getTotalDecodeDuration(),
+    totalTtftDuration: getTotalTtftDuration(),
     totalDuration: getTotalDuration(),
     totalLinesAdded: getTotalLinesAdded(),
     totalLinesRemoved: getTotalLinesRemoved(),

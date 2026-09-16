@@ -11,11 +11,19 @@ import { browserHost } from '../lib/desktopHost/browserHost'
 
 describe('api diagnostics reporting', () => {
   afterEach(() => {
+    window.history.replaceState({}, '', '/')
     vi.useRealTimers()
     setAuthToken(null)
     setBaseUrl(getDefaultBaseUrl())
     Reflect.deleteProperty(window, 'desktopHost')
     vi.restoreAllMocks()
+  })
+
+  it('never uploads public pairing material or errors to desktop diagnostics', async () => {
+    window.history.replaceState({}, '', '/remote#pair=fixture-secret')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    await rawRecordDiagnosticEvent({ type: 'error', summary: 'fixture', details: { url: window.location.href } })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('recovers a desktop GET after the sidecar restarts on a new port', async () => {

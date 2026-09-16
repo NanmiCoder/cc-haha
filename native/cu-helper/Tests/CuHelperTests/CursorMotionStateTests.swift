@@ -81,6 +81,88 @@ final class CursorMotionStateTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinateActionsStartVisibleFeedbackWithoutSleepingAtAnyDistance() async {
+        for frontmostPid: pid_t in [41, 99] {
+            let decision = OverlayPolicy.decision(
+                targetPid: 41, frontmostPid: frontmostPid,
+                overlayRequested: true, targetWindowExposed: true
+            )
+            XCTAssertTrue(decision.visible)
+            XCTAssertGreaterThan(decision.actionDelay, 0, "the element-action policy remains available")
+            let origin = CGPoint(x: 410, y: 349)
+            for destination in [origin, CGPoint(x: 411, y: 349), CGPoint(x: -1000, y: 1400)] {
+                var motion = CursorMotionState(position: origin)
+                var events: [String] = []
+                await CursorActionTiming.perform(
+                    decision: decision,
+                    waitForVisualFeedback: false,
+                    startGlide: {
+                        motion.startGlide(to: destination)
+                        events.append("glide-started")
+                    },
+                    snap: { events.append("snap") },
+                    sleep: { _ in events.append("sleep") }
+                )
+                events.append("returned")
+                XCTAssertEqual(events, ["glide-started", "returned"])
+                XCTAssertEqual(motion.destination, destination, "visual feedback must still be started")
+                XCTAssertEqual(motion.position, origin, "input must not wait for the displayed cursor to arrive")
+            }
+        }
+    }
+
+    @MainActor
+    func testCoveredCoordinateActionStillSnapsWithoutStartingHiddenAnimation() async {
+        let decision = OverlayPolicy.decision(
+            targetPid: 41, frontmostPid: 99,
+            overlayRequested: true, targetWindowExposed: false
+        )
+        var events: [String] = []
+        await CursorActionTiming.perform(
+            decision: decision,
+            waitForVisualFeedback: false,
+            startGlide: { events.append("glide") },
+            snap: { events.append("snap") },
+            sleep: { _ in events.append("sleep") }
+        )
+        XCTAssertEqual(events, ["snap"])
+    }
+
+    func testRouterSkipsOnlyCoordinateVisualWaitsAndPreservesPostMoveValidation() throws {
+        // These wiring checks complement the executable timing seam tests;
+        // resolving real app windows would make a unit test mutate user UI.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/cu-helper")
+        let router = try String(contentsOf: root.appendingPathComponent("CommandRouter.swift"), encoding: .utf8)
+        let clickStart = try XCTUnwrap(router.range(of: "private func handleClick("))
+        let indexedStart = try XCTUnwrap(router.range(of: "// Index click", range: clickStart.upperBound..<router.endIndex))
+        let clickEnd = try XCTUnwrap(router.range(of: "private func handleSetValue(", range: indexedStart.upperBound..<router.endIndex))
+        let coordinateClick = String(router[clickStart.upperBound..<indexedStart.lowerBound])
+        let indexedClick = String(router[indexedStart.upperBound..<clickEnd.lowerBound])
+        let dragStart = try XCTUnwrap(router.range(of: "private func handleDrag("))
+        let dragEnd = try XCTUnwrap(router.range(of: "// MARK: - Target resolution", range: dragStart.upperBound..<router.endIndex))
+        let drag = String(router[dragStart.upperBound..<dragEnd.lowerBound])
+
+        for action in [coordinateClick, drag] {
+            let move = try XCTUnwrap(action.range(of: "waitForVisualFeedback: false"))
+            let afterMove = action[move.upperBound...]
+            XCTAssertTrue(afterMove.contains("Self.validatedGlobalPoint("))
+            XCTAssertTrue(afterMove.contains("Injection.validateAuthorizedTarget(target)"))
+        }
+        XCTAssertTrue(coordinateClick.contains("cursor.showClick("), "the click ripple remains active")
+        XCTAssertTrue(drag.contains("cursor.move(to: from, animated: false)"))
+        XCTAssertTrue(indexedClick.contains("cursor.moveForAction("))
+        XCTAssertFalse(indexedClick.contains("waitForVisualFeedback: false"), "element actions retain their current policy")
+        XCTAssertTrue(indexedClick.contains("CursorIndexedActionGate.perform("))
+        XCTAssertTrue(indexedClick.contains("guardStaleness(pid:"))
+
+        let cursor = try String(contentsOf: root.appendingPathComponent("VirtualCursor.swift"), encoding: .utf8)
+        XCTAssertTrue(cursor.contains("waitForVisualFeedback: Bool = true"))
+        XCTAssertTrue(cursor.contains("waitForVisualFeedback: waitForVisualFeedback"), "the live cursor must use the tested timing seam")
+    }
+
+    @MainActor
     func testIndexedActionRechecksStalenessAfterCursorDelayBeforeMutation() async {
         var events: [String] = []
 

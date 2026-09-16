@@ -47,6 +47,7 @@ export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: 'help', description: '查看帮助' },
   { command: 'new', description: '新建会话或切换项目' },
   { command: 'projects', description: '查看最近项目' },
+  { command: 'sessions', description: '查看项目历史会话' },
   { command: 'resume', description: '恢复历史会话' },
   { command: 'status', description: '查看当前状态' },
   { command: 'clear', description: '清空当前上下文' },

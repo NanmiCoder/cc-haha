@@ -22,6 +22,7 @@ export type ProviderPreset = {
   apiFormat: ApiFormat
   reasoningProviderKind?: ModelReasoningProviderKind
   defaultModels: ModelMapping
+  defaultImageGeneration?: { model: string }
   needsApiKey: boolean
   websiteUrl: string
   apiKeyUrl?: string

@@ -15,6 +15,42 @@ final class CommandRouterSafetyTests: XCTestCase {
         launchTime: 200
     )
 
+    func testRoundedScreenshotDimensionsPreserveOfficialUniformCoordinateScale() throws {
+        defer { CommandRouter.clearShotTransformsForTesting() }
+        CommandRouter.recordShotTransform(
+            pid: 77, originX: 100, originY: 200,
+            pointWidth: 1398, pointHeight: 769,
+            imageWidth: 1397, imageHeight: 768,
+            processIdentity: processA, windowID: 17,
+            pixelsPerPoint: 768.0 / 769.0
+        )
+        let point = try CommandRouter.toGlobalPoint(
+            x: 300, y: 180, pid: 77,
+            currentProcessIdentity: processA, currentWindowID: 17
+        )
+        // Actual official native receiver, 1398×769 points → 1397×768 JPEG.
+        // Both axes use the original fit, before the pixel buffer's ceil.
+        XCTAssertEqual(point.x, 400.390625, accuracy: 0.000001)
+        XCTAssertEqual(point.y, 380.234375, accuracy: 0.000001)
+    }
+
+    func testInvalidUniformCaptureScaleCannotPublishACoordinateTransform() throws {
+        defer { CommandRouter.clearShotTransformsForTesting() }
+        for scale in [0, -1, Double.nan, Double.infinity] {
+            CommandRouter.recordShotTransform(
+                pid: 77, originX: 100, originY: 200,
+                pointWidth: 1398, pointHeight: 769,
+                imageWidth: 1397, imageHeight: 768,
+                processIdentity: processA, windowID: 17,
+                pixelsPerPoint: scale
+            )
+            XCTAssertThrowsError(try CommandRouter.toGlobalPoint(
+                x: 300, y: 180, pid: 77,
+                currentProcessIdentity: processA, currentWindowID: 17
+            )) { XCTAssertEqual(($0 as? CUError)?.code, "stale_snapshot") }
+        }
+    }
+
     func testHeadlessMouseDownAndMouseUpRequireDaemon() async throws {
         let monitor = PhysicalInputEpochMonitor(counterReader: { _ in 0 })
         _ = monitor.startAndWait()
@@ -438,7 +474,7 @@ private final class WindowCaptureProviderSpy: WindowCaptureProviding {
         pid: pid_t,
         processIdentity: AXTreeProcessIdentity,
         preferredWindowID: CGWindowID?,
-        scale: Double,
+        scale: Double?,
         newerThanUptime: TimeInterval?
     ) async -> WindowShot? {
         nil

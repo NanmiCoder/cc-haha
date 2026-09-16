@@ -198,9 +198,7 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://www.xuanshuapi.com",
-    "apiKeyUrl": "https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA",
-    "promoText": "玄枢API 为 cc-haha 的用户提供了专属福利，通过此链接注册的新用户即赠 5 美元额度！",
-    "featured": true,
+    "deprecated": true,
     "authStrategy": "auth_token",
     "defaultEnv": {
       "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5"
@@ -227,9 +225,7 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://api.fenno.ai",
-    "apiKeyUrl": "https://api.fenno.ai/s/WD8c",
-    "promoText": "FennoAI 为 cc-haha 的用户提供了专属福利，通过此链接购买订阅，仅需 1.99 美元即可获得价值 50 美元的 Coding Plan 额度！",
-    "featured": true,
+    "deprecated": true,
     "authStrategy": "auth_token",
     "defaultEnv": {},
     "modelContextWindows": {
@@ -254,9 +250,7 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://www.qiniu.com/ai/models",
-    "apiKeyUrl": "https://s.qiniu.com/IZbyya",
-    "promoText": "七牛云 AI 为 cc-haha 的用户提供了专属福利，通过此链接注册，企业用户免费领 1200 万 Token，开发者免费领 300 万 Token！",
-    "featured": true,
+    "deprecated": true,
     "authStrategy": "auth_token",
     "defaultEnv": {},
     "modelContextWindows": {
@@ -287,6 +281,28 @@
     "authStrategy": "api_key",
     "modelContextWindows": {
       "deepseek-ai/deepseek-v4-pro": 1000000
+    }
+  },
+  {
+    "id": "apismart",
+    "name": "ApiSmart",
+    "defaultImageGeneration": { "model": "doubao-seedream-5-0" },
+    "baseUrl": "https://gw.apismart.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-v4-pro-0813",
+      "haiku": "deepseek-v4-flash-0731-tem",
+      "sonnet": "deepseek-v4-pro-0813",
+      "opus": "deepseek-v4-pro-0813"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://www.apismart.ai",
+    "apiKeyUrl": "https://www.apismart.ai",
+    "featured": true,
+    "authStrategy": "api_key",
+    "modelContextWindows": {
+      "deepseek-v4-pro-0813": 1000000,
+      "deepseek-v4-flash-0731-tem": 1000000
     }
   },
   {

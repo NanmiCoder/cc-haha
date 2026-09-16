@@ -27,10 +27,12 @@ import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialL
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { CcSwitchImportModal } from '../../components/settings/CcSwitchImportModal'
 import { ModelIdCombobox } from '../../components/settings/ModelIdCombobox'
+import { ProviderRequestCompatibilityFields } from '@/components/settings/ProviderRequestCompatibilityFields'
+import { compatibilityForm, invalidCompatibilityNumber, parseCompatibilityForm, readCompatibilityEditorJson, writeCompatibilityJson, type RequestCompatibilityForm } from '../../lib/providerRequestCompatibility'
 import { ProviderImageGenerationFields, type ImageGenerationFormValue } from '../../components/settings/ProviderImageGenerationFields'
 import { BUILT_IN_PROVIDER_IDS, CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import { GROK_OFFICIAL_PROVIDER_ID } from '../../constants/grokOfficialProvider'
-import { getBaseUrl } from '../../api/client'
+import { ApiError, getBaseUrl } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { API_KEY_JSON_PLACEHOLDER, maskSettingsJsonSecrets, restoreSettingsJsonSecrets, stripProviderSettingsJsonEnv } from '../../lib/providerSettingsJson'
 import { SETTINGS_CHECKBOX_INPUT_CLASS, SettingsCheckboxMark } from '../settings/shared'
@@ -121,7 +123,7 @@ function providerItemTestId(item: ProviderListItem): string {
   }
 }
 
-export function ProviderSettings() {
+export function ProviderSettings({ browserMode = false }: { browserMode?: boolean }) {
   const {
     providers,
     providerOrder,
@@ -129,6 +131,7 @@ export function ProviderSettings() {
     hasLoadedProviders,
     presets,
     isLoading,
+    error: providerLoadError,
     fetchProviders,
     deleteProvider,
     reorderProviders,
@@ -143,6 +146,7 @@ export function ProviderSettings() {
   const [showCcSwitchImport, setShowCcSwitchImport] = useState(false)
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<SavedProvider | null>(null)
   const [isDeletingProvider, setIsDeletingProvider] = useState(false)
+  const [actionFailed, setActionFailed] = useState(false)
   const [testResults, setTestResults] = useState<Record<string, { loading: boolean; result?: ProviderTestResult }>>({})
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -170,11 +174,12 @@ export function ProviderSettings() {
   const confirmDelete = async () => {
     if (!pendingDeleteProvider) return
     setIsDeletingProvider(true)
+    setActionFailed(false)
     try {
       await deleteProvider(pendingDeleteProvider.id)
       setPendingDeleteProvider(null)
-    } catch (error) {
-      console.error(error)
+    } catch {
+      setActionFailed(true)
     } finally {
       setIsDeletingProvider(false)
     }
@@ -191,13 +196,15 @@ export function ProviderSettings() {
   }
 
   const handleActivate = async (id: string) => {
-    await activateProvider(id)
-    await fetchSettings()
+    setActionFailed(false)
+    try { await activateProvider(id); await fetchSettings() }
+    catch { setActionFailed(true) }
   }
 
   const handleActivateOfficial = async () => {
-    await activateOfficial()
-    await fetchSettings()
+    setActionFailed(false)
+    try { await activateOfficial(); await fetchSettings() }
+    catch { setActionFailed(true) }
   }
 
   const providerItems = useMemo(
@@ -222,20 +229,21 @@ export function ProviderSettings() {
   const isGrokOfficialActive = hasLoadedProviders && activeId === GROK_OFFICIAL_PROVIDER_ID
 
   return (
-    <div className="max-w-2xl">
+    <div className="min-w-0 max-w-2xl">
       <SettingsPageHeader
+        className={browserMode ? 'flex-col' : undefined}
         title={t('settings.providers.title')}
         description={t('settings.providers.description')}
         action={(
           <>
-            <Button
+            {!browserMode && <Button
               variant="secondary"
               size="base"
               onClick={() => setShowCcSwitchImport(true)}
               icon={<span className="material-symbols-outlined text-[16px]">download</span>}
             >
               {t('settings.providers.ccSwitch.importButton')}
-            </Button>
+            </Button>}
             <Button
               size="base"
               onClick={() => setShowCreateModal(true)}
@@ -247,6 +255,7 @@ export function ProviderSettings() {
         )}
       />
 
+      {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mb-3 text-sm text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -261,6 +270,7 @@ export function ProviderSettings() {
               if (item.kind === 'claude-official') {
                 return (
                   <SortableProviderCard
+                    browserMode={browserMode}
                     key={item.id}
                     item={item}
                     isActive={isClaudeOfficialActive}
@@ -271,7 +281,7 @@ export function ProviderSettings() {
                     badges={isClaudeOfficialActive ? (
                       <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
                     ) : null}
-                    details={isClaudeOfficialActive ? (
+                    details={!browserMode && isClaudeOfficialActive ? (
                       <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
                         <ClaudeOfficialLogin />
                       </div>
@@ -283,6 +293,7 @@ export function ProviderSettings() {
               if (item.kind === 'openai-official') {
                 return (
                   <SortableProviderCard
+                    browserMode={browserMode}
                     key={item.id}
                     item={item}
                     isActive={isOpenAIOfficialActive}
@@ -293,7 +304,7 @@ export function ProviderSettings() {
                     badges={isOpenAIOfficialActive ? (
                       <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
                     ) : null}
-                    details={isOpenAIOfficialActive ? (
+                    details={!browserMode && isOpenAIOfficialActive ? (
                       <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
                         <ChatGPTOfficialLogin />
                       </div>
@@ -305,6 +316,7 @@ export function ProviderSettings() {
               if (item.kind === 'grok-official') {
                 return (
                   <SortableProviderCard
+                    browserMode={browserMode}
                     key={item.id}
                     item={item}
                     isActive={isGrokOfficialActive}
@@ -315,7 +327,7 @@ export function ProviderSettings() {
                     badges={isGrokOfficialActive ? (
                       <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
                     ) : null}
-                    details={isGrokOfficialActive ? (
+                    details={!browserMode && isGrokOfficialActive ? (
                       <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
                         <GrokOfficialLogin />
                       </div>
@@ -331,6 +343,7 @@ export function ProviderSettings() {
 
               return (
                 <SortableProviderCard
+                    browserMode={browserMode}
                   key={item.id}
                   item={item}
                   isActive={isActive}
@@ -374,7 +387,7 @@ export function ProviderSettings() {
                       {!isActive && (
                         <Button variant="ghost" size="sm" onClick={() => handleActivate(provider.id)}>{t('settings.providers.setDefault')}</Button>
                       )}
-                      <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>{t('settings.providers.test')}</Button>
+                      {!browserMode && <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>{t('settings.providers.test')}</Button>}
                       <Button variant="ghost" size="sm" onClick={() => setEditingProvider(provider)}>{t('settings.providers.edit')}</Button>
                       {!isActive && (
                         <Button variant="ghost" size="sm" onClick={() => handleDelete(provider)} className="text-[var(--color-error)] hover:text-[var(--color-error)]">{t('common.delete')}</Button>
@@ -396,12 +409,12 @@ export function ProviderSettings() {
 
       {/* Create Modal — conditionally rendered so state resets on close */}
       {showCreateModal && (
-        <ProviderFormModal open={true} onClose={() => setShowCreateModal(false)} mode="create" presets={presets} />
+        <ProviderFormModal browserMode={browserMode} open={true} onClose={() => setShowCreateModal(false)} mode="create" presets={presets} />
       )}
 
       {/* Edit Modal */}
       {editingProvider && (
-        <ProviderFormModal key={editingProvider.id} open={true} onClose={() => setEditingProvider(null)} mode="edit" provider={editingProvider} presets={presets} />
+        <ProviderFormModal browserMode={browserMode} key={editingProvider.id} open={true} onClose={() => setEditingProvider(null)} mode="edit" provider={editingProvider} presets={presets} />
       )}
 
       {/* cc-switch import — conditionally rendered so the scan reruns each time */}
@@ -428,6 +441,7 @@ export function ProviderSettings() {
 }
 
 type SortableProviderCardProps = {
+  browserMode?: boolean
   item: ProviderListItem
   isActive: boolean
   dragLabel: string
@@ -441,6 +455,7 @@ type SortableProviderCardProps = {
 }
 
 function SortableProviderCard({
+  browserMode = false,
   item,
   isActive,
   dragLabel,
@@ -477,7 +492,7 @@ function SortableProviderCard({
           : 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
       } ${isDragging ? 'shadow-[var(--shadow-overlay)] opacity-90' : ''}`}
     >
-      <div className="flex items-center gap-2 px-3.5 py-3">
+      <div className={browserMode ? "flex flex-wrap items-center gap-2 px-3.5 py-3" : "flex items-center gap-2 px-3.5 py-3"}>
         <button
           type="button"
           {...attributes}
@@ -508,7 +523,7 @@ function SortableProviderCard({
           </span>
         </button>
         {actions && (
-          <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+          <div className={browserMode ? "flex w-full flex-wrap items-center justify-end gap-1 [&_button]:min-h-11" : "flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100"}>
             {actions}
           </div>
         )}
@@ -521,6 +536,7 @@ function SortableProviderCard({
 // ─── Provider Form Modal ──────────────────────────────────────
 
 type ProviderFormProps = {
+  browserMode?: boolean
   open: boolean
   onClose: () => void
   mode: 'create' | 'edit'
@@ -571,12 +587,12 @@ function getProviderAuthValue(apiKey: string, preset: ProviderPreset): string {
 }
 
 function buildSettingsJsonAuthEnv(
-  apiFormat: ApiFormat,
+  needsProxy: boolean,
   authStrategy: ProviderAuthStrategy,
   apiKey: string,
   preset: ProviderPreset,
 ): Record<string, string> {
-  if (apiFormat !== 'anthropic') {
+  if (needsProxy) {
     return { ANTHROPIC_API_KEY: 'proxy-managed' }
   }
 
@@ -903,6 +919,13 @@ function updateSettingsJsonModels(
   }
 }
 
+function providerNeedsProxy(
+  apiFormat: ApiFormat,
+  supportsNestedToolResultMedia: boolean,
+): boolean {
+  return apiFormat !== 'anthropic' || !supportsNestedToolResultMedia
+}
+
 function updateSettingsJsonProviderConnection(
   raw: string,
   apiFormat: ApiFormat,
@@ -913,6 +936,7 @@ function updateSettingsJsonProviderConnection(
   proxyBaseUrl: string,
   toolSearchEnabled = false,
   disableExperimentalBetas = false,
+  supportsNestedToolResultMedia = true,
 ): string {
   try {
     const parsed = JSON.parse(raw || '{}') as { env?: Record<string, unknown> }
@@ -924,8 +948,13 @@ function updateSettingsJsonProviderConnection(
     delete env.ANTHROPIC_AUTH_TOKEN
     applyToolSearchEnv(env, apiFormat, toolSearchEnabled)
     applyDisableExperimentalBetasEnv(env, disableExperimentalBetas)
-    env.ANTHROPIC_BASE_URL = apiFormat !== 'anthropic' ? proxyBaseUrl : baseUrl
-    Object.assign(env, buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, preset))
+    env.ANTHROPIC_BASE_URL = providerNeedsProxy(apiFormat, supportsNestedToolResultMedia) ? proxyBaseUrl : baseUrl
+    Object.assign(env, buildSettingsJsonAuthEnv(
+      providerNeedsProxy(apiFormat, supportsNestedToolResultMedia),
+      authStrategy,
+      apiKey,
+      preset,
+    ))
     parsed.env = env
     return JSON.stringify(parsed, null, 2)
   } catch {
@@ -959,7 +988,7 @@ function openExternalUrl(url: string) {
     .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
 }
 
-function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderFormProps) {
+function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode = false }: ProviderFormProps) {
   const { createProvider, updateProvider, testConfig, fetchModels } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const addToast = useUIStore((s) => s.addToast)
@@ -983,6 +1012,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
     : selectablePresets[0] ?? fallbackPreset
   const initialModels = stripModel1mMarkers(provider?.models ?? initialPreset.defaultModels)
+  const initialImageGeneration = provider
+    ? provider.imageGeneration
+    : initialPreset.defaultImageGeneration
   const initialModel1mSupport = getInitialModel1mSupport(
     provider?.models ?? initialPreset.defaultModels,
     provider,
@@ -1000,6 +1032,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [apiKey, setApiKey] = useState(provider?.apiKey ?? '')
   const [showApiKey, setShowApiKey] = useState(false)
   const [notes, setNotes] = useState(provider?.notes ?? '')
+  const [compatibility, setCompatibility] = useState(() => compatibilityForm(provider?.requestCompatibility))
   const [models, setModels] = useState<ModelMapping>(initialModels)
   const [model1mSupport, setModel1mSupport] = useState<Model1mSupport>(initialModel1mSupport)
   const [modelContextInputs, setModelContextInputs] = useState<ModelContextInputs>(initialModelContextInputs)
@@ -1011,14 +1044,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [toolSearchEnabled, setToolSearchEnabled] = useState(provider?.toolSearchEnabled ?? false)
   const [toolSearchConfirmOpen, setToolSearchConfirmOpen] = useState(false)
   const [disableExperimentalBetas, setDisableExperimentalBetas] = useState(provider?.disableExperimentalBetas ?? false)
+  const [supportsNestedToolResultMedia, setSupportsNestedToolResultMedia] = useState(provider?.supportsNestedToolResultMedia ?? true)
   const [imageGeneration, setImageGeneration] = useState<ImageGenerationFormValue>({
-    enabled: Boolean(provider?.imageGeneration),
-    model: provider?.imageGeneration?.model ?? '',
+    enabled: Boolean(initialImageGeneration),
+    model: initialImageGeneration?.model ?? '',
     baseUrl: provider?.imageGeneration?.baseUrl ?? '',
     apiKey: provider?.imageGeneration?.apiKey ?? '',
   })
   const [showContextSettings, setShowContextSettings] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
+  const [credentialRequired, setCredentialRequired] = useState(false)
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
   const [isTesting, setIsTesting] = useState(false)
   const [fetchedModels, setFetchedModels] = useState<ProviderModelInfo[] | null>(null)
@@ -1032,6 +1068,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const settingsJsonUserEditedRef = useRef(false)
   const providerProxyBaseUrl = useMemo(() => getProviderProxyBaseUrl(), [])
   const currentProviderSettings = {
+    compatibility,
     selectedPreset,
     baseUrl,
     apiFormat,
@@ -1043,12 +1080,14 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     autoCompactWindow,
     toolSearchEnabled,
     disableExperimentalBetas,
+    supportsNestedToolResultMedia,
   }
   const providerSettingsRef = useRef(currentProviderSettings)
   providerSettingsRef.current = currentProviderSettings
 
   // Load current settings.json and merge provider env vars
   useEffect(() => {
+    if (browserMode) return
     // Skip if JSON was just populated by user paste
     if (jsonPastedRef.current) {
       jsonPastedRef.current = false
@@ -1060,6 +1099,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       providersApi.getSettings().then((settings) => {
         if (cancelled || settingsJsonUserEditedRef.current) return
         const {
+          compatibility,
           selectedPreset,
           baseUrl,
           apiFormat,
@@ -1071,8 +1111,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           autoCompactWindow,
           toolSearchEnabled,
           disableExperimentalBetas,
+          supportsNestedToolResultMedia,
         } = providerSettingsRef.current
-        const needsProxy = apiFormat !== 'anthropic'
+        const needsProxy = providerNeedsProxy(apiFormat, supportsNestedToolResultMedia)
         const autoCompactWindowEnv = autoCompactWindow.trim()
         const modelContextWindows = buildModelContextWindows(models, modelContextInputs)
         const normalizedModels = normalizeModelMapping(models)
@@ -1087,7 +1128,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
             : {}),
           ANTHROPIC_BASE_URL: needsProxy ? providerProxyBaseUrl : baseUrl,
-          ...buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, selectedPreset),
+          ...buildSettingsJsonAuthEnv(needsProxy, authStrategy, apiKey, selectedPreset),
           ANTHROPIC_MODEL: runtimeModels.main,
           ...(runtimeModels.fable ? { ANTHROPIC_DEFAULT_FABLE_MODEL: runtimeModels.fable } : {}),
           ANTHROPIC_DEFAULT_HAIKU_MODEL: runtimeModels.haiku,
@@ -1101,7 +1142,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           skipWebFetchPreflight: settings.skipWebFetchPreflight ?? true,
           env: mergedEnv,
         }
-        setSettingsJson(JSON.stringify(merged, null, 2))
+        setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)), null, 2))
       }).catch(() => {
         if (!cancelled && !settingsJsonUserEditedRef.current) {
           setSettingsJson((current) => current.trim() ? current : JSON.stringify({}, null, 2))
@@ -1112,7 +1153,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       cancelled = true
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPreset.id, providerProxyBaseUrl])
+  }, [selectedPreset.id, providerProxyBaseUrl, browserMode])
 
   // A fetched list only describes the endpoint and key it came from. cc-switch
   // shipped this without a guard and kept offering the previous provider's
@@ -1131,8 +1172,15 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const handlePresetChange = (preset: ProviderPreset) => {
     settingsJsonUserEditedRef.current = false
     setSelectedPreset(preset)
+    setCompatibility(compatibilityForm())
     setName(preset.name)
     setBaseUrl(preset.baseUrl)
+    setImageGeneration({
+      enabled: Boolean(preset.defaultImageGeneration),
+      model: preset.defaultImageGeneration?.model ?? '',
+      baseUrl: '',
+      apiKey: '',
+    })
     setApiFormat(preset.apiFormat ?? 'anthropic')
     setAuthStrategy(getPresetAuthStrategy(preset))
     const nextModels = stripModel1mMarkers(preset.defaultModels)
@@ -1148,6 +1196,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     setToolSearchEnabled(false)
     setToolSearchConfirmOpen(false)
     setDisableExperimentalBetas(false)
+    setSupportsNestedToolResultMedia(true)
     setShowContextSettings(false)
     setTestResult(null)
   }
@@ -1156,7 +1205,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const requiresApiKey = selectedPreset.needsApiKey !== false
   const autoCompactWindowErrorKey = getAutoCompactWindowErrorKey(autoCompactWindow)
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
-  const canSubmit = name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const compatibilityInvalid = apiFormat !== 'anthropic' && (invalidCompatibilityNumber(compatibility.maxOutputTokens) || invalidCompatibilityNumber(compatibility.outputTokenLimit))
+  const canSubmit = !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -1238,6 +1288,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   ] satisfies Array<{ value: ProviderAuthStrategy; label: string; description: string; icon: ReactNode }>
   const selectedAuthStrategyLabel = authStrategyItems.find((item) => item.value === authStrategy)?.label ?? t('settings.providers.authStrategyAuthToken')
   const toolSearchUnsupported = apiFormat !== 'anthropic'
+  const nestedToolResultMediaUnsupported = apiFormat !== 'anthropic'
+  const nestedToolResultMediaDescription = nestedToolResultMediaUnsupported
+    ? t('settings.providers.nestedToolResultMediaUnsupported')
+    : t('settings.providers.nestedToolResultMediaDesc')
   const toolSearchDescription = toolSearchUnsupported
     ? t('settings.providers.toolSearchUnsupported')
     : t('settings.providers.toolSearchDesc')
@@ -1261,20 +1315,55 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   }
   const handleBaseUrlChange = (value: string) => {
     setBaseUrl(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas, supportsNestedToolResultMedia))
   }
   const handleApiKeyChange = (value: string) => {
     setApiKey(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas, supportsNestedToolResultMedia))
+  }
+  const handleCompatibilityChange = (value: RequestCompatibilityForm) => {
+    setCompatibility(value)
+    if (invalidCompatibilityNumber(value.maxOutputTokens) || invalidCompatibilityNumber(value.outputTokenLimit)) return
+    setSettingsJson((current) => {
+      try {
+        return JSON.stringify(writeCompatibilityJson(JSON.parse(current || '{}'), parseCompatibilityForm(value)), null, 2)
+      } catch {
+        return current
+      }
+    })
   }
   const handleApiFormatChange = (value: ApiFormat) => {
     setApiFormat(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas))
+    setSettingsJson((current) => {
+      const connected = updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas, supportsNestedToolResultMedia)
+      try {
+        return JSON.stringify(writeCompatibilityJson(JSON.parse(connected), value === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)), null, 2)
+      } catch {
+        return connected
+      }
+    })
   }
   const handleAuthStrategyChange = (value: ProviderAuthStrategy) => {
     setAuthStrategy(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas, supportsNestedToolResultMedia))
   }
+  const handleNestedToolResultMediaToggle = (enabled: boolean) => {
+    if (nestedToolResultMediaUnsupported) return
+    setSupportsNestedToolResultMedia(enabled)
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(
+      current,
+      apiFormat,
+      authStrategy,
+      apiKey,
+      selectedPreset,
+      baseUrl,
+      providerProxyBaseUrl,
+      toolSearchEnabled,
+      disableExperimentalBetas,
+      enabled,
+    ))
+  }
+
   const handleToolSearchToggle = (enabled: boolean) => {
     if (toolSearchUnsupported) return
     if (enabled) {
@@ -1293,6 +1382,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
     setDisableExperimentalBetas(disabled)
     setSettingsJson((current) => updateSettingsJsonDisableExperimentalBetas(current, disabled))
   }
+
   const handleModelChange = (slot: ModelSlot, value: string) => {
     const hasMarker = hasModel1mMarker(value)
     const nextModels = { ...models, [slot]: stripModel1mMarker(value) }
@@ -1416,6 +1506,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
 
   const handleSubmit = async () => {
     if (!canSubmit || isSubmitting) return
+    const storedCompatibility = apiFormat === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)
     const normalizedModels = normalizeModelMapping(models)
     const parsedAutoCompactWindow = parseAutoCompactWindowInput(autoCompactWindow)
     const parsedModelContextWindows = buildModelContextWindows(models, modelContextInputs)
@@ -1430,14 +1521,18 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         }
       : undefined
     setIsSubmitting(true)
+    setSaveFailed(false)
+    setCredentialRequired(false)
     try {
       // Write the edited cc-haha settings.json first so provider-specific model
       // settings never conflict with the user's global ~/.claude/settings.json.
-      if (settingsJson.trim()) {
+      if (!browserMode && settingsJson.trim()) {
         try {
           const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
           const { providersApi } = await import('../../api/providers')
-          await providersApi.updateSettings(parsed)
+          const settings = writeCompatibilityJson(parsed, storedCompatibility)
+          delete settings.requestCompatibility
+          await providersApi.updateSettings(settings)
         } catch {
           // JSON validation already prevents this
         }
@@ -1451,12 +1546,14 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           authStrategy,
           baseUrl: baseUrl.trim(),
           apiFormat,
+          ...(storedCompatibility ? { requestCompatibility: storedCompatibility } : {}),
           models: normalizedModels,
           ...(storedModel1mSupport !== undefined && { model1mSupport: storedModel1mSupport }),
           ...(parsedAutoCompactWindow !== undefined && { autoCompactWindow: parsedAutoCompactWindow }),
           ...(Object.keys(parsedModelContextWindows).length > 0 && { modelContextWindows: parsedModelContextWindows }),
           toolSearchEnabled,
           ...(disableExperimentalBetas && { disableExperimentalBetas }),
+          supportsNestedToolResultMedia,
           ...(storedImageGeneration !== undefined && { imageGeneration: storedImageGeneration }),
           notes: notes.trim() || undefined,
         })
@@ -1466,6 +1563,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           baseUrl: baseUrl.trim(),
           authStrategy,
           apiFormat,
+          requestCompatibility: storedCompatibility ?? null,
           models: normalizedModels,
           model1mSupport: storedModel1mSupport ?? null,
           autoCompactWindow: parsedAutoCompactWindow ?? null,
@@ -1474,6 +1572,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             : null,
           toolSearchEnabled,
           disableExperimentalBetas,
+          supportsNestedToolResultMedia,
           imageGeneration: storedImageGeneration ?? null,
           notes: notes.trim() || undefined,
         }
@@ -1482,8 +1581,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       }
       await fetchSettings()
       onClose()
-    } catch (err) {
-      console.error('Failed to save provider:', err)
+    } catch (error) {
+      setCredentialRequired(browserMode && error instanceof ApiError &&
+        !!error.body && typeof error.body === 'object' && 'code' in error.body &&
+        error.body.code === 'REMOTE_PROVIDER_CREDENTIAL_REQUIRED')
+      setSaveFailed(true)
     } finally {
       setIsSubmitting(false)
     }
@@ -1495,7 +1597,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   }
 
   const handleTest = async () => {
-    if (!baseUrl.trim() || !models.main.trim()) return
+    if (!baseUrl.trim() || !models.main.trim() || compatibilityInvalid) return
     setIsTesting(true)
     setTestResult(null)
     try {
@@ -1503,7 +1605,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       const savedConfigUnchanged = mode === 'edit' && provider && !apiKey.trim() &&
         baseUrl.trim() === provider.baseUrl.trim() &&
         apiFormat === provider.apiFormat &&
-        authStrategy === provider.authStrategy
+        authStrategy === provider.authStrategy &&
+        supportsNestedToolResultMedia === (provider.supportsNestedToolResultMedia ?? true) &&
+        JSON.stringify(parseCompatibilityForm(compatibility)) === JSON.stringify(provider.requestCompatibility)
       if (savedConfigUnchanged && provider) {
         result = await useProviderStore.getState().testProvider(provider.id, {
           modelId: models.main.trim(),
@@ -1516,6 +1620,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           modelId: models.main.trim(),
           authStrategy,
           apiFormat,
+          supportsNestedToolResultMedia,
+          ...(apiFormat !== 'anthropic' ? { requestCompatibility: parseCompatibilityForm(compatibility) } : {}),
         })
       }
       setTestResult(result)
@@ -1542,7 +1648,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         </>
       }
     >
-      <div className="flex flex-col gap-4">
+      <div className="flex min-w-0 flex-col gap-4">
+        {browserMode && <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('h5Settings.providerPrivacy')}</p>}
+        {saveFailed && <p role="alert" className="text-sm text-[var(--color-error)]">{t(credentialRequired ? 'h5Settings.credentialRequired' : 'publicAccess.genericError')}</p>}
         {/* Preset chips */}
         {mode === 'create' && (
           <div>
@@ -1634,6 +1742,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           </div>
         ) : null}
 
+        <ProviderRequestCompatibilityFields value={compatibility} apiFormat={apiFormat} onChange={handleCompatibilityChange} />
+
         {apiFormat === 'anthropic' && (
           <div>
             <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.authStrategy')}</label>
@@ -1692,8 +1802,28 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             <div className="text-sm font-medium text-[var(--color-text-primary)]">
               {t('settings.providers.disableExperimentalBetas')}
             </div>
-            <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+            <div className={`mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]${browserMode ? ' [overflow-wrap:anywhere]' : ''}`}>
               {t('settings.providers.disableExperimentalBetasDesc')}
+            </div>
+          </div>
+        </label>
+
+        <label className="relative flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-3 transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)]">
+          <input
+            type="checkbox"
+            aria-label={t('settings.providers.supportsNestedToolResultMedia')}
+            checked={supportsNestedToolResultMedia}
+            disabled={nestedToolResultMediaUnsupported}
+            onChange={(e) => handleNestedToolResultMediaToggle(e.target.checked)}
+            className={SETTINGS_CHECKBOX_INPUT_CLASS}
+          />
+          <SettingsCheckboxMark checked={supportsNestedToolResultMedia} disabled={nestedToolResultMediaUnsupported} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {t('settings.providers.supportsNestedToolResultMedia')}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+              {nestedToolResultMediaDescription}
             </div>
           </div>
         </label>
@@ -1706,6 +1836,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           <div className="relative">
             <input
               id="provider-api-key"
+              autoComplete="off"
+              spellCheck={false}
               type={showApiKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => handleApiKeyChange(e.target.value)}
@@ -1763,7 +1895,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
             <label className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.providers.modelMapping')}</label>
-            <Button
+            {!browserMode && <Button
               variant="secondary"
               size="base"
               onClick={handleFetchModels}
@@ -1772,9 +1904,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               icon={<span className="material-symbols-outlined text-[15px]">cloud_download</span>}
             >
               {t('settings.providers.fetchModels')}
-            </Button>
+            </Button>}
           </div>
-          {!hasModelsApiKey ? (
+          {browserMode ? null : !hasModelsApiKey ? (
             <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsApiKeyHint')}</p>
           ) : !hasModelsBaseUrl ? (
             <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsHint')}</p>
@@ -1796,7 +1928,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
           ) : (
             <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsSupportHint')}</p>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <div className={browserMode ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "grid grid-cols-2 gap-2"}>
             {MODEL_SLOTS.map((slot) => {
               const labelKey = slot === 'main'
                 ? 'settings.providers.mainModel'
@@ -1874,7 +2006,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-3">
               <div>
                 <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.modelContextWindows')}</label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className={browserMode ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "grid grid-cols-2 gap-2"}>
                   {MODEL_SLOTS.map((slot) => {
                     const errorKey = getModelContextWindowErrorKey(modelContextInputs[slot])
                     const labelKey = slot === 'main'
@@ -1932,8 +2064,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
         </div>
 
         {/* Test connection */}
-        <div className="flex items-center gap-3">
-          <Button variant="secondary" size="sm" onClick={handleTest} loading={isTesting} disabled={!baseUrl.trim() || !models.main.trim()}>
+        {!browserMode && <div className="flex items-center gap-3">
+          <Button variant="secondary" size="sm" onClick={handleTest} loading={isTesting} disabled={!baseUrl.trim() || !models.main.trim() || compatibilityInvalid}>
             {t('settings.providers.testConnection')}
           </Button>
           {testResult && (
@@ -1952,25 +2084,29 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
               )}
             </div>
           )}
-        </div>
+        </div>}
 
-        {/* Settings JSON — editable, shown for all presets including official */}
-        <div>
+        {/* Settings JSON stays on the trusted desktop. */}
+        {!browserMode && <div>
           <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.settingsJson')}</label>
           <textarea
+            aria-label={t('settings.providers.settingsJson')}
             value={displayedSettingsJson}
             onChange={(e) => {
               settingsJsonUserEditedRef.current = true
               const raw = e.target.value
               try {
                 const parsed = restoreSettingsJsonSecrets(JSON.parse(raw), settingsJson, apiKey)
-                setSettingsJson(JSON.stringify(parsed, null, 2))
+                const nextCompatibility = readCompatibilityEditorJson(parsed, settingsJson)
+                setCompatibility(compatibilityForm(nextCompatibility))
+                const synchronized = writeCompatibilityJson(parsed, apiFormat === 'anthropic' ? undefined : nextCompatibility)
+                setSettingsJson(JSON.stringify(synchronized, null, 2))
                 setSettingsJsonError(null)
                 // Auto-fill form fields from parsed JSON env
                 const env = parsed.env as Record<string, string> | undefined
                 if (env) {
                   const baseUrl = env.ANTHROPIC_BASE_URL
-                  if (baseUrl) {
+                  if (baseUrl && normalizeProviderBaseUrl(baseUrl) !== normalizeProviderBaseUrl(providerProxyBaseUrl)) {
                     setBaseUrl(baseUrl)
                     // Auto-switch to matching preset or Custom
                     if (mode === 'create') {
@@ -2043,7 +2179,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
                 }
               } catch (err) {
                 setSettingsJson(raw)
-                setSettingsJsonError(err instanceof Error ? err.message : 'Invalid JSON')
+                setSettingsJsonError(err instanceof Error && err.message === 'settings.providers.compatibilityNumberError' ? t('settings.providers.compatibilityNumberError') : err instanceof Error && err.message === 'settings.providers.compatibilityJsonError' ? t('settings.providers.compatibilityJsonError') : err instanceof Error ? err.message : 'Invalid JSON')
               }
             }}
             rows={16}
@@ -2058,7 +2194,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             <p className="text-[11px] text-[var(--color-error)] mt-1">{t('settings.providers.jsonError', { error: settingsJsonError })}</p>
           )}
           <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.settingsJsonDesc')}</p>
-        </div>
+          {apiFormat !== 'anthropic' && <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.compatibilityJsonHint')}</p>}
+        </div>}
       </div>
       </Modal>
       <ConfirmDialog

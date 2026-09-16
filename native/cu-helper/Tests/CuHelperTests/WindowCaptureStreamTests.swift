@@ -517,7 +517,7 @@ final class WindowCaptureStreamTests: XCTestCase {
         XCTAssertEqual(factory.sources[0].retireCount, 1)
     }
 
-    func testMovingTheSameWindowReusesItsStream() async {
+    func testMovingTheSameWindowRebuildsItsDisplayRegion() async {
         let factory = FakeWindowCaptureStreamFactory { source, _ in
             source.startFrame = makeFrame(
                 for: source.targetKey,
@@ -534,10 +534,29 @@ final class WindowCaptureStreamTests: XCTestCase {
         let moved = await manager.frame(for: after, newerThanUptime: nil)
 
         XCTAssertEqual(moved?.bytes.first, 5)
-        XCTAssertEqual(factory.sources.count, 1)
+        XCTAssertEqual(factory.sources.count, 2, "The old display crop no longer follows a moved window")
         XCTAssertEqual(factory.sources[0].startCount, 1)
-        XCTAssertEqual(factory.sources[0].retireCount, 0)
+        XCTAssertEqual(factory.sources[0].retireCount, 1)
         XCTAssertEqual(manager.activeKeyForTesting, after.key)
+    }
+
+    func testPointSizeChangeRebuildsTheRegionEvenWhenPixelDimensionsMatch() async {
+        let factory = FakeWindowCaptureStreamFactory { source, index in
+            source.startFrame = makeFrame(
+                for: source.targetKey, sequence: 1, uptime: 10, byte: UInt8(index + 1)
+            )
+        }
+        let manager = makeManager(factory: factory)
+        let before = makeTarget(windowID: 43)
+        let after = WindowCaptureStreamTarget(
+            key: before.key, originX: before.originX, originY: before.originY,
+            pointWidth: before.pointWidth / 2, pointHeight: before.pointHeight / 2
+        )
+        _ = await manager.frame(for: before, newerThanUptime: nil)
+        let changed = await manager.frame(for: after, newerThanUptime: nil)
+        XCTAssertEqual(changed?.bytes.first, 2)
+        XCTAssertEqual(factory.sources.count, 2)
+        XCTAssertEqual(factory.sources[0].retireCount, 1)
     }
 
     func testDelegateFailureRestartsOnceAndDropsTheFailedFrame() async {
@@ -653,7 +672,42 @@ final class WindowCaptureStreamTests: XCTestCase {
         XCTAssertTrue(configuration.ignoreShadowsDisplay)
     }
 
-    func testCopiedBGRAFrameEncodesAsAStreamPNGWithTheSameGeometry() throws {
+    func testDisplaySubscriptionUsesLargestIntersectionInDisplayLocalCoordinates() throws {
+        let target = makeTarget(windowID: 73, pixelWidth: 800, pixelHeight: 600)
+        let region = try XCTUnwrap(ScreenCaptureKitWindowStreamSource.displayCaptureRegion(
+            windowFrame: CGRect(x: -600, y: 100, width: 800, height: 600),
+            displayFrames: [
+                CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                CGRect(x: -1920, y: -200, width: 1920, height: 1080),
+            ]
+        ))
+        XCTAssertEqual(region.displayIndex, 1)
+        XCTAssertEqual(region.sourceRect, CGRect(x: 1320, y: 300, width: 600, height: 600))
+        let configuration = ScreenCaptureKitWindowStreamSource.makeConfiguration(
+            for: target, sourceRect: region.sourceRect
+        )
+        XCTAssertEqual(configuration.sourceRect, region.sourceRect)
+        XCTAssertFalse(configuration.shouldBeOpaque)
+        // The crop is only the renderer subscription. Its output still meets
+        // the manager's frame contract; on-demand screenshots retain full size.
+        XCTAssertEqual(configuration.width, 800)
+        XCTAssertEqual(configuration.height, 600)
+    }
+
+    func testDisplaySubscriptionRejectsAbsentAndNonIntersectingDisplays() {
+        let frame = CGRect(x: 100, y: 200, width: 800, height: 600)
+        XCTAssertNil(ScreenCaptureKitWindowStreamSource.displayCaptureRegion(
+            windowFrame: frame, displayFrames: []
+        ))
+        XCTAssertNil(ScreenCaptureKitWindowStreamSource.displayCaptureRegion(
+            windowFrame: frame, displayFrames: [CGRect(x: -1920, y: 0, width: 1920, height: 1080)]
+        ))
+        XCTAssertNil(ScreenCaptureKitWindowStreamSource.displayCaptureRegion(
+            windowFrame: frame, displayFrames: [.infinite, .null]
+        ))
+    }
+
+    func testCopiedBGRAFramePreservesLosslessEvidenceAndPresentsJPEGAtTheSameGeometry() throws {
         let target = makeTarget(
             windowID: 72,
             pixelWidth: 1,
@@ -671,9 +725,14 @@ final class WindowCaptureStreamTests: XCTestCase {
         )
 
         let shot = try XCTUnwrap(Capture.windowShot(from: frame, target: target))
-        let png = try XCTUnwrap(Data(base64Encoded: shot.base64))
-
-        XCTAssertEqual(Array(png.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        let evidence = try XCTUnwrap(Data(base64Encoded: shot.base64))
+        XCTAssertEqual(Array(evidence.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        XCTAssertEqual(shot.mimeType, "image/png")
+        let model = Capture.modelWindowImage(shot)
+        let jpeg = try XCTUnwrap(Data(base64Encoded: model.base64))
+        XCTAssertEqual(Array(jpeg.prefix(2)), [255, 216])
+        XCTAssertEqual(model.mimeType, "image/jpeg")
+        XCTAssertEqual(shot.base64, evidence.base64EncodedString())
         XCTAssertEqual(shot.width, 1)
         XCTAssertEqual(shot.height, 1)
         XCTAssertEqual(shot.originX, 300)

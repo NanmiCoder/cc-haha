@@ -10,6 +10,9 @@
 - `docs/im/whatsapp.md`
 - `docs/im/telegram.md`
 - `docs/im/feishu.md`
+- `docs/im/wecom.md`
+- `docs/im/qq.md`
+- `docs/im/slack.md`
 
 ## 当前方案摘要
 
@@ -27,7 +30,7 @@ Desktop Webapp Settings
 注意两点：
 
 - IM 配置和配对都在 Desktop Webapp 的 `Settings -> IM 接入`
-- Webapp 不会自动启动 Adapter 进程，仍需手动运行 `bun run wechat`、`bun run dingtalk`、`bun run telegram` 或 `bun run feishu`
+- 从源码运行时 Webapp 不会自动启动 Adapter 进程，仍需手动运行 `bun run <platform>`；发布版桌面端会把它们作为 sidecar 拉起
 
 ## 快速启动
 
@@ -35,14 +38,7 @@ Desktop Webapp Settings
 cd adapters
 bun install
 bun run telegram
-# 或
-bun run feishu
-# 或
-bun run wechat
-# 或
-bun run dingtalk
-# 或
-bun run whatsapp
+# 或 feishu / wechat / dingtalk / whatsapp / wecom / qq / slack
 ```
 
 ## 开发
@@ -58,6 +54,9 @@ bun test feishu/
 bun test wechat/
 bun test dingtalk/
 bun test whatsapp/
+bun test wecom/
+bun test qq/
+bun test slack/
 ```
 
 ### 目录结构
@@ -65,7 +64,8 @@ bun test whatsapp/
 ```text
 adapters/
 ├── common/
-│   └── attachment/        # 跨平台附件工具(types / limits / store / image-watcher)
+│   ├── chat-runtime.ts    # 跨平台会话循环(配对 / 命令 / 服务端流 -> ChatPort)
+│   └── attachment/        # 跨平台附件工具(types / limits / store / image-watcher / mime)
 ├── telegram/
 │   └── media.ts           # TelegramMediaService(grammy Bot API 封装)
 ├── feishu/
@@ -81,6 +81,19 @@ adapters/
 │   ├── session.ts         # Baileys socket / auth state 封装
 │   ├── protocol.ts        # WhatsApp QR 登录 / 解绑协议封装
 │   └── index.ts           # WhatsApp Web 私聊 Adapter
+├── wecom/
+│   ├── qr-auth.ts         # 企业微信智能机器人扫码创建
+│   ├── extract-payload.ts # 入站消息解析(text / voice / mixed / quote)
+│   └── index.ts           # 企业微信长连接 Adapter(流式消息)
+├── qq/
+│   ├── qr-auth.ts         # QQ 开放平台扫码授权
+│   ├── extract-payload.ts # 入站 C2C 消息解析
+│   └── index.ts           # QQ WebSocket 网关 Adapter(stream_messages)
+├── slack/
+│   ├── api.ts             # Slack Web API 封装(消息 / 文件 / Socket 连接)
+│   ├── socket-mode.ts     # Socket Mode 长连接
+│   ├── manifest.ts        # 应用清单与一键创建链接
+│   └── index.ts           # Slack 私信 Adapter(原地编辑)
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -88,13 +101,16 @@ adapters/
 
 ## 附件收发
 
-两个 Adapter 都支持双向图片/文件,和 Desktop 端走同一套 `AttachmentRef` 协议透传给主进程。
+各 Adapter 支持双向图片/文件,和 Desktop 端走同一套 `AttachmentRef` 协议透传给主进程。
 
 **入站(用户 → Claude):**
 
 - 飞书: 图片(jpg/png/gif/webp/heic)、文档(doc/xls/ppt/pdf 等)、post 富文本里的 img/file 元素
 - Telegram: photo、document、video、audio、voice
 - WhatsApp: image、document、video、audio、sticker
+- 企业微信: image、file、mixed 里的 image(下载后按 aeskey 解密);voice 由平台转写成文本
+- QQ: 事件里的 attachments;voice 用平台的 ASR 文本,不下载音频
+- Slack: 私信里的 files(仅 files.slack.com,带 Bot Token 下载)
 
 下载落地到 `~/.claude/im-downloads/{platform}/{sessionId}/`,24 小时后自动 GC(`.part` 孤文件 10 分钟超时)。大小限制:单张图 ≤10 MB、单个文件 ≤30 MB,超限直接拒收并在 IM 里提示。
 
@@ -105,6 +121,9 @@ Agent 流式文本里的 markdown 图片引用 `![alt](path|url|data:)` 会被 `
 - 飞书: `im.message.create(msg_type='image')` 单发(card 内嵌是后续优化)
 - Telegram: `bot.api.sendPhoto(InputFile)` 单发
 - WhatsApp: Baileys `sendMessage({ image })` 单发
+- 企业微信: `uploadMedia` + `sendMediaMessage` 单发
+- QQ: `sendMedia(MediaFileType.IMAGE)` 单发
+- Slack: `files.getUploadURLExternal` 三步上传后发进私信
 
 非图片类出站(Agent 产的 pdf/zip 等)暂不支持。
 

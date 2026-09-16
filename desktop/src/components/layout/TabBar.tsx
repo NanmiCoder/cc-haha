@@ -4,6 +4,7 @@ import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
   MARKET_TAB_ID,
+  CONNECTORS_TAB_ID,
   SUBAGENT_TAB_PREFIX,
   TEAM_MEMBER_TAB_PREFIX,
   TEAM_TAB_PREFIX,
@@ -18,8 +19,8 @@ import {
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
-import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
-import { useTerminalPanelStore } from '../../stores/terminalPanelStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useCLITaskStore } from '../../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { StatusDot } from '@/components/ui/Badge'
@@ -30,7 +31,9 @@ import { getDesktopHost } from '../../lib/desktopHost'
 import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
-import { Folder, FolderOpen, SquareTerminal } from 'lucide-react'
+import { SquareTerminal } from 'lucide-react'
+import { WorkspaceLayoutControls } from './WorkspaceLayoutControls'
+import { useWorkspaceHeaderHost } from './WorkspaceHeaderContext'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { buildMainSessionActivityModel, hasVisibleSessionActivity } from '../activity/sessionActivityModel'
 import { SessionActivityButton } from '../activity/SessionActivityButton'
@@ -64,6 +67,7 @@ const TAB_TYPE_ICON: Partial<Record<TabType, string>> = {
   settings: 'settings',
   scheduled: 'schedule',
   market: 'storefront',
+  connectors: 'link',
   terminal: 'terminal',
   trace: 'account_tree',
   traces: 'account_tree',
@@ -95,6 +99,7 @@ function isSessionTabId(tabId: string | null) {
   return tabId !== SETTINGS_TAB_ID &&
     tabId !== SCHEDULED_TAB_ID &&
     tabId !== MARKET_TAB_ID &&
+    tabId !== CONNECTORS_TAB_ID &&
     tabId !== TRACE_LIST_TAB_ID &&
     !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
     !tabId.startsWith(TRACE_TAB_PREFIX) &&
@@ -129,18 +134,14 @@ export function TabBar() {
   const openProjectPath = isActiveSessionTab
     ? getSessionBrowsablePath(activeSession) ?? null
     : null
-  // The right-side panel is now a single unified "workbench" with a per-session
-  // mode (file ↔ browser). The folder/browser toolbar buttons reflect whether
-  // the panel is open in their respective mode.
-  const isWorkbenchOpen = useWorkspacePanelStore((state) =>
-    activeTabId && isActiveSessionTab ? state.isPanelOpen(activeTabId) : false,
+  const workspaceLayout = useWorkspaceStore((state) =>
+    activeTabId && isActiveSessionTab ? state.bySession[activeTabId]?.layout ?? 'hidden' : 'hidden',
   )
-  const workbenchMode = useWorkspacePanelStore((state) =>
-    activeTabId && isActiveSessionTab ? state.getMode(activeTabId) : 'workspace',
-  )
-  const isWorkspacePanelOpen = isWorkbenchOpen && workbenchMode === 'workspace'
-  const isTerminalPanelOpen = useTerminalPanelStore((state) =>
-    activeTabId && isActiveSessionTab ? state.isPanelOpen(activeTabId) : false,
+  const isWorkbenchOpen = workspaceLayout !== 'hidden'
+  const workspaceHeader = useWorkspaceHeaderHost(isActiveSessionTab ? activeTabId : null)
+  const hasWorkspaceHeader = workspaceHeader.available && isWorkbenchOpen
+  const isTerminalPanelOpen = useWorkspaceStore((state) =>
+    activeTabId && isActiveSessionTab ? state.bySession[activeTabId]?.bottomOpen ?? false : false,
   )
   const cliTasks = useCLITaskStore((state) => state.tasks)
   const cliTasksSessionId = useCLITaskStore((state) => state.sessionId)
@@ -338,9 +339,7 @@ export function TabBar() {
 
   const closeTabWithCleanup = useCallback((tab: Tab) => {
     if (isSessionTab(tab)) {
-      useWorkspacePanelStore.getState().clearSession(tab.sessionId)
-      useTerminalPanelStore.getState().clearSession(tab.sessionId)
-      useActivityPanelStore.getState().close(tab.sessionId)
+      releaseWorkspaceSession(tab.sessionId)
     }
     closeTab(tab.sessionId)
   }, [closeTab])
@@ -536,6 +535,12 @@ export function TabBar() {
     setActiveTab(sessionId)
   }
 
+  const rightScrollControl = canScrollRight && (
+        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} className="flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
+          <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+        </button>
+      )
+
   return (
     <div
       data-testid="tab-bar"
@@ -559,6 +564,7 @@ export function TabBar() {
       className="flex min-h-[52px] items-stretch bg-[var(--color-surface-sidebar)] select-none"
     >
 
+      <div data-testid="workspace-session-header" className={hasWorkspaceHeader ? 'flex min-w-0 flex-1 overflow-hidden' : 'contents'}>
       {canScrollLeft && (
         <button type="button" onClick={() => scroll('left')} aria-label={t('tabs.scrollLeft')} className="flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
           <span className="material-symbols-outlined text-[16px]">chevron_left</span>
@@ -581,7 +587,7 @@ export function TabBar() {
         {tabs.map((tab, index) => {
           const displayTitle = tab.type === 'settings'
             ? t('settings.title')
-            : (tab.title || t('tabs.untitled'))
+            : tab.type === 'market' || tab.type === 'connectors' ? t('sidebar.extensions') : (tab.title || t('tabs.untitled'))
           return (
             <TabItem
               key={tab.sessionId}
@@ -604,6 +610,9 @@ export function TabBar() {
         })}
       </div>
 
+      {hasWorkspaceHeader ? rightScrollControl : null}
+      </div>
+
       {/*
         Same hairline as the one between two idle tabs, drawn the same way: a
         16px rule rather than a full-height `border-l`, because a 52px line
@@ -612,46 +621,61 @@ export function TabBar() {
         against paper, it all but disappears on the trough (1.12:1 on 素白),
         which left the toolbar looking welded to the last tab.
       */}
-      <div className="relative flex shrink-0 items-center gap-1 px-2 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-px before:-translate-y-1/2 before:bg-[var(--color-tab-separator)]">
+      {/*
+        The frame owns the paper, not the header inside it. The drag gutter —
+        and, on Windows, the window controls — are the header's siblings in
+        here, and they are transparent: while the workspace is closed that is
+        invisible, because the whole strip is the sidebar's ground. Next to an
+        open panel it showed as a 16px strip of trough welded to the window's
+        top-right corner. One ground for everything above the panel.
+      */}
+      <div
+        data-testid="workspace-header-frame"
+        style={hasWorkspaceHeader ? { width: workspaceHeader.width, maxWidth: '100%' } : undefined}
+        className={`flex min-w-0 shrink-0 items-stretch ${hasWorkspaceHeader ? 'bg-[var(--color-surface)]' : ''}`}
+      >
+      <div
+        data-testid="workspace-window-header"
+        data-desktop-drag-region={hasWorkspaceHeader && isDesktopRuntime ? true : undefined}
+        className={hasWorkspaceHeader
+          ? 'flex min-w-0 flex-1 items-center gap-1 pr-2'
+          : 'relative flex shrink-0 items-center gap-1 px-2 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-px before:-translate-y-1/2 before:bg-[var(--color-tab-separator)]'}
+      >
+        {hasWorkspaceHeader ? (
+          <div
+            ref={workspaceHeader.ref}
+            data-testid="workspace-header-slot"
+            data-desktop-drag-region={isDesktopRuntime ? true : undefined}
+            // The slot is titlebar chrome: empty space must drag the window.
+            // `tab-bar-interactive` here would also mark every descendant as
+            // no-drag, including the resource strip's leftover flex space.
+            className="flex h-[52px] min-w-0 flex-1"
+          />
+        ) : null}
         {showActivityButton && activeTabId && (
           <SessionActivityButton sessionId={activeTabId} />
         )}
-        {isDesktopRuntime && isActiveSessionTab && (
+        {isDesktopRuntime && isActiveSessionTab && !isWorkbenchOpen && (
           <OpenProjectMenu path={openProjectPath} />
         )}
-        {/* AgentTeamsStrip in the session header opens the full workbench. */}
-        <IconButton
-          icon={<SquareTerminal size={17} strokeWidth={1.9} />}
-          label={t('tabs.openTerminal')}
-          onClick={() => {
-            if (activeTabId && isActiveSessionTab) {
-              useTerminalPanelStore.getState().togglePanel(activeTabId)
-              return
-            }
-            useTabStore.getState().openTerminalTab()
-          }}
-          size="md"
-          tone={isTerminalPanelOpen ? 'default' : 'muted'}
-          pressed={isTerminalPanelOpen}
-          data-active={isTerminalPanelOpen ? 'true' : 'false'}
-        />
-        {isActiveSessionTab && activeTabId && (
+        {isActiveSessionTab && activeTabId ? (
+          <WorkspaceLayoutControls
+            layout={workspaceLayout}
+            bottomOpen={isTerminalPanelOpen}
+            onToggleFullscreen={() => useWorkspaceStore.getState().toggleFullscreen(activeTabId)}
+            onToggleBottom={() => useWorkspaceStore.getState().toggleBottomPanel(
+              activeTabId,
+              getSessionBrowsablePath(activeSession) ?? '',
+            )}
+            onToggleWorkspace={() => useWorkspaceStore.getState().toggleWorkspace(activeTabId)}
+          />
+        ) : (
           <IconButton
-            icon={isWorkspacePanelOpen ? <FolderOpen size={18} strokeWidth={1.9} /> : <Folder size={18} strokeWidth={1.9} />}
-            label={t(isWorkspacePanelOpen ? 'tabs.hideWorkspace' : 'tabs.showWorkspace')}
-            onClick={() => {
-              const workbench = useWorkspacePanelStore.getState()
-              if (workbench.isPanelOpen(activeTabId) && workbench.getMode(activeTabId) === 'workspace') {
-                workbench.closePanel(activeTabId)
-              } else {
-                workbench.setMode(activeTabId, 'workspace')
-                workbench.openPanel(activeTabId)
-              }
-            }}
+            icon={<SquareTerminal size={17} strokeWidth={1.9} />}
+            label={t('tabs.openTerminal')}
+            onClick={() => useTabStore.getState().openTerminalTab()}
             size="md"
-            tone={isWorkspacePanelOpen ? 'default' : 'muted'}
-            pressed={isWorkspacePanelOpen}
-            data-active={isWorkspacePanelOpen ? 'true' : 'false'}
+            tone="muted"
           />
         )}
       </div>
@@ -665,13 +689,10 @@ export function TabBar() {
         />
       )}
 
-      {canScrollRight && (
-        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} className="flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
-          <span className="material-symbols-outlined text-[16px]">chevron_right</span>
-        </button>
-      )}
 
+      {!hasWorkspaceHeader ? rightScrollControl : null}
       <WindowControls />
+      </div>
 
       {contextMenu && (
         <div

@@ -335,6 +335,26 @@ let argv = CommandLine.arguments
 let entryCommand = argv.count >= 2 ? argv[1] : nil
 let isDaemonMode = entryCommand == "daemon"
 
+// Public, input-free package diagnostic. Resolve and decode exactly the same
+// optional assets used by the first visible click, before TCC disclaim, client
+// authorization, NSApplication creation, runtime files, or injection cleanup.
+// This permits testing a relocated release app with no user permissions/state.
+if entryCommand == "--probe-cursor-resources" {
+    let resources = VirtualCursor.loadLensSequence()
+    let report = JSONValue.object([
+        "resourceDirectory": resources.directory.map { .string($0.path) } ?? .null,
+        "frameCount": .int(resources.frames?.count ?? 0),
+        "proceduralFallback": .bool(resources.frames == nil),
+    ])
+    do {
+        emitLine(try JSONEncoder().encode(report))
+        exit(0)
+    } catch {
+        emitLine(Data("{\"error\":\"cursor resource diagnostic encoding failed\"}".utf8))
+        exit(1)
+    }
+}
+
 // disclaim re-exec — for the BARE-EXEC'd modes only (one-shot CLI + onboarding
 // card, which the Electron app spawns directly). It re-execs us once with
 // responsibility_spawnattrs_setdisclaim so the process becomes its OWN TCC

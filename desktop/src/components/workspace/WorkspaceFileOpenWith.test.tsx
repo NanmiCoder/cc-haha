@@ -3,8 +3,9 @@ import '@testing-library/jest-dom'
 import { render, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { browserHost } from '../../lib/desktopHost/browserHost'
+import type { OpenTarget } from '@/api/openTargets'
 
-const openTarget = vi.hoisted(() => vi.fn())
+const openTarget = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const shellOpen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const hostOpenPath = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const browserOpen = vi.hoisted(() => vi.fn())
@@ -39,16 +40,16 @@ vi.mock('../../i18n', () => ({
     v?.target ? `${k}:${v.target}` : k,
 }))
 
-vi.mock('../../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: {
-    getState: () => ({ open: browserOpen }),
+// The unified open entry point replaced the per-store `open` / `openPreview`
+// pair: every caller now names a target and the controller decides the tab.
+vi.mock('../../lib/workspace/openTarget', () => ({
+  workspaceOpen: {
+    file: (...args: unknown[]) => openPreview(...args),
+    browser: (...args: unknown[]) => browserOpen(...args),
+    review: (...args: unknown[]) => openPreview(...args),
+    terminal: vi.fn(),
   },
-}))
-
-vi.mock('../../stores/workspacePanelStore', () => ({
-  useWorkspacePanelStore: {
-    getState: () => ({ openPreview }),
-  },
+  openWorkspaceTarget: vi.fn(),
 }))
 
 import { WorkspaceFileOpenWith } from './WorkspaceFileOpenWith'
@@ -79,12 +80,11 @@ describe('WorkspaceFileOpenWith', () => {
     const labels = getAllByRole('menuitem').map((el) => el.textContent)
     expect(labels).toHaveLength(4)
     expect(labels.some((l) => l?.includes('VS Code'))).toBe(true)
-    expect(labels.some((l) => l?.includes('openWith.revealIn.darwin'))).toBe(true)
-    // Added with #1146. "Copy path" is deliberately absent: WorkspacePanel
-    // already renders its own copy-path pair directly above this block.
+    expect(labels.some((l) => l?.includes('workspace.files.openContainingFolder'))).toBe(true)
+    // This is now a standalone menu: there is no parent copy-path pair.
     expect(labels).toContain('openWith.copyFileContent')
-    expect(labels).not.toContain('openWith.copyPath')
-    expect(labels).toContain('openWith.systemDefault')
+    expect(labels).toContain('openWith.copyPath')
+    expect(labels).not.toContain('openWith.systemDefault')
   })
 
   it('clicking the IDE item calls openTarget and onAfterSelect', () => {
@@ -103,6 +103,41 @@ describe('WorkspaceFileOpenWith', () => {
     expect(onAfter).toHaveBeenCalledTimes(1)
   })
 
+  it('groups all detected native apps above file actions without truncating the list or rediscovering', () => {
+    const targets: OpenTarget[] = Array.from({ length: 9 }, (_, index) => ({
+      id: `editor-${index}`, kind: 'ide', label: `Editor ${index}`, icon: '', platform: 'darwin',
+    }))
+    targets.push({ id: 'finder', kind: 'file_manager', label: 'Finder', icon: '', platform: 'darwin' })
+    const { getAllByRole, getByRole, queryByText } = render(<WorkspaceFileOpenWith absolutePath="/fixture/app.ts" targets={targets} onRefresh={vi.fn()} />)
+    const items = getAllByRole('menuitem')
+    expect(items.slice(0, 9).map((item) => item.textContent)).toEqual(targets.slice(0, 9).map((target) => target.label))
+    expect(items[0]).toHaveClass('h-9', 'text-[15px]')
+    expect(items[8]?.nextElementSibling).toBe(getByRole('separator'))
+    expect(items[9]?.previousElementSibling).toBe(getByRole('separator'))
+    expect(items.at(-1)).toHaveTextContent('workspace.refresh')
+    expect(queryByText('openWith.systemDefault')).not.toBeInTheDocument()
+    expect(openTargetState.getTargetsForPath).not.toHaveBeenCalled()
+  })
+
+  it('opens the containing folder through the detected file manager with the current exact file path', () => {
+    const onAfter = vi.fn()
+    const { getByRole } = render(<WorkspaceFileOpenWith absolutePath="/fixture/with spaces/app.ts" onAfterSelect={onAfter} />)
+    fireEvent.click(getByRole('menuitem', { name: 'workspace.files.openContainingFolder' }))
+    expect(openTarget).toHaveBeenCalledWith('finder', '/fixture/with spaces/app.ts')
+    expect(onAfter).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains real preview and refresh actions but omits reopening the same already-active file', () => {
+    const refresh = vi.fn()
+    const after = vi.fn()
+    const { getByRole, queryByText } = render(<WorkspaceFileOpenWith absolutePath="/w/index.html" workspacePath="index.html" sessionId="s1" targets={[]} onRefresh={refresh} onAfterSelect={after} />)
+    expect(queryByText('openWith.workspacePreview')).not.toBeInTheDocument()
+    expect(getByRole('menuitem', { name: 'openWith.inAppBrowser' })).toBeInTheDocument()
+    fireEvent.click(getByRole('menuitem', { name: 'workspace.refresh' }))
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(after).toHaveBeenCalledTimes(1)
+  })
+
   it('adds native applications discovered for this exact file path', async () => {
     openTargetState.getTargetsForPath.mockResolvedValueOnce([
       { id: 'application:pages', kind: 'application', label: 'Pages', icon: 'application', platform: 'darwin' },
@@ -111,7 +146,7 @@ describe('WorkspaceFileOpenWith', () => {
 
     const view = render(<WorkspaceFileOpenWith absolutePath="/w/brief.docx" />)
 
-    expect(await view.findByText('openWith.openInTarget:Pages')).toBeInTheDocument()
+    expect(await view.findByText('Pages')).toBeInTheDocument()
     expect(openTargetState.getTargetsForPath).toHaveBeenCalledWith('/w/brief.docx')
   })
 
@@ -135,7 +170,7 @@ describe('WorkspaceFileOpenWith', () => {
     expect(labels.some((l) => l?.includes('openWith.workspacePreview'))).toBe(true)
     expect(labels.some((l) => l?.includes('openWith.inAppBrowser'))).toBe(true)
     expect(labels.some((l) => l?.includes('VS Code'))).toBe(true)
-    expect(labels.some((l) => l?.includes('openWith.revealIn.darwin'))).toBe(true)
+    expect(labels.some((l) => l?.includes('workspace.files.openContainingFolder'))).toBe(true)
   })
 
   it('opens the in-app browser preview URL from workspace html files', () => {
@@ -174,6 +209,6 @@ describe('WorkspaceFileOpenWith', () => {
 
     fireEvent.click(previewItem)
 
-    expect(openPreview).toHaveBeenCalledWith('s1', 'report.md', 'file')
+    expect(openPreview).toHaveBeenCalledWith('s1', 'report.md')
   })
 })

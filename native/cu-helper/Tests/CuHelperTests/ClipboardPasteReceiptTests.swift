@@ -6,6 +6,24 @@ import XCTest
 
 final class ClipboardPasteReceiptTests: XCTestCase {
     @MainActor
+    func testReadWithoutTargetSignalsUsesOnlyTheShortFallbackWindow() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        try await ClipboardPasteReceipt.perform(
+            text: "temporary", lease: ClipboardLease(pasteboard: fixture.board)
+        ) { validate in
+            try await fixture.sendPaste(validate)
+            XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+        }
+        let diagnostic = try XCTUnwrap(ClipboardPasteReceipt.lastDiagnostic)
+        let readElapsed = try XCTUnwrap(diagnostic.readElapsedMilliseconds)
+        XCTAssertGreaterThanOrEqual(diagnostic.elapsedMilliseconds - readElapsed, 90)
+        XCTAssertLessThan(diagnostic.elapsedMilliseconds - readElapsed, 600,
+                          "a successful read without AX signals has a 100 ms fallback, not a fixed two-second hold")
+        XCTAssertEqual(fixture.board.string(forType: .string), "original")
+    }
+
+    @MainActor
     func testHtmlPastePromisesRichAndPlainRepresentationsThenRestoresClipboard() async throws {
         let fixture = PasteReceiptFixture()
         defer { fixture.close() }
@@ -58,6 +76,109 @@ final class ClipboardPasteReceiptTests: XCTestCase {
         XCTAssertTrue(diagnostic.restored)
         XCTAssertEqual(fixture.board.string(forType: .string), "original")
         XCTAssertEqual(fixture.events.map(\.type), [.flagsChanged, .keyDown, .flagsChanged, .keyUp])
+    }
+
+    @MainActor
+    func testAnEarlyReaderCannotRestoreClipboardBeforeTheTargetReads() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        let lease = ClipboardLease(pasteboard: fixture.board)
+        var returned = false
+        var targetChanged = false
+        var targetReader: Task<Void, Never>?
+
+        try await ClipboardPasteReceipt.perform(
+            text: "temporary", lease: lease, timeout: .milliseconds(450),
+            targetObservation: ClipboardPasteObservation(hasSignals: true, hasChanged: { targetChanged })
+        ) { validate in
+            try await fixture.sendPaste(validate)
+            // A clipboard observer can request the promised bytes first.
+            XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+            targetReader = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                XCTAssertFalse(returned, "an unidentified reader cannot end the target's consumption window")
+                XCTAssertTrue(lease.temporaryWriteIsCurrent())
+                XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+                targetChanged = true
+            }
+        }
+        returned = true
+        await targetReader?.value
+
+        let diagnostic = try XCTUnwrap(ClipboardPasteReceipt.lastDiagnostic)
+        XCTAssertEqual(diagnostic.status, "completed")
+        XCTAssertTrue(diagnostic.dataSupplied)
+        XCTAssertTrue(diagnostic.restored)
+        XCTAssertEqual(fixture.events.count, 4)
+        XCTAssertEqual(fixture.board.string(forType: .string), "original")
+    }
+
+    @MainActor
+    func testCancellationAfterAnEarlyReadPreservesTheTargetsConsumptionWindow() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        let lease = ClipboardLease(pasteboard: fixture.board)
+        var targetReader: Task<Void, Never>?
+        var targetChanged = false
+        let task = Task { @MainActor in
+            try await ClipboardPasteReceipt.perform(
+                text: "temporary", lease: lease, timeout: .milliseconds(450),
+                targetObservation: ClipboardPasteObservation(hasSignals: true, hasChanged: { targetChanged })
+            ) { validate in
+                try await fixture.sendPaste(validate)
+                XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+                targetReader = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    XCTAssertTrue(lease.temporaryWriteIsCurrent())
+                    XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+                    targetChanged = true
+                }
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        do {
+            try await task.value
+            XCTFail("cancellation must still reach the caller after the bounded window")
+        } catch is CancellationError {}
+        await targetReader?.value
+
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.status, "cancelled")
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.dataSupplied, true)
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.restored, true)
+        XCTAssertEqual(fixture.events.count, 4)
+        XCTAssertEqual(fixture.board.string(forType: .string), "original")
+    }
+
+    @MainActor
+    func testExternalCopyAfterAnEarlyReadStillWinsDuringTheConsumptionWindow() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        var externalCopy: Task<Void, Never>?
+        do {
+            try await ClipboardPasteReceipt.perform(
+                text: "temporary", lease: ClipboardLease(pasteboard: fixture.board),
+                timeout: .milliseconds(450),
+                targetObservation: ClipboardPasteObservation(hasSignals: true)
+            ) { validate in
+                try await fixture.sendPaste(validate)
+                XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+                externalCopy = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    fixture.board.clearContents()
+                    XCTAssertTrue(fixture.board.setString("new external copy", forType: .string))
+                }
+            }
+            XCTFail("an early read must not hide a later ownership change")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "clipboard_changed")
+        }
+        await externalCopy?.value
+
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.status, "clipboard_changed")
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.dataSupplied, true)
+        XCTAssertEqual(ClipboardPasteReceipt.lastDiagnostic?.restored, false)
+        XCTAssertEqual(fixture.events.count, 4)
+        XCTAssertEqual(fixture.board.string(forType: .string), "new external copy")
     }
 
     @MainActor
@@ -198,6 +319,104 @@ final class ClipboardPasteReceiptTests: XCTestCase {
         } catch let error as CUError {
             XCTAssertEqual(error.code, "clipboard_read_timeout")
         }
+    }
+
+    @MainActor
+    func testObservedTargetChangeCompletesBeforeTheTwoSecondDeadline() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        let notifications = ClipboardPasteNotifications()
+        var closed = false
+        try await ClipboardPasteReceipt.perform(
+            text: "temporary", lease: ClipboardLease(pasteboard: fixture.board),
+            targetObservation: ClipboardPasteObservation(
+                hasSignals: true,
+                arm: { notifications.arm($0) },
+                hasChanged: { notifications.hasChanged },
+                close: {
+                    notifications.close()
+                    closed = true
+                }
+            )
+        ) { validate in
+            try await fixture.sendPaste(validate)
+            XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+            notifications.recordTargetChange()
+        }
+        let diagnostic = try XCTUnwrap(ClipboardPasteReceipt.lastDiagnostic)
+        XCTAssertEqual(diagnostic.status, "completed")
+        XCTAssertLessThan(diagnostic.elapsedMilliseconds, 600)
+        XCTAssertTrue(closed)
+        XCTAssertEqual(fixture.events.count, 4)
+    }
+
+    @MainActor
+    func testReadWithoutAChangeInObservableTargetTimesOutAndRestores() async throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        var closed = false
+        do {
+            try await ClipboardPasteReceipt.perform(
+                text: "temporary", lease: ClipboardLease(pasteboard: fixture.board),
+                timeout: .milliseconds(60),
+                targetObservation: ClipboardPasteObservation(hasSignals: true, close: { closed = true })
+            ) { validate in
+                try await fixture.sendPaste(validate)
+                XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+            }
+            XCTFail("a read alone cannot acknowledge an observable field that did not change")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "clipboard_target_timeout")
+        }
+        let diagnostic = try XCTUnwrap(ClipboardPasteReceipt.lastDiagnostic)
+        XCTAssertEqual(diagnostic.status, "clipboard_target_timeout")
+        XCTAssertTrue(diagnostic.dataSupplied)
+        XCTAssertGreaterThanOrEqual(diagnostic.elapsedMilliseconds - (diagnostic.readElapsedMilliseconds ?? 0), 55)
+        XCTAssertTrue(closed)
+        XCTAssertEqual(fixture.board.string(forType: .string), "original")
+        XCTAssertEqual(fixture.events.count, 4, "timeout must not resend the paste")
+    }
+
+    @MainActor
+    func testOnlyAnArmedNotificationAfterDataReadConfirmsTheTarget() throws {
+        let fixture = PasteReceiptFixture()
+        defer { fixture.close() }
+        let lease = ClipboardLease(pasteboard: fixture.board)
+        defer { lease.restoreIfUnchanged() }
+        let receipt = try lease.writeTemporaryStringWithReceipt("temporary")
+        let notifications = ClipboardPasteNotifications()
+        notifications.recordTargetChange()
+        XCTAssertFalse(notifications.hasChanged, "an unarmed callback cannot confirm this paste")
+        notifications.arm(receipt)
+        notifications.recordTargetChange()
+        XCTAssertFalse(notifications.hasChanged, "a callback before the data read cannot confirm consumption")
+        XCTAssertEqual(fixture.board.string(forType: .string), "temporary")
+        XCTAssertFalse(notifications.hasChanged, "an unrelated clipboard reader cannot confirm the target")
+        notifications.recordTargetChange()
+        XCTAssertTrue(notifications.hasChanged)
+    }
+
+    @MainActor
+    func testFailedOrUnchangedAXReadsCannotConfirmTargetConsumption() throws {
+        var initialRange = CFRange(location: 2, length: 3)
+        var sameRange = initialRange
+        var changedRange = CFRange(location: 5, length: 0)
+        let initial = try XCTUnwrap(AXValueCreate(.cfRange, &initialRange))
+        let same = try XCTUnwrap(AXValueCreate(.cfRange, &sameRange))
+        let changed = try XCTUnwrap(AXValueCreate(.cfRange, &changedRange))
+        let baseline: [String: CFTypeRef] = ["range": initial, "count": NSNumber(value: 12)]
+        XCTAssertFalse(ClipboardPasteObservation.attributesChanged(baseline: baseline, current: [:]))
+        XCTAssertFalse(ClipboardPasteObservation.attributesChanged(baseline: baseline, current: ["range": changed]),
+                       "a partial AX read must not claim target success")
+        XCTAssertFalse(ClipboardPasteObservation.attributesChanged(
+            baseline: baseline, current: ["range": same, "count": NSNumber(value: 12)]
+        ), "AX value equality must compare values rather than object identity")
+        XCTAssertTrue(ClipboardPasteObservation.attributesChanged(
+            baseline: baseline, current: ["range": changed, "count": NSNumber(value: 12)]
+        ))
+        XCTAssertTrue(ClipboardPasteObservation.attributesChanged(
+            baseline: baseline, current: ["range": same, "count": NSNumber(value: 15)]
+        ))
     }
 }
 

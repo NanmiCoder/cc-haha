@@ -338,10 +338,10 @@ describe('settingsStore network persistence', () => {
     window.localStorage.clear()
   })
 
-  it('defaults old user settings to 600s system network settings', async () => {
+  it.each([undefined, 14_400_000, 43_200_000, 2_147_483_000])('loads old defaults or a long saved request timeout (%s ms)', async timeoutMs => {
     vi.doMock('../api/settings', () => ({
       settingsApi: {
-        getUser: vi.fn().mockResolvedValue({}),
+        getUser: vi.fn().mockResolvedValue(timeoutMs === undefined ? {} : { network: { aiRequestTimeoutMs: timeoutMs } }),
         updateUser: vi.fn(),
         getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
         setPermissionMode: vi.fn(),
@@ -379,7 +379,7 @@ describe('settingsStore network persistence', () => {
     await useSettingsStore.getState().fetchAll()
 
     expect(useSettingsStore.getState().network).toEqual({
-      aiRequestTimeoutMs: 600_000,
+      aiRequestTimeoutMs: timeoutMs ?? 1_800_000,
       proxy: {
         mode: 'system',
         url: '',
@@ -503,7 +503,7 @@ describe('settingsStore network persistence', () => {
     })
   })
 
-  it('persists trimmed manual network proxy and clamps timeout', async () => {
+  it.each([[14_400_000, 14_400_000], [43_200_000, 43_200_000], [2_147_483_000, 2_147_483_000], [Number.MAX_SAFE_INTEGER, 2_147_483_000]])('persists long request budgets and clamps timer overflow (%s ms)', async (inputMs, expectedMs) => {
     const updateUser = vi.fn().mockResolvedValue({})
     vi.doMock('../api/settings', () => ({
       settingsApi: {
@@ -536,7 +536,7 @@ describe('settingsStore network persistence', () => {
     const { useSettingsStore } = await import('./settingsStore')
 
     await useSettingsStore.getState().setNetwork({
-      aiRequestTimeoutMs: 9_999_999,
+      aiRequestTimeoutMs: inputMs,
       proxy: {
         mode: 'manual',
         url: '  http://127.0.0.1:7890  ',
@@ -544,7 +544,7 @@ describe('settingsStore network persistence', () => {
     })
 
     expect(useSettingsStore.getState().network).toEqual({
-      aiRequestTimeoutMs: 1_800_000,
+      aiRequestTimeoutMs: expectedMs,
       proxy: {
         mode: 'manual',
         url: 'http://127.0.0.1:7890',
@@ -552,7 +552,7 @@ describe('settingsStore network persistence', () => {
     })
     expect(updateUser).toHaveBeenCalledWith({
       network: {
-        aiRequestTimeoutMs: 1_800_000,
+        aiRequestTimeoutMs: expectedMs,
         proxy: {
           mode: 'manual',
           url: 'http://127.0.0.1:7890',
@@ -1078,6 +1078,75 @@ describe('settingsStore workflow keyword persistence', () => {
     expect(updateUser).toHaveBeenNthCalledWith(1, { workflowKeywordTriggerEnabled: false })
     expect(updateUser).toHaveBeenNthCalledWith(2, { workflowKeywordTriggerEnabled: true })
     expect(useSettingsStore.getState().workflowKeywordTriggerEnabled).toBe(true)
+  })
+})
+
+describe('settingsStore Agent Teams persistence', () => {
+  const updateUser = vi.fn()
+  const getUser = vi.fn()
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    updateUser.mockReset().mockResolvedValue({ ok: true })
+    getUser.mockReset().mockResolvedValue({})
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser,
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: { get: vi.fn().mockResolvedValue({ settings: {} }) },
+    }))
+    vi.doMock('../api/traces', () => ({
+      tracesApi: { getSettings: vi.fn().mockResolvedValue({ enabled: true, storageDir: '/tmp/test-traces' }) },
+    }))
+  })
+
+  it.each([
+    [{}, true],
+    [{ agentTeamsEnabled: true }, true],
+    [{ agentTeamsEnabled: false }, false],
+  ])('loads Agent Teams from user settings %j', async (settings, expected) => {
+    getUser.mockResolvedValue(settings)
+    const { useSettingsStore } = await import('./settingsStore')
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(true)
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(expected)
+  })
+
+  it('persists disabling and re-enabling Agent Teams', async () => {
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().setAgentTeamsEnabled(false)
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(false)
+    await useSettingsStore.getState().setAgentTeamsEnabled(true)
+    expect(updateUser).toHaveBeenNthCalledWith(1, { agentTeamsEnabled: false })
+    expect(updateUser).toHaveBeenNthCalledWith(2, { agentTeamsEnabled: true })
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(true)
+  })
+
+  it.each([true, false])('rolls back an optimistic update from %s and rejects on save failure', async (previous) => {
+    const { useSettingsStore } = await import('./settingsStore')
+    useSettingsStore.setState({ agentTeamsEnabled: previous })
+    const deferred = createDeferred<{ ok: boolean }>()
+    updateUser.mockReturnValueOnce(deferred.promise)
+    const saving = useSettingsStore.getState().setAgentTeamsEnabled(!previous)
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(!previous)
+    const failure = new Error('disk full')
+    const rejected = expect(saving).rejects.toBe(failure)
+    deferred.reject(failure)
+    await rejected
+    expect(useSettingsStore.getState().agentTeamsEnabled).toBe(previous)
   })
 })
 
@@ -1723,5 +1792,98 @@ describe('settingsStore H5 access behavior', () => {
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
     expect('h5AccessGeneratedToken' in useSettingsStore.getState()).toBe(false)
+  })
+})
+
+describe('settingsStore session retention persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  function mockApis(
+    updateUser: ReturnType<typeof vi.fn>,
+    getUser: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
+  ) {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser,
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+  }
+
+  it('treats 0 as an explicit value and persists it', async () => {
+    const updateUser = vi.fn().mockResolvedValue({})
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().setCleanupPeriodDays(0)
+
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBe(0)
+    expect(updateUser).toHaveBeenCalledWith({ cleanupPeriodDays: 0 })
+  })
+
+  it('rolls the optimistic value back when persisting fails', async () => {
+    const updateUser = vi.fn().mockRejectedValue(new Error('offline'))
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await expect(
+      useSettingsStore.getState().setCleanupPeriodDays(90),
+    ).rejects.toThrow('offline')
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBeNull()
+  })
+
+  it('rejects out-of-range values without calling the API', async () => {
+    const updateUser = vi.fn()
+    mockApis(updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await expect(useSettingsStore.getState().setCleanupPeriodDays(-1)).rejects.toThrow()
+    await expect(useSettingsStore.getState().setCleanupPeriodDays(3651)).rejects.toThrow()
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('reads the stored retention and falls back to null for invalid values', async () => {
+    const getUser = vi.fn().mockResolvedValue({ cleanupPeriodDays: 30 })
+    mockApis(vi.fn(), getUser)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBe(30)
+
+    getUser.mockResolvedValue({ cleanupPeriodDays: 'thirty' })
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().cleanupPeriodDays).toBeNull()
   })
 })

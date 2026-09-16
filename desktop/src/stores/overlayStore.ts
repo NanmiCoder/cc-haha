@@ -12,14 +12,22 @@ import { create } from 'zustand'
  */
 type OverlayStore = {
   count: number
-  push: () => void
-  pop: () => void
+  snapshotCount: number
+  push: (preserveSnapshot?: boolean) => void
+  pop: (preserveSnapshot?: boolean) => void
 }
 
 export const useOverlayStore = create<OverlayStore>((set) => ({
   count: 0,
-  push: () => set((state) => ({ count: state.count + 1 })),
-  pop: () => set((state) => ({ count: Math.max(0, state.count - 1) })),
+  snapshotCount: 0,
+  push: (preserveSnapshot = false) => set((state) => ({
+    count: state.count + 1,
+    snapshotCount: state.snapshotCount + (preserveSnapshot ? 1 : 0),
+  })),
+  pop: (preserveSnapshot = false) => set((state) => ({
+    count: Math.max(0, state.count - 1),
+    snapshotCount: Math.max(0, state.snapshotCount - (preserveSnapshot ? 1 : 0)),
+  })),
 }))
 
 /**
@@ -27,10 +35,10 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
  * unmount. Pairs cleanly with strict-mode double-invoke because each effect
  * run does exactly one inc + one dec.
  */
-export function useSuppressBrowserOverlay() {
+export function useSuppressBrowserOverlay({ preserveSnapshot = false }: { preserveSnapshot?: boolean } = {}) {
   useEffect(() => {
     const { push, pop } = useOverlayStore.getState()
-    push()
-    return () => pop()
-  }, [])
+    push(preserveSnapshot)
+    return () => pop(preserveSnapshot)
+  }, [preserveSnapshot])
 }

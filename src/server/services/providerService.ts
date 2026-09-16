@@ -10,10 +10,14 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { buildOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
+import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
+import { resolveRequestCompatibility } from '../proxy/transform/requestCompatibility.js'
+import { hoistToolResultMediaForCompatibility } from '../proxy/transform/anthropicMediaHoist.js'
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesToAnthropic.js'
 import type { AnthropicRequest } from '../proxy/transform/types.js'
@@ -41,6 +45,8 @@ import {
   normalizeImageGeneration,
   normalizeModelMapping,
   normalizeProvidersIndex,
+  providerNeedsProxy,
+  resolveProviderApiKey,
 } from './providerRuntimeEnv.js'
 import {
   getNetworkProxyFetchOptions,
@@ -58,6 +64,7 @@ import type {
   ProviderTestStepResult,
   ApiFormat,
   ProviderAuthStrategy,
+  RequestCompatibility,
 } from '../types/provider.js'
 import {
   BUILT_IN_PROVIDER_IDS,
@@ -125,6 +132,8 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(input.modelContextWindows !== undefined && { modelContextWindows: input.modelContextWindows }),
     toolSearchEnabled: input.toolSearchEnabled ?? false,
     ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
+    ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
+    ...(input.requestCompatibility !== undefined && { requestCompatibility: input.requestCompatibility }),
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.notes !== undefined && { notes: input.notes }),
   }
@@ -298,6 +307,8 @@ export class ProviderService {
       ...(typeof input.autoCompactWindow === 'number' && { autoCompactWindow: input.autoCompactWindow }),
       ...(input.modelContextWindows !== undefined && input.modelContextWindows !== null && { modelContextWindows: input.modelContextWindows }),
       ...(input.toolSearchEnabled !== undefined && { toolSearchEnabled: input.toolSearchEnabled }),
+      ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
+      ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
       ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
       ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
       ...(input.notes !== undefined && { notes: input.notes }),
@@ -310,6 +321,9 @@ export class ProviderService {
     }
     if (input.modelContextWindows === null) {
       delete updated.modelContextWindows
+    }
+    if (input.requestCompatibility === null) {
+      delete updated.requestCompatibility
     }
     if (input.disableExperimentalBetas === false) {
       delete updated.disableExperimentalBetas
@@ -521,7 +535,10 @@ export class ProviderService {
       const provider = index.providers.find(p => p.id === index.activeId)
       if (provider) {
         const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
-        const needsProxy = provider.apiFormat != null && provider.apiFormat !== 'anthropic'
+        const needsProxy = providerNeedsProxy(
+          provider.apiFormat ?? 'anthropic',
+          provider.supportsNestedToolResultMedia,
+        )
         const authEnv = buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy)
         if (Object.values(authEnv).some(value => value.length > 0)) {
           return { hasAuth: true, source: 'cc-haha-provider', activeProvider: provider.name }
@@ -567,19 +584,28 @@ export class ProviderService {
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
+    supportsNestedToolResultMedia: boolean
+    authStrategy: ProviderAuthStrategy
+    requestCompatibility?: RequestCompatibility
   } | null> {
-    if (providerId) {
-      if (isOpenAIOfficialProviderId(providerId) || isGrokOfficialProviderId(providerId)) {
-        return null
-      }
-      const provider = await this.getProvider(providerId)
+    const toProxyConfig = (provider: SavedProvider) => {
+      const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
       return {
         id: provider.id,
         name: provider.name,
         baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
+        apiKey: resolveProviderApiKey(provider, presetDefaultEnv),
         apiFormat: provider.apiFormat ?? 'anthropic',
+        supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia ?? true,
+        authStrategy: provider.authStrategy ?? getPresetAuthStrategy(provider.presetId),
+        ...(provider.requestCompatibility !== undefined && { requestCompatibility: provider.requestCompatibility }),
       }
+    }
+    if (providerId) {
+      if (isOpenAIOfficialProviderId(providerId) || isGrokOfficialProviderId(providerId)) {
+        return null
+      }
+      return toProxyConfig(await this.getProvider(providerId))
     }
 
     const index = await this.readIndex()
@@ -588,20 +614,16 @@ export class ProviderService {
       return null
     }
     const provider = await this.getProvider(index.activeId).catch(() => null)
-    if (!provider) return null
-    return {
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      apiFormat: provider.apiFormat ?? 'anthropic',
-    }
+    return provider ? toProxyConfig(provider) : null
   }
 
   async getActiveProviderForProxy(): Promise<{
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
+    supportsNestedToolResultMedia: boolean
+    authStrategy: ProviderAuthStrategy
+    requestCompatibility?: RequestCompatibility
   } | null> {
     return this.getProviderForProxy()
   }
@@ -618,9 +640,7 @@ export class ProviderService {
     const apiFormat = provider.apiFormat ?? 'anthropic'
     const authStrategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
     const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
-    const apiKey = provider.apiKey
-      || presetDefaultEnv.ANTHROPIC_AUTH_TOKEN
-      || presetDefaultEnv.ANTHROPIC_API_KEY
+    const apiKey = resolveProviderApiKey(provider, presetDefaultEnv)
       || (authStrategy === 'dual_dummy' ? 'dummy' : '')
 
     if (!baseUrl || !apiKey) {
@@ -632,6 +652,8 @@ export class ProviderService {
       modelId,
       authStrategy,
       apiFormat,
+      supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia,
+      requestCompatibility: provider.requestCompatibility,
     })
   }
 
@@ -644,21 +666,28 @@ export class ProviderService {
 
     // ── Step 1: Basic connectivity ───────────────────────────
     // Directly call the upstream API to verify URL, key, and model.
-    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings)
+    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings, input.requestCompatibility)
 
     // If connectivity failed, no point running step 2
     if (!step1.success) {
       return { connectivity: step1 }
     }
 
-    // For native Anthropic format, no proxy pipeline to test
-    if (format === 'anthropic') {
+    if (!providerNeedsProxy(format, input.supportsNestedToolResultMedia)) {
       return { connectivity: step1 }
     }
 
     // ── Step 2: Full proxy pipeline ──────────────────────────
     // Anthropic request → transform → upstream → transform back → validate
-    const step2 = await this.testProxyPipeline(base, input.apiKey, modelId, format, networkSettings)
+    const step2 = await this.testProxyPipeline(
+      base,
+      input.apiKey,
+      modelId,
+      format,
+      authStrategy,
+      networkSettings,
+      input.requestCompatibility,
+    )
 
     return { connectivity: step1, proxy: step2 }
   }
@@ -671,10 +700,11 @@ export class ProviderService {
     format: ApiFormat,
     authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
+    requestCompatibility?: RequestCompatibility,
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
-      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format, authStrategy)
+      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format, authStrategy, requestCompatibility)
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
       const response = await fetch(url, {
         method: 'POST',
@@ -716,8 +746,10 @@ export class ProviderService {
     base: string,
     apiKey: string,
     modelId: string,
-    format: 'openai_chat' | 'openai_responses',
+    format: ApiFormat,
+    authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
+    requestCompatibility?: RequestCompatibility,
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
@@ -728,22 +760,32 @@ export class ProviderService {
         messages: [{ role: 'user', content: 'Say "ok" and nothing else.' }],
       }
 
-      // Transform to OpenAI format
       let upstreamUrl: string
       let transformedBody: unknown
+      let headers: Record<string, string>
       if (format === 'openai_chat') {
-        transformedBody = anthropicToOpenaiChat(anthropicReq)
-        upstreamUrl = `${base}/v1/chat/completions`
+        transformedBody = anthropicToOpenaiChat(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
+        upstreamUrl = buildOpenaiEndpoint(base, 'chat/completions')
+        headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+      } else if (format === 'openai_responses') {
+        transformedBody = anthropicToOpenaiResponses(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
+        upstreamUrl = buildOpenaiEndpoint(base, 'responses')
+        headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
       } else {
-        transformedBody = anthropicToOpenaiResponses(anthropicReq)
-        upstreamUrl = `${base}/v1/responses`
+        transformedBody = hoistToolResultMediaForCompatibility(anthropicReq)
+        upstreamUrl = `${normalizeAnthropicBaseUrl(base)}/v1/messages`
+        headers = {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          ...buildAnthropicAuthHeaders(apiKey, authStrategy),
+        }
       }
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, upstreamUrl)
 
       // Call upstream with transformed request
       const response = await fetch(upstreamUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers,
         body: JSON.stringify(transformedBody),
         signal: AbortSignal.timeout(networkSettings.aiRequestTimeoutMs),
         ...proxyOptions,
@@ -760,7 +802,9 @@ export class ProviderService {
       const responseBody = await response.json()
       const anthropicRes = format === 'openai_chat'
         ? openaiChatToAnthropic(responseBody, modelId)
-        : openaiResponsesToAnthropic(responseBody, modelId)
+        : format === 'openai_responses'
+          ? openaiResponsesToAnthropic(responseBody, modelId)
+          : responseBody
 
       const latencyMs = Date.now() - start
 
@@ -789,26 +833,37 @@ function buildDirectTestRequest(
   modelId: string,
   format: ApiFormat,
   authStrategy: ProviderAuthStrategy,
+  requestCompatibility?: RequestCompatibility,
 ): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
   const prompt = 'Say "ok" and nothing else.'
+  const outputBudget = format !== 'anthropic'
+    ? resolveRequestCompatibility({ model: modelId, max_tokens: 16, messages: [] }, {
+        protocol: format,
+        requestCompatibility,
+        budgetSource: 'explicit',
+      }).outputBudget
+    : undefined
+  const budgetParams = outputBudget && outputBudget.field !== 'omit' && outputBudget.effective !== undefined
+    ? { [outputBudget.field]: outputBudget.effective }
+    : {}
 
   if (format === 'openai_chat') {
     return {
-      url: `${base}/v1/chat/completions`,
+      url: buildOpenaiEndpoint(base, 'chat/completions'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: { model: modelId, max_tokens: 16, stream: false, messages: [{ role: 'user', content: prompt }] },
+      body: { model: modelId, ...budgetParams, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {
     return {
-      url: `${base}/v1/responses`,
+      url: buildOpenaiEndpoint(base, 'responses'),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: { model: modelId, max_output_tokens: 16, input: [{ type: 'message', role: 'user', content: prompt }] },
+      body: { model: modelId, ...budgetParams, input: [{ type: 'message', role: 'user', content: prompt }] },
     }
   }
   // anthropic
   return {
-    url: `${base}/v1/messages`,
+    url: `${normalizeAnthropicBaseUrl(base)}/v1/messages`,
     headers: {
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',

@@ -1,12 +1,16 @@
 import { DARK_THEME_MODES, LIGHT_THEME_MODES, THEME_MODES } from '../types/settings'
 import {
+  WORKSPACE_STORAGE_KEY,
+  WORKSPACE_STORAGE_VERSION,
+} from './workspace/storageKey'
+import {
   APP_ZOOM_STORAGE_KEY,
   LEGACY_UI_ZOOM_STORAGE_KEY,
   isValidStoredAppZoomLevel,
   normalizeAppZoomLevel,
 } from './appZoom'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 1
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 4
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -23,14 +27,16 @@ const LIGHT_THEME_STORAGE_KEY = 'cc-haha-light-theme'
 const DARK_THEME_STORAGE_KEY = 'cc-haha-dark-theme'
 const LOCALE_STORAGE_KEY = 'cc-haha-locale'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
-const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'traces'] as const
+const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'connectors', 'traces'] as const
 const PERSISTED_SPECIAL_TAB_IDS: Record<(typeof PERSISTED_SPECIAL_TAB_TYPES)[number], string> = {
   settings: '__settings__',
   scheduled: '__scheduled__',
   market: '__market__',
+  connectors: '__connectors__',
   traces: '__traces__',
 }
 const SUPPORTED_LOCALES = ['en', 'zh', 'zh-TW', 'jp', 'kr']
+const WORKSPACE_PERSISTED_TAB_KINDS = ['file', 'browser', 'review', 'terminal']
 
 function readJson(storage: StorageLike, key: string): unknown {
   const raw = storage.getItem(key)
@@ -49,9 +55,10 @@ function isPersistedSpecialTabType(value: unknown): value is (typeof PERSISTED_S
 function getPersistedSpecialTabType(tab: Record<string, unknown>): (typeof PERSISTED_SPECIAL_TAB_TYPES)[number] | null {
   if (tab.sessionId === '__settings__') return 'settings'
   if (tab.sessionId === '__scheduled__') return 'scheduled'
+  if (tab.sessionId === '__connectors__') return 'market'
   if (tab.sessionId === '__market__') return 'market'
   if (tab.sessionId === '__traces__') return 'traces'
-  return isPersistedSpecialTabType(tab.type) ? tab.type : null
+  return isPersistedSpecialTabType(tab.type) ? tab.type === 'connectors' ? 'market' : tab.type : null
 }
 
 function writeJson(storage: StorageLike, key: string, value: unknown): void {
@@ -81,11 +88,15 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
           type: specialType ?? 'session',
         }
       })
+      .filter((tab, index, tabs) => tabs.findIndex(other => other.sessionId === tab.sessionId) === index)
+    const legacyActive = isRecord(parsed) ? rawTabs.find(tab => isRecord(tab) && tab.sessionId === parsed.activeTabId) : undefined
+    const activeType = isRecord(legacyActive) ? getPersistedSpecialTabType(legacyActive) : null
+    const normalizedActive = activeType ? PERSISTED_SPECIAL_TAB_IDS[activeType] : isRecord(parsed) ? parsed.activeTabId : null
     const activeTabId =
       isRecord(parsed) &&
-      typeof parsed.activeTabId === 'string' &&
-      openTabs.some((tab) => tab.sessionId === parsed.activeTabId)
-        ? parsed.activeTabId
+      typeof normalizedActive === 'string' &&
+      openTabs.some((tab) => tab.sessionId === normalizedActive)
+        ? normalizedActive
         : (openTabs[0]?.sessionId ?? null)
 
     if (openTabs.length === 0) {
@@ -175,6 +186,75 @@ function migrateThemeKey(
   normalizeEnumKey(storage, key, [...allowedValues], report)
 }
 
+/**
+ * Schema 2 introduced the unified workspace store. Schema 3 adds review viewed
+ * paths and the turn checkpoint index to its descriptors. Old workspaces keep
+ * their tabs, including the Files picker whose path is deliberately empty.
+ *
+ * Terminal descriptors are the reason this cannot be left to the hydrator
+ * alone: a stale entry carrying a live-looking runtime id is exactly the shape
+ * that would make a restored shell look like a running process.
+ */
+function migrateWorkspaceState(storage: StorageLike, report: DesktopMigrationReport): void {
+  const raw = storage.getItem(WORKSPACE_STORAGE_KEY)
+  if (!raw) return
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (!isRecord(parsed) || !isRecord(parsed.sessions)) {
+      storage.removeItem(WORKSPACE_STORAGE_KEY)
+      report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
+      return
+    }
+    if (parsed.version !== 1 && parsed.version !== WORKSPACE_STORAGE_VERSION) {
+      // A newer build wrote this. The hydrator already refuses a version it
+      // does not know, so leave the entry alone — deleting it would mean that
+      // downgrading once, briefly, permanently discards the workspace the newer
+      // build is still using.
+      return
+    }
+
+    let changed = parsed.version !== WORKSPACE_STORAGE_VERSION
+    const sessions: Record<string, unknown> = {}
+    for (const [sessionId, value] of Object.entries(parsed.sessions)) {
+      if (!isRecord(value) || !Array.isArray(value.tabs)) {
+        changed = true
+        continue
+      }
+      const tabs = value.tabs.filter((tab) =>
+        isRecord(tab) &&
+        typeof tab.id === 'string' &&
+        // Anything naming a host resource is stale by definition once the
+        // process that owned it is gone.
+        !('runtimeId' in tab) &&
+        !('browserTabId' in tab) &&
+        WORKSPACE_PERSISTED_TAB_KINDS.includes(tab.kind as string))
+        .map((tab) => parsed.version === 1 && tab.kind === 'review'
+          ? { ...tab, viewedPaths: [] }
+          : tab)
+      if (tabs.length !== value.tabs.length) changed = true
+      if (tabs.length === 0) {
+        changed = true
+        continue
+      }
+      sessions[sessionId] = { ...value, tabs }
+    }
+
+    if (Object.keys(sessions).length === 0) {
+      storage.removeItem(WORKSPACE_STORAGE_KEY)
+      report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
+      return
+    }
+    if (changed) {
+      writeJson(storage, WORKSPACE_STORAGE_KEY, { ...parsed, version: WORKSPACE_STORAGE_VERSION, sessions })
+      report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
+    }
+  } catch {
+    storage.removeItem(WORKSPACE_STORAGE_KEY)
+    report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
+  }
+}
+
 function normalizeEnumKey(
   storage: StorageLike,
   key: string,
@@ -245,6 +325,7 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
     migrateThemeKey(storage, DARK_THEME_STORAGE_KEY, DARK_THEME_MODES, report))
   runMigrationStep(report, LOCALE_STORAGE_KEY, () => normalizeEnumKey(storage, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, report))
   runMigrationStep(report, APP_ZOOM_STORAGE_KEY, () => normalizeAppZoomKey(storage, report))
+  runMigrationStep(report, WORKSPACE_STORAGE_KEY, () => migrateWorkspaceState(storage, report))
   try {
     storage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
   } catch {

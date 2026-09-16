@@ -1,4 +1,5 @@
 import type { ClientOptions } from '@anthropic-ai/sdk'
+import { getRequestBodyAudit } from './requestBodyAudit.js'
 import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
 import { dirname, join } from 'path'
@@ -240,15 +241,23 @@ export function createDumpPromptsFetch(
     let timestamp: string | undefined
     let traceStartedAtMs = 0
     let traceRequestBody: unknown
+    const bodyAudit = getRequestBodyAudit(init?.body)
+    const encodingMetadata = bodyAudit ? {
+      requestEncoding: bodyAudit.requestEncoding,
+      requestPlainBytes: bodyAudit.requestPlainBytes,
+      requestWireBytes: bodyAudit.requestWireBytes,
+    } : {}
 
     if (init?.method === 'POST' && init.body) {
       timestamp = new Date().toISOString()
       traceStartedAtMs = Date.now()
-      traceRequestBody = init.body
+      traceRequestBody = bodyAudit?.plainBody ?? init.body
       // Parsing + stringifying the request (system prompt + tool schemas = MBs)
       // takes hundreds of ms. Defer so it doesn't block the actual API call —
       // this is debug tooling for /issue, not on the critical path.
-      setImmediate(dumpRequest, init.body as string, timestamp, state, filePath)
+      if (typeof traceRequestBody === 'string') {
+        setImmediate(dumpRequest, traceRequestBody, timestamp, state, filePath)
+      }
     }
 
     const requestUrl = getRequestUrl(input)
@@ -298,6 +307,7 @@ export function createDumpPromptsFetch(
           bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
         },
         metadata: {
+          ...encodingMetadata,
           phase: 'api_call_started',
         },
       })
@@ -312,6 +322,7 @@ export function createDumpPromptsFetch(
         severity: 'info',
         title: 'API call started',
         metadata: {
+          ...encodingMetadata,
           url: traceRequestUrl,
         },
       })
@@ -344,6 +355,7 @@ export function createDumpPromptsFetch(
           },
           error: err,
           metadata: {
+            ...encodingMetadata,
             phase: 'api_call_failed',
             ...(aborted ? { aborted: true } : {}),
           },
@@ -360,6 +372,7 @@ export function createDumpPromptsFetch(
           title: 'API call failed',
           message: err instanceof Error ? err.message : String(err),
           metadata: {
+            ...encodingMetadata,
             url: traceRequestUrl,
             ...(aborted ? { aborted: true } : {}),
           },
@@ -419,6 +432,7 @@ export function createDumpPromptsFetch(
               bodySnapshot: capture.snapshot,
             },
             metadata: {
+              ...encodingMetadata,
               phase: 'api_call_completed',
             },
           })
@@ -428,6 +442,7 @@ export function createDumpPromptsFetch(
             severity: response.ok ? 'info' : 'warning',
             title: 'API call completed',
             metadata: {
+              ...encodingMetadata,
               status: response.status,
               url: traceRequestUrl,
             },
@@ -451,6 +466,7 @@ export function createDumpPromptsFetch(
             },
             error: abortError,
             metadata: {
+              ...encodingMetadata,
               phase: 'api_call_aborted',
               aborted: true,
             },
@@ -463,6 +479,7 @@ export function createDumpPromptsFetch(
             title: 'API call aborted',
             message: abortError.message,
             metadata: {
+              ...encodingMetadata,
               status: response.status,
               url: traceRequestUrl,
               durationMs,
@@ -480,6 +497,7 @@ export function createDumpPromptsFetch(
           title: 'Response capture failed',
           message: captureFailure instanceof Error ? captureFailure.message : String(captureFailure),
           metadata: {
+            ...encodingMetadata,
             status: response.status,
             url: traceRequestUrl,
           },
@@ -498,6 +516,7 @@ export function createDumpPromptsFetch(
           },
           error: captureFailure,
           metadata: {
+            ...encodingMetadata,
             phase: 'response_capture_failed',
             responseCaptureFailed: true,
           },

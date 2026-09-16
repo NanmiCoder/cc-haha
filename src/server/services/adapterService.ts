@@ -40,6 +40,7 @@ export type AdapterFileConfig = {
     appSecret?: string
     encryptKey?: string
     verificationToken?: string
+    domain?: 'feishu' | 'lark'
     allowedUsers?: string[]
     pairedUsers?: PairedUser[]
     defaultWorkDir?: string
@@ -69,6 +70,30 @@ export type AdapterFileConfig = {
   whatsapp?: {
     accountJid?: string
     authDir?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  wecom?: {
+    botId?: string
+    secret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  qq?: {
+    appId?: string
+    appSecret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  slack?: {
+    botToken?: string
+    appToken?: string
     allowedUsers?: string[]
     pairedUsers?: PairedUser[]
     defaultWorkDir?: string
@@ -125,6 +150,16 @@ class AdapterService {
     if (config.dingtalk?.clientSecret) {
       config.dingtalk.clientSecret = maskSecret(config.dingtalk.clientSecret)
     }
+    if (config.wecom?.secret) {
+      config.wecom.secret = maskSecret(config.wecom.secret)
+    }
+    if (config.qq?.appSecret) {
+      config.qq.appSecret = maskSecret(config.qq.appSecret)
+    }
+    if (config.slack) {
+      if (config.slack.botToken) config.slack.botToken = maskSecret(config.slack.botToken)
+      if (config.slack.appToken) config.slack.appToken = maskSecret(config.slack.appToken)
+    }
     if (config.pairing?.code) {
       config.pairing.code = '******'
     }
@@ -156,6 +191,16 @@ class AdapterService {
     if (patch.dingtalk && isMasked(patch.dingtalk.clientSecret)) {
       patch.dingtalk.clientSecret = current.dingtalk?.clientSecret
     }
+    if (patch.wecom && isMasked(patch.wecom.secret)) {
+      patch.wecom.secret = current.wecom?.secret
+    }
+    if (patch.qq && isMasked(patch.qq.appSecret)) {
+      patch.qq.appSecret = current.qq?.appSecret
+    }
+    if (patch.slack) {
+      if (isMasked(patch.slack.botToken)) patch.slack.botToken = current.slack?.botToken
+      if (isMasked(patch.slack.appToken)) patch.slack.appToken = current.slack?.appToken
+    }
     if (patch.pairing && isMasked(patch.pairing.code ?? undefined)) {
       patch.pairing.code = current.pairing?.code
     }
@@ -168,6 +213,9 @@ class AdapterService {
       wechat: patch.wechat ? { ...current.wechat, ...patch.wechat } : current.wechat,
       dingtalk: patch.dingtalk ? { ...current.dingtalk, ...patch.dingtalk } : current.dingtalk,
       whatsapp: patch.whatsapp ? { ...current.whatsapp, ...patch.whatsapp } : current.whatsapp,
+      wecom: patch.wecom ? { ...current.wecom, ...patch.wecom } : current.wecom,
+      qq: patch.qq ? { ...current.qq, ...patch.qq } : current.qq,
+      slack: patch.slack ? { ...current.slack, ...patch.slack } : current.slack,
       pairing: patch.pairing !== undefined ? { ...current.pairing, ...patch.pairing } : current.pairing,
     }
 

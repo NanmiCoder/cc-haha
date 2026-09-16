@@ -16,7 +16,7 @@ import { extractAssistantOutputTargets } from '../../lib/assistantOutputTargets'
 import { createAssistantMarkdownImageResolver } from '../../lib/markdownImages'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { isManagedGeneratedImagePath } from '../../lib/attachmentImages'
-import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
+import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 
 type Props = {
@@ -45,7 +45,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   turnCompletion,
 }: Props) {
   const t = useTranslation()
-  const workDir = useWorkspacePanelStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
+  const workDir = useWorkspaceContentStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
 
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect } | null>(null)
 

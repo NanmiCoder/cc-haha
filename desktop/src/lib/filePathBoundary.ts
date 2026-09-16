@@ -14,8 +14,13 @@
  * permissively and then trimmed, while a path segment is an *allow* list. Prose
  * punctuation, brackets and whitespace simply are not path characters, so a
  * sentence can never leak into a path the way it leaked into an href in #1145.
- * CJK letters ARE allowed — `文档/说明.md` is a real file — while CJK
- * punctuation is not.
+ *
+ * CJK letters are the one place the two entry points disagree on purpose. The
+ * prose scanner excludes them (`修改了lib/foo.ts` must match from `lib`, not
+ * from `修`), while {@link parseFilePathRef} — an href we generated ourselves,
+ * a backtick-quoted span — accepts them, because `README-拍摄大纲.md` is a real
+ * file the turn really wrote and its delimiter is the span, not the sentence.
+ * CJK *punctuation* is excluded in both — it is sentence material either way.
  */
 
 import { trimTrailingPunctuation } from './urlBoundary'
@@ -89,17 +94,17 @@ const LINKABLE_DOTFILES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Characters allowed inside one path segment.
+ * Characters allowed inside one path segment *while scanning prose*.
  *
  * Deliberately absent: whitespace, quotes, brackets, `:`/`#` (they open the line
  * suffix), `,`/`;`, and every full-width mark — those are the sentence, not the
  * path.
  *
- * CJK is absent on purpose too, which costs us `文档/说明.md`. Allowing it would
- * mean `修改了lib/foo.ts` — Chinese runs into a path with no space, constantly —
- * matches from `修` and drags the verb into the path. That is #1145's failure
- * mode pointed the other way, and a CJK *filename* is far rarer than CJK prose
- * sitting flush against an ASCII path.
+ * CJK is absent here on purpose: allowing it would mean `修改了lib/foo.ts` —
+ * Chinese runs into a path with no space, constantly — matches from `修` and
+ * drags the verb into the path. That is #1145's failure mode pointed the other
+ * way, and in *prose* a CJK filename is far rarer than CJK sitting flush
+ * against an ASCII path. Whole-string references use FULLREF_SEGMENT instead.
  */
 const SEGMENT_CHARS = String.raw`\w.\-@+`
 const SEGMENT = `[${SEGMENT_CHARS}]+`
@@ -107,6 +112,16 @@ const SEGMENT = `[${SEGMENT_CHARS}]+`
 const CONTINUES_PATH_RE = new RegExp(`[${SEGMENT_CHARS}/\\\\:]`)
 const SEPARATOR = String.raw`[\/\\]`
 const PREFIX = String.raw`(?:~${SEPARATOR}|\.{1,2}${SEPARATOR}|${SEPARATOR}|[A-Za-z]:${SEPARATOR})`
+
+/**
+ * Segment characters for a reference that is *already known to be one* — an
+ * href the app itself generated, or a backtick-quoted code span. The delimiter
+ * is the markdown, not the sentence, so the prose-bleed concern above does not
+ * apply and Unicode letters/digits are allowed: `README-拍摄大纲.md` and
+ * `文档/说明.md` are real files a turn really writes, and rejecting them made
+ * their output cards and "Open with" menus silently dead.
+ */
+const FULLREF_SEGMENT = String.raw`[\p{L}\p{N}_.\-@+]+`
 
 /**
  * `path:42`, `path:42:8`, `path#L42`, `path#L42-L60`, `path:L42`.
@@ -121,6 +136,11 @@ const FILE_PATH_SOURCE =
 
 const ANCHORED_FILE_PATH_RE = new RegExp(`^${FILE_PATH_SOURCE}`)
 const FILE_PATH_SCAN_RE = new RegExp(FILE_PATH_SOURCE, 'g')
+
+const FULLREF_PATH_SOURCE =
+  `(?:${PREFIX})?(?:${FULLREF_SEGMENT}${SEPARATOR})*${FULLREF_SEGMENT}(?:${LINE_SUFFIX})?`
+
+const ANCHORED_FULLREF_PATH_RE = new RegExp(`^${FULLREF_PATH_SOURCE}`, 'u')
 
 export type FilePathRef = {
   /** Exactly what the prose said, line suffix included. Used for "copy path". */
@@ -203,8 +223,8 @@ function buildRef(raw: string, match: RegExpExecArray): FilePathRef | null {
  * `见 lib/foo.ts。` yields `lib/foo.ts` — but only after the trim, because
  * `foo.ts.` must not lose the `.ts` that makes it a file.
  */
-export function matchFilePath(src: string): FilePathRef | null {
-  const match = ANCHORED_FILE_PATH_RE.exec(src)
+function matchPath(src: string, anchoredRe: RegExp): FilePathRef | null {
+  const match = anchoredRe.exec(src)
   if (!match) return null
 
   const trimmed = trimTrailingPunctuation(match[0])
@@ -212,10 +232,14 @@ export function matchFilePath(src: string): FilePathRef | null {
 
   // Re-run against the trimmed text so the captured line suffix belongs to what
   // we actually return (`foo.ts:42.` must not report a line of `42.`).
-  const reMatch = ANCHORED_FILE_PATH_RE.exec(trimmed)
+  const reMatch = anchoredRe.exec(trimmed)
   if (!reMatch || reMatch[0] !== trimmed) return null
 
   return buildRef(trimmed, reMatch)
+}
+
+export function matchFilePath(src: string): FilePathRef | null {
+  return matchPath(src, ANCHORED_FILE_PATH_RE)
 }
 
 /**
@@ -314,12 +338,14 @@ export function splitTextByFilePaths(text: string): FilePathSegment[] {
  * round-trip, and inline code spans.
  *
  * Unlike {@link matchFilePath} this requires the WHOLE value to be the path, so
- * `` `curl foo.ts` `` stays a command instead of becoming a link.
+ * `` `curl foo.ts` `` stays a command instead of becoming a link. And because
+ * the boundary is the markdown span rather than the sentence, it runs on the
+ * Unicode-tolerant FULLREF segment set: `` `README-拍摄大纲.md` `` is a file.
  */
 export function parseFilePathRef(value: string): FilePathRef | null {
   const trimmed = value.trim()
   if (!trimmed) return null
-  const ref = matchFilePath(trimmed)
+  const ref = matchPath(trimmed, ANCHORED_FULLREF_PATH_RE)
   return ref && ref.raw === trimmed ? ref : null
 }
 

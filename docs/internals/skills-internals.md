@@ -349,12 +349,13 @@ export const MAX_LISTING_DESC_CHARS = 250          // 每条描述上限
 
 ```
 formatCommandsWithinBudget(commands, contextWindowTokens)
+    ├─ 所有条目的 description + whenToUse 先限制为 250 字符（含 Bundled）
     ├─ 计算总预算 = contextWindowTokens × 4 × 1%
-    ├─ 尝试全量描述
+    ├─ 尝试保留上述已限长描述
     │  └─ 总字符 ≤ 预算 → 全部输出
     │
-    ├─ 分区: Bundled（不截断） + 其余
-    │  ├─ Bundled Skills 始终保留完整描述
+    ├─ 分区: Bundled（不再按总预算截断） + 其余
+    │  ├─ Bundled Skills 保留经过 250 字符限制的描述
     │  └─ 其余 Skills 平分剩余预算
     │
     ├─ 截断描述 → maxDescLen 字符
@@ -362,6 +363,8 @@ formatCommandsWithinBudget(commands, contextWindowTokens)
     │
     └─ 输出格式: "- skill-name: description..."
 ```
+
+技能列表用于发现，正文在调用时加载。编写描述时先写清具体触发条件和用途；将操作步骤、例子和参考文件放在正文，按任务需要读取。不要把整套工作流塞进描述，也不要要求每次调用都读完所有参考文件。
 
 ### SkillTool Prompt
 

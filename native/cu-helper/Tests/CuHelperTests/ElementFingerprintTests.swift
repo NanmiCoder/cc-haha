@@ -246,6 +246,57 @@ final class ElementFingerprintTests: XCTestCase {
         )
     }
 
+    func testNativeWindowIDMatchesChromeDespiteDecoratedAXAndAudioCGTitles() {
+        let candidates = [
+            SnapshotWindowIdentityEvidence.Candidate(id: 17673, frameMatches: false, title: "Window"),
+            SnapshotWindowIdentityEvidence.Candidate(id: 16290, frameMatches: true, title: "“Townscaper”🔊"),
+        ]
+        XCTAssertNil(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Townscaper - Google Chrome - Mi", candidates: candidates
+        ))
+        XCTAssertEqual(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Townscaper - Google Chrome - Mi", candidates: candidates,
+            nativeWindowID: 16290
+        ), 16290)
+    }
+
+    func testNativeWindowIDSurvivesMissingTitleAndMovedFrame() {
+        XCTAssertEqual(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Document", candidates: [
+                .init(id: 11, frameMatches: false, title: nil),
+            ], nativeWindowID: 11
+        ), 11)
+    }
+
+    func testNativeWindowIDOutsideTargetCandidatesCannotFallBackToLookalike() {
+        XCTAssertNil(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Document", candidates: [
+                .init(id: 11, frameMatches: true, title: "Document"),
+            ], nativeWindowID: 12
+        ))
+    }
+
+    func testAmbiguousNativeWindowIDIsRejected() {
+        XCTAssertNil(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Document", candidates: [
+                .init(id: 11, frameMatches: true, title: "Document"),
+                .init(id: 11, frameMatches: false, title: "Other"),
+            ], nativeWindowID: 11
+        ))
+    }
+
+    func testUnavailableNativeWindowIDPreservesStrictTitleFallback() {
+        let candidates = [SnapshotWindowIdentityEvidence.Candidate(
+            id: 11, frameMatches: true, title: "Document"
+        )]
+        XCTAssertEqual(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Document", candidates: candidates, nativeWindowID: 0
+        ), 11)
+        XCTAssertNil(SnapshotWindowIdentityEvidence.mappedWindowID(
+            axTitle: "Other", candidates: candidates, nativeWindowID: 0
+        ))
+    }
+
     func testStageManagerFallsBackToUniqueBilateralTitleWhenNoFrameMatches() {
         let candidates = [
             SnapshotWindowIdentityEvidence.Candidate(

@@ -69,6 +69,13 @@ describe('terminalApi desktop host bridge', () => {
 
     expect(terminalApi.isAvailable()).toBe(true)
     expect(spawn).toHaveBeenCalledWith({ cols: 80, rows: 24, cwd: '/tmp/project' })
+    // New hot renderer must remain usable with an older, strict native preload.
+    spawn.mockClear()
+    await terminalApi.spawn({ cols: 80, rows: 24, requestId: 'early-event' })
+    expect(spawn).toHaveBeenCalledWith({ cols: 80, rows: 24 })
+    window.desktopHost.terminal.supportsStartupCorrelation = true
+    await terminalApi.spawn({ cols: 80, rows: 24, requestId: 'early-event' })
+    expect(spawn).toHaveBeenLastCalledWith({ cols: 80, rows: 24, requestId: 'early-event' })
     expect(write).toHaveBeenCalledWith(9, 'ls\n')
     expect(resize).toHaveBeenCalledWith(9, 100, 30)
     expect(kill).toHaveBeenCalledWith(9)

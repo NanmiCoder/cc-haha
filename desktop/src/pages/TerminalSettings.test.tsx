@@ -4,7 +4,7 @@ import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
-import { destroyTerminalRuntime } from '../lib/terminalRuntime'
+import { destroyTerminalRuntime, getTerminalRuntime } from '../lib/terminalRuntime'
 import { browserHost } from '../lib/desktopHost/browserHost'
 
 const terminalMocks = vi.hoisted(() => {
@@ -19,6 +19,7 @@ const terminalMocks = vi.hoisted(() => {
     open: vi.fn(),
     dispose: vi.fn(),
     onData: vi.fn(),
+    onTitleChange: vi.fn((_listener: (title: string) => void) => ({ dispose: vi.fn() })),
     write: vi.fn(),
     writeln: vi.fn(),
     clear: vi.fn(),
@@ -48,6 +49,8 @@ const terminalMocks = vi.hoisted(() => {
 vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn(() => terminalMocks.terminalInstance),
 }))
+
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn() }))
 
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: vi.fn(() => terminalMocks.fitInstance),
@@ -124,6 +127,42 @@ describe('TerminalSettings', () => {
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   })
 
+  it('resolves typography and enables links without forcing history scroll', async () => {
+    terminalMocks.available = true
+    document.documentElement.style.setProperty('--font-mono', '"Test Mono", monospace')
+    render(<TerminalSettings />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+    const { Terminal } = await import('@xterm/xterm')
+    expect(Terminal).toHaveBeenLastCalledWith(expect.objectContaining({
+      fontFamily: '"Test Mono", monospace', fontSize: 13, letterSpacing: 0, cursorStyle: 'bar',
+      scrollOnEraseInDisplay: false,
+    }))
+    const { WebLinksAddon } = await import('@xterm/addon-web-links')
+    expect(WebLinksAddon).toHaveBeenCalledWith(expect.any(Function))
+    const open = vi.spyOn(browserHost.shell, 'open').mockResolvedValue(undefined)
+    const handleLink = vi.mocked(WebLinksAddon).mock.calls.at(-1)![0]!
+    handleLink(new MouseEvent('click'), 'https://example.com/docs')
+    expect(open).toHaveBeenCalledWith('https://example.com/docs')
+    handleLink(new MouseEvent('click'), 'javascript:alert(1)')
+    expect(open).toHaveBeenCalledTimes(1)
+    document.documentElement.style.removeProperty('--font-mono')
+  })
+
+  it('exposes live title and restart to workspace chrome without a second toolbar', async () => {
+    terminalMocks.available = true
+    const { unmount } = render(<TerminalSettings runtimeId="chrome-bridge" compactHeader />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+    expect(screen.queryByTestId('settings-terminal-toolbar')).not.toBeInTheDocument()
+    const runtime = getTerminalRuntime('chrome-bridge', 'idle')
+    act(() => terminalMocks.terminalInstance.onTitleChange.mock.calls.at(-1)?.[0]('project — zsh'))
+    expect(runtime.title).toBe('project — zsh')
+    await act(async () => { runtime.restart?.() })
+    expect(terminalMocks.spawn).toHaveBeenCalledTimes(2)
+    expect(runtime.title).toBe('')
+    unmount()
+    expect(runtime.restart).toBeNull()
+  })
+
   it('shows a desktop-runtime empty state outside Tauri', () => {
     render(<TerminalSettings />)
 
@@ -138,7 +177,7 @@ describe('TerminalSettings', () => {
     render(<TerminalSettings />)
 
     await waitFor(() => {
-      expect(terminalMocks.spawn).toHaveBeenCalledWith({ cols: 80, rows: 24 })
+      expect(terminalMocks.spawn).toHaveBeenCalledWith({ cols: 80, rows: 24, requestId: expect.any(String) })
     })
     expect(screen.getByText('/bin/zsh')).toBeInTheDocument()
     expect(screen.getByText('/Users/test')).toBeInTheDocument()
@@ -205,6 +244,20 @@ describe('TerminalSettings', () => {
     expect(panel?.className).toContain('bg-[var(--color-terminal-bg)]')
     expect(panel?.className).toContain('rounded-[var(--radius-xl)]')
     expect(panel).toContainElement(screen.getByTestId('settings-terminal-frame'))
+  })
+
+  it('uses a flush workspace surface while keeping shell status and actions when docked', async () => {
+    terminalMocks.available = true
+    render(<TerminalSettings docked />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+    const toolbar = screen.getByTestId('settings-terminal-toolbar')
+    expect(toolbar.querySelector('h2')).toBeNull()
+    expect(toolbar.parentElement?.className).not.toContain('rounded-')
+    expect(toolbar.parentElement?.className).not.toContain('shadow-')
+    expect(toolbar).toHaveTextContent('/bin/zsh')
+    expect(toolbar).toHaveTextContent('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(terminalMocks.terminalInstance.clear).toHaveBeenCalled()
   })
 
   it('puts the cwd and shell in mono and keeps the status a bare dot', async () => {
@@ -295,8 +348,27 @@ describe('TerminalSettings', () => {
         cols: 80,
         rows: 24,
         cwd: '/tmp/current-project',
+        requestId: expect.any(String),
       })
     })
+  })
+
+  it('preserves output and exit delivered before the spawn IPC reply without reviving the process', async () => {
+    terminalMocks.available = true
+    terminalMocks.spawn.mockImplementation(async (input) => {
+      expect(input.requestId).toEqual(expect.any(String))
+      const output = terminalMocks.onOutput.mock.calls.at(-1)![0]
+      const exit = terminalMocks.onExit.mock.calls.at(-1)![0]
+      output({ session_id: 91, requestId: 'another-start', data: 'wrong terminal' })
+      output({ session_id: 7, requestId: input.requestId, data: 'startup prompt' })
+      exit({ session_id: 7, requestId: input.requestId, code: 0 })
+      return { session_id: 7, shell: '/bin/zsh', cwd: '/fixture' }
+    })
+    render(<TerminalSettings />)
+    await waitFor(() => expect(terminalMocks.terminalInstance.write).toHaveBeenCalledWith('startup prompt'))
+    expect(terminalMocks.terminalInstance.write).not.toHaveBeenCalledWith('wrong terminal')
+    expect(screen.getByText('Exited')).toBeInTheDocument()
+    expect(screen.queryByText('Running')).toBeNull()
   })
 
   it('writes matching terminal output events into xterm', async () => {

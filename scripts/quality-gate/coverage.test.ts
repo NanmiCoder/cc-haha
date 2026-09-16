@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -14,6 +15,7 @@ import {
   parseLcov,
   prefixRelativeLcovSourcePaths,
   resolveCoverageCommand,
+  runCommand,
 } from './coverage'
 
 describe('coverage gate helpers', () => {
@@ -411,5 +413,79 @@ describe('coverage gate helpers', () => {
     })
 
     expect(failures).toEqual(['new-suite: branches coverage 80% is below minimum 85%'])
+  })
+})
+
+describe('coverage subprocess output', () => {
+  test('preserves output when the reporter replaces its destination directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-cleanup-'))
+    const script = join(root, 'reporter.ts')
+    const logPath = join(root, 'reports', 'coverage.log')
+    try {
+      writeFileSync(script, `
+        import { mkdirSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+        writeSync(1, 'before report cleanup\\n')
+        // Vitest removes reportsDirectory before emitting its coverage files.
+        rmSync('reports', { recursive: true, force: true })
+        mkdirSync('reports')
+        writeFileSync('reports/lcov.info', 'SF:src/example.ts\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n')
+        writeSync(2, 'after report cleanup\\n')
+      `)
+      const command = [process.execPath, '--no-env-file', script]
+      const result = await runCommand(command, root, logPath)
+      expect(result.exitCode).toBe(0)
+      expect(result.output).toBe('before report cleanup\nafter report cleanup\n')
+      expect(readFileSync(logPath, 'utf8')).toBe(`$ ${command.join(' ')}\n${result.output}`)
+      expect(hasUsableLcov(readFileSync(join(root, 'reports', 'lcov.info'), 'utf8'))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('captures large synchronous reports to regular files without losing artifacts or exit status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-output-'))
+    const script = join(root, 'reporter.ts')
+    const logPath = join(root, 'logs', 'coverage.log')
+    const summary = '\nRan 1 test across 1 file. [1.00ms]\n'
+    const lcov = 'SF:src/example.ts\nDA:1,1\nLF:1\nLH:1\nend_of_record\n'
+    const rounds = 128
+    const chunkSize = 64 * 1024
+    try {
+      writeFileSync(script, `
+        import { fstatSync, writeSync, writeFileSync } from 'node:fs'
+        // A synchronous reporter must not depend on a nonblocking pipe's
+        // available buffer capacity. Assert the child receives disk-backed FDs.
+        if (!fstatSync(1).isFile() || !fstatSync(2).isFile()) {
+          throw new Error('synchronous coverage reporter requires regular output files')
+        }
+        const stdoutChunk = Buffer.alloc(${chunkSize}, 'o')
+        const stderrChunk = Buffer.alloc(${chunkSize}, 'e')
+        for (let round = 0; round < ${rounds}; round++) {
+          writeSync(1, stdoutChunk)
+          writeSync(2, stderrChunk)
+        }
+        writeFileSync('lcov.info', ${JSON.stringify(lcov)})
+        writeSync(2, ${JSON.stringify(summary)})
+        process.exit(7)
+      `)
+      const command = [process.execPath, '--no-env-file', script]
+      const result = await runCommand(command, root, logPath)
+      expect(result.exitCode).toBe(7)
+      expect(parseBunTestFileCount(result.output)).toBe(1)
+      expect(result.output.length).toBe(rounds * chunkSize * 2 + summary.length)
+      const expected = createHash('sha256')
+      for (let round = 0; round < rounds; round++) {
+        expected.update(Buffer.alloc(chunkSize, 'o'))
+        expected.update(Buffer.alloc(chunkSize, 'e'))
+      }
+      expected.update(summary)
+      expect(createHash('sha256').update(result.output).digest('hex'))
+        .toBe(expected.digest('hex'))
+      expect(readFileSync(logPath, 'utf8').slice(`$ ${command.join(' ')}\n`.length))
+        .toBe(result.output)
+      expect(hasUsableLcov(readFileSync(join(root, 'lcov.info'), 'utf8'))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

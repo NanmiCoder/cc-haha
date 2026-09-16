@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from '../i18n'
 import { useMarketStore } from '../stores/marketStore'
 import { useSkillStore } from '../stores/skillStore'
@@ -9,7 +9,7 @@ import { MarketSkillDetail } from '../components/market/MarketSkillDetail'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { NormalizedSkill } from '../types/market'
 
-export function Market() {
+export function Market({ featured }: { featured?: ReactNode } = {}) {
   const t = useTranslation()
   const selectedId = useMarketStore((s) => s.selectedId)
   const installingIds = useMarketStore((s) => s.installingIds)
@@ -82,7 +82,7 @@ export function Market() {
       {selectedId ? (
         <MarketSkillDetail onRequestInstall={requestInstall} onRequestUninstall={requestUninstall} />
       ) : (
-        <MarketHome onRequestInstall={requestInstall} />
+        <MarketHome onRequestInstall={requestInstall} featured={featured} />
       )}
 
       <InstallConfirmDialog

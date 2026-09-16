@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { WsBridge } from '../ws-bridge.js'
+import { restoreSelectedSession } from '../session-selection.js'
 import { WebSocketServer, type WebSocket as WsServerSocket } from 'ws'
 
 async function waitFor(
@@ -264,6 +265,83 @@ describe('WsBridge: handler serialization', () => {
     expect(staleSession.ws.listenerCount('error')).toBe(0)
 
     bridge.destroy()
+  })
+
+  it('drops old permission and status messages already queued when a session is replaced', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', '')
+    const events: string[] = []
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const firstStarted = new Promise<void>((resolve) => { started = resolve })
+    try {
+      bridge.onServerMessage('chat-queued', async (message) => {
+        if (message.tag === 'first') {
+          started()
+          await gate
+        }
+        events.push(message.tag)
+      })
+      bridge.connectSession('chat-queued', 'old')
+      expect(await bridge.waitForOpen('chat-queued')).toBe(true)
+      const oldServerSocket = await waitForServerConnection()
+      oldServerSocket.send(JSON.stringify({ type: 'message_complete', tag: 'first' }))
+      await firstStarted
+
+      const oldClientSocket = (bridge as any).sessions.get('chat-queued').ws
+      let received = 0
+      const queued = new Promise<void>((resolve) => {
+        oldClientSocket.on('message', () => {
+          received++
+          if (received === 2) resolve()
+        })
+      })
+      oldServerSocket.send(JSON.stringify({ type: 'permission_request', tag: 'old-permission' }))
+      oldServerSocket.send(JSON.stringify({ type: 'status', tag: 'old-status' }))
+      await queued
+      const oldChain = (bridge as any).handlerChains.get('chat-queued') as Promise<void>
+
+      bridge.resetSession('chat-queued')
+      bridge.onServerMessage('chat-queued', (message) => { events.push(message.tag) })
+      bridge.connectSession('chat-queued', 'selected')
+      expect(await bridge.waitForOpen('chat-queued')).toBe(true)
+      connections[1]!.send(JSON.stringify({ type: 'status', tag: 'selected-status' }))
+      expect(await waitFor(() => events.includes('selected-status'))).toBe(true)
+      release()
+      await oldChain
+
+      // An already-running callback may complete; its queued successors must
+      // not restore old permissions or overwrite the selected session state.
+      expect(events).toEqual(['selected-status', 'first'])
+    } finally {
+      release()
+      bridge.destroy()
+    }
+  })
+
+  it('delivers immediate connection state after history restoration replaces its buffering handler', async () => {
+    server.once('connection', (socket) => {
+      socket.send(JSON.stringify({ type: 'status', state: 'permission_pending' }))
+      socket.send(JSON.stringify({ type: 'permission_request', requestId: 'selected-permission' }))
+    })
+    const bridge = new WsBridge(serverUrl, 'test', '')
+    const events: string[] = []
+    let savedId: string | undefined
+    try {
+      const result = await restoreSelectedSession({
+        bridge,
+        httpClient: { sessionExists: async () => true },
+        sessionStore: { get: () => null, set(_chatId, id) { savedId = id }, delete() {} },
+        clearTransientState() { events.push('clear') },
+        onServerMessage(_chatId, message) { events.push(message.type) },
+      }, 'chat-immediate', { id: 'selected', title: 'Selected session', workDir: '/fixture/project' })
+      expect(result.ok).toBe(true)
+      expect(savedId).toBe('selected')
+      expect(await waitFor(() => events.length === 3)).toBe(true)
+      expect(events).toEqual(['clear', 'status', 'permission_request'])
+    } finally {
+      bridge.destroy()
+    }
   })
 
   it('does not dispatch stale messages from a socket reset before reconnect', async () => {

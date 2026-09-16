@@ -446,7 +446,7 @@ enum HeldInputReleasePolicy {
 enum CommandForegroundPolicy {
     private static let leasedCommands: Set<String> = [
         "click", "set_value", "select_text", "perform_secondary_action",
-        "scroll", "type_text", "press_key", "drag",
+        "scroll", "type_text", "paste", "press_key", "drag",
         "key", "hold_key", "type", "paste_clipboard", "mouse_down", "mouse_up",
     ]
 

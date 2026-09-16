@@ -35,10 +35,109 @@ describe('image unsupported API errors', () => {
     expect(msg.isApiErrorMessage).toBe(true)
     expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED)
     expect(msg.errorDetails).toBe('This model does not support image blocks')
+    expect(msg.sourceModel).toBe('mimo-v2.5-pro')
     expect(msg.message.content[0]).toMatchObject({
       type: 'text',
       text: getImageUnsupportedErrorMessage(),
     })
+  })
+
+  test('falls back to image_unsupported when a 400 with unrecognized wording hit a request carrying images', () => {
+    const message = 'unsupported content block type: only text is allowed for this model'
+    const error = new APIError(
+      400,
+      {
+        type: 'error',
+        error: { type: 'invalid_request_error', message },
+      },
+      message,
+      undefined,
+    )
+    const messagesForAPI = [
+      {
+        type: 'user' as const,
+        message: {
+          role: 'user' as const,
+          content: [
+            { type: 'text', text: 'look at this' },
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'AAA' },
+            },
+          ],
+        },
+      },
+    ]
+
+    // The wording alone must not match the text classifier, otherwise this
+    // test stops exercising the request-context fallback.
+    expect(isUnsupportedImageInputErrorMessage(message)).toBe(false)
+
+    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
+      messagesForAPI: messagesForAPI as never,
+    })
+
+    expect(msg.isApiErrorMessage).toBe(true)
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED)
+    expect(msg.sourceModel).toBe('deepseek-v4-pro')
+  })
+
+  test('does not fall back to image_unsupported when the failed request carried no images', () => {
+    const message = 'unsupported content block type: only text is allowed for this model'
+    const error = new APIError(
+      400,
+      {
+        type: 'error',
+        error: { type: 'invalid_request_error', message },
+      },
+      message,
+      undefined,
+    )
+    const messagesForAPI = [
+      {
+        type: 'user' as const,
+        message: { role: 'user' as const, content: 'plain text only' },
+      },
+    ]
+
+    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
+      messagesForAPI: messagesForAPI as never,
+    })
+
+    expect(msg.isApiErrorMessage).toBe(true)
+    expect(msg.businessErrorCode).toBeUndefined()
+  })
+
+  test('does not fall back for non-400/422 API errors even when images were sent', () => {
+    const error = new APIError(
+      500,
+      {
+        type: 'error',
+        error: { type: 'api_error', message: 'internal error' },
+      },
+      'internal error',
+      undefined,
+    )
+    const messagesForAPI = [
+      {
+        type: 'user' as const,
+        message: {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'AAA' },
+            },
+          ],
+        },
+      },
+    ]
+
+    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
+      messagesForAPI: messagesForAPI as never,
+    })
+
+    expect(msg.businessErrorCode).toBeUndefined()
   })
 })
 

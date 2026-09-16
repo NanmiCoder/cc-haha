@@ -165,6 +165,21 @@ describe('parseFilePathRef / isFilePathOnly', () => {
     expect(isFilePathOnly('bun test src/a.test.ts')).toBe(false)
     expect(isFilePathOnly('rm -rf dist/')).toBe(false)
   })
+
+  it('round-trips a CJK filename a turn actually wrote', () => {
+    // Output cards and code spans carry real paths from disk; rejecting CJK here
+    // made the README-拍摄大纲.md card render yet die silently on click.
+    expect(parseFilePathRef('README-拍摄大纲.md')?.path).toBe('README-拍摄大纲.md')
+    expect(parseFilePathRef('文档/说明.md')?.path).toBe('文档/说明.md')
+    expect(parseFilePathRef('review-02-技术视角.md:12')).toMatchObject({
+      path: 'review-02-技术视角.md',
+      line: 12,
+    })
+  })
+
+  it('keeps CJK sentence punctuation out of the path', () => {
+    expect(parseFilePathRef('说明.md。')).toBeNull()
+  })
 })
 
 describe('isLinkableFilePath', () => {

@@ -1,8 +1,8 @@
 import { handlePreviewLink } from './handlePreviewLink'
 import { getServerBaseUrl } from './desktopRuntime'
 import { getDesktopHost } from './desktopHost'
-import { useBrowserPanelStore } from '../stores/browserPanelStore'
-import { useWorkspacePanelStore } from '../stores/workspacePanelStore'
+import { useWorkspaceContentStore } from '../stores/workspaceContentStore'
+import { workspaceOpen } from './workspace/openTarget'
 import { openLocalFileWithSystem, reportOpenFailure, resolveAbsoluteOpenPath } from './systemFileOpen'
 
 /**
@@ -20,12 +20,14 @@ export function openPreviewLink(href: string, sessionId: string): boolean {
   return handlePreviewLink(href, {
     sessionId,
     serverBaseUrl: getServerBaseUrl(),
-    openBrowser: (id, url) => useBrowserPanelStore.getState().open(id, url),
+    openBrowser: (id, url) => { workspaceOpen.browser(id, url) },
     openFilePreview: (id, path, reveal) => {
-      void useWorkspacePanelStore.getState().openPreview(id, path, 'file', undefined, reveal)
+      workspaceOpen.file(id, path, {
+        ...(reveal ? { line: reveal.line, ...(reveal.column ? { column: reveal.column } : {}) } : {}),
+      })
     },
     openSystemFile: (path) => {
-      const workDir = useWorkspacePanelStore.getState().statusBySession[sessionId]?.workDir
+      const workDir = useWorkspaceContentStore.getState().statusBySession[sessionId]?.workDir
       const absolutePath = resolveAbsoluteOpenPath(path, workDir)
       void openLocalFileWithSystem(absolutePath).catch(() => reportOpenFailure(absolutePath))
     },

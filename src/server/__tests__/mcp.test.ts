@@ -1,4 +1,6 @@
+import '../../../preload.ts'
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
@@ -7,6 +9,7 @@ import * as mcpClient from '../../services/mcp/client.js'
 import * as mcpConfig from '../../services/mcp/config.js'
 import { _setGlobalConfigCacheForTesting, getProjectPathForConfig } from '../../utils/config.js'
 import { getGlobalClaudeFile } from '../../utils/env.js'
+import { runWithCwdOverride } from '../../utils/cwd.js'
 import { normalizePathForConfigKey } from '../../utils/path.js'
 import * as mcpHostPreflight from '../services/mcpHostPreflight.js'
 import { handleMcpApi } from '../api/mcp.js'
@@ -23,6 +26,7 @@ let reconnectSpy: ReturnType<typeof spyOn> | undefined
 let hostPreflightSpy: ReturnType<typeof spyOn> | undefined
 let originalRequestControl: typeof conversationService.requestControl
 let originalHasSession: typeof conversationService.hasSession
+let originalGetActiveSessions: typeof conversationService.getActiveSessions
 let originalGetSessionWorkDir: typeof conversationService.getSessionWorkDir
 
 function clearConfigPathCaches() {
@@ -82,6 +86,7 @@ describe('MCP API', () => {
     originalRequestControl = conversationService.requestControl.bind(conversationService)
     originalHasSession = conversationService.hasSession.bind(conversationService)
     originalGetSessionWorkDir = conversationService.getSessionWorkDir.bind(conversationService)
+    originalGetActiveSessions = conversationService.getActiveSessions.bind(conversationService)
 
     connectSpy = spyOn(mcpClient, 'connectToServer').mockImplementation(async (name, config) => ({
       name,
@@ -109,6 +114,7 @@ describe('MCP API', () => {
     conversationService.requestControl = originalRequestControl
     conversationService.hasSession = originalHasSession
     conversationService.getSessionWorkDir = originalGetSessionWorkDir
+    conversationService.getActiveSessions = originalGetActiveSessions
     await teardown()
   })
 
@@ -466,6 +472,66 @@ describe('MCP API', () => {
       command: 'npx',
       args: ['new-tools'],
     })
+  })
+
+  it('retries status after a failed connection instead of reusing its cached failure', async () => {
+    connectSpy?.mockRestore()
+    connectSpy = undefined
+    const connect = spyOn(Client.prototype, 'connect')
+      .mockRejectedValueOnce(new Error('fixture temporarily unavailable'))
+      .mockResolvedValue(undefined)
+    try {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot, name: 'retry-probe', scope: 'local',
+        config: { type: 'sse', url: 'http://127.0.0.1:1/mcp' },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+      const status = makeRequest('GET', `/api/mcp/retry-probe/status?cwd=${encodeURIComponent(projectRoot)}`)
+      expect((await (await handleMcpApi(status.req, status.url, status.segments)).json()).server.status).toBe('failed')
+      expect((await (await handleMcpApi(status.req, status.url, status.segments)).json()).server.status).toBe('connected')
+      expect(connect).toHaveBeenCalledTimes(2)
+    } finally {
+      await runWithCwdOverride(projectRoot, () => mcpClient.clearServerCache('retry-probe', mcpConfig.getMcpConfigByName('retry-probe')!))
+      connect.mockRestore()
+    }
+  })
+
+  it('does not discard a replacement connection when an older status probe fails', async () => {
+    connectSpy?.mockRestore()
+    connectSpy = undefined
+    let failOld!: (error: Error) => void
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    const connect = spyOn(Client.prototype, 'connect')
+      .mockImplementationOnce(() => {
+        markStarted()
+        return new Promise<void>((_resolve, reject) => { failOld = reject })
+      })
+      .mockResolvedValue(undefined)
+    let config: NonNullable<ReturnType<typeof mcpConfig.getMcpConfigByName>>
+    try {
+      const create = makeRequest('POST', '/api/mcp', {
+        cwd: projectRoot, name: 'replaced-probe', scope: 'local',
+        config: { type: 'sse', url: 'http://127.0.0.1:1/mcp' },
+      })
+      await handleMcpApi(create.req, create.url, create.segments)
+      config = runWithCwdOverride(projectRoot, () => mcpConfig.getMcpConfigByName('replaced-probe')!)
+      const status = makeRequest('GET', `/api/mcp/replaced-probe/status?cwd=${encodeURIComponent(projectRoot)}`)
+      const probing = handleMcpApi(status.req, status.url, status.segments)
+      await started
+      await runWithCwdOverride(projectRoot, () => mcpClient.clearServerCache('replaced-probe', config))
+      const replacement = await runWithCwdOverride(projectRoot, () => mcpClient.connectToServer('replaced-probe', config))
+      expect(replacement.type).toBe('connected')
+      failOld(new Error('old probe failed'))
+      expect((await (await probing).json()).server.status).toBe('failed')
+      const retained = await runWithCwdOverride(projectRoot, () => mcpClient.connectToServer('replaced-probe', config))
+      expect(retained).toBe(replacement)
+      expect(connect).toHaveBeenCalledTimes(2)
+    } finally {
+      failOld?.(new Error('fixture cleanup'))
+      await runWithCwdOverride(projectRoot, () => mcpClient.clearServerCache('replaced-probe', mcpConfig.getMcpConfigByName('replaced-probe')!))
+      connect.mockRestore()
+    }
   })
 
   it('checks a single server status on demand', async () => {
@@ -845,9 +911,95 @@ describe('MCP API', () => {
     expect(disableRes.status).toBe(200)
     expect(requestControl).toHaveBeenCalledWith(
       'session-1',
-      { subtype: 'mcp_toggle', serverName: 'session-sync', enabled: false },
+      { subtype: 'mcp_toggle', serverName: 'session-sync', enabled: false, alreadyPersisted: true },
       120_000,
     )
+  })
+
+  it('reports no selected session and clears every running session in the same project', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'all-sessions', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['first', 'second', 'other']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = id => id === 'other' ? tmpDir : projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const toggle = makeRequest('POST', '/api/mcp/all-sessions/toggle', { cwd: projectRoot })
+    const response = await handleMcpApi(toggle.req, toggle.url, toggle.segments)
+    expect((await response.json()).sessionSync).toEqual({ applied: false, reason: 'no_session' })
+    expect(requestControl.mock.calls.map(call => call[0])).toEqual(['first', 'second'])
+  })
+
+  it('reports a failed background session sync while keeping the persisted disable', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'failed-sync', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['first', 'second']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    conversationService.requestControl = (async (id: string) => {
+      if (id === 'second') throw new Error('control transport closed')
+      return {}
+    }) as typeof conversationService.requestControl
+    const toggle = makeRequest('POST', '/api/mcp/failed-sync/toggle', { cwd: projectRoot, sessionId: 'first' })
+    const response = await handleMcpApi(toggle.req, toggle.url, toggle.segments)
+    const body = await response.json()
+    expect(body.server.enabled).toBe(false)
+    expect(body.sessionSync).toEqual({ applied: false, reason: 'failed', error: 'control transport closed' })
+  })
+
+  it('applies disable immediately while a slow enable probe is pending', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'slow-toggle', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    const toggle = makeRequest('POST', '/api/mcp/slow-toggle/toggle', { cwd: projectRoot })
+    await handleMcpApi(toggle.req, toggle.url, toggle.segments)
+    let release!: () => void
+    let probeStarted!: () => void
+    const started = new Promise<void>(resolve => { probeStarted = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    connectSpy!.mockImplementation(async (name, config) => {
+      probeStarted()
+      await pending
+      return { name, type: 'connected', config, client: {} as never, capabilities: {}, cleanup: async () => {} }
+    })
+    const enable = makeRequest('POST', '/api/mcp/slow-toggle/toggle', { cwd: projectRoot })
+    const enabling = handleMcpApi(enable.req, enable.url, enable.segments)
+    await started
+    const disable = makeRequest('POST', '/api/mcp/slow-toggle/toggle', { cwd: projectRoot })
+    const disabling = handleMcpApi(disable.req, disable.url, disable.segments)
+    try {
+      const disabled = await Promise.race([disabling, Bun.sleep(100).then(() => null)])
+      expect(disabled).not.toBeNull()
+      expect((await disabled!.json()).server).toMatchObject({ enabled: false, status: 'disabled' })
+    } finally { release() }
+    expect((await (await enabling).json()).server).toMatchObject({ enabled: false, status: 'disabled' })
+    expect(connectSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains the not-running sync receipt when enable preflight fails', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'preflight-sync', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.hasSession = () => false
+    const disable = makeRequest('POST', '/api/mcp/preflight-sync/toggle', { cwd: projectRoot })
+    await handleMcpApi(disable.req, disable.url, disable.segments)
+    hostPreflightSpy!.mockResolvedValue({ ok: false, message: 'Missing mock executable' })
+    const enable = makeRequest('POST', '/api/mcp/preflight-sync/toggle', { cwd: projectRoot, sessionId: 'stopped' })
+    const response = await handleMcpApi(enable.req, enable.url, enable.segments)
+    expect(await response.json()).toMatchObject({
+      server: { enabled: true, status: 'failed' },
+      sessionSync: { applied: false, reason: 'not_running' },
+    })
   })
 
   it('does not sync a project-specific toggle into a session from another project', async () => {

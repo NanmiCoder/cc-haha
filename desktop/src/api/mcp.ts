@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { McpServerRecord, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 export const mcpApi = {
   list: (cwd?: string) => {
@@ -39,7 +39,7 @@ export const mcpApi = {
   },
 
   toggle: (name: string, cwd?: string, sessionId?: string) => {
-    return api.post<{ server: McpServerRecord }>(
+    return api.post<McpToggleResult>(
       `/api/mcp/${encodeURIComponent(name)}/toggle`,
       {
         ...(cwd ? { cwd } : {}),

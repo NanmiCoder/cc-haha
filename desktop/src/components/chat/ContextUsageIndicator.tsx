@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { sessionsApi, type SessionContextSnapshot } from '../../api/sessions'
+import {
+  sessionsApi,
+  type SessionContextSnapshot,
+  type SessionUsageSnapshot,
+} from '../../api/sessions'
 import { useTranslation } from '../../i18n'
 import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useDismissable } from '../../hooks/useDismissable'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { deriveSessionUsageMetrics } from '../../lib/sessionUsageMetrics'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
-import { ContextUsageDetails, type ContextUsageDetailsStatus } from './ContextUsageDetails'
+import {
+  ContextUsageDetails,
+  type ContextUsageDetailsStatus,
+  type ContextUsageSessionStats,
+} from './ContextUsageDetails'
 
 type Props = {
   sessionId?: string
@@ -31,6 +40,11 @@ const ACTIVE_REFRESH_MS = 30_000
 // racing a client abort that can strand loopback sockets on Windows.
 const CONTEXT_REQUEST_TIMEOUT_MS = 30_000
 const AUTO_REFRESH_MIN_INTERVAL_MS = 10_000
+// Lifetime totals only change when a turn completes, but a turn can run for minutes and the
+// user is staring at the panel while it does. Polling is scoped to the open popover/sheet —
+// a closed panel costs nothing — and the request it makes is the single-control `usageOnly`
+// path, not the full inspection.
+const USAGE_POLL_MS = 3_000
 // Right after a completed turn, compaction, or runtime restart the CLI can
 // still be settling, so retry the event-driven refresh once.
 const FORCED_REFRESH_RETRY_MS = 5_000
@@ -115,6 +129,8 @@ export function ContextUsageIndicator({
   const [error, setError] = useState<string | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   const [inspectionModel, setInspectionModel] = useState<string | null>(null)
+  const [usage, setUsage] = useState<SessionUsageSnapshot | null>(null)
+  const usageSessionIdRef = useRef<string | undefined>(undefined)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -308,6 +324,48 @@ export function ContextUsageIndicator({
     return () => clearInterval(timer)
   }, [chatState, messageCount, refresh])
 
+  // Lifetime session totals, polled only while the breakdown is on screen. The request is the
+  // single-control `usageOnly` one, so a 3s cadence costs far less than the context refresh it
+  // sits next to, and closing the panel takes the timer with it — nothing runs in the
+  // background, and a hidden document skips its ticks rather than queueing them.
+  useEffect(() => {
+    if (!detailsOpen || !sessionId) return
+    if (typeof sessionsApi.getSessionUsage !== 'function') return
+    let cancelled = false
+    // The poll interval is shorter than the request deadline, so a slow server would otherwise
+    // let ticks stack up behind the in-flight one. Skipping a tick loses nothing: the answer
+    // that is still outstanding is the same answer the new tick would have asked for.
+    let inFlight = false
+    const controller = new AbortController()
+
+    const load = () => {
+      if (inFlight || !isDocumentVisible()) return
+      inFlight = true
+      void sessionsApi.getSessionUsage(sessionId, controller.signal)
+        .then((inspection) => {
+          if (cancelled || !inspection.usage) return
+          usageSessionIdRef.current = sessionId
+          setUsage(inspection.usage)
+        })
+        .catch(() => {
+          // A failed poll (CLI busy, control timeout) leaves the last good numbers on screen.
+          // The panel is a readout, not a task; a flickering error would be worse than a
+          // value that is three seconds stale.
+        })
+        .finally(() => {
+          inFlight = false
+        })
+    }
+
+    load()
+    const timer = setInterval(load, USAGE_POLL_MS)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(timer)
+    }
+  }, [detailsOpen, sessionId])
+
   // If the presentation mode flips (Workbench drag, H5 resize), drop any open
   // shell so we don't leave a desktop popover stranded on a sheet layout.
   useEffect(() => {
@@ -369,7 +427,31 @@ export function ContextUsageIndicator({
     pendingDetail: t('contextIndicator.pendingDetail'),
     loading: t('contextIndicator.loading'),
     unavailableDetail: t('contextIndicator.unavailableDetail'),
+    sessionUsage: t('contextIndicator.sessionUsage'),
+    sessionTotalTokens: t('contextIndicator.sessionTotalTokens'),
+    sessionCacheHit: t('contextIndicator.sessionCacheHit'),
+    sessionSpeed: t('contextIndicator.sessionSpeed'),
+    sessionApiDuration: t('contextIndicator.sessionApiDuration'),
+    sessionSpeedUnit: t('contextIndicator.sessionSpeedUnit'),
+    sessionScopeNote: t('contextIndicator.sessionScopeNote'),
   }), [t])
+
+  // Derived per render rather than memoized on `usage` alone: the session it belongs to lives in
+  // a ref, so the guard has to run against the current sessionId every time.
+  const displayUsage = usageSessionIdRef.current === sessionId ? usage : null
+  const sessionStats = useMemo<ContextUsageSessionStats | null>(() => {
+    if (!displayUsage) return null
+    const metrics = deriveSessionUsageMetrics(displayUsage)
+    // A session with nothing spent yet has no honest answer for any of these rows; showing an
+    // empty block (or a 0 tok/s) would read as a measurement rather than an absence.
+    if (metrics.totalTokens === 0) return null
+    return {
+      totalTokens: metrics.totalTokens,
+      cacheHitRate: metrics.cacheHitRate,
+      tokensPerSecond: metrics.tokensPerSecond,
+      apiDurationMs: displayUsage.totalAPIDuration,
+    }
+  }, [displayUsage])
 
   const detailsBody = (
     <ContextUsageDetails
@@ -380,6 +462,7 @@ export function ContextUsageIndicator({
       freeTokens={freeTokens}
       maxTokens={maxTokens}
       categories={details}
+      sessionStats={sessionStats}
       updatedAtLabel={displayContext ? formatUpdatedAt(updatedAt, t) : undefined}
       estimate={contextSource === 'estimate'}
       status={detailsStatus}
@@ -461,29 +544,31 @@ export function ContextUsageIndicator({
         onClick={handleTriggerClick}
         title={t('contextIndicator.title')}
         data-testid="context-usage-indicator"
-        className={`flex shrink-0 items-center gap-[7px] rounded-full border border-[var(--color-border)] bg-transparent text-[var(--color-text-secondary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)] ${
-          isMobileBrowser ? 'h-11' : 'h-8'
-        } ${compact ? 'px-2' : 'px-3'} ${detailsOpen ? 'border-[var(--color-outline)] bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`}
+        className={`group grid shrink-0 place-items-center rounded-full bg-transparent text-[var(--color-text-secondary)] transition-[background-color,color] duration-150 ease-out hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)] ${
+          isMobileBrowser ? 'h-11 w-11' : 'h-8 w-8'
+        } ${detailsOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`}
       >
-        <span className="relative grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full">
+        <span className={`relative grid shrink-0 place-items-center rounded-full ${isMobileBrowser ? 'h-[22px] w-[22px]' : 'h-5 w-5'}`}>
           {loading && !displayContext ? (
             <span className="absolute inset-[2px] rounded-full border-2 border-[var(--color-text-tertiary)] border-t-transparent motion-safe:animate-spin" />
           ) : (
             <span
-              className="relative grid h-[18px] w-[18px] place-items-center rounded-full"
+              className={`relative grid place-items-center rounded-full ${isMobileBrowser ? 'h-[22px] w-[22px]' : 'h-5 w-5'}`}
               style={ringStyle}
             >
-              <span className="absolute inset-[3px] rounded-full bg-[var(--color-surface-container-lowest)]" />
+              <span className={`absolute inset-[3.5px] rounded-full transition-colors duration-150 ${
+                detailsOpen
+                  ? 'bg-[var(--color-surface-hover)]'
+                  : 'bg-[var(--color-surface-container-lowest)] group-hover:bg-[var(--color-surface-hover)]'
+              }`} />
               <span
-                className="relative h-[5px] w-[5px] rounded-full"
+                className="relative h-1.5 w-1.5 rounded-full"
                 style={{ backgroundColor: displayContext ? strokeColor : 'var(--color-text-tertiary)' }}
               />
             </span>
           )}
         </span>
-        <span className="font-mono text-[11px] font-semibold tabular-nums">
-          {displayPercent}
-        </span>
+        <span className="sr-only">{displayPercent}</span>
       </button>
 
       {!preferSheet && detailsOpen && popoverPosition && createPortal(

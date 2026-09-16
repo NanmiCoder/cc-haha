@@ -14,6 +14,7 @@ import { attributionHeaderEnvForModel } from '../services/attributionHeaderPolic
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { hasOpenAIAuthLogin } from '../../utils/auth.js'
 import { getOpenAICodexModelCatalog } from '../../services/openaiAuth/modelCatalog.js'
+import { getDesktopOpenAICodexModelCatalog } from '../services/openaiModelCatalog.js'
 import {
   OPENAI_DEFAULT_MAIN_MODEL,
   type OpenAIModelCatalogEntry,
@@ -50,6 +51,14 @@ import {
 // ─── Fallback models (used when no provider is configured) ────────────────────
 
 const DEFAULT_MODELS = [
+  {
+    id: 'claude-fable-5-1',
+    name: 'Fable 5.1',
+    description: 'Highest capability for long-running tasks',
+    context: '1m',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
   {
     id: 'claude-fable-5',
     name: 'Fable 5',
@@ -180,7 +189,7 @@ function buildOpenAIModelList(catalog: OpenAIModelCatalogEntry[]): ApiModelInfo[
 }
 
 async function getOpenAIModelList(): Promise<ApiModelInfo[]> {
-  return buildOpenAIModelList(await getOpenAICodexModelCatalog())
+  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog())
 }
 
 function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {
@@ -228,7 +237,7 @@ async function getOpenAIAuthModels(): Promise<ApiModelInfo[]> {
     return []
   }
 
-  return getOpenAIModelList()
+  return buildOpenAIModelList(await getOpenAICodexModelCatalog())
 }
 
 async function getStandaloneModelList(): Promise<ApiModelInfo[]> {

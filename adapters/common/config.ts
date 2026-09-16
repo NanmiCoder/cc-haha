@@ -33,6 +33,8 @@ export type FeishuConfig = {
   appSecret: string
   encryptKey: string
   verificationToken: string
+  /** `lark` for international tenants, whose APIs live on open.larksuite.com. */
+  domain: 'feishu' | 'lark'
   allowedUsers: string[]
   pairedUsers: PairedUser[]
   defaultWorkDir: string
@@ -71,6 +73,37 @@ export type WhatsAppConfig = {
   allowedProjectRoots: string[]
 }
 
+/** Enterprise WeChat (企业微信) AI bot — QR-provisioned botId/secret over the
+ *  官方 WebSocket 长连接 (`@wecom/aibot-node-sdk`). */
+export type WecomConfig = {
+  botId: string
+  secret: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+  allowedProjectRoots: string[]
+}
+
+/** QQ Open Platform bot — QR-provisioned appId/appSecret over the WS gateway. */
+export type QQConfig = {
+  appId: string
+  appSecret: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+  allowedProjectRoots: string[]
+}
+
+/** Slack app in Socket Mode — `xoxb-` bot token plus `xapp-` app-level token. */
+export type SlackConfig = {
+  botToken: string
+  appToken: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+  allowedProjectRoots: string[]
+}
+
 export type AdapterConfig = {
   serverUrl: string
   defaultProjectDir: string
@@ -81,6 +114,9 @@ export type AdapterConfig = {
   wechat: WechatConfig
   dingtalk: DingtalkConfig
   whatsapp: WhatsAppConfig
+  wecom: WecomConfig
+  qq: QQConfig
+  slack: SlackConfig
 }
 
 export type AdapterPlatformConfig =
@@ -89,6 +125,9 @@ export type AdapterPlatformConfig =
   | WechatConfig
   | DingtalkConfig
   | WhatsAppConfig
+  | WecomConfig
+  | QQConfig
+  | SlackConfig
 
 function getConfigPath(): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -113,6 +152,9 @@ export function loadConfig(): AdapterConfig {
   const wc = file.wechat ?? {}
   const dt = file.dingtalk ?? {}
   const wa = file.whatsapp ?? {}
+  const wecom = file.wecom ?? {}
+  const qq = file.qq ?? {}
+  const slack = file.slack ?? {}
   const pairing = file.pairing ?? {}
   const fallbackWorkDir = resolveUserDefaultWorkDir()
   const whatsappAuthDir = resolveConfiguredPath(
@@ -142,6 +184,7 @@ export function loadConfig(): AdapterConfig {
       appSecret: process.env.FEISHU_APP_SECRET || fs_.appSecret || '',
       encryptKey: process.env.FEISHU_ENCRYPT_KEY || fs_.encryptKey || '',
       verificationToken: process.env.FEISHU_VERIFICATION_TOKEN || fs_.verificationToken || '',
+      domain: (process.env.FEISHU_DOMAIN || fs_.domain) === 'lark' ? 'lark' : 'feishu',
       allowedUsers: fs_.allowedUsers ?? [],
       pairedUsers: fs_.pairedUsers ?? [],
       defaultWorkDir: fs_.defaultWorkDir || fallbackWorkDir,
@@ -175,6 +218,30 @@ export function loadConfig(): AdapterConfig {
       pairedUsers: wa.pairedUsers ?? [],
       defaultWorkDir: wa.defaultWorkDir || fallbackWorkDir,
       allowedProjectRoots: readProjectRoots(wa.allowedProjectRoots),
+    },
+    wecom: {
+      botId: process.env.WECOM_BOT_ID || wecom.botId || '',
+      secret: process.env.WECOM_BOT_SECRET || wecom.secret || '',
+      allowedUsers: wecom.allowedUsers ?? [],
+      pairedUsers: wecom.pairedUsers ?? [],
+      defaultWorkDir: wecom.defaultWorkDir || fallbackWorkDir,
+      allowedProjectRoots: readProjectRoots(wecom.allowedProjectRoots),
+    },
+    qq: {
+      appId: process.env.QQ_APP_ID || qq.appId || '',
+      appSecret: process.env.QQ_APP_SECRET || qq.appSecret || '',
+      allowedUsers: qq.allowedUsers ?? [],
+      pairedUsers: qq.pairedUsers ?? [],
+      defaultWorkDir: qq.defaultWorkDir || fallbackWorkDir,
+      allowedProjectRoots: readProjectRoots(qq.allowedProjectRoots),
+    },
+    slack: {
+      botToken: process.env.SLACK_BOT_TOKEN || slack.botToken || '',
+      appToken: process.env.SLACK_APP_TOKEN || slack.appToken || '',
+      allowedUsers: slack.allowedUsers ?? [],
+      pairedUsers: slack.pairedUsers ?? [],
+      defaultWorkDir: slack.defaultWorkDir || fallbackWorkDir,
+      allowedProjectRoots: readProjectRoots(slack.allowedProjectRoots),
     },
   }
 }

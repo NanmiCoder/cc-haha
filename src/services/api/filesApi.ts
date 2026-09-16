@@ -21,6 +21,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../analytics/index.js'
+import { normalizeAnthropicBaseUrl } from './anthropicBaseUrl.js'
 
 // Files API is currently in beta. oauth-2025-04-20 enables Bearer OAuth
 // on public-api routes (auth.py: "oauth_auth" not in beta_versions → 404).
@@ -133,7 +134,7 @@ export async function downloadFile(
   fileId: string,
   config: FilesApiConfig,
 ): Promise<Buffer> {
-  const baseUrl = config.baseUrl || getDefaultApiBaseUrl()
+  const baseUrl = normalizeAnthropicBaseUrl(config.baseUrl || getDefaultApiBaseUrl())
   const url = `${baseUrl}/v1/files/${fileId}/content`
 
   const headers = {
@@ -381,7 +382,7 @@ export async function uploadFile(
   config: FilesApiConfig,
   opts?: { signal?: AbortSignal },
 ): Promise<UploadResult> {
-  const baseUrl = config.baseUrl || getDefaultApiBaseUrl()
+  const baseUrl = normalizeAnthropicBaseUrl(config.baseUrl || getDefaultApiBaseUrl())
   const url = `${baseUrl}/v1/files`
 
   const headers = {
@@ -618,7 +619,7 @@ export async function listFilesCreatedAfter(
   afterCreatedAt: string,
   config: FilesApiConfig,
 ): Promise<FileMetadata[]> {
-  const baseUrl = config.baseUrl || getDefaultApiBaseUrl()
+  const baseUrl = normalizeAnthropicBaseUrl(config.baseUrl || getDefaultApiBaseUrl())
   const headers = {
     Authorization: `Bearer ${config.oauthToken}`,
     'anthropic-version': ANTHROPIC_VERSION,

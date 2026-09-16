@@ -52,6 +52,10 @@ type State = {
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
   totalToolDuration: number
+  // Generation-only timing: the span from the first emitted delta to the end of each API
+  // response, and the prefill wait that precedes it. See QueryEngine's per-turn accumulators.
+  totalDecodeDuration: number
+  totalTtftDuration: number
   turnHookDurationMs: number
   turnToolDurationMs: number
   turnClassifierDurationMs: number
@@ -285,6 +289,8 @@ function getInitialState(): State {
     totalAPIDuration: 0,
     totalAPIDurationWithoutRetries: 0,
     totalToolDuration: 0,
+    totalDecodeDuration: 0,
+    totalTtftDuration: 0,
     turnHookDurationMs: 0,
     turnToolDurationMs: 0,
     turnClassifierDurationMs: 0,
@@ -548,10 +554,28 @@ export function addToTotalDurationState(
   STATE.totalAPIDurationWithoutRetries += durationWithoutRetries
 }
 
+export function addToTotalGenerationDuration(
+  decodeDuration: number,
+  ttftDuration: number,
+): void {
+  STATE.totalDecodeDuration += decodeDuration
+  STATE.totalTtftDuration += ttftDuration
+}
+
+export function getTotalDecodeDuration(): number {
+  return STATE.totalDecodeDuration
+}
+
+export function getTotalTtftDuration(): number {
+  return STATE.totalTtftDuration
+}
+
 export function resetTotalDurationStateAndCost_FOR_TESTS_ONLY(): void {
   STATE.totalAPIDuration = 0
   STATE.totalAPIDurationWithoutRetries = 0
   STATE.totalCostUSD = 0
+  STATE.totalDecodeDuration = 0
+  STATE.totalTtftDuration = 0
 }
 
 export function addToTotalCostState(
@@ -866,6 +890,8 @@ export function resetCostState(): void {
   STATE.totalAPIDuration = 0
   STATE.totalAPIDurationWithoutRetries = 0
   STATE.totalToolDuration = 0
+  STATE.totalDecodeDuration = 0
+  STATE.totalTtftDuration = 0
   STATE.startTime = Date.now()
   STATE.totalLinesAdded = 0
   STATE.totalLinesRemoved = 0
@@ -882,6 +908,8 @@ export function setCostStateForRestore({
   totalCostUSD,
   totalAPIDuration,
   totalAPIDurationWithoutRetries,
+  totalDecodeDuration,
+  totalTtftDuration,
   totalToolDuration,
   totalLinesAdded,
   totalLinesRemoved,
@@ -891,6 +919,8 @@ export function setCostStateForRestore({
   totalCostUSD: number
   totalAPIDuration: number
   totalAPIDurationWithoutRetries: number
+  totalDecodeDuration: number
+  totalTtftDuration: number
   totalToolDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -900,6 +930,8 @@ export function setCostStateForRestore({
   STATE.totalCostUSD = totalCostUSD
   STATE.totalAPIDuration = totalAPIDuration
   STATE.totalAPIDurationWithoutRetries = totalAPIDurationWithoutRetries
+  STATE.totalDecodeDuration = totalDecodeDuration
+  STATE.totalTtftDuration = totalTtftDuration
   STATE.totalToolDuration = totalToolDuration
   STATE.totalLinesAdded = totalLinesAdded
   STATE.totalLinesRemoved = totalLinesRemoved

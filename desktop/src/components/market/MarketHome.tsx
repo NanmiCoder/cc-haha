@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUpRight, CloudOff, PackageSearch, RefreshCw, Search, Sparkles, Store, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { Button } from '@/components/ui/Button'
@@ -28,7 +28,7 @@ const PREFETCH_MARGIN = '400px'
 
 const CATALOG_GRID_STYLE = { gridTemplateColumns: CATALOG_GRID_TEMPLATE, gap: CATALOG_GAP }
 
-export function MarketHome({ onRequestInstall }: { onRequestInstall: (id: string) => void }) {
+export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (id: string) => void, featured?: ReactNode }) {
   const t = useTranslation()
   const {
     items,
@@ -170,6 +170,8 @@ export function MarketHome({ onRequestInstall }: { onRequestInstall: (id: string
           </div>
           <FilterBar />
         </div>
+
+        {featured}
 
         {!isLoading && items.length > 0 && (
           <p className="mb-4 mt-5 text-sm tabular-nums text-[var(--color-text-secondary)]">

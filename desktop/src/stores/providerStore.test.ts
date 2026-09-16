@@ -151,6 +151,35 @@ describe('providerStore runtime refresh', () => {
     })
   })
 
+  it.each([true, false])('refreshes saved model capabilities for idle, disconnected and draft selections (1m=%s)', async (enabled) => {
+    const provider = makeProvider({ model1mSupport: { main: enabled, haiku: false, sonnet: false, opus: enabled } })
+    providersApiMock.update.mockResolvedValue({ provider })
+    providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
+    chatStoreState.sessions = {
+      idle: { connectionState: 'connected', chatState: 'idle' },
+      offline: { connectionState: 'disconnected', chatState: 'idle' },
+      busy: { connectionState: 'connected', chatState: 'streaming' },
+    }
+    const previous = `model-opus${enabled ? '' : '[1m]'}`
+    runtimeStoreState.selections = Object.fromEntries(
+      ['idle', 'offline', 'busy', '__draft__', 'restored'].map((key) => [key, {
+        providerId: provider.id,
+        modelId: previous,
+        effortLevel: 'high',
+      }]),
+    )
+
+    const { useProviderStore } = await import('./providerStore')
+    await useProviderStore.getState().updateProvider(provider.id, { model1mSupport: provider.model1mSupport })
+
+    const selection = { providerId: provider.id, modelId: `model-opus${enabled ? '[1m]' : ''}`, effortLevel: 'high' }
+    for (const key of ['idle', 'offline', '__draft__', 'restored']) {
+      expect(setSelectionMock).toHaveBeenCalledWith(key, selection)
+    }
+    expect(setSelectionMock).not.toHaveBeenCalledWith('busy', expect.anything())
+    expect(setSessionRuntimeMock.mock.calls).toEqual([['idle', selection]])
+  })
+
   it('does not restart busy sessions while a provider update is saved', async () => {
     const provider = makeProvider()
     providersApiMock.update.mockResolvedValue({ provider })
@@ -165,6 +194,20 @@ describe('providerStore runtime refresh', () => {
 
     expect(setSelectionMock).not.toHaveBeenCalled()
     expect(setSessionRuntimeMock).not.toHaveBeenCalled()
+  })
+
+  it('reconciles restored selections when provider capabilities arrive after connection', async () => {
+    const provider = makeProvider({ model1mSupport: { main: true, haiku: false, sonnet: false, opus: false } })
+    providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
+    chatStoreState.sessions = { restored: { connectionState: 'connected', chatState: 'idle' } }
+    runtimeStoreState.selections = { restored: { providerId: provider.id, modelId: 'model-main' } }
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ hasLoadedProviders: false })
+
+    await useProviderStore.getState().fetchProviders()
+
+    expect(setSessionRuntimeMock).toHaveBeenCalledWith('restored', { providerId: provider.id, modelId: 'model-main[1m]' })
+    expect(setSelectionMock).toHaveBeenCalledWith('restored', { providerId: provider.id, modelId: 'model-main[1m]' })
   })
 
   it('sets the OpenAI default model when activating built-in ChatGPT Official', async () => {

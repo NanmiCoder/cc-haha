@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { branchMock, createMock, deleteMock, batchDeleteMock, listMock, invalidateRecentProjectsCacheMock } = vi.hoisted(() => ({
+const { branchMock, createMock, deleteMock, batchDeleteMock, listMock, projectHistoryMock, invalidateRecentProjectsCacheMock } = vi.hoisted(() => ({
   branchMock: vi.fn(),
   createMock: vi.fn(),
   deleteMock: vi.fn(),
   batchDeleteMock: vi.fn(),
   listMock: vi.fn(),
+  projectHistoryMock: vi.fn(),
   invalidateRecentProjectsCacheMock: vi.fn(),
 }))
 
@@ -14,6 +15,7 @@ vi.mock('../api/sessions', () => ({
     branch: branchMock,
     create: createMock,
     list: listMock,
+    listProjectHistory: projectHistoryMock,
     delete: deleteMock,
     batchDelete: batchDeleteMock,
     rename: vi.fn(),
@@ -28,6 +30,7 @@ import { useSessionStore } from './sessionStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
+import { ApiError } from '../api/client'
 
 const initialState = useSessionStore.getState()
 
@@ -82,6 +85,7 @@ describe('sessionStore', () => {
     deleteMock.mockReset()
     batchDeleteMock.mockReset()
     listMock.mockReset()
+    projectHistoryMock.mockReset()
     invalidateRecentProjectsCacheMock.mockReset()
     useSessionStore.setState({
       ...initialState,
@@ -255,6 +259,142 @@ describe('sessionStore', () => {
     })
   })
 
+  it('hydrates only the selected historical session before activating its tab', () => {
+    const historical = {
+      ...makeSession('history-opened', '2025-01-01T00:00:00.000Z', 'Old worktree'),
+      workDir: '/workspace/project/.claude/worktrees/old',
+      workDirExists: false,
+      workspaceState: 'worktree_removed' as const,
+      permissionMode: 'acceptEdits',
+      runtimeProviderId: 'provider-current',
+      runtimeModelId: 'model-current',
+      effortLevel: 'high' as const,
+    }
+    useSessionRuntimeStore.getState().setSelection(historical.id, {
+      providerId: 'provider-stale',
+      modelId: 'model-stale',
+    })
+    let observedAtActivation: unknown
+    const unsubscribe = useTabStore.subscribe((state) => {
+      if (state.activeTabId !== historical.id) return
+      observedAtActivation = {
+        session: useSessionStore.getState().sessions.find((session) => session.id === historical.id),
+        runtime: useSessionRuntimeStore.getState().selections[historical.id],
+      }
+    })
+
+    try {
+      useSessionStore.getState().openHistoricalSession(historical)
+    } finally {
+      unsubscribe()
+    }
+
+    expect(observedAtActivation).toEqual({
+      session: historical,
+      runtime: {
+        providerId: 'provider-current',
+        modelId: 'model-current',
+        effortLevel: 'high',
+      },
+    })
+    expect(useTabStore.getState().tabs).toEqual([
+      expect.objectContaining({ sessionId: historical.id, title: historical.title, type: 'session' }),
+    ])
+    expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set([historical.id]))
+    expect(listMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['2025-01-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'])(
+    'keeps current metadata when the history snapshot is not newer (%s)',
+    (snapshotTime) => {
+      const current = {
+        ...makeSession('history-current', '2026-08-01T00:00:00.000Z', 'Current title'),
+        permissionMode: 'plan',
+        runtimeProviderId: 'provider-current',
+        runtimeModelId: 'model-current',
+      }
+      const snapshot = {
+        ...current,
+        title: 'Stale history title',
+        modifiedAt: snapshotTime,
+        workDir: '/workspace/stale-worktree',
+        permissionMode: 'acceptEdits',
+        runtimeProviderId: 'provider-stale',
+        runtimeModelId: 'model-stale',
+      }
+      useSessionStore.setState({ sessions: [current] })
+
+      useSessionStore.getState().openHistoricalSession(snapshot)
+
+      expect(useSessionStore.getState().sessions).toEqual([current])
+      expect(useSessionRuntimeStore.getState().selections[current.id]).toEqual({
+        providerId: 'provider-current',
+        modelId: 'model-current',
+      })
+      expect(useTabStore.getState().tabs[0]?.title).toBe(current.title)
+    },
+  )
+
+  it.each(['ready', 'building'] as const)('retains opened history across bounded %s refreshes and releases closed tabs', async (indexState) => {
+    const historical = makeSession('history-retained', '2025-01-01T00:00:00.000Z')
+    const recent = makeSession('history-recent', '2026-08-01T00:00:00.000Z')
+    listMock.mockResolvedValue({
+      sessions: [recent],
+      total: 2000,
+      index: makeIndexStatus(indexState, 1000, 2000),
+    })
+    useSessionStore.getState().openHistoricalSession(historical)
+    useSessionStore.getState().updateSessionPermissionMode(historical.id, 'plan')
+
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions).toEqual([
+      recent,
+      { ...historical, permissionMode: 'plan' },
+    ])
+    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+
+    useTabStore.getState().closeTab(historical.id)
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions).toEqual([recent])
+    expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set())
+    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+  })
+
+  it('uses fresh recent metadata when an opened historical session reenters the recent page', async () => {
+    const historical = makeSession('history-updated', '2025-01-01T00:00:00.000Z')
+    useSessionStore.getState().openHistoricalSession(historical)
+    const refreshed = { ...historical, title: 'Updated elsewhere', permissionMode: 'plan' }
+    listMock.mockResolvedValue({ sessions: [refreshed], total: 1 })
+
+    await useSessionStore.getState().fetchSessions()
+    useTabStore.getState().closeTab(historical.id)
+    await useSessionStore.getState().fetchSessions()
+
+    expect(useSessionStore.getState().sessions).toEqual([refreshed])
+    expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set())
+  })
+
+  it.each(['single', 'batch'] as const)('does not resurrect deleted history from a pending refresh after %s deletion', async (deletion) => {
+    const historical = makeSession(`history-deleted-${deletion}`, '2025-01-01T00:00:00.000Z')
+    const pending = createDeferred<{ sessions: ReturnType<typeof makeSession>[]; total: number }>()
+    listMock.mockReturnValueOnce(pending.promise).mockResolvedValue({ sessions: [], total: 0 })
+    deleteMock.mockResolvedValue({ ok: true })
+    batchDeleteMock.mockResolvedValue({ ok: true, successes: [historical.id], failures: [] })
+    useSessionStore.getState().openHistoricalSession(historical)
+    const refresh = useSessionStore.getState().fetchSessions()
+
+    if (deletion === 'single') await useSessionStore.getState().deleteSession(historical.id)
+    else await useSessionStore.getState().deleteSessions([historical.id])
+    pending.resolve({ sessions: [historical], total: 1 })
+    await refresh
+
+    expect(useSessionStore.getState().sessions).toEqual([])
+    expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set())
+    expect(useSessionStore.getState().isLoading).toBe(false)
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions).toEqual([])
+  })
+
   it('requests a large default session page for noisy history directories', async () => {
     listMock.mockResolvedValue({
       sessions: [makeSession('session-newest', '2026-05-07T00:00:03.000Z')],
@@ -264,6 +404,237 @@ describe('sessionStore', () => {
     await useSessionStore.getState().fetchSessions()
 
     expect(listMock).toHaveBeenCalledWith({ limit: 400 })
+  })
+
+  it('loads one project below its recent boundary without skipping restored old tabs and retains pages on refresh', async () => {
+    const root = '/workspace/project'
+    const recent = makeSession('project-recent', '2026-08-01T00:00:00.000Z')
+    const old = makeSession('project-old', '2025-01-01T00:00:00.000Z')
+    const restored = makeSession('project-restored', '2020-01-01T00:00:00.000Z')
+    listMock.mockResolvedValue({ sessions: [recent], total: 5000 })
+    await useSessionStore.getState().fetchSessions()
+    useSessionStore.getState().openHistoricalSession(restored)
+    projectHistoryMock.mockResolvedValue({ sessions: [old], nextCursor: 'next-project-page' })
+
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().fetchSessions()
+
+    expect(projectHistoryMock).toHaveBeenCalledExactlyOnceWith({
+      projectRoot: root,
+      limit: 50,
+      beforeModifiedAt: recent.modifiedAt,
+      beforeId: recent.id,
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(useSessionStore.getState().sessions.map((session) => session.id))
+      .toEqual([recent.id, old.id, restored.id])
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({
+      initialized: true,
+      hasMore: true,
+      nextCursor: 'next-project-page',
+      isLoading: false,
+      error: null,
+    })
+    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+  })
+
+  it('uses cursor pages once, deduplicates overlapping rows, and keeps current titles and runtime metadata', async () => {
+    const root = '/workspace/project'
+    const first = {
+      ...makeSession('project-first', '2025-01-01T00:00:00.000Z'),
+      runtimeProviderId: 'current-provider',
+      runtimeModelId: 'current-model',
+    }
+    const second = makeSession('project-second', '2024-01-01T00:00:00.000Z')
+    const pending = createDeferred<{ sessions: typeof first[]; nextCursor: string | null }>()
+    projectHistoryMock.mockReturnValueOnce(pending.promise)
+    const initial = useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    expect(projectHistoryMock).toHaveBeenCalledOnce()
+    pending.resolve({ sessions: [first], nextCursor: 'cursor-1' })
+    await initial
+    useSessionStore.getState().updateSessionTitle(first.id, 'Fresh rename')
+    projectHistoryMock.mockResolvedValueOnce({
+      sessions: [{ ...first, runtimeModelId: 'stale-model' }, second],
+      nextCursor: null,
+    })
+
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(projectHistoryMock).toHaveBeenCalledTimes(2)
+    expect(projectHistoryMock).toHaveBeenLastCalledWith({ projectRoot: root, limit: 50, cursor: 'cursor-1' }, expect.anything())
+    expect(useSessionStore.getState().sessions).toEqual([{ ...first, title: 'Fresh rename' }, second])
+    expect(useSessionRuntimeStore.getState().selections).toEqual({})
+    useSessionStore.getState().openHistoricalSession(first)
+    expect(useSessionRuntimeStore.getState().selections[first.id]?.modelId).toBe('current-model')
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ hasMore: false, nextCursor: null })
+  })
+
+  it('anchors project history to the original recent page even when a row later changes activity time', async () => {
+    const root = '/workspace/project'
+    const recent = makeSession('snapshot-boundary', '2026-08-01T00:00:00.000Z')
+    listMock.mockResolvedValue({ sessions: [recent], total: 5000 })
+    await useSessionStore.getState().fetchSessions()
+    useSessionStore.getState().hydrateHistoricalSessions([{ ...recent, modifiedAt: '2026-09-01T00:00:00.000Z' }])
+    projectHistoryMock.mockResolvedValue({ sessions: [], nextCursor: null })
+
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(projectHistoryMock).toHaveBeenCalledWith({
+      projectRoot: root, limit: 50, beforeModifiedAt: recent.modifiedAt, beforeId: recent.id,
+    }, expect.anything())
+  })
+
+  it('does not use an incomplete index-building page as a project history boundary', async () => {
+    const root = '/workspace/project'
+    listMock.mockResolvedValue({
+      sessions: [makeSession('partial-old-row', '2020-01-01T00:00:00.000Z')],
+      total: 1,
+      index: makeIndexStatus('building', 1, 5000),
+    })
+    await useSessionStore.getState().fetchSessions()
+    projectHistoryMock.mockResolvedValue({ sessions: [], nextCursor: null })
+
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(projectHistoryMock).toHaveBeenCalledWith({ projectRoot: root, limit: 50 }, expect.anything())
+  })
+
+  it('releases a collapsed project page but keeps recent and open-tab metadata', async () => {
+    const root = '/workspace/project'
+    const recent = makeSession('collapse-recent', '2026-08-01T00:00:00.000Z')
+    const opened = makeSession('collapse-opened', '2025-01-01T00:00:00.000Z')
+    const extra = makeSession('collapse-extra', '2024-01-01T00:00:00.000Z')
+    listMock.mockResolvedValue({ sessions: [recent], total: 5000 })
+    await useSessionStore.getState().fetchSessions()
+    projectHistoryMock.mockResolvedValue({ sessions: [recent, opened, extra], nextCursor: null })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    useTabStore.getState().openTab(opened.id, opened.title)
+
+    useSessionStore.getState().releaseProjectHistory(root)
+
+    expect(useSessionStore.getState().projectHistory[root]).toBeUndefined()
+    expect(useSessionStore.getState().sessions).toEqual([recent, opened])
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions).toEqual([recent, opened])
+    useTabStore.getState().closeTab(opened.id)
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions).toEqual([recent])
+  })
+
+  it('ignores canceled project responses after collapse and keeps other project requests independent', async () => {
+    const firstRoot = '/workspace/project'
+    const secondRoot = '/workspace/another'
+    const pending = createDeferred<{ sessions: ReturnType<typeof makeSession>[]; nextCursor: null }>()
+    const stale = makeSession('collapsed-response', '2024-01-01T00:00:00.000Z')
+    const other = { ...makeSession('other-project', '2025-01-01T00:00:00.000Z'), projectRoot: secondRoot }
+    projectHistoryMock.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ sessions: [other], nextCursor: null })
+    const loading = useSessionStore.getState().loadMoreProjectSessions(firstRoot)
+    const signal = projectHistoryMock.mock.calls[0]![1].signal as AbortSignal
+    await useSessionStore.getState().loadMoreProjectSessions(secondRoot)
+
+    useSessionStore.getState().releaseProjectHistory(firstRoot)
+    expect(signal.aborted).toBe(true)
+    pending.resolve({ sessions: [stale], nextCursor: null })
+    await loading
+
+    expect(useSessionStore.getState().sessions).toEqual([other])
+    expect(useSessionStore.getState().projectHistory[firstRoot]).toBeUndefined()
+    expect(useSessionStore.getState().projectHistory[secondRoot]?.initialized).toBe(true)
+  })
+
+  it('keeps a reopened project request current when the canceled request finishes late', async () => {
+    const root = '/workspace/project'
+    const oldPage = createDeferred<{ sessions: ReturnType<typeof makeSession>[]; nextCursor: null }>()
+    const newPage = createDeferred<{ sessions: ReturnType<typeof makeSession>[]; nextCursor: null }>()
+    const stale = makeSession('project-canceled', '2024-01-01T00:00:00.000Z')
+    const fresh = makeSession('project-reopened', '2025-01-01T00:00:00.000Z')
+    projectHistoryMock.mockReturnValueOnce(oldPage.promise).mockReturnValueOnce(newPage.promise)
+    const oldLoading = useSessionStore.getState().loadMoreProjectSessions(root)
+    useSessionStore.getState().releaseProjectHistory(root)
+    const newLoading = useSessionStore.getState().loadMoreProjectSessions(root)
+
+    oldPage.resolve({ sessions: [stale], nextCursor: null })
+    await oldLoading
+    expect(useSessionStore.getState().projectHistory[root]?.isLoading).toBe(true)
+    expect(useSessionStore.getState().sessions).toEqual([])
+    newPage.resolve({ sessions: [fresh], nextCursor: null })
+    await newLoading
+
+    expect(useSessionStore.getState().sessions).toEqual([fresh])
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ isLoading: false, hasMore: false })
+  })
+
+  it.each(['single', 'batch'] as const)('does not resurrect %s-deleted rows from an in-flight project page', async (deletion) => {
+    const root = '/workspace/project'
+    const deleted = makeSession(`project-delete-${deletion}`, '2025-01-01T00:00:00.000Z')
+    const retained = makeSession('project-retained', '2024-01-01T00:00:00.000Z')
+    const pending = createDeferred<{ sessions: ReturnType<typeof makeSession>[]; nextCursor: string | null }>()
+    projectHistoryMock
+      .mockResolvedValueOnce({ sessions: [deleted], nextCursor: 'cursor-1' })
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ sessions: [deleted], nextCursor: null })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    const loading = useSessionStore.getState().loadMoreProjectSessions(root)
+    deleteMock.mockResolvedValue({ ok: true })
+    batchDeleteMock.mockResolvedValue({ ok: true, successes: [deleted.id], failures: [] })
+
+    if (deletion === 'single') await useSessionStore.getState().deleteSession(deleted.id)
+    else await useSessionStore.getState().deleteSessions([deleted.id])
+    pending.resolve({ sessions: [deleted, retained], nextCursor: 'cursor-after-delete' })
+    await loading
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(useSessionStore.getState().sessions).toEqual([retained])
+    expect(useSessionStore.getState().projectHistory[root]?.sessionIds).toEqual(new Set([retained.id]))
+  })
+
+  it('keeps the same project cursor on a retryable error', async () => {
+    const root = '/workspace/project'
+    projectHistoryMock
+      .mockResolvedValueOnce({ sessions: [], nextCursor: 'retry-cursor' })
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValueOnce({ sessions: [], nextCursor: null })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ isLoading: false, error: 'Offline', nextCursor: 'retry-cursor', hasMore: true })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    expect(projectHistoryMock).toHaveBeenLastCalledWith({ projectRoot: root, limit: 50, cursor: 'retry-cursor' }, expect.anything())
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ error: null, hasMore: false })
+  })
+
+  it('restarts an expired project cursor once without discarding visible rows', async () => {
+    const root = '/workspace/project'
+    const existing = makeSession('project-expired', '2025-01-01T00:00:00.000Z')
+    projectHistoryMock
+      .mockResolvedValueOnce({ sessions: [existing], nextCursor: 'expired-cursor' })
+      .mockRejectedValueOnce(new ApiError(409, { code: 'PROJECT_HISTORY_CURSOR_EXPIRED' }))
+      .mockResolvedValueOnce({ sessions: [existing], nextCursor: 'fresh-cursor' })
+
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(projectHistoryMock).toHaveBeenLastCalledWith({ projectRoot: root, limit: 50 }, expect.anything())
+    expect(useSessionStore.getState().sessions).toEqual([existing])
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ nextCursor: 'fresh-cursor', error: null })
+  })
+
+  it('allows a fresh retry when resetting an expired project cursor also fails', async () => {
+    const root = '/workspace/project'
+    projectHistoryMock
+      .mockResolvedValueOnce({ sessions: [], nextCursor: 'expired-cursor' })
+      .mockRejectedValueOnce(new ApiError(409, { code: 'PROJECT_HISTORY_CURSOR_EXPIRED' }))
+      .mockRejectedValueOnce(new Error('Unavailable'))
+      .mockResolvedValueOnce({ sessions: [], nextCursor: null })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+
+    expect(projectHistoryMock).toHaveBeenCalledTimes(3)
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ error: 'Unavailable', nextCursor: null, initialized: false, isLoading: false })
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    expect(projectHistoryMock).toHaveBeenLastCalledWith({ projectRoot: root, limit: 50 }, expect.anything())
+    expect(useSessionStore.getState().projectHistory[root]).toMatchObject({ error: null, initialized: true, hasMore: false })
   })
 
   it('ignores stale session list responses when a newer refresh finishes first', async () => {

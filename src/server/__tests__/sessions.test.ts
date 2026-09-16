@@ -3426,6 +3426,107 @@ describe('Sessions API', () => {
     expect(body.index?.lastErrorCode === null || typeof body.index?.lastErrorCode === 'string').toBe(true)
   })
 
+  it('GET turn-checkpoints accepts a known memory session across workspace changes and persistence restore', async () => {
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 0 }))
+    resetSettingsCache()
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: tmpDir }),
+    })
+    expect(created.status).toBe(201)
+    const { sessionId } = await created.json() as { sessionId: string }
+    const { sessionService } = await import('../services/sessionService.js')
+    const selectedWorkDir = await fs.mkdtemp(path.join(tmpDir, 'selected-project-'))
+    // The runtime launch boundary records the user's selected working folder
+    // even though retention zero deliberately never materializes a JSONL.
+    await sessionService.appendSessionMetadata(sessionId, { workDir: selectedWorkDir })
+    expect(await sessionService.getSessionWorkDir(sessionId)).toBe(selectedWorkDir)
+
+    for (const days of [0, 365]) {
+      await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ cleanupPeriodDays: days }))
+      resetSettingsCache()
+      const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ checkpoints: [] })
+      expect(await sessionService.getSessionMessagesWithEvidence(sessionId)).toEqual({
+        messages: [], transcriptEvidenceComplete: false,
+      })
+      expect(await sessionService.findSessionFile(sessionId)).toBeNull()
+    }
+
+    // After new enabled content reaches disk, it takes precedence over the
+    // retained launch metadata and produces normal completed-turn checkpoints.
+    await writeSessionFile(sanitizePath(selectedWorkDir), sessionId, [
+      { type: 'session-meta', workDir: selectedWorkDir },
+      { type: 'user', uuid: 'public-user', parentUuid: null, timestamp: '2026-09-10T00:00:00.000Z', message: { role: 'user', content: 'public prompt' } },
+      { type: 'assistant', uuid: 'public-assistant', parentUuid: 'public-user', timestamp: '2026-09-10T00:00:01.000Z', message: { role: 'assistant', content: 'public reply' } },
+    ])
+    const restored = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(restored.status).toBe(200)
+    const body = await restored.json() as { checkpoints: Array<{ target: { targetUserMessageId: string } }> }
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]?.target.targetUserMessageId).toBe('public-user')
+    expect((await sessionService.getSessionMessagesWithEvidence(sessionId)).transcriptEvidenceComplete).toBe(true)
+
+    await sessionService.deleteSession(sessionId)
+    expect((await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)).status).toBe(404)
+    expect((await fetch(`${baseUrl}/api/sessions/${crypto.randomUUID()}/turn-checkpoints`)).status).toBe(404)
+  })
+
+  for (const origin of ['created', 'resumed']) {
+    it(`GET turn-checkpoints keeps a positive ${origin} session known immediately after retention cleanup`, async () => {
+      const { sessionService } = await import('../services/sessionService.js')
+      await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 365 }))
+      resetSettingsCache()
+      let sessionId: string
+      if (origin === 'created') {
+        const created = await fetch(`${baseUrl}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workDir: tmpDir }),
+        })
+        expect(created.status).toBe(201)
+        sessionId = (await created.json() as { sessionId: string }).sessionId
+      } else {
+        sessionId = crypto.randomUUID()
+        await writeSessionFile(sanitizePath(tmpDir), sessionId, [
+          { type: 'session-meta', workDir: tmpDir },
+          { type: 'user', uuid: 'restored-user', parentUuid: null, message: { role: 'user', content: 'saved before server restart' } },
+        ])
+        // Starting the runtime for an existing disk session updates metadata;
+        // this ID was never created by the current SessionService process.
+        await sessionService.appendSessionMetadata(sessionId, { workDir: tmpDir })
+      }
+      const found = await sessionService.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+      await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 0 }))
+      resetSettingsCache()
+      await fs.unlink(found!.filePath)
+
+      // Clicking the still-open tab requests checkpoints before another prompt
+      // can refresh runtime metadata. No disk evidence must be created here.
+      for (const days of [0, 365]) {
+        await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ cleanupPeriodDays: days }))
+        resetSettingsCache()
+        const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ checkpoints: [] })
+        expect(await sessionService.getSessionMessagesWithEvidence(sessionId)).toEqual({
+          messages: [], transcriptEvidenceComplete: false,
+        })
+        expect(await sessionService.findSessionFile(sessionId)).toBeNull()
+        expect((await fetch(`${baseUrl}/api/sessions/${crypto.randomUUID()}/turn-checkpoints`)).status).toBe(404)
+      }
+
+      // Explicit deletion ends this in-process lifetime even when cleanup has
+      // already removed its file; it must not become an immortal empty session.
+      await sessionService.deleteSession(sessionId)
+      expect((await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)).status).toBe(404)
+      await expect(sessionService.deleteSession(sessionId)).rejects.toMatchObject({ statusCode: 404 })
+    })
+  }
+
   it('POST /api/sessions should create a session', async () => {
     const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-'))
     const res = await fetch(`${baseUrl}/api/sessions`, {
@@ -3484,6 +3585,99 @@ describe('Sessions API', () => {
     }
     expect(inspection.active).toBe(false)
     expect(inspection.status.permissionMode).toBe('bypassPermissions')
+  })
+
+  it('counts a multi-block assistant reply once when rebuilding transcript usage', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-dedup-'))
+    const sessionId = '11111111-2222-3333-4444-555555555555'
+    const projectDir = '-tmp-api-session-usage-dedup'
+    const messageId = 'msg_shared_reply'
+    const replyUsage = {
+      input_tokens: 100,
+      output_tokens: 250,
+      cache_read_input_tokens: 1_000,
+      cache_creation_input_tokens: 20,
+    }
+    // Claude Code writes one JSONL line per content block of a reply and repeats the complete
+    // `usage` object on every one. Three lines here stand for one reply with thinking + text +
+    // tool_use; summing them raw is the 2.2x inflation `usageAccounting.ts` documents.
+    const blockLine = () => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'block' }],
+        usage: replyUsage,
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      blockLine(),
+      blockLine(),
+      blockLine(),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      usage?: {
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalCacheReadInputTokens: number
+        totalCacheCreationInputTokens: number
+      }
+    }
+
+    expect(body.usage?.totalInputTokens).toBe(100)
+    expect(body.usage?.totalOutputTokens).toBe(250)
+    expect(body.usage?.totalCacheReadInputTokens).toBe(1_000)
+    expect(body.usage?.totalCacheCreationInputTokens).toBe(20)
+  })
+
+  it('still totals separate assistant replies separately after dedup', async () => {
+    // The negative control for the test above: a dedup key that collapsed too much would make
+    // every reply after the first free, which is a far worse error than the inflation it fixes.
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-distinct-'))
+    const sessionId = '22222222-3333-4444-5555-666666666666'
+    const projectDir = '-tmp-api-session-usage-distinct'
+    const reply = (messageId: string, outputTokens: number) => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'reply' }],
+        usage: { input_tokens: 10, output_tokens: outputTokens },
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      reply('msg_first', 300),
+      reply('msg_second', 70),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    const body = await res.json() as { usage?: { totalInputTokens: number; totalOutputTokens: number } }
+
+    expect(body.usage?.totalOutputTokens).toBe(370)
+    expect(body.usage?.totalInputTokens).toBe(20)
   })
 
   it('GET /api/sessions/repository-context should return branch launch metadata', async () => {
@@ -6170,6 +6364,152 @@ describe('Sessions API', () => {
     ])
   })
 
+  it.each(['legacy', 'completed'] as const)('does not repeat carried-forward %s file checkpoints on text and Read turns', async (kind) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `carried-forward-chat-checkpoints-${kind}`)
+    const filePath = path.join(workDir, 'created.txt')
+    const userIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(filePath, 'created in the first turn\n')
+    await writeFileHistoryBackup(sessionId, 'created-after', 'created in the first turn\n')
+    const entries: Record<string, unknown>[] = [makeSessionMetaEntry(workDir)]
+    for (const [index, userId] of userIds.entries()) {
+      const snapshot = makeFileHistorySnapshotEntry(userId, {
+        'created.txt': { backupFileName: null, version: 1, backupTime: `2026-01-01T00:0${index}:00.000Z` },
+      })
+      if (kind === 'completed') {
+        snapshot.snapshot = { ...(snapshot.snapshot as Record<string, unknown>), completedFileBackups: {
+          'created.txt': { backupFileName: 'created-after', version: 1, backupTime: `2026-01-01T00:0${index}:00.000Z` },
+        } }
+      }
+      entries.push(
+        snapshot,
+        { ...makeUserEntry(['create a file', 'hello', 'read the file'][index]!, userId), cwd: workDir, sessionId },
+      )
+      if (index !== 1) {
+        const toolName = index === 0 ? 'Write' : 'Read'
+        const toolId = `${toolName}:carry-forward-${index}`
+        entries.push(
+          makeAssistantToolUseEntry([{
+            id: toolId,
+            name: toolName,
+            input: { file_path: filePath, ...(index === 0 ? { content: 'created in the first turn\n' } : {}) },
+          }], userId),
+          makeToolResultUserEntry(toolId, 'success', undefined, undefined, sessionId),
+        )
+      }
+      entries.push(makeAssistantEntry('Done.', userId))
+    }
+    await writeSessionFile('-tmp-carried-forward-chat-checkpoints', sessionId, entries)
+
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ code: { filesChanged: string[] } }> }
+    expect(body.checkpoints.map((checkpoint) => checkpoint.code.filesChanged)).toEqual([[filePath], [], []])
+
+    const rewindPreview = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userIds[1], dryRun: true }),
+    })
+    expect(rewindPreview.status).toBe(200)
+    expect(await rewindPreview.json()).toMatchObject({ restoreAvailable: true, code: { available: true, filesChanged: [] } })
+    const rewind = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userIds[1] }),
+    })
+    expect(rewind.status).toBe(200)
+    expect(await rewind.json()).toMatchObject({ mode: 'both', restoreAvailable: true })
+    expect(await fs.readFile(filePath, 'utf8')).toBe('created in the first turn\n')
+  })
+
+  it('does not report carried files as changed on the last turn when their backups are migrated hard links', async () => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `migrated-link-checkpoints-${sessionId}`)
+    const filePath = path.join(workDir, 'doc.md')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(filePath, 'turn one\n')
+    await writeFileHistoryBackup(sessionId, 'doc-before@v1', 'before turn one\n')
+    await writeFileHistoryBackup(sessionId, 'doc-after-first@v2', 'turn one\n')
+    // Resume migration hard-links backups from the previous session's directory
+    // into this one, leaving the carried backup with nlink > 1.
+    const migratedDir = path.join(tmpDir, 'file-history', crypto.randomUUID())
+    await fs.mkdir(migratedDir, { recursive: true })
+    await fs.link(
+      path.join(tmpDir, 'file-history', sessionId, 'doc-after-first@v2'),
+      path.join(migratedDir, 'doc-after-first@v2'),
+    )
+
+    await writeSessionFile('-tmp-migrated-link-checkpoints', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'doc.md': { backupFileName: 'doc-before@v1', version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('write the doc', firstUserId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Write:migrated-link-0',
+        name: 'Write',
+        input: { file_path: filePath, content: 'turn one\n' },
+      }], firstUserId),
+      makeToolResultUserEntry('Write:migrated-link-0', 'success', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'doc.md': { backupFileName: 'doc-after-first@v2', version: 2, backupTime: '2026-01-01T00:01:00.000Z' },
+      }),
+      { ...makeUserEntry('just talk about it', secondUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('No files this turn.', secondUserId),
+    ])
+
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ code: { filesChanged: string[] } }> }
+    // The last (discussion-only) turn must not inherit the carried file. Before
+    // the heal, its unreadable linked before-backup diffed against live disk as
+    // "changed", and every carried file leaked into the last turn's list.
+    expect(body.checkpoints.map((checkpoint) => checkpoint.code.filesChanged)).toEqual([[filePath], []])
+  })
+
+  it('preserves fresh snapshot-only evidence after a recorded Write turn', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000001306'
+    const workDir = path.join(tmpDir, 'mixed-snapshot-only-checkpoints')
+    const filePath = path.join(workDir, 'created.txt')
+    const legacyPath = path.join(workDir, 'legacy.txt')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const freshBackup = 'mixed-snapshot-created@v2'
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(filePath, 'second version\n')
+    await fs.writeFile(legacyPath, 'legacy write\n')
+    await writeFileHistoryBackup(sessionId, freshBackup, 'first version\n')
+    await writeSessionFile('-tmp-mixed-snapshot-only-checkpoints', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'created.txt': { backupFileName: null, version: 1, backupTime: '2026-01-01T00:00:00.000Z' },
+      }),
+      { ...makeUserEntry('create a file', firstUserId), cwd: workDir, sessionId },
+      makeAssistantToolUseEntry([{
+        id: 'Write:mixed-snapshot', name: 'Write', input: { file_path: filePath, content: 'first version\n' },
+      }], firstUserId),
+      makeToolResultUserEntry('Write:mixed-snapshot', 'success', undefined, undefined, sessionId),
+      makeAssistantEntry('Done.', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'created.txt': { backupFileName: freshBackup, version: 2, backupTime: '2026-01-01T00:01:00.000Z' },
+        'legacy.txt': { backupFileName: null, version: 1, backupTime: '2026-01-01T00:01:00.000Z' },
+      }),
+      { ...makeUserEntry('edit using an older provider', secondUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('Done.', secondUserId),
+    ])
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ code: { filesChanged: string[] } }> }
+    expect(body.checkpoints.map((checkpoint) => checkpoint.code.filesChanged)).toEqual([
+      [filePath], [filePath, legacyPath],
+    ])
+  })
+
   it('should expose authoritative conversation targets for text, provider errors, and repeated continues', async () => {
     const sessionId = '99999999-bbbb-cccc-dddd-000000001273'
     const workDir = path.join(tmpDir, 'conversation-only-turn-targets')
@@ -6971,6 +7311,7 @@ describe('Sessions API', () => {
     const changedFile = path.join(workDir, 'changed.ts')
     const restoredFile = path.join(workDir, 'restored.ts')
     const userId = crypto.randomUUID()
+    const chatUserId = crypto.randomUUID()
     const changedBackup = 'snapshot-covered-changed@v1'
     const restoredBackup = 'snapshot-covered-restored@v1'
     const changedBefore = "export const changed = 'before'\n"
@@ -7035,6 +7376,12 @@ describe('Sessions API', () => {
       makeToolResultUserEntry('Edit:restored-forward', 'Updated successfully.', undefined, undefined, sessionId),
       makeToolResultUserEntry('Edit:restored-back', 'Updated successfully.', undefined, undefined, sessionId),
       makeAssistantEntry('Finished.', userId),
+      makeFileHistorySnapshotEntry(chatUserId, {
+        'changed.ts': { backupFileName: changedBackup, version: 1, backupTime: '2026-01-01T00:01:00.000Z' },
+        'restored.ts': { backupFileName: restoredBackup, version: 1, backupTime: '2026-01-01T00:01:00.000Z' },
+      }),
+      { ...makeUserEntry('say hello without tools', chatUserId), cwd: workDir, sessionId },
+      makeAssistantEntry('Hello.', chatUserId),
     ])
 
     const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
@@ -7045,7 +7392,8 @@ describe('Sessions API', () => {
         restoreAvailable?: boolean
       }>
     }
-    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints).toHaveLength(2)
+    expect(body.checkpoints[1]).toMatchObject({ code: { filesChanged: [], insertions: 0, deletions: 0 } })
     expect(body.checkpoints[0]).toMatchObject({
       code: {
         filesChanged: [changedFile],
@@ -8993,4 +9341,616 @@ describe('Sessions API', () => {
     expect(status.state).toBe('idle')
     expect(status.activityState).toBe('idle')
   })
+
+  it('frozen review never uses current bytes for the latest legacy turn', async () => {
+    const fixture = await createThreeTurnCheckpointFixture('ffffffff-bbbb-cccc-dddd-eeeeeeeeeee1')
+    await fs.writeFile(fixture.stepFile, 'unrelated after all turns\n')
+    for (const [target, before, after] of [
+      [fixture.firstUserId, 'base', 'v1'],
+      [fixture.secondUserId, 'v1', 'v2'],
+    ]) {
+      const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${target}&path=src/step.js`)
+      const diff = await response.json() as { state: string; diff?: string }
+      expect(diff.state).toBe('ok')
+      expect(diff.diff).toContain(`-export const STEP = '${before}'`)
+      expect(diff.diff).toContain(`+export const STEP = '${after}'`)
+      expect(diff.diff).not.toContain('unrelated')
+    }
+    const latest = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&path=src/step.js`)
+    expect((await latest.json() as { state: string }).state).toBe('missing')
+  })
+
+  it('frozen review uses a completed after-checkpoint even after later edits and reload', async () => {
+    const fixture = await createThreeTurnCheckpointFixture('ffffffff-bbbb-cccc-dddd-eeeeeeeeeee2')
+    const snapshotEntries = await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)
+    const latest = snapshotEntries.find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    await writeFileHistoryBackup(fixture.sessionId, 'completed-step', "export const STEP = 'v3'\n")
+    await writeFileHistoryBackup(fixture.sessionId, 'completed-created', 'generated third turn\n')
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot: {
+      ...latest,
+      completedFileBackups: {
+        'src/step.js': { backupFileName: 'completed-step', version: 3, backupTime: new Date() },
+        'notes/generated.txt': { backupFileName: 'completed-created', version: 1, backupTime: new Date() },
+      },
+    } }) + '\n')
+    await fs.writeFile(fixture.stepFile, 'unrelated after complete\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&userMessageIndex=2&path=src/step.js`)
+    const diff = await response.json() as { state: string; diff?: string }
+    expect(diff.state).toBe('ok')
+    expect(diff.diff).toContain("+export const STEP = 'v3'")
+    expect(diff.diff).not.toContain('unrelated')
+    const status = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    const body = await status.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { insertions: number; deletions: number } }> }
+    expect(body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)?.code).toMatchObject({ insertions: 2, deletions: 1 })
+  })
+
+
+  it('frozen review refuses mismatched IDs instead of falling through to another turn index', async () => {
+    const fixture = await createThreeTurnCheckpointFixture('ffffffff-bbbb-cccc-dddd-eeeeeeeeeee3')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=gone-message&userMessageIndex=1&path=src/step.js`)
+    expect(response.status).toBe(400)
+    const mismatch = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.firstUserId}&userMessageIndex=1&path=src/step.js`)
+    expect(mismatch.status).toBe(400)
+  })
+
+  it.each(['absent-map', 'empty-map', 'missing-entry', 'missing-file', 'directory', 'invalid-utf8', 'corrupt-descriptor'] as const)('frozen review marks the whole comparison unavailable for a %s after boundary', async (failure) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    await writeFileHistoryBackup(fixture.sessionId, 'completed-step', "export const STEP = 'v3'\n")
+    const backupDirectory = path.join(tmpDir, 'file-history', fixture.sessionId)
+    const completed: Record<string, unknown> = {
+      'src/step.js': { backupFileName: 'completed-step', version: 3, backupTime: new Date() },
+    }
+    if (failure === 'empty-map') delete completed['src/step.js']
+    if (failure === 'directory') await fs.mkdir(path.join(backupDirectory, 'bad-after'))
+    if (failure === 'invalid-utf8') await fs.writeFile(path.join(backupDirectory, 'bad-after'), Buffer.from([0xc3, 0x28]))
+    if (['missing-file', 'directory', 'invalid-utf8'].includes(failure)) completed['notes/generated.txt'] = { backupFileName: 'bad-after', version: 1, backupTime: new Date() }
+    if (failure === 'corrupt-descriptor') completed['notes/generated.txt'] = { backupFileName: 123, version: 1 }
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot: {
+      ...latest,
+      ...(failure === 'absent-map' ? {} : { completedFileBackups: completed }),
+    } }) + '\n')
+    await fs.writeFile(fixture.stepFile, 'later live step\n')
+    await fs.writeFile(fixture.createdFile, 'later live generated\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    expect(turn.code.reason).toContain('notes/generated.txt')
+    const missing = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&userMessageIndex=2&path=notes/generated.txt`)
+    const missingDiff = await missing.json() as { state: string; diff?: string }
+    expect(missingDiff.state).toBe('missing')
+    expect(missingDiff.diff).toBeUndefined()
+    if (!['absent-map', 'empty-map'].includes(failure)) {
+      const successful = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&userMessageIndex=2&path=src/step.js`)
+      const diff = await successful.json() as { state: string; diff?: string }
+      expect(diff.state).toBe('ok')
+      expect(diff.diff).toContain("+export const STEP = 'v3'")
+      expect(diff.diff).not.toContain('later live')
+    }
+  })
+
+  it('frozen review rejects incomplete history produced by the real completion writer', async () => {
+    const runtime = await import('../../bootstrap/state.js')
+    const historyApi = await import('../../utils/fileHistory.js')
+    const { flushSessionStorage } = await import('../../utils/sessionStorage.js')
+    const fixture = await createThreeTurnCheckpointFixture(runtime.getSessionId())
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    const original = { cwd: runtime.getOriginalCwd(), projectDir: runtime.getSessionProjectDir(), interactive: runtime.getIsInteractive() }
+    let history: import('../../utils/fileHistory.js').FileHistoryState = {
+      snapshots: [{ messageId: fixture.thirdUserId as ReturnType<typeof crypto.randomUUID>, trackedFileBackups: {}, timestamp: new Date() }],
+      trackedFiles: new Set(), snapshotSequence: 1,
+    }
+    const updateHistory = (updater: (state: typeof history) => typeof history) => { history = updater(history) }
+    try {
+      runtime.setOriginalCwd(fixture.workDir)
+      runtime.setIsInteractive(true)
+      runtime.switchSession(runtime.getSessionId(), path.dirname(found!.filePath))
+      await historyApi.fileHistoryTrackEdit(updateHistory, fixture.stepFile, history.snapshots[0]!.messageId)
+      await historyApi.fileHistoryTrackEdit(updateHistory, fixture.createdFile, history.snapshots[0]!.messageId)
+      await fs.writeFile(fixture.stepFile, 'captured successful after\n')
+      await fs.unlink(fixture.createdFile)
+      await fs.symlink(fixture.stepFile, fixture.createdFile)
+      await historyApi.fileHistoryCompleteSnapshot(updateHistory, history.snapshots[0]!.messageId)
+      await flushSessionStorage()
+      const completed = history.snapshots[0]!
+      expect(Object.keys(completed.trackedFileBackups)).toHaveLength(2)
+      expect(Object.keys(completed.completedFileBackups!)).toHaveLength(1)
+      // Consume the actual production writer output through the API fixture.
+      await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: completed.messageId, isSnapshotUpdate: true, snapshot: completed }) + '\n')
+      await fs.writeFile(fixture.stepFile, 'later live edit\n')
+      const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+      const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean }> }
+      const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)!
+      expect(turn.code.available).toBe(false)
+      expect(turn.restoreAvailable).toBe(false)
+      expect(turn.code.reason).toContain('notes/generated.txt')
+      const successful = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&path=src/step.js`)
+      const diff = await successful.json() as { state: string; diff?: string }
+      expect(diff.state).toBe('ok')
+      expect(diff.diff).toContain('+captured successful after')
+      expect(diff.diff).not.toContain('later live edit')
+      const missing = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&path=notes/generated.txt`)
+      expect((await missing.json() as { state: string }).state).toBe('missing')
+    } finally {
+      await flushSessionStorage()
+      runtime.setOriginalCwd(original.cwd)
+      runtime.setIsInteractive(original.interactive)
+      runtime.switchSession(runtime.getSessionId(), original.projectDir)
+    }
+  })
+
+  it.each([{ completedFileBackups: null }, { completedFileBackups: 'invalid-map' }, { completedFileBackups: [] }])('frozen review keeps a malformed completed container unavailable instead of using the next turn: %j', async ({ completedFileBackups }) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const second = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.secondUserId)!
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: second.messageId, isSnapshotUpdate: true, snapshot: { ...second, completedFileBackups } }) + '\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.secondUserId)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    expect(turn.code.reason).toContain('src/step.js')
+    const missing = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.secondUserId}&path=src/step.js`)
+    expect((await missing.json() as { state: string }).state).toBe('missing')
+  })
+
+  it.each(['missing', 'conflicting'] as const)('frozen review rejects a %s after boundary hidden behind a duplicate recorded path', async (failure) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const second = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.secondUserId)!
+    await writeFileHistoryBackup(fixture.sessionId, 'after-step', 'one after\n')
+    await writeFileHistoryBackup(fixture.sessionId, 'other-after-step', 'different after\n')
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: second.messageId, isSnapshotUpdate: true, snapshot: {
+      ...second,
+      trackedFileBackups: { ...second.trackedFileBackups, './src/step.js': second.trackedFileBackups['src/step.js'] },
+      completedFileBackups: {
+        'src/step.js': { backupFileName: 'after-step', version: 2, backupTime: new Date() },
+        ...(failure === 'conflicting' ? { './src/step.js': { backupFileName: 'other-after-step', version: 2, backupTime: new Date() } } : {}),
+      },
+    } }) + '\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean }; restoreAvailable: boolean }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.secondUserId)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    for (const requestedPath of ['src/step.js', './src/step.js']) {
+      const missing = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.secondUserId}&path=${encodeURIComponent(requestedPath)}`)
+      expect((await missing.json() as { state: string }).state).toBe('missing')
+    }
+  })
+
+  it.each([
+    { boundary: 'target', descriptor: null },
+    { boundary: 'target', descriptor: {} },
+    { boundary: 'next', descriptor: null },
+    { boundary: 'next', descriptor: {} },
+  ])('frozen review reports a corrupt before descriptor as unavailable without a server error: %j', async ({ boundary, descriptor }) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const second = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.secondUserId)!
+    const target = boundary === 'target' ? fixture.secondUserId : fixture.firstUserId
+    await writeFileHistoryBackup(fixture.sessionId, 'known-after', 'known after\n')
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: second.messageId, isSnapshotUpdate: true, snapshot: {
+      ...second,
+      trackedFileBackups: { 'src/step.js': descriptor },
+      completedFileBackups: { 'src/step.js': { backupFileName: 'known-after', version: 2, backupTime: new Date() } },
+    } }) + '\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === target)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    expect(turn.code.reason).toContain('src/step.js')
+    const missing = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${target}&path=src/step.js`)
+    expect(missing.status).toBe(200)
+    expect((await missing.json() as { state: string }).state).toBe('missing')
+  })
+
+  it.each(['null', 'string', 'array', 'missing', 'partial', 'empty'] as const)('frozen review checks after-known paths when the before map is %s', async (kind) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    await writeFileHistoryBackup(fixture.sessionId, 'known-step-after', 'frozen step after\n')
+    await writeFileHistoryBackup(fixture.sessionId, 'known-note-after', 'frozen note after\n')
+    const trackedFileBackups = kind === 'null' ? null : kind === 'string' ? 'damaged' : kind === 'array' ? []
+      : kind === 'partial' ? { 'src/step.js': latest.trackedFileBackups['src/step.js'] } : {}
+    const snapshot: Record<string, unknown> = { ...latest, trackedFileBackups, completedFileBackups: {
+      'src/step.js': { backupFileName: 'known-step-after', version: 3, backupTime: new Date() },
+      'notes/generated.txt': { backupFileName: 'known-note-after', version: 1, backupTime: new Date() },
+    } }
+    if (kind === 'missing') delete snapshot.trackedFileBackups
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot }) + '\n')
+    await fs.writeFile(fixture.stepFile, 'later live step\n')
+    await fs.writeFile(fixture.createdFile, 'later live note\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean; unverifiedChangeSources: string[] }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    expect(turn.code.reason).toContain('notes/generated.txt')
+    expect(turn.unverifiedChangeSources).toContain('file-history:notes/generated.txt')
+    if (kind !== 'partial') expect(turn.code.reason).toContain('src/step.js')
+    for (const requestedPath of ['src/step.js', 'notes/generated.txt']) {
+      const result = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&userMessageIndex=2&path=${requestedPath}`)
+      expect(result.status).toBe(200)
+      const diff = await result.json() as { state: string; diff?: string }
+      if (kind === 'partial' && requestedPath === 'src/step.js') {
+        expect(diff.state).toBe('ok')
+        expect(diff.diff).toContain('+frozen step after')
+        expect(diff.diff).not.toContain('later live')
+      } else {
+        expect(diff.state).toBe('missing')
+        expect(diff.diff).toBeUndefined()
+      }
+    }
+  })
+
+  it.each([{ before: null }, { before: 'damaged' }, { before: [] }])('frozen review preserves malformed-before evidence even when no paths survive: %j', async ({ before }) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot: { ...latest, trackedFileBackups: before, completedFileBackups: {} } }) + '\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; reason?: string }; restoreAvailable: boolean; unverifiedChangeSources: string[] }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)!
+    expect(turn.code.available).toBe(false)
+    expect(turn.restoreAvailable).toBe(false)
+    expect(turn.code.reason).toContain('before')
+    expect(turn.unverifiedChangeSources.length).toBeGreaterThan(0)
+  })
+
+  it.each(['legacy', 'completed'] as const)('frozen review keeps a valid empty %s checkpoint complete', async (kind) => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot: {
+      ...latest, trackedFileBackups: {}, ...(kind === 'completed' ? { completedFileBackups: {} } : {}),
+    } }) + '\n')
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints?frozen=true`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { checkpoints: Array<{ target: { targetUserMessageId: string }; code: { available: boolean; filesChanged: string[] }; restoreAvailable: boolean; unverifiedChangeSources: string[] }> }
+    const turn = body.checkpoints.find(checkpoint => checkpoint.target.targetUserMessageId === fixture.thirdUserId)!
+    expect(turn.code).toMatchObject({ available: true, filesChanged: [], insertions: 0, deletions: 0 })
+    expect(turn.restoreAvailable).toBe(true)
+    expect(turn.unverifiedChangeSources).toEqual([])
+    const result = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?frozen=true&targetUserMessageId=${fixture.thirdUserId}&path=src/step.js`)
+    expect((await result.json() as { state: string }).state).toBe('missing')
+  })
+
+  const rewindBeforeFailures = ['null', 'string', 'array', 'empty', 'partial', 'missing-map', 'null-descriptor', 'empty-descriptor', 'missing-backup', 'missing-backup-and-live'] as const
+
+  async function incompleteRewindFixture(kind: typeof rewindBeforeFailures[number], location: 'target' | 'later-middle' = 'target') {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const damagedId = location === 'target' ? fixture.thirdUserId : fixture.secondUserId
+    const targetId = location === 'target' ? fixture.thirdUserId : fixture.firstUserId
+    const damaged = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === damagedId)!
+    await writeFileHistoryBackup(fixture.sessionId, 'rewind-step-after', 'recorded step after\n')
+    await writeFileHistoryBackup(fixture.sessionId, 'rewind-note-after', 'recorded note after\n')
+    let before: unknown = damaged.trackedFileBackups
+    if (kind === 'null') before = null
+    if (kind === 'string') before = 'malformed-before'
+    if (kind === 'array') before = []
+    if (kind === 'empty') before = {}
+    if (kind === 'partial') before = { 'src/step.js': damaged.trackedFileBackups['src/step.js'] }
+    if (kind === 'null-descriptor') before = { ...damaged.trackedFileBackups, 'src/step.js': null }
+    if (kind === 'empty-descriptor') before = { ...damaged.trackedFileBackups, 'src/step.js': {} }
+    if (kind.startsWith('missing-backup')) {
+      await fs.unlink(path.join(tmpDir, 'file-history', fixture.sessionId, damaged.trackedFileBackups['src/step.js']!.backupFileName!))
+      if (kind === 'missing-backup-and-live') await fs.unlink(fixture.stepFile)
+    }
+    const snapshot: Record<string, unknown> = { ...damaged, trackedFileBackups: before, completedFileBackups: {
+      'src/step.js': { backupFileName: 'rewind-step-after', version: 3, backupTime: new Date() },
+      'notes/generated.txt': { backupFileName: 'rewind-note-after', version: 1, backupTime: new Date() },
+    } }
+    if (kind === 'missing-map') delete snapshot.trackedFileBackups
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: damaged.messageId, isSnapshotUpdate: true, snapshot }) + '\n')
+    return { ...fixture, targetId, transcriptPath: found!.filePath }
+  }
+
+  async function fileBytesOrMissing(filePath: string): Promise<Buffer | null> {
+    try { return await fs.readFile(filePath) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  it.each(rewindBeforeFailures.flatMap(kind => [{ kind, location: 'target' as const }, { kind, location: 'later-middle' as const }]))('rewind safety refuses incomplete before history without changing bytes or messages: %j', async ({ kind, location }) => {
+    const fixture = await incompleteRewindFixture(kind, location)
+    const beforeStep = await fileBytesOrMissing(fixture.stepFile)
+    const beforeNote = await fs.readFile(fixture.createdFile)
+    const beforeMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const beforeTranscript = await fs.readFile(fixture.transcriptPath)
+    const request = (mode: 'both' | 'code', dryRun = false) => fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: fixture.targetId, mode, dryRun }),
+    })
+    const dryResponse = await request('both', true)
+    const preview = await dryResponse.json() as { restoreAvailable: boolean }
+    // Code-only is an unsupported existing mode, not a newly added action.
+    const codeResponse = await request('code')
+    expect(codeResponse.status).toBe(400)
+    expect(await fileBytesOrMissing(fixture.stepFile)).toEqual(beforeStep)
+    expect(await fs.readFile(fixture.createdFile)).toEqual(beforeNote)
+    expect(await fs.readFile(fixture.transcriptPath)).toEqual(beforeTranscript)
+    expect(await sessionService.getSessionMessages(fixture.sessionId)).toEqual(beforeMessages)
+    const execution = await request('both')
+    const afterStep = await fileBytesOrMissing(fixture.stepFile)
+    const afterNote = await fileBytesOrMissing(fixture.createdFile)
+    const afterMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const afterTranscript = await fs.readFile(fixture.transcriptPath)
+    console.log('REWIND_SAFETY', JSON.stringify({ kind, location, previewRestoreAvailable: preview.restoreAvailable, status: execution.status,
+      stepUnchanged: beforeStep === null ? afterStep === null : beforeStep.equals(afterStep ?? Buffer.alloc(0)),
+      noteUnchanged: beforeNote.equals(afterNote ?? Buffer.alloc(0)), messagesBefore: beforeMessages.length, messagesAfter: afterMessages.length,
+      transcriptUnchanged: beforeTranscript.equals(afterTranscript),
+    }))
+    expect(dryResponse.status).toBe(200)
+    expect(preview.restoreAvailable).toBe(false)
+    expect(execution.status).toBe(400)
+    expect(afterStep).toEqual(beforeStep)
+    expect(afterNote).toEqual(beforeNote)
+    expect(afterMessages).toEqual(beforeMessages)
+    expect(afterTranscript).toEqual(beforeTranscript)
+  })
+
+  it.each(['null', 'partial'] as const)('rewind safety permits conversation-only truncation with %s before history while preserving files', async kind => {
+    const fixture = await incompleteRewindFixture(kind)
+    const beforeStep = await fs.readFile(fixture.stepFile)
+    const beforeNote = await fs.readFile(fixture.createdFile)
+    const beforeMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const response = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: fixture.targetId, mode: 'conversation' }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ mode: 'conversation', restoreAvailable: false })
+    expect(await fs.readFile(fixture.stepFile)).toEqual(beforeStep)
+    expect(await fs.readFile(fixture.createdFile)).toEqual(beforeNote)
+    const afterMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    expect(afterMessages.map(message => message.id)).toEqual(beforeMessages.slice(0, 4).map(message => message.id))
+    expect(afterMessages.some(message => message.id === fixture.targetId)).toBe(false)
+  })
+
+  it.each(['legacy-no-after', 'corrupt-after-container', 'missing-after-file', 'binary-before'] as const)('rewind safety restores trustworthy before bytes despite %s', async kind => {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    const beforeBytes = kind === 'binary-before' ? Buffer.from([0x00, 0xff, 0xfe, 0x41, 0x0d, 0x0a]) : Buffer.from("export const STEP = 'v2'\n")
+    if (kind === 'binary-before') await fs.writeFile(path.join(tmpDir, 'file-history', fixture.sessionId, latest.trackedFileBackups['src/step.js']!.backupFileName!), beforeBytes)
+    if (kind === 'corrupt-after-container' || kind === 'missing-after-file') {
+      const found = await sessionService.findSessionFile(fixture.sessionId)
+      await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true, snapshot: {
+        ...latest, completedFileBackups: kind === 'corrupt-after-container' ? 'malformed-after' : {
+          'src/step.js': { backupFileName: 'absent-after', version: 3, backupTime: new Date() },
+          'notes/generated.txt': { backupFileName: 'absent-note-after', version: 1, backupTime: new Date() },
+        },
+      } }) + '\n')
+    }
+    const beforeMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const request = (dryRun: boolean) => fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: fixture.thirdUserId, mode: 'both', dryRun }),
+    })
+    const preview = await request(true)
+    expect(preview.status).toBe(200)
+    expect(await preview.json()).toMatchObject({ restoreAvailable: true })
+    const execution = await request(false)
+    expect(execution.status).toBe(200)
+    expect(await execution.json()).toMatchObject({ mode: 'both', restoreAvailable: true })
+    expect(await fs.readFile(fixture.stepFile)).toEqual(beforeBytes)
+    // Explicit null is a trusted "did not exist" marker, unlike a null descriptor.
+    expect(latest.trackedFileBackups['notes/generated.txt']!.backupFileName).toBeNull()
+    expect(await fileBytesOrMissing(fixture.createdFile)).toBeNull()
+    expect((await sessionService.getSessionMessages(fixture.sessionId)).map(message => message.id)).toEqual(beforeMessages.slice(0, 4).map(message => message.id))
+  })
+
+  async function binaryRewindFixture(format: 'legacy' | 'completed', kind: 'same' | 'different' | 'mixed') {
+    const fixture = await createThreeTurnCheckpointFixture(crypto.randomUUID())
+    const latest = (await sessionService.getSessionFileHistorySnapshots(fixture.sessionId)).find(snapshot => snapshot.messageId === fixture.thirdUserId)!
+    const beforeBytes = Buffer.from([0xff])
+    const currentBytes = Buffer.from([kind === 'same' ? 0xff : 0xfe])
+    await fs.writeFile(path.join(tmpDir, 'file-history', fixture.sessionId, latest.trackedFileBackups['src/step.js']!.backupFileName!), beforeBytes)
+    await fs.writeFile(fixture.stepFile, currentBytes)
+    const trackedFileBackups: Record<string, unknown> = { 'src/step.js': latest.trackedFileBackups['src/step.js'] }
+    const completedFileBackups: Record<string, unknown> = {}
+    if (kind === 'mixed') {
+      await writeFileHistoryBackup(fixture.sessionId, 'text-before', 'before text\n')
+      trackedFileBackups['notes/generated.txt'] = { backupFileName: 'text-before', version: 1, backupTime: new Date() }
+    } else await fs.unlink(fixture.createdFile)
+    if (format === 'completed') {
+      await fs.writeFile(path.join(tmpDir, 'file-history', fixture.sessionId, 'binary-after'), currentBytes)
+      completedFileBackups['src/step.js'] = { backupFileName: 'binary-after', version: 3, backupTime: new Date() }
+      if (kind === 'mixed') {
+        await writeFileHistoryBackup(fixture.sessionId, 'text-after', 'generated third turn\n')
+        completedFileBackups['notes/generated.txt'] = { backupFileName: 'text-after', version: 1, backupTime: new Date() }
+      }
+    }
+    const found = await sessionService.findSessionFile(fixture.sessionId)
+    await fs.appendFile(found!.filePath, JSON.stringify({ type: 'file-history-snapshot', messageId: latest.messageId, isSnapshotUpdate: true,
+      snapshot: { ...latest, trackedFileBackups, ...(format === 'completed' ? { completedFileBackups } : {}) },
+    }) + '\n')
+    return { ...fixture, beforeBytes, currentBytes, transcriptPath: found!.filePath, binaryBackup: latest.trackedFileBackups['src/step.js']!.backupFileName! }
+  }
+
+  it.each((['legacy', 'completed'] as const).flatMap(format => (['same', 'different', 'mixed'] as const).map(kind => ({ format, kind }))))('binary rewind previews and restores exact bytes despite equal decoded text: %j', async ({ format, kind }) => {
+    const fixture = await binaryRewindFixture(format, kind)
+    expect(fixture.beforeBytes.toString('utf8')).toBe(fixture.currentBytes.toString('utf8'))
+    const beforeMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const beforeTranscript = await fs.readFile(fixture.transcriptPath)
+    const beforeNote = await fileBytesOrMissing(fixture.createdFile)
+    const request = (dryRun: boolean) => fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: fixture.thirdUserId, mode: 'both', dryRun }),
+    })
+    const dryResponse = await request(true)
+    const preview = await dryResponse.json() as { restoreAvailable: boolean; code: { available: boolean; filesChanged: string[]; insertions: number; deletions: number; reason?: string } }
+    const diffResponse = await fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/turn-checkpoints/diff?targetUserMessageId=${fixture.thirdUserId}&path=src/step.js`)
+    const diff = await diffResponse.json() as { state: string; diff?: string }
+    expect(await fs.readFile(fixture.stepFile)).toEqual(fixture.currentBytes)
+    expect(await fileBytesOrMissing(fixture.createdFile)).toEqual(beforeNote)
+    expect(await fs.readFile(fixture.transcriptPath)).toEqual(beforeTranscript)
+    expect(await sessionService.getSessionMessages(fixture.sessionId)).toEqual(beforeMessages)
+    // Execute before preview assertions so a red run also records the actual byte loss.
+    const response = await request(false)
+    const execution = await response.json() as typeof preview
+    const actual = await fs.readFile(fixture.stepFile)
+    console.log('BINARY_REWIND', JSON.stringify({ format, kind, previewPaths: preview.code.filesChanged, status: response.status, beforeHex: fixture.beforeBytes.toString('hex'), actualHex: actual.toString('hex') }))
+    const expectedPaths = kind === 'same' ? [] : kind === 'mixed' ? [fixture.stepFile, fixture.createdFile].sort() : [fixture.stepFile]
+    expect(dryResponse.status).toBe(200)
+    expect(preview.restoreAvailable).toBe(true)
+    expect(preview.code.available).toBe(true)
+    expect([...preview.code.filesChanged].sort()).toEqual(expectedPaths)
+    expect(response.status).toBe(200)
+    expect(execution.restoreAvailable).toBe(true)
+    expect([...execution.code.filesChanged].sort()).toEqual(expectedPaths)
+    if (kind !== 'mixed') expect(preview.code).toMatchObject({ insertions: 0, deletions: 0 })
+    if (kind !== 'same') expect(preview.code.reason).toBe('Some changed files cannot be compared as UTF-8 text.')
+    expect(diffResponse.status).toBe(200)
+    expect(['missing', 'error']).toContain(diff.state)
+    expect(diff.diff).toBeUndefined()
+    expect(actual).toEqual(fixture.beforeBytes)
+    expect(await fileBytesOrMissing(fixture.createdFile)).toEqual(kind === 'mixed' ? Buffer.from('before text\n') : null)
+    expect((await sessionService.getSessionMessages(fixture.sessionId)).map(message => message.id)).toEqual(beforeMessages.slice(0, 4).map(message => message.id))
+  })
+
+  it.each((['legacy', 'completed'] as const).flatMap(format => [
+    { format, targetIndex: 0, settles: false, returnsToBefore: false }, { format, targetIndex: 1, settles: false, returnsToBefore: false },
+    { format, targetIndex: 0, settles: true, returnsToBefore: false }, { format, targetIndex: 0, settles: false, returnsToBefore: true },
+  ]))('binary rewind from an earlier turn covers later changes, creations and deletions: %j', async ({ format, targetIndex, settles, returnsToBefore }) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `binary-rewind-range-${sessionId}`)
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'file-history', sessionId), { recursive: true })
+    const states: Array<Record<string, Buffer | null>> = [
+      { 'changed.bin': Buffer.from([0xff]), 'deleted.bin': Buffer.from([0xf0]), 'created.bin': null },
+      { 'changed.bin': Buffer.from([0xfe]), 'deleted.bin': Buffer.from([0xf0]), 'created.bin': null },
+      { 'changed.bin': Buffer.from([settles ? 0xfe : 0xfd]), 'deleted.bin': null, 'created.bin': Buffer.from([0xfa]) },
+      { 'changed.bin': Buffer.from([returnsToBefore ? 0xff : settles ? 0xfe : 0xfc]), 'deleted.bin': null, 'created.bin': Buffer.from([0xf9]) },
+    ]
+    const maps: Array<Record<string, unknown>> = []
+    for (const [stateIndex, state] of states.entries()) {
+      const backups: Record<string, unknown> = {}
+      for (const [filePath, bytes] of Object.entries(state)) {
+        const backupFileName = bytes === null ? null : `state-${stateIndex}-${filePath}`
+        if (backupFileName && bytes) await fs.writeFile(path.join(tmpDir, 'file-history', sessionId, backupFileName), bytes)
+        backups[filePath] = { backupFileName, version: stateIndex + 1, backupTime: new Date() }
+      }
+      maps.push(backups)
+    }
+    const userIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    const entries: Record<string, unknown>[] = [makeSessionMetaEntry(workDir)]
+    for (const [index, userId] of userIds.entries()) {
+      const entry = makeFileHistorySnapshotEntry(userId, maps[index]!)
+      if (format === 'completed') entry.snapshot = { ...(entry.snapshot as Record<string, unknown>), completedFileBackups: maps[index + 1] }
+      entries.push(entry, { ...makeUserEntry(`binary turn ${index}`, userId), cwd: workDir, sessionId }, makeAssistantEntry('Done.', userId))
+    }
+    const transcriptPath = await writeSessionFile('-tmp-binary-rewind-range', sessionId, entries)
+    for (const [filePath, bytes] of Object.entries(states[3]!)) if (bytes) await fs.writeFile(path.join(workDir, filePath), bytes)
+    const beforeMessages = await sessionService.getSessionMessages(sessionId)
+    const beforeTranscript = await fs.readFile(transcriptPath)
+    const request = (dryRun: boolean) => fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userIds[targetIndex], mode: 'both', dryRun }),
+    })
+    const dryResponse = await request(true)
+    const preview = await dryResponse.json() as { restoreAvailable: boolean; code: { filesChanged: string[] } }
+    for (const [filePath, bytes] of Object.entries(states[3]!)) expect(await fileBytesOrMissing(path.join(workDir, filePath))).toEqual(bytes)
+    expect(await fs.readFile(transcriptPath)).toEqual(beforeTranscript)
+    const response = await request(false)
+    const execution = await response.json() as typeof preview
+    const actual: Record<string, string | null> = {}
+    for (const filePath of Object.keys(states[0]!)) actual[filePath] = (await fileBytesOrMissing(path.join(workDir, filePath)))?.toString('hex') ?? null
+    console.log('BINARY_REWIND_RANGE', JSON.stringify({ format, targetIndex, settles, returnsToBefore, previewPaths: preview.code.filesChanged, status: response.status, actual }))
+    const expectedPaths = Object.keys(states[0]!).filter(filePath => !returnsToBefore || filePath !== 'changed.bin').map(filePath => path.join(workDir, filePath)).sort()
+    expect(dryResponse.status).toBe(200)
+    expect(preview.restoreAvailable).toBe(true)
+    expect([...preview.code.filesChanged].sort()).toEqual(expectedPaths)
+    expect(response.status).toBe(200)
+    expect(execution.restoreAvailable).toBe(true)
+    expect([...execution.code.filesChanged].sort()).toEqual(expectedPaths)
+    for (const [filePath, bytes] of Object.entries(states[targetIndex]!)) expect(await fileBytesOrMissing(path.join(workDir, filePath))).toEqual(bytes)
+    expect((await sessionService.getSessionMessages(sessionId)).map(message => message.id)).toEqual(beforeMessages.slice(0, targetIndex * 2).map(message => message.id))
+  })
+
+  it.each(['legacy', 'completed'] as const)('binary rewind refuses missing before bytes without partially restoring mixed files or trimming messages: %s', async format => {
+    const fixture = await binaryRewindFixture(format, 'mixed')
+    await fs.unlink(path.join(tmpDir, 'file-history', fixture.sessionId, fixture.binaryBackup))
+    const beforeStep = await fs.readFile(fixture.stepFile)
+    const beforeNote = await fs.readFile(fixture.createdFile)
+    const beforeMessages = await sessionService.getSessionMessages(fixture.sessionId)
+    const beforeTranscript = await fs.readFile(fixture.transcriptPath)
+    const request = (dryRun: boolean) => fetch(`${baseUrl}/api/sessions/${fixture.sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: fixture.thirdUserId, mode: 'both', dryRun }),
+    })
+    const dryResponse = await request(true)
+    const preview = await dryResponse.json() as { restoreAvailable: boolean }
+    const response = await request(false)
+    expect(dryResponse.status).toBe(200)
+    expect(preview.restoreAvailable).toBe(false)
+    expect(response.status).toBe(400)
+    expect(await fs.readFile(fixture.stepFile)).toEqual(beforeStep)
+    expect(await fs.readFile(fixture.createdFile)).toEqual(beforeNote)
+    expect(await sessionService.getSessionMessages(fixture.sessionId)).toEqual(beforeMessages)
+    expect(await fs.readFile(fixture.transcriptPath)).toEqual(beforeTranscript)
+  })
+
+  it.each((['legacy', 'completed'] as const).flatMap(format => [false, true].map(hasEarlierEdit => ({ format, hasEarlierEdit }))))('binary rewind scopes successful replacement Write bytes out of later chat and Read carries: %j', async ({ format, hasEarlierEdit }) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `binary-write-carry-${sessionId}`)
+    const filePath = path.join(workDir, 'replaced.bin')
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'file-history', sessionId), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'file-history', sessionId, 'raw-before'), Buffer.from([0xff]))
+    const writtenContent = hasEarlierEdit ? 'final known output' : '�'
+    await fs.writeFile(path.join(tmpDir, 'file-history', sessionId, 'write-after'), Buffer.from(writtenContent))
+    await fs.writeFile(filePath, Buffer.from(writtenContent))
+    const userIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    const entries: Record<string, unknown>[] = [makeSessionMetaEntry(workDir)]
+    for (const [index, userId] of userIds.entries()) {
+      const entry = makeFileHistorySnapshotEntry(userId, { 'replaced.bin': { backupFileName: 'raw-before', version: 1, backupTime: new Date() } })
+      if (format === 'completed') entry.snapshot = { ...(entry.snapshot as Record<string, unknown>), completedFileBackups: {
+        'replaced.bin': { backupFileName: 'write-after', version: 1, backupTime: new Date() },
+      } }
+      entries.push(entry, { ...makeUserEntry(['replace bytes', 'hello', 'read it'][index]!, userId), cwd: workDir, sessionId })
+      if (index === 0 && hasEarlierEdit) {
+        entries.push(makeAssistantToolUseEntry([{ id: 'Edit:binary-carry', name: 'Edit', input: { file_path: filePath, old_string: '�', new_string: 'intermediate' } }], userId),
+          makeToolResultUserEntry('Edit:binary-carry', 'success', undefined, undefined, sessionId))
+      }
+      if (index !== 1) {
+        const name = index === 0 ? 'Write' : 'Read'
+        const toolId = `${name}:binary-carry-${index}`
+        entries.push(makeAssistantToolUseEntry([{ id: toolId, name, input: { file_path: filePath, ...(index === 0 ? { content: writtenContent } : {}) } }], userId),
+          makeToolResultUserEntry(toolId, 'success', undefined, undefined, sessionId))
+      }
+      entries.push(makeAssistantEntry('Done.', userId))
+    }
+    await writeSessionFile('-tmp-binary-write-carry', sessionId, entries)
+    const beforeMessages = await sessionService.getSessionMessages(sessionId)
+    const request = (dryRun: boolean) => fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserMessageId: userIds[1], mode: 'both', dryRun }),
+    })
+    const dryResponse = await request(true)
+    const preview = await dryResponse.json() as { restoreAvailable: boolean; code: { filesChanged: string[] } }
+    const response = await request(false)
+    const execution = await response.json() as typeof preview
+    expect(dryResponse.status).toBe(200)
+    expect(preview.restoreAvailable).toBe(true)
+    expect(preview.code.filesChanged).toEqual([])
+    expect(response.status).toBe(200)
+    expect(execution.code.filesChanged).toEqual([])
+    expect(await fs.readFile(filePath)).toEqual(Buffer.from(writtenContent))
+    const secondIndex = beforeMessages.findIndex(message => message.id === userIds[1])
+    expect((await sessionService.getSessionMessages(sessionId)).map(message => message.id)).toEqual(beforeMessages.slice(0, secondIndex).map(message => message.id))
+  })
+
 })

@@ -1,14 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+vi.mock('../../pages/ExtensionMarket', () => ({ ExtensionMarket: () => <div data-testid="extension-market-page" /> }))
+vi.mock('../../pages/Connectors', () => ({ Connectors: () => <div data-testid="connectors-page" /> }))
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-
-const { previewBridgeMock } = vi.hoisted(() => ({
-  previewBridgeMock: {
-    close: vi.fn().mockResolvedValue(undefined),
-  },
-}))
-
-vi.mock('../../lib/previewBridge', () => ({ previewBridge: previewBridgeMock }))
 
 vi.mock('../../pages/EmptySession', () => ({
   EmptySession: () => <div data-testid="empty-session" />,
@@ -60,12 +54,6 @@ vi.mock('../../pages/SubagentRunPage', () => ({
   ),
 }))
 
-vi.mock('../workbench/WorkbenchTab', () => ({
-  WorkbenchTab: ({ sessionId, tabId }: { sessionId: string; tabId: string }) => (
-    <div data-testid="workbench-tab">workbench:{sessionId}:{tabId}</div>
-  ),
-}))
-
 import { ContentRouter } from './ContentRouter'
 import { MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -73,7 +61,6 @@ import { useUIStore } from '../../stores/uiStore'
 describe('ContentRouter tab surfaces', () => {
   afterEach(() => {
     cleanup()
-    previewBridgeMock.close.mockClear()
     useTabStore.setState({ tabs: [], activeTabId: null })
     useUIStore.setState({ pendingSettingsTab: null })
   })
@@ -271,11 +258,11 @@ describe('ContentRouter tab surfaces', () => {
 
     render(<ContentRouter />)
 
-    expect(screen.getByTestId('market-page')).toBeInTheDocument()
+    expect(screen.getByTestId('extension-market-page')).toBeInTheDocument()
     expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
   })
 
-  it('renders workbench tabs as main content instead of mounting the chat session surface', () => {
+  it('returns an old in-memory workbench tab to its source task', () => {
     useTabStore.setState({
       tabs: [{
         sessionId: '__workbench__session-1',
@@ -289,11 +276,12 @@ describe('ContentRouter tab surfaces', () => {
 
     render(<ContentRouter />)
 
-    expect(screen.getByTestId('workbench-tab')).toHaveTextContent('workbench:session-1:__workbench__session-1')
-    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
+    expect(screen.getByTestId('active-session')).toBeInTheDocument()
+    expect(useTabStore.getState().activeTabId).toBe('session-1')
+    expect(useTabStore.getState().tabs.some(tab => tab.type === 'workbench')).toBe(false)
   })
 
-  it('closes the native preview when switching from a chat session to settings', async () => {
+  it('switches to settings without dropping the source task', async () => {
     useTabStore.setState({
       tabs: [
         { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
@@ -304,15 +292,18 @@ describe('ContentRouter tab surfaces', () => {
 
     render(<ContentRouter />)
     expect(screen.getByTestId('active-session')).toBeInTheDocument()
-    previewBridgeMock.close.mockClear()
 
     act(() => {
       useTabStore.setState({ activeTabId: '__settings__' })
     })
 
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
-    await waitFor(() => {
-      expect(previewBridgeMock.close).toHaveBeenCalledTimes(1)
-    })
+    expect(useTabStore.getState().tabs.find(tab => tab.sessionId === 'session-1')).toMatchObject({ type: 'session' })
   })
+})
+
+it('routes the independent connectors tab', () => {
+  useTabStore.setState({ tabs: [{ sessionId: '__connectors__', title: 'Connectors', type: 'connectors', status: 'idle' }], activeTabId: '__connectors__' })
+  render(<ContentRouter />)
+  expect(screen.getByTestId('extension-market-page')).toBeInTheDocument()
 })

@@ -146,12 +146,12 @@ describe('openaiChatStreamToAnthropic', () => {
     expect(blockStops[0].data.index).toBe(0)
   })
 
-  test('empty stream (just DONE)', async () => {
+  test('empty DONE without a model terminal is a stream error', async () => {
     const upstream = makeStream(['data: [DONE]\n\n'])
     const anthropicStream = openaiChatStreamToAnthropic(upstream, 'gpt-4')
     const events = await collectSse(anthropicStream)
-    // Should at least have message_stop
-    expect(events.some((e) => e.event === 'message_stop')).toBe(true)
+    expect(events.some((e) => e.event === 'error')).toBe(true)
+    expect(events.some((e) => e.event === 'message_stop')).toBe(false)
   })
 
   test('event ordering: content_block_stop before message_delta', async () => {
@@ -585,19 +585,16 @@ describe('openaiResponsesStreamToAnthropic', () => {
     expect(cancelReason).toBe('user-abort')
   })
 
-  test('generic mode still accepts a bare DONE sentinel', async () => {
-    const events = await collectSse(openaiResponsesStreamToAnthropic(
+  test('generic mode rejects DONE without a terminal response', async () => {
+    await expect(collectSse(openaiResponsesStreamToAnthropic(
       makeStream(['data: [DONE]\n\n']),
       'gpt-4o',
-    ))
-
-    expect(events.map(event => event.event)).toEqual(['message_start', 'message_stop'])
+    ))).rejects.toThrow('before response.completed')
   })
 
-  test('ignores malformed events and converts refusal deltas', async () => {
+  test('converts refusal deltas', async () => {
     const events = await collectSse(openaiResponsesStreamToAnthropic(
       makeStream([
-        'data: not-json\n\n',
         'event: response.created\ndata: {"response":{"id":"r9","model":"gpt-5.6-terra","status":"in_progress"}}\n\n',
         'event: response.content_part.added\ndata: {"output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}\n\n',
         'event: response.refusal.delta\ndata: {"output_index":0,"content_index":0,"delta":"cannot comply"}\n\n',
@@ -697,4 +694,36 @@ describe('openaiResponsesStreamToAnthropicResponse', () => {
     expect(error.message).toContain('before response.completed')
     expect(error.code).toBe('ERR_STREAM_PREMATURE_CLOSE')
   })
+})
+
+
+describe('OpenAI policy failures', () => {
+  for (const code of ['cyber_policy', 'content_policy', 'content_policy_violation']) {
+    for (const oauth of [true, false]) {
+      test(`preserves ${code} as a terminal permission error (OAuth=${oauth})`, async () => {
+        const chunk = `event: response.failed\ndata: ${JSON.stringify({ response: { error: { code, message: 'Request denied' } } })}\n\n`
+        const events = await collectSse(openaiResponsesStreamToAnthropic(
+          makeStream([chunk]), 'test-model', { openAICodexOAuth: oauth },
+        ))
+        expect(events.find((event) => event.event === 'error')?.data).toEqual({
+          type: 'error', error: { type: 'permission_error', code, message: 'Request denied' },
+        })
+        expect(events.some((event) => event.event === 'message_stop')).toBe(false)
+        await expect(openaiResponsesStreamToAnthropicResponse(
+          makeStream([chunk]), 'test-model', { openAICodexOAuth: oauth },
+        )).rejects.toMatchObject({ code, type: 'permission_error', status: 403 })
+      })
+    }
+  }
+})
+
+
+test('Chat SSE policy errors stop without a successful completion', async () => {
+  const events = await collectSse(openaiChatStreamToAnthropic(makeStream([
+    'data: {"error":{"code":"cyber_policy","message":"Request denied"}}\n\n',
+    'data: [DONE]\n\n',
+  ]), 'test-model'))
+  expect(events).toEqual([{ event: 'error', data: {
+    type: 'error', error: { type: 'permission_error', code: 'cyber_policy', message: 'Request denied' },
+  } }])
 })

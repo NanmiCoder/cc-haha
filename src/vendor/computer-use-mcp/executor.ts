@@ -32,6 +32,20 @@ export interface RunningApp {
   displayName: string
 }
 
+/** Native macOS inventory, preserving optional usage and running metadata. */
+export interface NativeAppInfo {
+  id: string
+  displayName?: string
+  isRunning?: boolean
+  lastUsedDate?: string
+  useCount?: number
+}
+
+export function formatNativeAppList(apps: readonly NativeAppInfo[]): string {
+  if (apps.length === 0) return 'No running applications are available to control.'
+  return apps.map(app => `${app.displayName ?? app.id} — ${app.id}`).join('\n')
+}
+
 // ----------------------------------------------------------------------------
 // Codex semantic engine — AX-tree-aware app state + element-indexed injection.
 //
@@ -47,12 +61,15 @@ export interface RunningApp {
 // is the Swift format authority; see blueprint §1).
 // ----------------------------------------------------------------------------
 
-/** A captured window screenshot returned alongside an app-state snapshot.
- *  Base64 PNG in capture-pixel space (left-top origin, scaled per blueprint §5). */
+/** A captured window screenshot in capture-pixel space (left-top origin). */
 export interface AppStateScreenshot {
   base64: string
   width: number
   height: number
+  /** Older helpers omit this and return PNG. */
+  mimeType?: 'image/png' | 'image/jpeg'
+  /** Uniform capture scale before encoded pixel dimensions are rounded up. */
+  pixelsPerPoint?: number
 }
 
 /**
@@ -151,6 +168,8 @@ export interface ResolvedAppTarget {
 export interface CodexComputerEngine {
   /** Enumerate running/recent apps as the `list_apps` text block expects. */
   listApps(): Promise<string>
+  /** Structured inventory for JavaScript clients; legacy engines may omit it. */
+  listAppsInfo?(): Promise<NativeAppInfo[]>
   /**
    * Resolve a loose selector to one running process plus its lifetime identity.
    * Never launches anything — a selector that matches nothing is an error, not

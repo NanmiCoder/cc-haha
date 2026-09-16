@@ -20,6 +20,7 @@ type RendererContextMenuParams = {
 type ApplicationMenuActions = {
   hide?: () => void
   close?: () => void
+  closeTab?: () => void
   toggleFullScreen?: () => void
 }
 
@@ -84,7 +85,8 @@ export function buildApplicationMenuTemplate(
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
-        { label: 'Close Window', accelerator: 'CmdOrCtrl+W', click: () => actions.close?.() },
+        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => actions.closeTab?.() },
+        { label: 'Close Window', click: () => actions.close?.() },
       ],
     },
   ]
@@ -120,6 +122,13 @@ export async function installRendererContextMenu(window: BrowserWindow) {
     if (template.length === 0 || window.isDestroyed()) return
     Menu.buildFromTemplate(template).popup({ window })
   })
+  window.webContents.on('before-input-event', (_event, input) => {
+    // Let the renderer decide whether W belongs to its active tab or terminal.
+    // Preventing the key here would also suppress readline's Ctrl+W.
+    window.webContents.setIgnoreMenuShortcuts(
+      input.key.toLowerCase() === 'w' && (input.meta || input.control),
+    )
+  })
 }
 
 export async function installApplicationMenu(
@@ -146,6 +155,11 @@ export async function installApplicationMenu(
     },
     close: () => {
       getMainWindow()?.close()
+    },
+    closeTab: () => {
+      getMainWindow()?.webContents.send(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, {
+        type: 'shortcut', tabId: '', action: 'close-tab',
+      })
     },
     toggleFullScreen: () => {
       const window = getMainWindow()

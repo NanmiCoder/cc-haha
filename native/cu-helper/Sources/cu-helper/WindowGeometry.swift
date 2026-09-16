@@ -1,4 +1,6 @@
+import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 
 /// Which on-screen window owns a global point, and where that window sits.
@@ -11,6 +13,28 @@ import Foundation
 /// Window *names* would require Screen Recording; these three do not, so this
 /// works before any capture grant exists.
 enum WindowGeometry {
+    private typealias GetAXWindow = @convention(c) (
+        AXUIElement, UnsafeMutablePointer<CGWindowID>
+    ) -> AXError
+
+    private static let getAXWindow: GetAXWindow? = {
+        guard let handle = dlopen(nil, RTLD_LAZY),
+              let symbol = dlsym(handle, "_AXUIElementGetWindow") else { return nil }
+        return unsafeBitCast(symbol, to: GetAXWindow.self)
+    }()
+
+    /// Read the window's identity directly. AX and WindowServer titles are
+    /// presentation strings and need not agree (Chrome decorates its AX title).
+    /// Callers must still validate this ID against the target process's live
+    /// windows. An unavailable SPI falls back to the existing evidence rules.
+    static func axWindowID(of element: AXUIElement) -> CGWindowID? {
+        var id: CGWindowID = 0
+        guard let getAXWindow,
+              getAXWindow(element, &id) == .success,
+              id != kCGNullWindowID else { return nil }
+        return id
+    }
+
     struct Window: Equatable, Sendable {
         let id: CGWindowID
         let bounds: CGRect

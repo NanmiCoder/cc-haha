@@ -511,6 +511,7 @@ export const SDKControlMcpToggleRequestSchema = lazySchema(() =>
       subtype: z.literal('mcp_toggle'),
       serverName: z.string(),
       enabled: z.boolean(),
+      alreadyPersisted: z.boolean().optional(),
     })
     .describe('Enables or disables an MCP server.'),
 )

@@ -1,17 +1,18 @@
 import type { UUID } from 'crypto'
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, open, readFile, realpath, unlink, type FileHandle } from 'node:fs/promises'
+import { access, lstat, mkdir, open, realpath, unlink, type FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 import { createTwoFilesPatch, diffLines } from 'diff'
 import { ApiError } from '../middleware/errorHandler.js'
 import { recordedCommandIsReadOnly } from '../../tools/BashTool/readOnlyValidation.js'
+import { applyEditToFile } from '../../tools/FileEditTool/utils.js'
 import {
   type FileHistorySnapshot,
   readBackupFileSafely,
 } from '../../utils/fileHistory.js'
 import { conversationService } from './conversationService.js'
 import { canonicalizeFilesystemAccessPath } from './filesystemAccessRoots.js'
-import { sessionService, type MessageEntry } from './sessionService.js'
+import { hasMalformedFileHistoryBefore, sessionService, type MessageEntry } from './sessionService.js'
 import {
   collectErroredToolUseIds,
   collectSuccessfulToolUseIds,
@@ -36,6 +37,7 @@ type RewindCodePreview = {
 type FileChangeStats = {
   insertions: number
   deletions: number
+  textComparable?: boolean
 }
 
 const fileChangeStats = Symbol('fileChangeStats')
@@ -151,7 +153,12 @@ function normalizeDiffStats(diffStats: {
     insertions: diffStats?.insertions ?? 0,
     deletions: diffStats?.deletions ?? 0,
   }
-  if (diffStats?.fileStats) preview[fileChangeStats] = diffStats.fileStats
+  if (diffStats?.fileStats) {
+    preview[fileChangeStats] = diffStats.fileStats
+    if ([...diffStats.fileStats.values()].some(stats => stats.textComparable === false)) {
+      preview.reason = 'Some changed files cannot be compared as UTF-8 text.'
+    }
+  }
   return preview
 }
 
@@ -310,7 +317,7 @@ function getBackupFileNameForTarget(
   targetSnapshot: FileHistorySnapshot,
 ): string | null | undefined {
   const targetBackup = targetSnapshot.trackedFileBackups[trackingPath]
-  if (targetBackup && 'backupFileName' in targetBackup) {
+  if (targetBackup && typeof targetBackup === 'object' && 'backupFileName' in targetBackup) {
     return targetBackup.backupFileName
   }
 
@@ -405,18 +412,34 @@ function normalizeUnverifiedChangeSources(sources: Iterable<string>): string[] {
   return [...new Set(sources)].sort().slice(0, MAX_UNVERIFIED_CHANGE_SOURCES)
 }
 
-async function readFileOrNull(filePath: string): Promise<string | null> {
+async function readCurrentFileBytes(filePath: string): Promise<Buffer | null | undefined> {
   try {
-    return await readFile(filePath, 'utf-8')
+    const state = await readRestorableFileState(filePath)
+    return state.exists ? state.content : null
   } catch {
-    return null
+    return undefined
   }
 }
 
-function countInsertedLines(content: string): number {
-  return diffLines('', content).reduce((total, change) => (
-    change.added ? total + (change.count || 0) : total
-  ), 0)
+function checkpointBytesMatch(before: Buffer | null, after: Buffer | null): boolean {
+  if (before === null || after === null) return before === after
+  return before.equals(after)
+}
+
+function checkpointText(content: Buffer | null | undefined, strictText = false): string | null | undefined {
+  if (content === null || content === undefined) return content
+  const text = content.toString('utf-8')
+  if (strictText && (content.includes(0) || !Buffer.from(text, 'utf-8').equals(content))) return undefined
+  return text
+}
+
+function countCheckpointByteDiffStats(before: Buffer | null, after: Buffer | null): FileChangeStats {
+  const beforeText = checkpointText(before, true)
+  const afterText = checkpointText(after, true)
+  if (beforeText === undefined || afterText === undefined) {
+    return { insertions: 0, deletions: 0, textComparable: false }
+  }
+  return countTurnDiffStats(beforeText, afterText)
 }
 
 function buildCheckpointDiff(
@@ -440,14 +463,16 @@ function buildCheckpointDiff(
   )
 }
 
-async function readBackupContent(
+async function readBackupBytes(
   sessionId: string,
   backupFileName: string | null | undefined,
-): Promise<string | null | undefined> {
+): Promise<Buffer | null | undefined> {
   if (backupFileName === undefined) return undefined
   if (backupFileName === null) return null
+  if (typeof backupFileName !== 'string') return undefined
   try {
-    return (await readBackupFileSafely(backupFileName, sessionId)).content.toString('utf-8')
+    const { content } = await readBackupFileSafely(backupFileName, sessionId)
+    return content
   } catch {
     return undefined
   }
@@ -527,8 +552,8 @@ function pathsMatch(firstPath: string, secondPath: string): boolean {
     : first === second
 }
 
-function toFileIdentityPath(filePath: string): string {
-  const canonicalPath = canonicalizeFilesystemAccessPath(filePath)
+function toFileIdentityPath(filePath: string, frozen = false): string {
+  const canonicalPath = frozen ? resolve(filePath) : canonicalizeFilesystemAccessPath(filePath)
   return process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath
 }
 
@@ -892,6 +917,7 @@ function buildTranscriptTurnContexts(
 function collectTranscriptFileChanges(
   turnMessages: MessageEntry[],
   baseDir: string,
+  frozen = false,
 ): TranscriptTurnFileEvidence {
   if (turnMessages.length === 0) {
     return { confirmedChanges: [], uncertainChanges: [], unverifiedChangeSources: [] }
@@ -939,7 +965,8 @@ function collectTranscriptFileChanges(
       )
       if (extractedChanges.length === 0) unverifiedChangeSources.add(record.name)
 
-      for (const change of extractedChanges) {
+      for (const extracted of extractedChanges) {
+        const change = frozen ? { ...extracted, identityPath: toFileIdentityPath(extracted.absolutePath, true) } : extracted
         const existing = changes.get(change.identityPath)
         if (!existing) {
           changes.set(change.identityPath, change)
@@ -969,10 +996,12 @@ function collectTranscriptTurnFileChanges(
   activeMessages: MessageEntry[],
   targetUserMessageId: string,
   baseDir: string,
+  frozen = false,
 ): TranscriptTurnFileEvidence {
   return collectTranscriptFileChanges(
     getTranscriptTurnMessages(activeMessages, targetUserMessageId),
     baseDir,
+    frozen,
   )
 }
 
@@ -1025,6 +1054,7 @@ function mergeTurnCodePreviews(
   snapshotPreview: SnapshotTurnCodePreview | null,
   transcriptEvidence: TranscriptTurnFileEvidence,
   transcriptIntact: boolean,
+  frozen = false,
 ): MergedTurnCodePreview {
   const transcriptChanges = transcriptEvidence.confirmedChanges
   const transcriptPreview = buildTranscriptTurnCodePreview(transcriptChanges)
@@ -1032,6 +1062,7 @@ function mergeTurnCodePreviews(
     snapshotPreview,
     transcriptEvidence,
     transcriptIntact,
+    frozen,
   )
   const checkpointPreview = scopedSnapshotPreview?.preview ?? null
   const hasUncoveredUncertainChange = transcriptEvidence.uncertainChanges.some((change) =>
@@ -1109,6 +1140,7 @@ function scopeSnapshotPreviewToTurn(
   snapshotPreview: SnapshotTurnCodePreview | null,
   transcriptEvidence: TranscriptTurnFileEvidence,
   transcriptIntact: boolean,
+  frozen = false,
 ): SnapshotTurnCodePreview | null {
   if (
     !snapshotPreview ||
@@ -1132,7 +1164,7 @@ function scopeSnapshotPreviewToTurn(
   const checkpointFileStats = snapshotPreview.preview[fileChangeStats] ?? new Map()
   const scopedFileStats = new Map<string, FileChangeStats>()
   const filesChanged = snapshotPreview.preview.filesChanged.filter((filePath) => {
-    const identityPath = toFileIdentityPath(filePath)
+    const identityPath = toFileIdentityPath(filePath, frozen)
     if (!attributedPathIdentities.has(identityPath)) return false
     const stats = checkpointFileStats.get(identityPath)
     if (stats) scopedFileStats.set(identityPath, stats)
@@ -1159,11 +1191,13 @@ function findTranscriptTurnDiff(
   targetUserMessageId: string,
   baseDir: string,
   requestedPath: string,
+  frozen = false,
 ): TranscriptFileChange | null {
   const { confirmedChanges: changes } = collectTranscriptTurnFileChanges(
     activeMessages,
     targetUserMessageId,
     baseDir,
+    frozen,
   )
   return changes.find((change) =>
     matchesCheckpointPath(requestedPath, change.path, baseDir) ||
@@ -1177,49 +1211,78 @@ async function getTurnBoundaryContents(
   trackingPath: string,
   targetSnapshot: FileHistorySnapshot,
   nextSnapshot: FileHistorySnapshot | null,
+  frozen = false,
 ): Promise<{
   beforeContent: string | null
   afterContent: string | null
   afterBoundaryAvailable: boolean
   restorePointAvailable: boolean
+  changed: boolean
+  textComparable: boolean
 }> {
   const targetBackup = targetSnapshot.trackedFileBackups[trackingPath]
   const absolutePath = expandTrackingPath(checkpointBaseDir, trackingPath)
-  const beforeContent = await readBackupContent(
-    sessionId,
-    targetBackup?.backupFileName,
-  )
-  const restorePointAvailable = targetBackup?.backupFileName === null ||
-    (typeof targetBackup?.backupFileName === 'string' && beforeContent !== undefined)
-
-  if (!nextSnapshot) {
-    return {
-      beforeContent: beforeContent ?? null,
-      afterContent: await readFileOrNull(absolutePath),
-      afterBoundaryAvailable: true,
-      restorePointAvailable,
-    }
+  const beforeBytes = await readBackupBytes(sessionId, targetBackup?.backupFileName)
+  const beforeContent = checkpointText(beforeBytes, frozen)
+  let afterBytes: Buffer | null | undefined
+  if (frozen && targetSnapshot.completedFileBackups) {
+    afterBytes = await readBackupBytes(sessionId, targetSnapshot.completedFileBackups[trackingPath]?.backupFileName)
+  } else if (!nextSnapshot) {
+    if (!frozen) afterBytes = await readCurrentFileBytes(absolutePath)
+  } else {
+    const identityPath = toFileIdentityPath(absolutePath, frozen)
+    const matchingNextBackups = Object.entries(nextSnapshot.trackedFileBackups)
+      .filter(([nextTrackingPath]) =>
+        toFileIdentityPath(expandTrackingPath(checkpointBaseDir, nextTrackingPath), frozen) === identityPath
+      )
+      .map(([, backup]) => backup?.backupFileName)
+    const distinctNextBackups = new Set(matchingNextBackups)
+    const nextBackupFileName = distinctNextBackups.size === 1
+      ? matchingNextBackups[0]
+      : undefined
+    afterBytes = await readBackupBytes(sessionId, nextBackupFileName)
   }
 
-  const identityPath = toFileIdentityPath(absolutePath)
-  const matchingNextBackups = Object.entries(nextSnapshot.trackedFileBackups)
-    .filter(([nextTrackingPath]) =>
-      toFileIdentityPath(expandTrackingPath(checkpointBaseDir, nextTrackingPath)) === identityPath
-    )
-    .map(([, backup]) => backup.backupFileName)
-  const distinctNextBackups = new Set(matchingNextBackups)
-  const nextBackupFileName = distinctNextBackups.size === 1
-    ? matchingNextBackups[0]
-    : undefined
-  const nextContent = await readBackupContent(sessionId, nextBackupFileName)
-  const afterBoundaryAvailable = distinctNextBackups.size === 1 && nextContent !== undefined
-
+  const afterContent = checkpointText(afterBytes, frozen)
+  const restorePointAvailable = beforeContent !== undefined &&
+    (frozen || nextSnapshot !== null || afterBytes !== undefined)
+  const afterBoundaryAvailable = afterContent !== undefined && (!frozen || restorePointAvailable)
+  const effectiveAfterBytes = afterBoundaryAvailable ? afterBytes : beforeBytes
   return {
     beforeContent: beforeContent ?? null,
-    afterContent: afterBoundaryAvailable ? nextContent ?? null : beforeContent ?? null,
+    afterContent: afterBoundaryAvailable ? afterContent ?? null : beforeContent ?? null,
     afterBoundaryAvailable,
     restorePointAvailable,
+    // Text is presentation only: distinct invalid UTF-8 bytes can decode to
+    // the same replacement character, while absence differs from an empty file.
+    changed: (!frozen && !nextSnapshot && afterBytes === undefined) ||
+      !checkpointBytesMatch(beforeBytes ?? null, effectiveAfterBytes ?? null),
+    textComparable: checkpointText(beforeBytes, true) !== undefined &&
+      checkpointText(effectiveAfterBytes, true) !== undefined,
   }
+}
+
+/** All recorded aliases of a frozen path must agree; live symlinks are irrelevant. */
+async function getFrozenTurnBoundaryContents(
+  sessionId: string,
+  checkpointBaseDir: string,
+  trackingPath: string,
+  targetSnapshot: FileHistorySnapshot,
+  nextSnapshot: FileHistorySnapshot | null,
+): Promise<Awaited<ReturnType<typeof getTurnBoundaryContents>>> {
+  const identity = toFileIdentityPath(expandTrackingPath(checkpointBaseDir, trackingPath), true)
+  const aliases = [...new Set([...Object.keys(targetSnapshot.trackedFileBackups), ...Object.keys(targetSnapshot.completedFileBackups ?? {})])].filter(candidate =>
+    toFileIdentityPath(expandTrackingPath(checkpointBaseDir, candidate), true) === identity)
+  let result: Awaited<ReturnType<typeof getTurnBoundaryContents>> | undefined
+  for (const alias of aliases) {
+    const boundary = await getTurnBoundaryContents(sessionId, checkpointBaseDir, alias, targetSnapshot, nextSnapshot, true)
+    if (!boundary.afterBoundaryAvailable) return boundary
+    if (result && (result.beforeContent !== boundary.beforeContent || result.afterContent !== boundary.afterContent)) {
+      return { ...result, afterBoundaryAvailable: false }
+    }
+    result = boundary
+  }
+  return result!
 }
 
 async function buildTurnCodePreview(
@@ -1228,6 +1291,7 @@ async function buildTurnCodePreview(
   targetSnapshot: FileHistorySnapshot,
   nextSnapshot: FileHistorySnapshot | null,
   signal?: AbortSignal,
+  frozen = false,
 ): Promise<SnapshotTurnCodePreview> {
   const trackedPaths = Object.keys(targetSnapshot.trackedFileBackups)
   const coveredPathIdentities = new Set<string>()
@@ -1245,6 +1309,7 @@ async function buildTurnCodePreview(
     signal?.throwIfAborted()
     const identityPath = toFileIdentityPath(
       expandTrackingPath(checkpointBaseDir, trackingPath),
+      frozen,
     )
     const targetBackupFileName = targetSnapshot.trackedFileBackups[trackingPath]
       ?.backupFileName
@@ -1269,8 +1334,10 @@ async function buildTurnCodePreview(
       afterContent,
       afterBoundaryAvailable,
       restorePointAvailable,
+      changed,
+      textComparable,
     } =
-      await getTurnBoundaryContents(
+      await (frozen ? getFrozenTurnBoundaryContents : getTurnBoundaryContents)(
         sessionId,
         checkpointBaseDir,
         trackingPath,
@@ -1283,14 +1350,16 @@ async function buildTurnCodePreview(
       restorablePathIdentities.add(identityPath)
     }
     if (afterBoundaryAvailable) coveredPathIdentities.add(identityPath)
-    if (beforeContent === afterContent) continue
-
-    filesChanged.push(expandTrackingPath(checkpointBaseDir, trackingPath))
     if (!restorePointAvailable || !safeTrackedPath) {
       unrestorablePathIdentities.add(identityPath)
       restoreAvailable = false
     }
-    const stats = countTurnDiffStats(beforeContent, afterContent)
+    if (!changed) continue
+
+    filesChanged.push(expandTrackingPath(checkpointBaseDir, trackingPath))
+    const stats: FileChangeStats = textComparable
+      ? countTurnDiffStats(beforeContent, afterContent)
+      : { insertions: 0, deletions: 0, textComparable: false }
     statsByIdentity.set(identityPath, stats)
     insertions += stats.insertions
     deletions += stats.deletions
@@ -1440,6 +1509,7 @@ async function buildRestorePlan(
   snapshots: FileHistorySnapshot[],
   targetSnapshot: FileHistorySnapshot,
   filesToRestore: string[],
+  checkWritable = true,
 ): Promise<RestorePlanEntry[]> {
   const plan: RestorePlanEntry[] = []
   const backupByIdentity = new Map<string, string | null>()
@@ -1457,7 +1527,9 @@ async function buildRestorePlan(
       snapshots,
       targetSnapshot,
     )
-    if (backupFileName === undefined) continue
+    if (backupFileName === undefined) {
+      throw ApiError.badRequest(`No restore point is available for tracked path: ${trackingPath}`)
+    }
 
     if (backupByIdentity.has(identityPath)) {
       if (backupByIdentity.get(identityPath) !== backupFileName) {
@@ -1482,10 +1554,15 @@ async function buildRestorePlan(
       throw ApiError.badRequest(`Checkpoint backup is missing: ${backupFileName}`)
     }
     if (restorableFileStatesMatch(originalState, targetState)) continue
-    await assertRestoreTargetWritable(absolutePath, originalState, targetState)
+    if (checkWritable) await assertRestoreTargetWritable(absolutePath, originalState, targetState)
     plan.push({ trackingPath, absolutePath, originalState, targetState })
   }
 
+  for (const identityPath of restorePathIdentities) {
+    if (!backupByIdentity.has(identityPath)) {
+      throw ApiError.badRequest(`No restore point is available for changed path: ${identityPath}`)
+    }
+  }
   return plan
 }
 
@@ -1610,39 +1687,22 @@ async function buildCodePreview(
       continue
     }
 
-    if (backupFileName === null) {
-      const currentContent = await readFileOrNull(absolutePath)
-      if (currentContent !== null) {
-        filesChanged.push(absolutePath)
-        const fileInsertions = countInsertedLines(currentContent)
-        insertions += fileInsertions
-        statsByIdentity.set(identityPath, { insertions: fileInsertions, deletions: 0 })
-      }
-      continue
-    }
-
-    const [currentContent, backupContent] = await Promise.all([
-      readFileOrNull(absolutePath),
-      readBackupContent(sessionId, backupFileName),
+    const [currentBytes, backupBytes] = await Promise.all([
+      readCurrentFileBytes(absolutePath),
+      readBackupBytes(sessionId, backupFileName),
     ])
-    if (backupContent === null || backupContent === undefined) {
+    if (backupBytes === undefined || currentBytes === undefined) {
       restoreAvailable = false
       continue
     }
-    if (currentContent === backupContent) continue
+    if (checkpointBytesMatch(currentBytes, backupBytes)) continue
 
     filesChanged.push(absolutePath)
-    const fileStats = { insertions: 0, deletions: 0 }
-    for (const change of diffLines(currentContent ?? '', backupContent ?? '')) {
-      if (change.added) {
-        insertions += change.count || 0
-        fileStats.insertions += change.count || 0
-      }
-      if (change.removed) {
-        deletions += change.count || 0
-        fileStats.deletions += change.count || 0
-      }
-    }
+    const fileStats = backupBytes === null
+      ? countCheckpointByteDiffStats(backupBytes, currentBytes)
+      : countCheckpointByteDiffStats(currentBytes, backupBytes)
+    insertions += fileStats.insertions
+    deletions += fileStats.deletions
     statsByIdentity.set(identityPath, fileStats)
   }
 
@@ -1656,6 +1716,131 @@ async function buildCodePreview(
     }),
     restoreAvailable,
   }
+}
+
+function replayKnownTurnFileContent(
+  messages: MessageEntry[],
+  baseDir: string,
+  identity: string,
+  before: string | null | undefined,
+  frozen = false,
+): string | null | undefined {
+  let content = before
+  const successfulIds = collectSuccessfulToolUseIds(messages)
+  for (const message of messages) {
+    if (message.type !== 'tool_use' || !Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (!block || typeof block !== 'object') continue
+      const tool = block as { type?: string; id?: string; name?: string; input?: Record<string, unknown> }
+      if (tool.type !== 'tool_use' || !tool.id || !successfulIds.has(tool.id) || !tool.name || !tool.input) continue
+      const changes = extractTranscriptChangesFromTool(tool.name, tool.input, message.cwd ?? baseDir)
+      if (!changes.some((change) => (frozen ? toFileIdentityPath(change.absolutePath, true) : change.identityPath) === identity)) continue
+      if (tool.name.toLowerCase() === 'write' && typeof tool.input.content === 'string') {
+        content = tool.input.content
+        continue
+      }
+      const edits = tool.name.toLowerCase() === 'edit'
+        ? [tool.input]
+        : tool.name.toLowerCase() === 'multiedit' && Array.isArray(tool.input.edits)
+          ? tool.input.edits
+          : null
+      if (!edits) {
+        content = undefined
+        continue
+      }
+      for (const edit of edits) {
+        if (!edit || typeof edit !== 'object' || typeof edit.old_string !== 'string' || typeof edit.new_string !== 'string') {
+          content = undefined
+          break
+        }
+        if (edit.old_string === '') {
+          content = edit.new_string
+          continue
+        }
+        // An unknown or ambiguous edit loses exact state, but a later complete
+        // Write can establish it again. Do not abandon the rest of the turn.
+        if (typeof content !== 'string' || !content.includes(edit.old_string) ||
+          (edit.replace_all !== true && content.indexOf(edit.old_string) !== content.lastIndexOf(edit.old_string))) {
+          content = undefined
+          break
+        }
+        content = applyEditToFile(content, edit.old_string, edit.new_string, edit.replace_all === true)
+      }
+    }
+  }
+  return content
+}
+
+/**
+ * Some resumed providers repeat an earlier turn's pre-edit backups in later
+ * snapshots. Those backups cannot be the later turn's before-state. Discard
+ * only entries we can trace to a nonzero earlier mutation with the same
+ * backup/version. Exact tool replay distinguishes stale backups from legitimate
+ * reuse after an edit was reverted; unknown and snapshot-only evidence stays intact.
+ * Use this view for both sides of a turn boundary, otherwise a carried backup
+ * also makes the original edit look like a zero-net change.
+ */
+async function scopeCarriedForwardSnapshots(
+  sessionId: string,
+  snapshots: FileHistorySnapshot[] | null,
+  activeMessages: MessageEntry[],
+  transcriptEvidenceComplete: boolean,
+  workDir: string,
+  frozen = false,
+): Promise<FileHistorySnapshot[] | null> {
+  if (!snapshots || !transcriptEvidenceComplete) return snapshots
+  const snapshotsByMessageId = new Map<string, FileHistorySnapshot>(
+    snapshots.map((snapshot) => [snapshot.messageId, snapshot]),
+  )
+  const attributedBackups = new Map<string, { backupFileName: string | null; version: number }>()
+  const scopedByMessageId = new Map<string, FileHistorySnapshot>()
+
+  for (const turn of buildTranscriptTurnContexts(activeMessages)) {
+    const baseDir = turn.userMessage.cwd ?? workDir
+    const evidence = collectTranscriptFileChanges(turn.messages, baseDir, frozen)
+    if (evidence.unverifiedChangeSources.length > 0) {
+      // Unknown writes break the attribution chain; do not infer their effects.
+      attributedBackups.clear()
+      continue
+    }
+    const snapshot = snapshotsByMessageId.get(turn.userMessage.id)
+    const attemptedPaths = new Set([
+      ...evidence.confirmedChanges,
+      ...evidence.uncertainChanges,
+    ].map((change) => change.identityPath))
+    const uncertainPaths = new Set(evidence.uncertainChanges.map((change) => change.identityPath))
+    const confirmedPaths = new Set(evidence.confirmedChanges.map((change) => change.identityPath))
+    for (const identity of attemptedPaths) attributedBackups.delete(identity)
+    const backups = { ...snapshot?.trackedFileBackups }
+    for (const [trackingPath, backup] of Object.entries(backups)) {
+      // Keep malformed keys for the frozen completeness check; they provide
+      // no trustworthy attribution and must never crash a checkpoint read.
+      if (!backup || typeof backup !== 'object' || Array.isArray(backup) ||
+        (backup.backupFileName !== null && typeof backup.backupFileName !== 'string')) continue
+      const identity = toFileIdentityPath(expandTrackingPath(baseDir, trackingPath), frozen)
+      const previous = attributedBackups.get(identity)
+      if (previous && previous.backupFileName === backup.backupFileName && previous.version === backup.version) {
+        if (!attemptedPaths.has(identity)) delete backups[trackingPath]
+      } else {
+        attributedBackups.delete(identity)
+      }
+      if (confirmedPaths.has(identity) && !uncertainPaths.has(identity)) {
+        attributedBackups.delete(identity)
+        const beforeBytes = await readBackupBytes(sessionId, backup.backupFileName)
+        if (beforeBytes !== undefined) {
+          // Full Write supplies exact UTF-8 output even when before is binary.
+          // Edit replay must never start from replacement-decoded before bytes.
+          const beforeText = checkpointText(beforeBytes, true)
+          const after = replayKnownTurnFileContent(turn.messages, baseDir, identity, beforeText, frozen)
+          if (after !== undefined && !checkpointBytesMatch(beforeBytes, after === null ? null : Buffer.from(after, 'utf-8'))) {
+            attributedBackups.set(identity, backup)
+          }
+        }
+      }
+    }
+    if (snapshot) scopedByMessageId.set(snapshot.messageId, { ...snapshot, trackedFileBackups: backups })
+  }
+  return snapshots.map((snapshot) => scopedByMessageId.get(snapshot.messageId) ?? snapshot)
 }
 
 async function buildTurnCheckpointState(
@@ -1699,6 +1884,7 @@ async function buildTurnCheckpointStateFromContext(
   nextSnapshot: FileHistorySnapshot | null,
   turnMessages: MessageEntry[],
   signal?: AbortSignal,
+  frozen = false,
 ): Promise<SessionTurnCheckpointPreview> {
   signal?.throwIfAborted()
   const snapshotPreview = targetSnapshot
@@ -1708,26 +1894,110 @@ async function buildTurnCheckpointStateFromContext(
       targetSnapshot,
       nextSnapshot,
       signal,
+      frozen,
     )
     : null
   signal?.throwIfAborted()
   const transcriptEvidence = collectTranscriptFileChanges(
     turnMessages,
     checkpointBaseDir,
+    frozen,
   )
   const { preview, restoreAvailable, unverifiedChangeSources } = mergeTurnCodePreviews(
     snapshotPreview,
     transcriptEvidence,
     transcriptEvidenceComplete,
+    frozen,
   )
 
+  // Completion can safely capture some paths and refuse others. Compare every
+  // expected path, rather than treating one successful copy as a complete turn.
+  // Only an explicit recorded diff for the same path can cover a missing pair.
+  const transcriptDiffPaths = new Set(transcriptEvidence.confirmedChanges.filter(change => change.diff).map(change => change.identityPath))
+  const beforeMapMalformed = frozen && targetSnapshot !== null && hasMalformedFileHistoryBefore(targetSnapshot)
+  const unavailablePaths = frozen && targetSnapshot
+    ? [...new Set([...Object.keys(targetSnapshot.trackedFileBackups), ...Object.keys(targetSnapshot.completedFileBackups ?? {})])].filter(trackingPath => {
+      const identityPath = toFileIdentityPath(expandTrackingPath(checkpointBaseDir, trackingPath), true)
+      return !snapshotPreview?.coveredPathIdentities.has(identityPath) && !transcriptDiffPaths.has(identityPath)
+    }).map(trackingPath => toCheckpointResponsePath(trackingPath, checkpointBaseDir))
+    : []
+  const boundaryUnavailable = beforeMapMalformed || unavailablePaths.length > 0
+  const missingEvidence = [...unavailablePaths, ...(beforeMapMalformed ? ['invalid before-file map'] : [])]
   return buildTurnPreview(
     target,
-    preview,
+    boundaryUnavailable ? { ...preview, available: false, reason: `Recorded file history is incomplete for: ${missingEvidence.join(', ')}` } : preview,
     checkpointBaseDir,
-    restoreAvailable,
-    unverifiedChangeSources,
+    boundaryUnavailable ? false : restoreAvailable,
+    boundaryUnavailable ? normalizeUnverifiedChangeSources([...unverifiedChangeSources, ...missingEvidence.map(filePath => `file-history:${filePath}`)]) : unverifiedChangeSources,
   )
+}
+
+async function findUnavailableRestorePoints(
+  sessionId: string,
+  snapshot: FileHistorySnapshot,
+  checkpointBaseDir: string,
+): Promise<string[]> {
+  const unavailable = new Set<string>()
+  if (hasMalformedFileHistoryBefore(snapshot)) unavailable.add('invalid before-file map')
+
+  // Validate the original recorded keys, before carried-forward entries are
+  // scoped out of the turn preview. Completion keys prove that a path needs a
+  // before-state; restoring that state does not require readable after bytes.
+  const trackedPaths = new Set([
+    ...Object.keys(snapshot.trackedFileBackups),
+    ...Object.keys(snapshot.completedFileBackups ?? {}),
+  ])
+  const backupByIdentity = new Map<string, string | null>()
+  for (const trackingPath of trackedPaths) {
+    const responsePath = toCheckpointResponsePath(trackingPath, checkpointBaseDir)
+    const backup = snapshot.trackedFileBackups[trackingPath]
+    if (!backup || typeof backup !== 'object' || Array.isArray(backup) ||
+      (backup.backupFileName !== null && typeof backup.backupFileName !== 'string')) {
+      unavailable.add(responsePath)
+      continue
+    }
+    const identityPath = toFileIdentityPath(expandTrackingPath(checkpointBaseDir, trackingPath))
+    if (backupByIdentity.has(identityPath) && backupByIdentity.get(identityPath) !== backup.backupFileName) {
+      unavailable.add(responsePath)
+      continue
+    }
+    backupByIdentity.set(identityPath, backup.backupFileName)
+    if (backup.backupFileName !== null) {
+      try {
+        // Restore is byte-preserving, including binary legacy backups.
+        await readBackupFileSafely(backup.backupFileName, sessionId)
+      } catch {
+        unavailable.add(responsePath)
+      }
+    }
+  }
+  return [...unavailable]
+}
+
+function buildRewindCodePreviewFromPlan(
+  preview: RewindCodePreview,
+  plan: RestorePlanEntry[],
+): RewindCodePreview {
+  const previousStats = preview[fileChangeStats] ?? new Map<string, FileChangeStats>()
+  const fileStats = new Map<string, FileChangeStats>()
+  for (const entry of plan) {
+    const identity = toFileIdentityPath(entry.absolutePath)
+    const byteStats = countCheckpointByteDiffStats(
+      entry.targetState.exists ? entry.targetState.content : null,
+      entry.originalState.exists ? entry.originalState.content : null,
+    )
+    const recordedStats = previousStats.get(identity)
+    fileStats.set(identity, byteStats.textComparable === false || recordedStats?.textComparable === false
+      ? byteStats
+      : recordedStats ?? byteStats)
+  }
+  const stats = [...fileStats.values()]
+  return normalizeDiffStats({
+    filesChanged: plan.map(entry => entry.absolutePath),
+    insertions: stats.reduce((total, entry) => total + entry.insertions, 0),
+    deletions: stats.reduce((total, entry) => total + entry.deletions, 0),
+    fileStats,
+  })
 }
 
 async function buildRewindTurnCheckpointState(
@@ -1738,19 +2008,23 @@ async function buildRewindTurnCheckpointState(
   workDir: string,
   target: RewindTarget,
 ): Promise<SessionTurnCheckpointPreview> {
+  const scopedSnapshots = await scopeCarriedForwardSnapshots(
+    sessionId, snapshots, activeMessages, transcriptEvidenceComplete, workDir,
+  )
   const userMessages = activeMessages.filter((message) => message.type === 'user')
   const checkpoints: SessionTurnCheckpointPreview[] = []
+  const unavailableRestorePoints = new Set<string>()
 
   for (let userMessageIndex = target.userMessageIndex;
     userMessageIndex < userMessages.length;
     userMessageIndex += 1) {
     const userMessage = userMessages[userMessageIndex]
     if (!userMessage) continue
-    checkpoints.push(await buildTurnCheckpointState(
+    const checkpoint = await buildTurnCheckpointState(
       sessionId,
       activeMessages,
       transcriptEvidenceComplete,
-      snapshots,
+      scopedSnapshots,
       workDir,
       {
         targetUserMessageId: userMessage.id,
@@ -1758,7 +2032,14 @@ async function buildRewindTurnCheckpointState(
         userMessageCount: userMessages.length,
         messagesRemoved: target.messagesRemoved,
       },
-    ))
+    )
+    checkpoints.push(checkpoint)
+    const snapshot = snapshots ? findTargetSnapshot(snapshots, userMessage.id) : null
+    if (snapshot) {
+      for (const unavailable of await findUnavailableRestorePoints(sessionId, snapshot, checkpoint.workDir)) {
+        unavailableRestorePoints.add(unavailable)
+      }
+    }
   }
 
   const [firstCheckpoint, ...laterCheckpoints] = checkpoints
@@ -1767,20 +2048,43 @@ async function buildRewindTurnCheckpointState(
       sessionId,
       activeMessages,
       transcriptEvidenceComplete,
-      snapshots,
+      scopedSnapshots,
       workDir,
       target,
     )
   }
+  let code = laterCheckpoints.reduce(
+    (preview, checkpoint) => mergeRewindCodePreview(preview, checkpoint.code),
+    firstCheckpoint.code,
+  )
+  const restorePointsComplete = unavailableRestorePoints.size === 0
+  let restoreAvailable = restorePointsComplete && checkpoints.every((checkpoint) => checkpoint.restoreAvailable)
+  const targetSnapshot = snapshots ? findTargetSnapshot(snapshots, target.targetUserMessageId) : null
+  if (restoreAvailable && code.available && snapshots && targetSnapshot) {
+    try {
+      // Turn boundaries identify candidates. The actual before/current byte
+      // states decide which candidates a rewind would write, including net
+      // no-ops across several turns. Execution repeats writable preflight.
+      const plan = await buildRestorePlan(sessionId, firstCheckpoint.workDir, snapshots, targetSnapshot, code.filesChanged, false)
+      code = buildRewindCodePreviewFromPlan(code, plan)
+    } catch {
+      restoreAvailable = false
+      code = { ...code, available: false, reason: 'The checkpoint could not be prepared safely.' }
+    }
+  }
   return {
     ...firstCheckpoint,
-    code: laterCheckpoints.reduce(
-      (preview, checkpoint) => mergeRewindCodePreview(preview, checkpoint.code),
-      firstCheckpoint.code,
-    ),
-    restoreAvailable: checkpoints.every((checkpoint) => checkpoint.restoreAvailable),
+    code: restorePointsComplete ? code : {
+      ...code,
+      available: false,
+      reason: `Recorded restore points are incomplete for: ${[...unavailableRestorePoints].join(', ')}`,
+    },
+    restoreAvailable,
     unverifiedChangeSources: normalizeUnverifiedChangeSources(
-      checkpoints.flatMap((checkpoint) => checkpoint.unverifiedChangeSources),
+      [
+        ...checkpoints.flatMap((checkpoint) => checkpoint.unverifiedChangeSources),
+        ...[...unavailableRestorePoints].map(filePath => `file-history:${filePath}`),
+      ],
     ),
   }
 }
@@ -1798,13 +2102,13 @@ function mergeRewindCodePreview(
   const missingPaths = turnPreview.filesChanged.filter((filePath) =>
     !knownPathIdentities.has(toFileIdentityPath(filePath))
   )
-  if (missingPaths.length === 0) return rewindPreview
-
   const turnFileStats = turnPreview[fileChangeStats] ?? new Map()
+  const mergedFileStats = new Map(rewindPreview[fileChangeStats] ?? [])
   let missingInsertions = 0
   let missingDeletions = 0
   for (const filePath of missingPaths) {
     const stats = turnFileStats.get(toFileIdentityPath(filePath))
+    if (stats) mergedFileStats.set(toFileIdentityPath(filePath), stats)
     missingInsertions += stats?.insertions ?? 0
     missingDeletions += stats?.deletions ?? 0
   }
@@ -1813,6 +2117,7 @@ function mergeRewindCodePreview(
     filesChanged: [...rewindPreview.filesChanged, ...missingPaths],
     insertions: rewindPreview.insertions + missingInsertions,
     deletions: rewindPreview.deletions + missingDeletions,
+    fileStats: mergedFileStats,
   })
 }
 
@@ -1846,7 +2151,7 @@ export async function previewSessionRewind(
     target,
   )
 
-  const hasTurnScopedPreview = turnCheckpoint.code.available
+  const hasTurnScopedPreview = turnCheckpoint.code.available || !turnCheckpoint.restoreAvailable
   return {
     target: {
       targetUserMessageId: target.targetUserMessageId,
@@ -1867,6 +2172,7 @@ export async function previewSessionRewind(
 export async function listSessionTurnCheckpoints(
   sessionId: string,
   signal?: AbortSignal,
+  frozen = false,
 ): Promise<SessionTurnCheckpointPreview[]> {
   const {
     messages: activeMessages,
@@ -1879,7 +2185,9 @@ export async function listSessionTurnCheckpoints(
   }
 
   const workDir = await resolveSessionWorkDir(sessionId)
-  const snapshots = await loadFileHistorySnapshots(sessionId)
+  const snapshots = await scopeCarriedForwardSnapshots(
+    sessionId, await loadFileHistorySnapshots(sessionId), activeMessages, transcriptEvidenceComplete, workDir, frozen,
+  )
   signal?.throwIfAborted()
   const snapshotByMessageId = new Map<string, FileHistorySnapshot>()
   for (const snapshot of snapshots ?? []) {
@@ -1909,6 +2217,7 @@ export async function listSessionTurnCheckpoints(
       nextUserMessageId ? snapshotByMessageId.get(nextUserMessageId) ?? null : null,
       turn.messages,
       signal,
+      frozen,
     )
 
     checkpoints.push(checkpoint)
@@ -1921,17 +2230,23 @@ export async function getSessionTurnCheckpointDiff(
   sessionId: string,
   selector: RewindTargetSelector,
   requestedPath: string,
+  frozen = false,
 ): Promise<SessionTurnCheckpointDiffResult> {
   const target = await resolveRewindTarget(sessionId, selector)
+  if (frozen && ((selector.targetUserMessageId && selector.targetUserMessageId !== target.targetUserMessageId) || (selector.userMessageIndex !== undefined && selector.userMessageIndex !== target.userMessageIndex))) {
+    throw ApiError.badRequest('The recorded checkpoint identity no longer matches this turn')
+  }
   const workDir = await resolveSessionWorkDir(sessionId)
   const checkpointBaseDir = await resolveCheckpointBaseDir(
     sessionId,
     target.targetUserMessageId,
     workDir,
   )
-  const { messages: activeMessages } =
+  const { messages: activeMessages, transcriptEvidenceComplete } =
     await sessionService.getSessionMessagesWithEvidence(sessionId)
-  const snapshots = await loadFileHistorySnapshots(sessionId)
+  const snapshots = await scopeCarriedForwardSnapshots(
+    sessionId, await loadFileHistorySnapshots(sessionId), activeMessages, transcriptEvidenceComplete, workDir, frozen,
+  )
   const missingResult = {
     target: buildTurnPreview(
       target,
@@ -1952,6 +2267,7 @@ export async function getSessionTurnCheckpointDiff(
     target.targetUserMessageId,
     checkpointBaseDir,
     requestedPath,
+    frozen,
   )
   const transcriptResult = transcriptChange?.diff
     ? {
@@ -1981,6 +2297,7 @@ export async function getSessionTurnCheckpointDiff(
   for (const trackingPath of Object.keys(targetSnapshot.trackedFileBackups)) {
     const identityPath = toFileIdentityPath(
       expandTrackingPath(checkpointBaseDir, trackingPath),
+      frozen,
     )
     if (inspectedPathIdentities.has(identityPath)) continue
     inspectedPathIdentities.add(identityPath)
@@ -1991,8 +2308,8 @@ export async function getSessionTurnCheckpointDiff(
     const displayPath = toCheckpointResponsePath(trackingPath, checkpointBaseDir)
 
     try {
-      const { beforeContent, afterContent, afterBoundaryAvailable } =
-        await getTurnBoundaryContents(
+      const { beforeContent, afterContent, afterBoundaryAvailable, changed, textComparable } =
+        await (frozen ? getFrozenTurnBoundaryContents : getTurnBoundaryContents)(
         sessionId,
         checkpointBaseDir,
         trackingPath,
@@ -2006,10 +2323,17 @@ export async function getSessionTurnCheckpointDiff(
           path: displayPath,
         }
       }
-      if (beforeContent === afterContent) {
+      if (!changed) {
         return {
           ...missingResult,
           path: displayPath,
+        }
+      }
+      if (!textComparable) {
+        return {
+          ...missingResult,
+          path: displayPath,
+          error: 'This file cannot be compared as UTF-8 text.',
         }
       }
 
@@ -2085,7 +2409,7 @@ export async function executeSessionRewind(
     checkpointBaseDir,
     target.targetUserMessageId,
   )
-  const hasTurnScopedPreview = turnCheckpoint.code.available
+  const hasTurnScopedPreview = turnCheckpoint.code.available || !turnCheckpoint.restoreAvailable
   if (restoreFiles && !hasTurnScopedPreview && !codePreview.restoreAvailable) {
     throw ApiError.badRequest(
       'One or more tracked files cannot be safely restored from this checkpoint. No messages or files were changed.',

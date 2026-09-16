@@ -25,6 +25,7 @@ import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useSessionStore } from '@/stores/sessionStore'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import type { ModelInfo } from '../../types/settings'
 
@@ -46,6 +47,7 @@ afterEach(() => {
   useSettingsStore.setState(useSettingsStore.getInitialState(), true)
   useProviderStore.setState(useProviderStore.getInitialState(), true)
   useSessionRuntimeStore.setState(useSessionRuntimeStore.getInitialState(), true)
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
   useChatStore.setState(useChatStore.getInitialState(), true)
   useHahaOAuthStore.setState(useHahaOAuthStore.getInitialState(), true)
   useHahaOpenAIOAuthStore.setState(useHahaOpenAIOAuthStore.getInitialState(), true)
@@ -61,6 +63,73 @@ beforeEach(() => {
 })
 
 describe('ModelSelector', () => {
+  it('keeps a long model label shrinkable in a fluid desktop toolbar', () => {
+    useSettingsStore.setState({ locale: 'en', availableModels: MODELS, currentModel: MODELS[0] })
+    render(<ModelSelector value="alpha" onChange={vi.fn()} fluid />)
+    const button = screen.getByRole('button', { name: /alpha/i })
+    expect(button).toHaveClass('min-w-0', 'flex-1')
+    expect(button.querySelector('span')).toHaveClass('truncate')
+  })
+
+  it.each([true, false])('sends each provider slot with 1M=%s and preserves reasoning controls', async (enabled) => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({
+      activeId: 'provider-1m', hasLoadedProviders: true, isLoading: false,
+      providers: [{
+        id: 'provider-1m', presetId: 'custom', name: 'Provider 1M',
+        apiFormat: 'anthropic', apiKey: 'fixture', baseUrl: 'http://127.0.0.1:9999',
+        models: { main: 'main-model', haiku: 'haiku-model', sonnet: 'sonnet-model', opus: 'opus-model' },
+        model1mSupport: { main: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
+      }],
+    })
+    const runtimeChange = vi.fn()
+    render(<ModelSelector runtimeKey="__draft__" onRuntimeSelectionChange={runtimeChange} />)
+    for (const slot of ['main', 'haiku', 'sonnet', 'opus']) {
+      await clickByRole(/, Provider 1M$/)
+      fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: new RegExp(`^${slot}-model`) }))
+      expect(runtimeChange).toHaveBeenLastCalledWith({
+        providerId: 'provider-1m', modelId: `${slot}-model${enabled ? '[1m]' : ''}`, effortLevel: 'high',
+      })
+      expect(screen.getByRole('button', { name: /High/ })).toBeInTheDocument()
+    }
+  })
+
+  it.each(['unknown', 'mixed', 'anthropic'] as const)(
+    'allows cross-protocol selection despite retained %s session metadata', async (sessionApiFormat) => {
+      const sessionId = 'protocol-rollback-session'
+      // Older API responses and hydrated state can still contain the removed lock.
+      const legacySession = {
+        id: sessionId, title: 'Existing session', messageCount: 2,
+        createdAt: '2026-09-09T00:00:00.000Z', modifiedAt: '2026-09-09T00:00:00.000Z',
+        projectPath: '/fixture/project', workDir: '/fixture/project', workDirExists: true, sessionApiFormat,
+      }
+      const legacyChat = { ...useChatStore.getState().getSession(sessionId), sessionApiFormat }
+      useSessionStore.setState({ sessions: [legacySession] })
+      useChatStore.setState({ sessions: { [sessionId]: legacyChat } })
+      useSettingsStore.setState({ locale: 'en' })
+      useProviderStore.setState({
+        activeId: 'provider-a', hasLoadedProviders: true, isLoading: false,
+        providers: (['anthropic', 'openai_chat', 'openai_responses'] as const).map((apiFormat, index) => ({
+          id: `provider-${['a', 'b', 'c'][index]}`, name: `Provider ${index + 1}`, apiFormat,
+          presetId: 'custom', apiKey: 'fixture', baseUrl: 'http://127.0.0.1:9999',
+          models: { main: `model-${index + 1}`, haiku: '', sonnet: '', opus: '' },
+        })),
+      })
+      useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'provider-a', modelId: 'model-1' })
+      const runtimeChange = vi.fn()
+      render(<ModelSelector runtimeKey={sessionId} onRuntimeSelectionChange={runtimeChange} />)
+
+      await clickByRole('model-1, Provider 1')
+      expect(screen.getByRole('button', { name: /model-2/ })).toBeEnabled()
+      expect(screen.getByRole('button', { name: /model-3/ })).toBeEnabled()
+      await clickByRole(/model-2/)
+      expect(runtimeChange).toHaveBeenLastCalledWith(expect.objectContaining({ providerId: 'provider-b', modelId: 'model-2' }))
+      await clickByRole('model-2, Provider 2')
+      await clickByRole(/model-3/)
+      expect(runtimeChange).toHaveBeenLastCalledWith(expect.objectContaining({ providerId: 'provider-c', modelId: 'model-3' }))
+    },
+  )
+
   it('keeps the current Claude Official catalog visible when the API returns legacy settings models', async () => {
     const legacyModels: ModelInfo[] = [
       { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Legacy Opus', context: '1m' },
@@ -93,7 +162,7 @@ describe('ModelSelector', () => {
 
     await clickByRole(/Opus 4\.7/i)
 
-    expect(screen.getByRole('button', { name: /Fable 5/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fable 5\.1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Opus 4\.8/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Sonnet 5/ })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Opus 4\.7/ }).length).toBeGreaterThan(0)

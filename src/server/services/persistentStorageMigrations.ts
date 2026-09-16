@@ -8,9 +8,10 @@ import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import {
   BUILT_IN_PROVIDER_IDS,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
+  PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -172,6 +173,9 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     ...rest
   } = value
   const sourceSchemaVersion = typeof value.schemaVersion === 'number' ? value.schemaVersion : 1
+  // v5 introduces optional requestCompatibility. An absent object is the
+  // automatic policy, so upgrading v4 must not materialize a numeric budget
+  // from old Claude defaults. Spreading providers also preserves future fields.
   const providers = value.providers
     .filter(isSavedProvider)
     .map((provider) => sourceSchemaVersion < PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION

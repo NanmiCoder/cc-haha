@@ -3,8 +3,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openBrowser } = vi.hoisted(() => ({ openBrowser: vi.fn() }))
-vi.mock('../../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: { getState: () => ({ open: openBrowser }) },
+// The unified open entry point replaced the per-store `open` / `openPreview`
+// pair: every caller now names a target and the controller decides the tab.
+vi.mock('../../lib/workspace/openTarget', () => ({
+  workspaceOpen: {
+    file: (...args: unknown[]) => openPreviewFn(...args),
+    browser: (...args: unknown[]) => openBrowser(...args),
+    review: (...args: unknown[]) => openPreviewFn(...args),
+    terminal: vi.fn(),
+  },
+  openWorkspaceTarget: vi.fn(),
 }))
 vi.mock('../../lib/desktopRuntime', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -26,13 +34,14 @@ vi.mock('../../stores/openTargetStore', () => ({
 }))
 
 const openPreviewFn = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
-vi.mock('../../stores/workspacePanelStore', () => {
+// The workspace status probe moved to the content store; the workDir it
+// reports is what resolves a relative reference to an absolute path.
+vi.mock('../../stores/workspaceContentStore', () => {
   const state = {
     statusBySession: { s1: { workDir: '/work' } } as Record<string, { workDir?: string } | undefined>,
-    openPreview: openPreviewFn,
   }
   return {
-    useWorkspacePanelStore: Object.assign(
+    useWorkspaceContentStore: Object.assign(
       (selector: (s: typeof state) => unknown) => selector(state),
       { getState: () => state },
     ),
@@ -77,13 +86,13 @@ describe('AssistantMessage file references', () => {
     // #1146, and the contract src/constants/prompts.ts already asks the model for.
     render(<AssistantMessage sessionId="s1" content={'越界在 desktop/src/lib/foo.ts:42'} isStreaming={false} />)
     fireEvent.click(screen.getByRole('link', { name: 'desktop/src/lib/foo.ts:42' }))
-    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'desktop/src/lib/foo.ts', 'file', undefined, { line: 42 })
+    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'desktop/src/lib/foo.ts', { line: 42 })
   })
 
   it('opens an inline-code reference through the same route', () => {
     render(<AssistantMessage sessionId="s1" content={'改 `src/app.ts:7`'} isStreaming={false} />)
     fireEvent.click(screen.getByRole('link', { name: 'src/app.ts:7' }))
-    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'src/app.ts', 'file', undefined, { line: 7 })
+    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'src/app.ts', { line: 7 })
   })
 
   it('does not linkify a bare path mid-stream', () => {

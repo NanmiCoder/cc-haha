@@ -73,7 +73,7 @@ import { getFsImplementation } from '../fsOperations.js'
 import { gitExe } from '../git.js'
 import { lazySchema } from '../lazySchema.js'
 import { logError } from '../log.js'
-import { getSettings_DEPRECATED } from '../settings/settings.js'
+import { getSettings_DEPRECATED, getSettingsForSource } from '../settings/settings.js'
 import {
   clearPluginSettingsBase,
   getPluginSettingsBase,
@@ -1915,16 +1915,25 @@ function mergeHooksSettings(
  */
 async function loadPluginsFromMarketplaces({
   cacheOnly,
+  projectRoot,
 }: {
   cacheOnly: boolean
+  projectRoot?: string
 }): Promise<{
   plugins: LoadedPlugin[]
   errors: PluginError[]
 }> {
-  const settings = getSettings_DEPRECATED()
+  const settings = projectRoot ? {
+    enabledPlugins: {
+      ...getSettingsForSource('userSettings', projectRoot)?.enabledPlugins,
+      ...getSettingsForSource('projectSettings', projectRoot)?.enabledPlugins,
+      ...getSettingsForSource('localSettings', projectRoot)?.enabledPlugins,
+      ...getSettingsForSource('policySettings', projectRoot)?.enabledPlugins,
+    },
+  } : getSettings_DEPRECATED()
   // Merge --add-dir plugins at lowest priority; standard settings win on conflict
   const enabledPlugins = {
-    ...getAddDirEnabledPlugins(),
+    ...(projectRoot ? {} : getAddDirEnabledPlugins()),
     ...(settings.enabledPlugins || {}),
   }
   const plugins: LoadedPlugin[] = []
@@ -2076,7 +2085,14 @@ async function loadPluginsFromMarketplaces({
       // installed_plugins.json records what's actually cached on disk
       // (version for the full loader's first-pass probe, installPath for
       // the cache-only loader's direct read).
-      const installEntry = installedPluginsData.plugins[pluginId]?.[0]
+      const installations = installedPluginsData.plugins[pluginId] ?? []
+      const installEntry = projectRoot
+        ? installations.find(entry => entry.scope === 'local' && entry.projectPath && resolve(entry.projectPath) === resolve(projectRoot))
+          ?? installations.find(entry => entry.scope === 'project' && entry.projectPath && resolve(entry.projectPath) === resolve(projectRoot))
+          ?? installations.find(entry => entry.scope === 'user')
+        : installations[0]
+      // A different project's cached installation is not an installed capability here.
+      if (projectRoot && !installEntry) return null
       const enabled = isEnabledPluginSettingValue(enabledValue)
       return cacheOnly
         ? loadPluginFromMarketplaceEntryCacheOnly(
@@ -3173,6 +3189,14 @@ export const loadAllPluginsCacheOnly = memoize(
     )
   },
 )
+
+/** Read installed project capabilities without changing process/session settings. */
+export async function loadInstalledPluginsForProject(projectRoot: string): Promise<PluginLoadResult> {
+  const result = await loadPluginsFromMarketplaces({ cacheOnly: true, projectRoot: resolve(projectRoot) })
+  const { demoted, errors } = verifyAndDemote(result.plugins)
+  const enabled = result.plugins.filter(plugin => plugin.enabled && !demoted.has(plugin.source))
+  return { enabled, disabled: result.plugins.filter(plugin => !enabled.includes(plugin)), errors: [...result.errors, ...errors] }
+}
 
 /**
  * Shared body of loadAllPlugins and loadAllPluginsCacheOnly.

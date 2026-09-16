@@ -1,6 +1,5 @@
 import type { Command } from '../commands.js'
 import type { ToolUseContext } from '../Tool.js'
-import { getAttributionTexts } from '../utils/attribution.js'
 import { executeShellCommandsInPrompt } from '../utils/promptShellExecution.js'
 import {
   resolveDefaultShell,
@@ -21,22 +20,19 @@ export function getCommitAllowedTools(shell: ShellToolType | null): string[] {
 }
 
 export function getPromptContent(shell: ShellToolType): string {
-  const { commit: commitAttribution } = getAttributionTexts()
-
   let prefix = ''
   if (process.env.USER_TYPE === 'ant' && isUndercover()) {
     prefix = getUndercoverInstructions() + '\n'
   }
 
-  const attribution = commitAttribution ? `\n\n${commitAttribution}` : ''
   const commitExample =
     shell === 'powershell'
       ? `$commitMessage = @'
-Commit message here.${attribution}
+Commit message here.
 '@
 git commit -m $commitMessage`
       : `git commit -m "$(cat <<'EOF'
-Commit message here.${attribution}
+Commit message here.
 EOF
 )"`
 

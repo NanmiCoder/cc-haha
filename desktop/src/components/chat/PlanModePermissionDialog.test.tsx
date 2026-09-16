@@ -167,6 +167,63 @@ describe('plan mode permission UI', () => {
     })
   })
 
+  it('approves with an explicit bypass permission update', () => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: PLAN, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve & bypass permissions' }))
+
+    // The CLI resumes implementation with the session mode pinned here; without
+    // it a session that launched in plan mode falls back to `default` and
+    // prompts for every tool call.
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+      permissionUpdates: [
+        { type: 'setMode', mode: 'bypassPermissions', destination: 'session' },
+      ],
+    })
+  })
+
+  it('approves with auto-accept edits and keeps the requested prompt rules', () => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve & auto-accept edits' }))
+
+    // Order matters: the mode rides first, the prompt rules follow it.
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+      permissionUpdates: [
+        { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'prompt: run tests' }],
+          behavior: 'allow',
+          destination: 'session',
+        },
+      ],
+    })
+  })
+
   it('renders approved ExitPlanMode results as a markdown plan card', () => {
     const { container } = render(
       <ToolCallBlock

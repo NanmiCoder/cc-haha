@@ -657,6 +657,9 @@ export function ComponentGallery() {
           <Tooltip content="This is a tooltip. It should flip near the viewport edge.">
             <Button variant="ghost">Hover / focus me</Button>
           </Tooltip>
+          <Tooltip appearance="surface" content={<span className="flex items-center gap-3">Toggle bottom panel <kbd>⌘J</kbd></span>}>
+            <Button variant="ghost">Workspace tooltip</Button>
+          </Tooltip>
           <Dropdown
             items={[
               { value: 'sonnet', label: 'Sonnet', description: 'Balanced' },

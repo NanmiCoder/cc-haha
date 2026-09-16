@@ -56,10 +56,12 @@ struct CursorMotionState: Equatable, Sendable {
 
 @MainActor
 enum CursorActionTiming {
-    /// Start a foreground glide, then wait only the bounded action delay. A
-    /// background/unrequested action snaps and does not call `sleep` at all.
+    /// Start visible feedback immediately. Coordinate gestures opt out of the
+    /// bounded readability delay; indexed actions retain their current policy.
+    /// Hidden/unrequested feedback snaps without calling `sleep`.
     static func perform(
         decision: OverlayPolicy.Decision,
+        waitForVisualFeedback: Bool = true,
         startGlide: () -> Void,
         snap: () -> Void,
         sleep: (TimeInterval) async -> Void
@@ -69,7 +71,7 @@ enum CursorActionTiming {
             return
         }
         startGlide()
-        if decision.actionDelay > 0 {
+        if waitForVisualFeedback, decision.actionDelay > 0 {
             await sleep(decision.actionDelay)
         }
     }

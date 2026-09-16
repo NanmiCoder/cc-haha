@@ -6,7 +6,15 @@ import type { AttachmentRef } from '../ws-bridge.js'
 export type { AttachmentRef }
 
 /** Platform tag — used for local staging subdir and telemetry. */
-export type ImPlatform = 'feishu' | 'telegram' | 'wechat' | 'dingtalk' | 'whatsapp'
+export type ImPlatform =
+  | 'feishu'
+  | 'telegram'
+  | 'wechat'
+  | 'dingtalk'
+  | 'whatsapp'
+  | 'wecom'
+  | 'qq'
+  | 'slack'
 
 /** Result of downloading an IM resource into the local stage dir. */
 export interface LocalAttachment {

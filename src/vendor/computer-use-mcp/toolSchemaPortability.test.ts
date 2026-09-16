@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { buildPlatformComputerUseTools } from './mcpServer.js'
+import { buildComputerUseTools } from './tools.js'
 
 /**
  * Cross-provider portability rules for the Computer Use tool schemas.
@@ -89,7 +90,7 @@ describe('computer use tool schema portability', () => {
     // take coordinates alone — so keying by name across both platforms would
     // silently assert against whichever came last.
     const darwinTools = new Map(
-      buildPlatformComputerUseTools(
+      buildComputerUseTools(
         { screenshotFiltering: 'native', platform: 'darwin' },
         'pixels',
       ).map(tool => [tool.name, tool]),

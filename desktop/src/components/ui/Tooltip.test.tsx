@@ -6,6 +6,14 @@ import { Button } from './Button'
 import { Tooltip } from './Tooltip'
 
 describe('Tooltip', () => {
+  it('offers a surface hint without stacking inverse colors over it', () => {
+    render(<Tooltip appearance="surface" content={<span>Toggle panel <kbd>⌘J</kbd></span>} delay={0}><Button>Toggle</Button></Tooltip>)
+    fireEvent.focus(screen.getByRole('button'))
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).toHaveTextContent('⌘J')
+    expect(tooltip.className).toContain('bg-[var(--color-surface-container-lowest)]')
+    expect(tooltip.className).not.toContain('bg-[var(--color-inverse-surface)]')
+  })
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 

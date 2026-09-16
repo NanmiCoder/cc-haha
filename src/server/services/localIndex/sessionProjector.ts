@@ -34,7 +34,9 @@ import type {
 // that refreshes already-indexed transcripts.
 // 3: usage is deduplicated per (message.id, requestId), and sessions carry active working time.
 // 4: usage copied into a fork is excluded from the fork's activity projection.
-export const SESSION_SUMMARY_PARSER_VERSION = 4
+// 5: protocol-lock metadata was projected into session summaries.
+// 6: protocol enforcement was removed; rebuild v5 summaries without protocol restrictions.
+export const SESSION_SUMMARY_PARSER_VERSION = 6
 
 export type SessionSourceCandidate = {
   path: string

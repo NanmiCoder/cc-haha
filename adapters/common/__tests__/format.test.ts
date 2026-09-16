@@ -4,6 +4,8 @@ import {
   formatImHelp,
   formatImStatus,
   splitMessage,
+  splitMessageByBytes,
+  utf8Length,
   formatToolUse,
   formatPermissionRequest,
   truncateInput,
@@ -218,5 +220,57 @@ describe('formatImStatus', () => {
     expect(text).toContain('当前没有活动会话')
     expect(text).toContain('/new')
     expect(text).toContain('/projects')
+  })
+})
+
+describe('splitMessageByBytes', () => {
+  it('returns a single chunk when the text already fits', () => {
+    expect(splitMessageByBytes('hello', 100)).toEqual(['hello'])
+  })
+
+  // The reason this function exists: WeCom caps on UTF-8 bytes, and a
+  // character-based split silently overflows the moment the text is Chinese.
+  it('keeps every chunk inside the byte budget for CJK text', () => {
+    const text = Array.from({ length: 200 }, (_, i) => `第 ${i} 段中文内容。`).join('\n')
+
+    const chunks = splitMessageByBytes(text, 300)
+
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const chunk of chunks) {
+      expect(utf8Length(chunk)).toBeLessThanOrEqual(300)
+    }
+    expect(chunks.join('\n').replace(/\s+/g, '')).toBe(text.replace(/\s+/g, ''))
+  })
+
+  it('prefers a line boundary over cutting mid-line', () => {
+    const chunks = splitMessageByBytes('first line\nsecond line', 12)
+
+    expect(chunks[0]).toBe('first line')
+  })
+
+  it('never splits a surrogate pair into invalid UTF-8', () => {
+    const text = '🙂'.repeat(50)
+
+    const chunks = splitMessageByBytes(text, 9)
+
+    for (const chunk of chunks) {
+      expect(chunk).not.toContain('\uFFFD')
+      expect(Buffer.from(chunk, 'utf8').toString('utf8')).toBe(chunk)
+    }
+    expect(chunks.join('')).toBe(text)
+  })
+
+  it('makes progress even when a single token exceeds the budget', () => {
+    const chunks = splitMessageByBytes('这是一个没有空格的超长中文串', 4)
+
+    expect(chunks.length).toBeGreaterThan(1)
+    expect(chunks.join('')).toBe('这是一个没有空格的超长中文串')
+  })
+})
+
+describe('utf8Length', () => {
+  it('counts bytes, not characters', () => {
+    expect(utf8Length('abc')).toBe(3)
+    expect(utf8Length('中文')).toBe(6)
   })
 })

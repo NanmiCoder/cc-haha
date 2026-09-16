@@ -328,41 +328,27 @@ export const SettingsSchema = lazySchema(() =>
         .int()
         .optional()
         .describe(
-          'Number of days to retain chat transcripts (default: 30). Setting to 0 disables session persistence entirely: no transcripts are written and existing transcripts are deleted at startup.',
+          'Number of days to retain chat transcripts (default: 365). Setting to 0 disables session persistence entirely: no transcripts are written and existing transcripts are deleted.',
         ),
       env: EnvironmentVariablesSchema()
         .optional()
         .describe('Environment variables to set for Claude Code sessions'),
-      // Attribution for commits and PRs
+      // Retired: commit/PR attribution is no longer injected. Kept as
+      // deprecated accept-and-ignore fields so existing settings files stay
+      // schema-valid — validateSettingsFileContent() parses with .strict(),
+      // and an unknown key there disables the settings edit guard entirely.
+      // See the BACKWARD COMPATIBILITY NOTICE above.
       attribution: z
         .object({
-          commit: z
-            .string()
-            .optional()
-            .describe(
-              'Attribution text for git commits, including any trailers. ' +
-                'Empty string hides attribution.',
-            ),
-          pr: z
-            .string()
-            .optional()
-            .describe(
-              'Attribution text for pull request descriptions. ' +
-                'Empty string hides attribution.',
-            ),
+          commit: z.string().optional(),
+          pr: z.string().optional(),
         })
         .optional()
-        .describe(
-          'Customize attribution text for commits and PRs. ' +
-            'Each field defaults to the standard Claude Code attribution if not set.',
-        ),
+        .describe('Deprecated: ignored. Commit and PR attribution is no longer added.'),
       includeCoAuthoredBy: z
         .boolean()
         .optional()
-        .describe(
-          'Deprecated: Use attribution instead. ' +
-            "Whether to include Claude's co-authored by attribution in commits and PRs (defaults to true)",
-        ),
+        .describe('Deprecated: ignored. Commit and PR attribution is no longer added.'),
       includeGitInstructions: z
         .boolean()
         .optional()
@@ -476,6 +462,10 @@ export const SettingsSchema = lazySchema(() =>
           'Explicitly enable dynamic workflows. Only consulted when they are not ' +
             'disabled; `disableWorkflows` and CLAUDE_CODE_DISABLE_WORKFLOWS win.',
         ),
+      agentTeamsEnabled: z
+        .boolean()
+        .optional()
+        .describe('Enable Agent Teams for new cc-haha managed sessions. Overrides the legacy team environment setting.'),
       workflowKeywordTriggerEnabled: z
         .boolean()
         .optional()

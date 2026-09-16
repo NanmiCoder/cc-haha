@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PDF_MAX_PAGES_PER_READ } from '../../constants/apiLimits.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
-import { FileReadTool } from './FileReadTool.js'
+import { FileReadTool, readImageWithTokenBudget } from './FileReadTool.js'
+import { getImageCreator, getImageProcessor } from './imageProcessor.js'
+import * as imageResizer from '../../utils/imageResizer.js'
 
 function makeToolUseContext(): ToolUseContext {
   return {
@@ -18,6 +20,37 @@ function makeToolUseContext(): ToolUseContext {
 }
 
 const temporaryDirectories: string[] = []
+
+test('uses the shared image processor for the final image compression fallback', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-haha-read-image-fallback-'))
+  temporaryDirectories.push(root)
+  const filePath = join(root, 'fixture.png')
+  const creator = await getImageCreator()
+  const processor = await getImageProcessor()
+  const image = await creator({ create: {
+    width: 4, height: 3, channels: 3, background: { r: 20, g: 40, b: 60 },
+  } }).png().toBuffer()
+  await writeFile(filePath, image)
+  const resize = spyOn(imageResizer, 'maybeResizeAndDownsampleImageBuffer').mockResolvedValue({
+    buffer: image, mediaType: 'png', dimensions: { originalWidth: 1000, originalHeight: 1000, displayWidth: 1000, displayHeight: 1000 },
+  })
+  const downsample = spyOn(imageResizer, 'downsampleImageBufferToVisionTokenBudget')
+    .mockRejectedValue(new Error('fixture downsample failure'))
+  const compress = spyOn(imageResizer, 'compressImageBufferWithTokenLimit')
+    .mockRejectedValue(new Error('fixture compression failure'))
+  try {
+    const result = await readImageWithTokenBudget(filePath, 1)
+    expect(downsample).toHaveBeenCalledTimes(1)
+    expect(compress).toHaveBeenCalledTimes(1)
+    expect(result.file.type).toBe('image/jpeg')
+    expect(await processor(Buffer.from(result.file.base64, 'base64')).metadata())
+      .toMatchObject({ width: 4, height: 3, format: 'jpeg' })
+  } finally {
+    resize.mockRestore()
+    downsample.mockRestore()
+    compress.mockRestore()
+  }
+})
 
 afterEach(async () => {
   await Promise.all(

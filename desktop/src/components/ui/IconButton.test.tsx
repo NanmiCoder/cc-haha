@@ -123,10 +123,7 @@ describe('IconButton', () => {
   })
 
   it('draws the terminal surface from the terminal palette, not the page one', () => {
-    // The terminal panel is one warm-ink block under every palette. The page
-    // tokens are inverted against it: --color-text-tertiary is a dark grey and
-    // --color-surface-hover a light cream, so a `muted` button on the default
-    // surface renders as an invisible glyph that flashes a pale square.
+    // Keep terminal controls on the same palette as xterm, including hover.
     const { container } = render(
       <IconButton icon={<span />} label="Clear" tone="muted" surface="terminal" />,
     )
@@ -134,6 +131,22 @@ describe('IconButton', () => {
     expect(className).toContain('text-[var(--color-terminal-muted)]')
     expect(className).toContain('hover:bg-[var(--color-terminal-selection)]')
     expect(className).toContain('hover:text-[var(--color-terminal-fg)]')
+    expect(className).not.toContain('text-[var(--color-text-tertiary)]')
+    expect(className).not.toContain('hover:bg-[var(--color-surface-hover)]')
+  })
+
+  it('draws the media surface from the media palette, not the page one', () => {
+    // Media remains dark even when the terminal follows a light theme. The page
+    // tokens are inverted against it: --color-text-tertiary is a dark grey and
+    // --color-surface-hover a light cream, so a `muted` button on the default
+    // surface renders as an invisible glyph that flashes a pale square.
+    const { container } = render(
+      <IconButton icon={<span />} label="Clear" tone="muted" surface="media" />,
+    )
+    const className = container.firstElementChild!.className
+    expect(className).toContain('text-[var(--color-media-muted)]')
+    expect(className).toContain('hover:bg-[var(--color-media-selection)]')
+    expect(className).toContain('hover:text-[var(--color-media-fg)]')
     expect(className).not.toContain('text-[var(--color-text-tertiary)]')
     expect(className).not.toContain('hover:bg-[var(--color-surface-hover)]')
   })

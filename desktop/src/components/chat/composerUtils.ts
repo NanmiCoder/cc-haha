@@ -63,14 +63,46 @@ export const SLASH_COMMAND_ALIASES = [
   { name: 'settings', target: 'config' },
 ] as const
 
-const DESKTOP_RESERVED_SLASH_COMMAND_NAMES = new Set(
-  [
-    ...PANEL_SLASH_COMMANDS.map(command => command.name),
-    ...SETTINGS_SLASH_COMMANDS.map(command => command.name),
-    ...SLASH_COMMAND_ALIASES.map(command => command.name),
-    'model',
-  ].map(name => name.toLowerCase()),
+/**
+ * Commands the desktop owns, in the order the slash menu should lead with them.
+ * The order is the one the panel and settings tables declare, so the first
+ * screen stays the same no matter how the CLI happened to register its list.
+ */
+const DESKTOP_SLASH_COMMAND_NAMES: readonly string[] = [
+  ...PANEL_SLASH_COMMANDS.map(command => command.name),
+  ...SETTINGS_SLASH_COMMANDS.map(command => command.name),
+  ...SLASH_COMMAND_ALIASES.map(command => command.name),
+  'model',
+]
+
+/**
+ * A session's command list is stitched together from the CLI's own registration
+ * (its bundled skills first) and the desktop fallback, which leaves entries such
+ * as `update-config`, `debug` and `batch` above the fold while the commands a
+ * user reaches for sit below it. Desktop-owned commands are unconditional — the
+ * client runs them itself — so they lead, and everything else keeps the order
+ * its source gave it.
+ */
+const PREFERRED_SLASH_COMMAND_RANKS = new Map(
+  DESKTOP_SLASH_COMMAND_NAMES.map((name, index) => [name.toLowerCase(), index] as const),
 )
+
+function prioritizeSlashCommands(commands: SlashCommandOption[]): SlashCommandOption[] {
+  const rankOf = (command: SlashCommandOption): number | undefined =>
+    PREFERRED_SLASH_COMMAND_RANKS.get(command.name.trim().toLowerCase())
+  const preferred = commands
+    .map((command, index) => ({ command, index, rank: rankOf(command) }))
+    .filter((entry): entry is { command: SlashCommandOption, index: number, rank: number } => entry.rank !== undefined)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+  if (!preferred.length || preferred.length === commands.length) return commands
+  return [
+    ...preferred.map(entry => entry.command),
+    ...commands.filter(command => rankOf(command) === undefined),
+  ]
+}
+
+/** Commands the desktop reserves for itself; new workflows must not claim them. */
+const DESKTOP_RESERVED_SLASH_COMMAND_NAMES = new Set(DESKTOP_SLASH_COMMAND_NAMES.map(name => name.toLowerCase()))
 
 export type SlashCommandNameConflict = 'reserved' | 'existing'
 
@@ -87,7 +119,17 @@ export function getSlashCommandNameConflict(
     : null
 }
 
-/** Static fallback with English descriptions (for non-React contexts) */
+/**
+ * Static fallback with English descriptions (for non-React contexts).
+ *
+ * Only commands this desktop can actually run belong here. The list is merged
+ * into the slash menu for sessions whose CLI has not reported its own commands
+ * yet, and every entry either resolves locally (see `resolveSlashUiAction`) or
+ * runs in the headless CLI. Interactive-TUI-only commands (`clear`, `vim`,
+ * `terminal-setup`, `permissions`), internal commands (`commit`, `pr`, `bug`)
+ * and sign-in commands are deliberately absent: the headless CLI answers them
+ * with "Unknown skill" instead of doing anything.
+ */
 export const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'agent', description: 'Run a prompt with a selected Agent', argumentHint: '<agent> <prompt>' },
   { name: 'mcp', description: 'Open available MCP tools for the current chat context' },
@@ -101,20 +143,11 @@ export const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'memory', description: 'Open project memory files in Settings' },
   { name: 'doctor', description: 'Open Doctor in Diagnostics' },
   { name: 'compact', description: 'Compact conversation context' },
-  { name: 'clear', description: 'Clear conversation history' },
   { name: 'goal', description: 'Set a completion goal', argumentHint: '[<condition> | clear]' },
   { name: 'review', description: 'Review code changes' },
-  { name: 'commit', description: 'Create a git commit' },
-  { name: 'pr', description: 'Create a pull request' },
   { name: 'init', description: 'Initialize project CLAUDE.md' },
-  { name: 'bug', description: 'Report a bug' },
   { name: 'config', description: 'Open configuration' },
-  { name: 'login', description: 'Switch Anthropic accounts' },
-  { name: 'logout', description: 'Sign out of current account' },
   { name: 'model', description: 'Switch AI model' },
-  { name: 'permissions', description: 'View or manage tool permissions' },
-  { name: 'terminal-setup', description: 'Set up terminal integration' },
-  { name: 'vim', description: 'Toggle vim editing mode' },
 ]
 
 /** Build localized fallback commands using the current locale.
@@ -151,6 +184,7 @@ export function getLocalizedFallbackCommands(t: (key: TranslationKey) => string)
 export type SlashCommandGroups = {
   system: SlashCommandOption[]
   skills: SlashCommandOption[]
+  plugins?: SlashCommandOption[]
   ordered: SlashCommandOption[]
 }
 
@@ -159,9 +193,12 @@ export function groupSlashCommands(
 ): SlashCommandGroups {
   const system: SlashCommandOption[] = []
   const skills: SlashCommandOption[] = []
+  const plugins: SlashCommandOption[] = []
 
   for (const command of commands) {
-    if (command.kind === 'skill') {
+    if (command.kind === 'plugin') {
+      plugins.push(command)
+    } else if (command.kind === 'skill') {
       skills.push(command)
     } else {
       system.push(command)
@@ -171,7 +208,8 @@ export function groupSlashCommands(
   return {
     system,
     skills,
-    ordered: [...system, ...skills],
+    plugins,
+    ordered: [...system, ...plugins, ...skills],
   }
 }
 
@@ -317,7 +355,9 @@ export function filterSlashCommands(
   filter: string,
 ): SlashCommandOption[] {
   const normalized = filter.toLowerCase()
-  if (!normalized.trim()) return [...commands]
+  // No query yet: this is the order the menu opens on, so lead with the
+  // commands the desktop owns instead of whatever the CLI registered first.
+  if (!normalized.trim()) return prioritizeSlashCommands([...commands])
 
   return commands
     .map((command, index) => ({

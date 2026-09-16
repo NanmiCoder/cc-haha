@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { computerUseApi, type ComputerUseStatus, type SetupResult, type InstalledApp, type AuthorizedApp } from '../api/computerUse'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { computerUseApi, type ComputerUseStatus, type SetupResult } from '../api/computerUse'
 import { useTranslation } from '../i18n'
+import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Modal } from '@/components/ui/Modal'
 import { Switch } from '@/components/ui/Switch'
 import { getDesktopHost } from '../lib/desktopHost'
 
@@ -59,22 +59,14 @@ export function ComputerUseSettings() {
   const [setupRunning, setSetupRunning] = useState(false)
   const [setupResult, setSetupResult] = useState<SetupResult | null>(null)
 
-  // App authorization state
-  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([])
-  const [authorizedBundleIds, setAuthorizedBundleIds] = useState<Set<string>>(new Set())
-  const [authorizedApps, setAuthorizedApps] = useState<AuthorizedApp[]>([])
-  const [appsLoading, setAppsLoading] = useState(false)
-  const [appsSaved, setAppsSaved] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [computerUseEnabled, setComputerUseEnabled] = useState(true)
-  const [clipboardAccess, setClipboardAccess] = useState(true)
-  const [systemKeys, setSystemKeys] = useState(true)
+  const [computerUseEnabled, setComputerUseEnabled] = useState(false)
+  const [enableConfirmOpen, setEnableConfirmOpen] = useState(false)
+  const [enableSaving, setEnableSaving] = useState(false)
   const [pythonPathDraft, setPythonPathDraft] = useState('')
   const [pythonPathSaved, setPythonPathSaved] = useState('')
   const [pythonPathSaving, setPythonPathSaving] = useState(false)
   const [pythonPathMessage, setPythonPathMessage] = useState<string | null>(null)
   // Native (cu-helper) Codex-style UI state
-  const [pickerOpen, setPickerOpen] = useState(false)
   const [cardOpening, setCardOpening] = useState(false)
   const [cardError, setCardError] = useState<string | null>(null)
   const configMutationSeqRef = useRef(0)
@@ -100,10 +92,6 @@ export function ComputerUseSettings() {
   ) => {
     if (requestSeq !== configMutationSeqRef.current) return
     setComputerUseEnabled(configResult.enabled)
-    setAuthorizedApps(configResult.authorizedApps)
-    setAuthorizedBundleIds(new Set(configResult.authorizedApps.map(a => a.bundleId)))
-    setClipboardAccess(configResult.grantFlags.clipboardRead)
-    setSystemKeys(configResult.grantFlags.systemKeyCombos)
     setPythonPathDraft(configResult.pythonPath ?? '')
     setPythonPathSaved(configResult.pythonPath ?? '')
   }, [])
@@ -122,33 +110,12 @@ export function ComputerUseSettings() {
     }
   }, [applyConfig])
 
-  const fetchApps = useCallback(async () => {
-    const requestSeq = configMutationSeqRef.current
-    setAppsLoading(true)
-    try {
-      const [appsResult, configResult] = await Promise.all([
-        computerUseApi.getInstalledApps(),
-        computerUseApi.getAuthorizedApps(),
-      ])
-      setInstalledApps(appsResult.apps)
-      applyConfig(configResult, requestSeq)
-    } catch {
-      // API not ready
-    } finally {
-      setAppsLoading(false)
-    }
-  }, [applyConfig])
-
   useEffect(() => {
     fetchStatus()
     fetchConfig()
   }, [fetchStatus, fetchConfig])
 
-  // Load apps when environment is ready
   const envReady = status?.venv.created && status?.dependencies.installed
-  useEffect(() => {
-    if (envReady) fetchApps()
-  }, [envReady, fetchApps])
 
   const handleSetup = async () => {
     setSetupRunning(true)
@@ -157,55 +124,11 @@ export function ComputerUseSettings() {
       const result = await computerUseApi.runSetup()
       setSetupResult(result)
       await fetchStatus()
-      if (result.success) await fetchApps()
     } catch {
       setSetupResult({ success: false, steps: [{ name: 'error', ok: false, message: 'Request failed' }] })
     } finally {
       setSetupRunning(false)
     }
-  }
-
-  const toggleApp = (app: InstalledApp) => {
-    configMutationSeqRef.current += 1
-    const newSet = new Set(authorizedBundleIds)
-    let newAuthorized = [...authorizedApps]
-    if (newSet.has(app.bundleId)) {
-      newSet.delete(app.bundleId)
-      newAuthorized = newAuthorized.filter(a => a.bundleId !== app.bundleId)
-    } else {
-      newSet.add(app.bundleId)
-      newAuthorized.push({
-        bundleId: app.bundleId,
-        displayName: app.displayName,
-        authorizedAt: new Date().toISOString(),
-      })
-    }
-    setAuthorizedBundleIds(newSet)
-    setAuthorizedApps(newAuthorized)
-
-    // Auto-save
-    computerUseApi.setAuthorizedApps({
-      authorizedApps: newAuthorized,
-      grantFlags: { clipboardRead: clipboardAccess, clipboardWrite: clipboardAccess, systemKeyCombos: systemKeys },
-    }).then(() => {
-      setAppsSaved(true)
-      setTimeout(() => setAppsSaved(false), 1500)
-    })
-  }
-
-  const toggleFlag = (flag: 'clipboard' | 'systemKeys', value: boolean) => {
-    configMutationSeqRef.current += 1
-    if (flag === 'clipboard') setClipboardAccess(value)
-    else setSystemKeys(value)
-
-    computerUseApi.setAuthorizedApps({
-      authorizedApps,
-      grantFlags: {
-        clipboardRead: flag === 'clipboard' ? value : clipboardAccess,
-        clipboardWrite: flag === 'clipboard' ? value : clipboardAccess,
-        systemKeyCombos: flag === 'systemKeys' ? value : systemKeys,
-      },
-    })
   }
 
   const toggleComputerUseEnabled = async (value: boolean): Promise<boolean> => {
@@ -214,10 +137,17 @@ export function ComputerUseSettings() {
     setConfigError(null)
     setComputerUseEnabled(value)
     try {
-      await computerUseApi.setAuthorizedApps({ enabled: value })
+      await computerUseApi.setAuthorizedApps(value
+        ? {
+            enabled: true,
+            grantFlags: {
+              clipboardRead: true,
+              clipboardWrite: true,
+              systemKeyCombos: true,
+            },
+          }
+        : { enabled: false })
       if (requestSeq !== configMutationSeqRef.current) return true
-      setAppsSaved(true)
-      setTimeout(() => setAppsSaved(false), 1500)
       return true
     } catch {
       if (requestSeq === configMutationSeqRef.current) {
@@ -248,65 +178,28 @@ export function ComputerUseSettings() {
     }
   }, [t, fetchStatus])
 
-  // Master Computer Use toggle on the native path. Mirrors toggleComputerUseEnabled
-  // for persistence, but additionally pops the native OS-permission card when
-  // turning ON while macOS permissions are still missing (the headline flow).
-  const toggleAnyApp = (value: boolean) => {
-    void (async () => {
-      const saved = await toggleComputerUseEnabled(value)
-      if (
-        saved &&
-        value &&
-        (status?.permissions.accessibility === false ||
-          status?.permissions.screenRecording === false)
-      ) {
-        await openPermissionCard()
-      }
-    })()
-  }
-
-  // Persist an authorized-apps list change (native add/remove). Reuses the same
-  // setAuthorizedApps shape + saved-flash + stale-guard discipline as toggleApp.
-  const persistAuthorizedApps = useCallback((next: AuthorizedApp[]) => {
-    configMutationSeqRef.current += 1
-    setAuthorizedApps(next)
-    setAuthorizedBundleIds(new Set(next.map(a => a.bundleId)))
-    computerUseApi.setAuthorizedApps({
-      authorizedApps: next,
-      grantFlags: { clipboardRead: clipboardAccess, clipboardWrite: clipboardAccess, systemKeyCombos: systemKeys },
-    }).then(() => {
-      setAppsSaved(true)
-      setTimeout(() => setAppsSaved(false), 1500)
-    })
-  }, [clipboardAccess, systemKeys])
-
-  const removeAuthorizedApp = (bundleId: string) => {
-    persistAuthorizedApps(authorizedApps.filter(a => a.bundleId !== bundleId))
-  }
-
-  const addAuthorizedApp = (app: InstalledApp) => {
-    if (authorizedBundleIds.has(app.bundleId)) {
-      setPickerOpen(false)
+  const requestComputerUseEnabled = (value: boolean) => {
+    if (value) {
+      setEnableConfirmOpen(true)
       return
     }
-    persistAuthorizedApps([
-      ...authorizedApps,
-      {
-        bundleId: app.bundleId,
-        displayName: app.displayName,
-        authorizedAt: new Date().toISOString(),
-      },
-    ])
-    setPickerOpen(false)
+    void toggleComputerUseEnabled(false)
   }
 
-  // Lazy-load installed apps the first time the picker opens (the native path
-  // has no Python env-ready gate, so fetchApps' envReady effect never fires).
-  const openPicker = useCallback(() => {
-    setSearchQuery('')
-    setPickerOpen(true)
-    if (installedApps.length === 0) void fetchApps()
-  }, [installedApps.length, fetchApps])
+  const confirmComputerUseEnabled = async () => {
+    setEnableSaving(true)
+    const saved = await toggleComputerUseEnabled(true)
+    setEnableSaving(false)
+    if (!saved) return
+    setEnableConfirmOpen(false)
+    if (
+      status?.engine === 'macos-native'
+      && (status.permissions.accessibility === false
+        || status.permissions.screenRecording === false)
+    ) {
+      await openPermissionCard()
+    }
+  }
 
   const savePythonPath = async (value = pythonPathDraft) => {
     configMutationSeqRef.current += 1
@@ -367,35 +260,19 @@ export function ComputerUseSettings() {
       ? `${t('settings.computerUse.pythonCustomInvalid')} — ${status.python.path}${status.python.error ? `: ${status.python.error}` : ''}`
       : t('settings.computerUse.pythonNotFound')
 
-  // Filter apps by search query
-  const filteredApps = useMemo(() => {
-    if (!searchQuery) return installedApps
-    const q = searchQuery.toLowerCase()
-    return installedApps.filter(
-      a => a.displayName.toLowerCase().includes(q) || a.bundleId.toLowerCase().includes(q)
-    )
-  }, [installedApps, searchQuery])
-
-  // Sort: authorized apps first, then alphabetical
-  const sortedApps = useMemo(() => {
-    return [...filteredApps].sort((a, b) => {
-      const aAuth = authorizedBundleIds.has(a.bundleId) ? 0 : 1
-      const bAuth = authorizedBundleIds.has(b.bundleId) ? 0 : 1
-      if (aAuth !== bAuth) return aAuth - bAuth
-      return a.displayName.localeCompare(b.displayName)
-    })
-  }, [filteredApps, authorizedBundleIds])
-
   // Native (cu-helper) path: drop the entire Python setup flow in favor of the
   // Codex-style page. Branch ONLY when on macOS AND the Swift helper resolves.
   const native = status?.engine === 'macos-native'
 
-  // Picker list (native "+ 添加应用"): installed apps not yet authorized, sorted.
-  const pickerApps = useMemo(() => {
-    return [...filteredApps]
-      .filter(a => !authorizedBundleIds.has(a.bundleId))
-      .sort((a, b) => a.displayName.localeCompare(b.displayName))
-  }, [filteredApps, authorizedBundleIds])
+  const enableDialog = (
+    <ComputerUseEnableDialog
+      open={enableConfirmOpen}
+      loading={enableSaving}
+      platform={status?.platform === 'darwin' ? 'darwin' : 'win32'}
+      onClose={() => setEnableConfirmOpen(false)}
+      onConfirm={confirmComputerUseEnabled}
+    />
+  )
 
   // The renderer cannot choose between the native macOS page and the
   // compatibility page until the capability probe finishes. Rendering the
@@ -477,29 +354,21 @@ export function ComputerUseSettings() {
 
   if (native && status) {
     return (
-      <NativeComputerUse
-        t={t}
-        status={status}
-        enabled={computerUseEnabled}
-        onToggleEnabled={toggleAnyApp}
-        authorizedApps={authorizedApps}
-        onRemoveApp={removeAuthorizedApp}
-        appsSaved={appsSaved}
-        configError={configError}
-        statusError={checkState === 'error'}
-        cardOpening={cardOpening}
-        cardError={cardError}
-        onOpenCard={openPermissionCard}
-        onRecheck={fetchStatus}
-        pickerOpen={pickerOpen}
-        onOpenPicker={openPicker}
-        onClosePicker={() => setPickerOpen(false)}
-        onAddApp={addAuthorizedApp}
-        appsLoading={appsLoading}
-        pickerApps={pickerApps}
-        searchQuery={searchQuery}
-        onSearch={setSearchQuery}
-      />
+      <>
+        <NativeComputerUse
+          t={t}
+          status={status}
+          enabled={computerUseEnabled}
+          onToggleEnabled={requestComputerUseEnabled}
+          configError={configError}
+          statusError={checkState === 'error'}
+          cardOpening={cardOpening}
+          cardError={cardError}
+          onOpenCard={openPermissionCard}
+          onRecheck={fetchStatus}
+        />
+        {enableDialog}
+      </>
     )
   }
 
@@ -522,7 +391,8 @@ export function ComputerUseSettings() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <>
+      <div className="max-w-2xl space-y-6">
       {/* Title */}
       <div>
         <div className="flex items-center justify-between gap-4">
@@ -531,7 +401,7 @@ export function ComputerUseSettings() {
           </h2>
           <Switch
             checked={computerUseEnabled}
-            onChange={value => { void toggleComputerUseEnabled(value) }}
+            onChange={requestComputerUseEnabled}
             label={t('settings.computerUse.enabledToggle')}
             size="sm"
           />
@@ -746,106 +616,11 @@ export function ComputerUseSettings() {
             </Button>
           </div>
 
-          {/* ─── App Authorization Section ─── */}
-          {envReady && (
-            <div className="space-y-4 pt-4 border-t border-[var(--color-border)]">
-              <div>
-                <h3 className="text-base font-semibold text-[var(--color-text-primary)] flex items-center gap-2" style={{ fontFamily: 'var(--font-headline)' }}>
-                  {t('settings.computerUse.appsTitle')}
-                  {appsSaved && (
-                    <span className="text-xs font-normal text-[var(--color-success)] flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>check</span>
-                      {t('settings.computerUse.appsSaved')}
-                    </span>
-                  )}
-                </h3>
-                <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                  {t('settings.computerUse.appsDescription')}
-                </p>
-              </div>
-
-              {/* Grant flags */}
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={clipboardAccess}
-                    onChange={e => toggleFlag('clipboard', e.target.checked)}
-                    className="rounded border-[var(--color-border)] accent-[var(--color-brand)]"
-                  />
-                  {t('settings.computerUse.flagClipboard')}
-                </label>
-                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={systemKeys}
-                    onChange={e => toggleFlag('systemKeys', e.target.checked)}
-                    className="rounded border-[var(--color-border)] accent-[var(--color-brand)]"
-                  />
-                  {t('settings.computerUse.flagSystemKeys')}
-                </label>
-              </div>
-
-              {/* Search */}
-              <div className="relative">
-                <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] absolute left-3 top-1/2 -translate-y-1/2">search</span>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder={t('settings.computerUse.appsSearch')}
-                  className="w-full pl-9 pr-4 py-2 text-sm bg-[var(--color-surface-container-low)] border border-[var(--color-border)] rounded-[var(--radius-lg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-brand)]"
-                />
-              </div>
-
-              {/* App list */}
-              {appsLoading ? (
-                <div className="py-6 text-center text-sm text-[var(--color-text-tertiary)]">
-                  {t('settings.computerUse.appsLoading')}
-                </div>
-              ) : installedApps.length === 0 ? (
-                <div className="py-6 text-center text-sm text-[var(--color-text-tertiary)]">
-                  {t('settings.computerUse.appsEmpty')}
-                </div>
-              ) : (
-                <div className="max-h-[400px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)]">
-                  {sortedApps.map(app => {
-                    const isAuthorized = authorizedBundleIds.has(app.bundleId)
-                    return (
-                      <button
-                        key={app.bundleId}
-                        onClick={() => toggleApp(app)}
-                        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] border-b border-[var(--color-border)] last:border-b-0 ${
-                          isAuthorized ? 'bg-[var(--color-brand-soft)]' : ''
-                        }`}
-                      >
-                        <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border ${
-                          isAuthorized
-                            ? 'bg-[var(--color-brand)] border-[var(--color-brand)]'
-                            : 'border-[var(--color-border)]'
-                        }`}>
-                          {isAuthorized && (
-                            <span className="material-symbols-outlined text-[14px] text-[var(--color-on-primary)]" style={{ fontVariationSettings: "'FILL' 1" }}>check</span>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-[var(--color-text-primary)] truncate">
-                            {app.displayName}
-                          </div>
-                          <div className="text-[11px] text-[var(--color-text-tertiary)] truncate font-mono">
-                            {app.bundleId}
-                          </div>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
         </>
       ) : null}
-    </div>
+      </div>
+      {enableDialog}
+    </>
   )
 }
 
@@ -854,65 +629,6 @@ export function ComputerUseSettings() {
 // ============================================================================
 
 type Translate = ReturnType<typeof useTranslation>
-
-/**
- * An app's real icon, falling back to a letter tile.
- *
- * The `/apps` payload deliberately carries no icon bytes — it lists every
- * installed application, and inlining hundreds of PNGs would bloat one
- * response. Each row instead points an `<img>` at the icon endpoint, which
- * reads the bundle's own `.icns` the same way Finder does. `loading="lazy"`
- * matters here: the picker is a long scroller, and without it every row off
- * screen would still cost a request and a rasterisation.
- *
- * A bundle with no icon 404s, which is an ordinary outcome rather than a
- * failure — that is what the letter tile is for.
- */
-function AppIcon({ name, bundleId }: { name: string; bundleId?: string }) {
-  const [iconUrl, setIconUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!bundleId) {
-      setIconUrl(null)
-      return
-    }
-    let cancelled = false
-    setIconUrl(null)
-    void computerUseApi.loadAppIcon(bundleId).then(url => {
-      if (!cancelled) setIconUrl(url)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [bundleId])
-
-  const tileClass =
-    'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-
-  if (iconUrl) {
-    return (
-      <div className={tileClass}>
-        <img
-          src={iconUrl}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-          className="block h-7 w-7 object-contain"
-        />
-      </div>
-    )
-  }
-
-  // Shown both while the icon is in flight and when the bundle has none. The
-  // letter is a stable placeholder rather than a spinner, so a list of
-  // iconless utilities does not read as permanently loading.
-  const letter = name.trim().charAt(0).toUpperCase() || '?'
-  return (
-    <div className={`${tileClass} text-[13px] font-semibold text-[var(--color-text-secondary)]`}>
-      {letter}
-    </div>
-  )
-}
 
 /** macOS OS-permission status row (辅助功能 / 屏幕录制): a refined row with a
  *  status dot (granted=emerald, needed=amber, checking=neutral) + label + state,
@@ -974,45 +690,23 @@ function NativeComputerUse({
   status,
   enabled,
   onToggleEnabled,
-  authorizedApps,
-  onRemoveApp,
-  appsSaved,
   configError,
   statusError,
   cardOpening,
   cardError,
   onOpenCard,
   onRecheck,
-  pickerOpen,
-  onOpenPicker,
-  onClosePicker,
-  onAddApp,
-  appsLoading,
-  pickerApps,
-  searchQuery,
-  onSearch,
 }: {
   t: Translate
   status: ComputerUseStatus
   enabled: boolean
   onToggleEnabled: (value: boolean) => void
-  authorizedApps: AuthorizedApp[]
-  onRemoveApp: (bundleId: string) => void
-  appsSaved: boolean
   configError: string | null
   statusError: boolean
   cardOpening: boolean
   cardError: string | null
   onOpenCard: () => void
   onRecheck: () => void
-  pickerOpen: boolean
-  onOpenPicker: () => void
-  onClosePicker: () => void
-  onAddApp: (app: InstalledApp) => void
-  appsLoading: boolean
-  pickerApps: InstalledApp[]
-  searchQuery: string
-  onSearch: (value: string) => void
 }) {
   const accessibility = status.permissions.accessibility
   const screenRecording = status.permissions.screenRecording
@@ -1141,153 +835,6 @@ function NativeComputerUse({
         </div>
       </section>
 
-      {/* ─── 始终允许的应用 (Always-allowed apps) ─── */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-4">
-          <h3 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-            {t('settings.computerUse.allowedAppsTitle')}
-            {appsSaved && (
-              <span className="flex items-center gap-1 text-[11px] font-medium normal-case tracking-normal text-[var(--color-success)]">
-                <span
-                  className="material-symbols-outlined text-[14px]"
-                  style={{ fontVariationSettings: "'FILL' 1" }}
-                >
-                  check_circle
-                </span>
-                {t('settings.computerUse.appsSaved')}
-              </span>
-            )}
-          </h3>
-          <button
-            onClick={onOpenPicker}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--color-brand)] px-3 py-1.5 text-xs font-semibold text-[var(--color-btn-primary-fg)] shadow-[0_1px_2px_rgba(0,0,0,0.08)] transition hover:opacity-90 active:scale-[0.98]"
-          >
-            <span className="material-symbols-outlined text-[16px]">add</span>
-            {t('settings.computerUse.addApp')}
-          </button>
-        </div>
-        <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
-          {t('settings.computerUse.allowedAppsDesc')}
-        </p>
-
-        {authorizedApps.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)]/40 px-6 py-10 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
-              <span className="material-symbols-outlined text-[22px]">apps</span>
-            </div>
-            <p className="max-w-xs text-xs leading-relaxed text-[var(--color-text-tertiary)]">
-              {t('settings.computerUse.allowedAppsEmpty')}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <div className="divide-y divide-[var(--color-border)]">
-              {authorizedApps.map(app => (
-                <div
-                  key={app.bundleId}
-                  className="group flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-[var(--color-surface-hover)]"
-                >
-                  <AppIcon name={app.displayName} bundleId={app.bundleId} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                      {app.displayName}
-                    </div>
-                    <div className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
-                      {app.bundleId}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onRemoveApp(app.bundleId)}
-                    aria-label={`${t('settings.computerUse.removeApp')} ${app.displayName}`}
-                    title={t('settings.computerUse.removeApp')}
-                    className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] opacity-0 transition group-hover:opacity-100 hover:bg-[var(--color-error-container)] hover:text-[var(--color-error)] focus-visible:opacity-100 active:scale-90"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* App picker dialog.
-          Uses the shared Modal rather than a hand-rolled overlay: Modal portals
-          to document.body, so it cannot be trapped by an ancestor's stacking
-          context, and it sits on `--z-dialog` instead of a bare `z-50` that the
-          rest of the `--z-*` scale does not know about. It also brings the focus
-          trap, Escape-to-close and focus restore this picker used to lack. */}
-      <Modal
-        open={pickerOpen}
-        onClose={onClosePicker}
-        title={t('settings.computerUse.addAppTitle')}
-        width={448}
-      >
-        {/* Cancel Modal's content padding so the app rows stay edge-to-edge —
-            their divider lines are the list's structure, and inset dividers
-            would read as a nested card. The search field keeps the padding. */}
-        <div className="-mx-6 -my-4 flex max-h-[60vh] flex-col">
-          <div className="shrink-0 px-6 pb-3 pt-4">
-            <div className="relative">
-              <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-[var(--color-text-tertiary)]">
-                search
-              </span>
-              <input
-                type="text"
-                autoFocus
-                value={searchQuery}
-                onChange={e => onSearch(e.target.value)}
-                placeholder={t('settings.computerUse.appsSearch')}
-                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] py-2 pl-9 pr-4 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] transition focus:border-[var(--color-brand)] focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-              />
-            </div>
-          </div>
-          {/* The list scrolls, not the dialog — otherwise the search field
-              scrolls out of view exactly when a long list needs it most. */}
-          <div className="min-h-0 flex-1 divide-y divide-[var(--color-border)] overflow-y-auto border-t border-[var(--color-border)]">
-              {appsLoading ? (
-                <div className="flex flex-col items-center gap-2 py-12 text-center">
-                  <span className="material-symbols-outlined animate-spin text-[20px] text-[var(--color-text-tertiary)]">
-                    progress_activity
-                  </span>
-                  <span className="text-sm text-[var(--color-text-tertiary)]">
-                    {t('settings.computerUse.appsPickerLoading')}
-                  </span>
-                </div>
-              ) : pickerApps.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-12 text-center">
-                  <span className="material-symbols-outlined text-[20px] text-[var(--color-text-tertiary)]">
-                    search_off
-                  </span>
-                  <span className="text-sm text-[var(--color-text-tertiary)]">
-                    {t('settings.computerUse.appsPickerEmpty')}
-                  </span>
-                </div>
-              ) : (
-                pickerApps.map(app => (
-                  <button
-                    key={app.bundleId}
-                    onClick={() => onAddApp(app)}
-                    className="group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
-                  >
-                    <AppIcon name={app.displayName} bundleId={app.bundleId} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                        {app.displayName}
-                      </div>
-                      <div className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
-                        {app.bundleId}
-                      </div>
-                    </div>
-                    <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] transition-colors group-hover:text-[var(--color-brand)]">
-                      add_circle
-                    </span>
-                  </button>
-                ))
-              )}
-          </div>
-        </div>
-      </Modal>
     </div>
   )
 }

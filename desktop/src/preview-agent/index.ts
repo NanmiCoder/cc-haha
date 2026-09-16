@@ -3,6 +3,7 @@ import { captureToDataUrl, createAnnotationOverlay } from './screenshot'
 import { createPicker } from './picker'
 import { buildElementMetadata } from './metadata'
 import { createEditBubble, type EditBubbleCopy } from './editBubble'
+import { createZoomControls } from './zoomControls'
 
 ;(() => {
   ;(window as unknown as { __PREVIEW_AGENT__?: boolean }).__PREVIEW_AGENT__ = true
@@ -10,7 +11,7 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
   const previewWindow = window as unknown as {
     __DESKTOP_PREVIEW_POST__?: (raw: string) => void
     __PREVIEW_BRIDGE__?: unknown
-    __PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__?: () => void
+    __PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__?: (captureId?: number) => void
   } & Record<string, unknown>
 
   const postToHost = (raw: string) => {
@@ -22,16 +23,33 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
   const bridge = createBridge({ postToHost, location: window.location, title: document.title })
   previewWindow.__PREVIEW_BRIDGE__ = bridge
   previewWindow.__PREVIEW_AGENT_CAPTURE__ = captureToDataUrl
+  const zoomControls = createZoomControls(action => bridge.send({ type: 'browser-zoom', action }))
+  previewWindow.__PREVIEW_AGENT_SET_CHROME_HIDDEN__ = (hidden: boolean) => zoomControls.setCaptureSuppressed(hidden)
+  bridge.on('browser-controls', message => zoomControls.update(message))
+  window.addEventListener('pagehide', () => zoomControls.destroy())
+  window.addEventListener('pageshow', () => zoomControls.restore())
 
   let selectionOverlayCleanup: (() => void) | null = null
   let selectionOverlayTimer: number | null = null
-  const clearSelectionOverlay = () => {
+  let selectionOverlayId: number | null = null
+  let selectionCaptureSequence = 0
+  let pickerOn = false
+  let activeBubble: { destroy: () => void; revert: () => void } | null = null
+  const updateChromeSuppression = () => {
+    zoomControls.setSuppressed(pickerOn || activeBubble !== null || selectionOverlayCleanup !== null || (persistentPicker && !temporarilyBrowsing))
+  }
+  const clearSelectionOverlay = (captureId?: number) => {
+    // Captures can finish after a newer selection, or after the 5 s fallback.
+    // A stale completion owns only its own overlay, never the current one.
+    if (captureId !== undefined && captureId !== selectionOverlayId) return
     if (selectionOverlayTimer !== null) {
       window.clearTimeout(selectionOverlayTimer)
       selectionOverlayTimer = null
     }
     selectionOverlayCleanup?.()
     selectionOverlayCleanup = null
+    selectionOverlayId = null
+    updateChromeSuppression()
   }
   previewWindow.__PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__ = clearSelectionOverlay
 
@@ -40,12 +58,18 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
     catch (e) { bridge.reportError(String(e)) }
   })
 
-  let pickerOn = false
+  let pickerGeneration: number | undefined
+  const acceptPickerCommand = (generation?: number) => {
+    if (generation !== undefined && pickerGeneration !== undefined && generation <= pickerGeneration) return false
+    pickerGeneration = generation
+    return true
+  }
+  let persistentPicker = false
+  let temporarilyBrowsing = false
   let pickerMode: 'single' | 'batch' = 'single'
   let pickerLabel = 1
   let pickerCopy: EditBubbleCopy | undefined
   let itemSequence = 0
-  let activeBubble: { destroy: () => void; revert: () => void } | null = null
   const queuedReverts = new Map<string, () => void>()
   const picker = createPicker({ onSelect: () => {} })
 
@@ -55,14 +79,17 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
     activeBubble?.destroy()
     activeBubble = null
     pickerOn = false
+    temporarilyBrowsing = false
     picker.exit()
+    updateChromeSuppression()
   }
 
   // 本次拾取结束但没有产出 selection：通知宿主解除授权、复位按钮态。
   const teardown = (reason: 'cancel-current' | 'host' | 'invalid-target') => {
+    persistentPicker = false
     activeBubble?.revert()
     closePicker()
-    bridge.send({ type: 'picker-exited', reason })
+    bridge.send({ type: 'picker-exited', reason, ...(pickerGeneration !== undefined ? { generation: pickerGeneration } : {}) })
   }
 
   const emitSelection = async (
@@ -71,13 +98,17 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
     delivery: 'send' | 'queue',
     draftItemId?: string,
   ) => {
+    const captureId = ++selectionCaptureSequence
     try {
       clearSelectionOverlay()
       const overlay = createAnnotationOverlay(el, pickerLabel)
       selectionOverlayCleanup = () => { overlay.remove() }
-      selectionOverlayTimer = window.setTimeout(clearSelectionOverlay, 5000)
+      selectionOverlayId = captureId
+      updateChromeSuppression()
+      selectionOverlayTimer = window.setTimeout(() => clearSelectionOverlay(captureId), 5000)
       bridge.send({
         type: 'selection',
+        ...(pickerGeneration !== undefined ? { generation: pickerGeneration } : {}),
         payload: {
           pageUrl: window.location.href,
           sourceHint: document.title || undefined,
@@ -86,10 +117,11 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
           delivery,
           selectionNumber: pickerLabel,
           ...(draftItemId ? { draftItemId } : {}),
-          screenshot: { kind: 'region' },
+          screenshot: { kind: 'region', captureId },
         },
       })
     } catch (e) {
+      clearSelectionOverlay(captureId)
       if (draftItemId) {
         queuedReverts.get(draftItemId)?.()
         queuedReverts.delete(draftItemId)
@@ -99,13 +131,21 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
   }
 
   bridge.on('enter-picker', (message) => {
+    if (!acceptPickerCommand(message.generation)) return
+    activeBubble?.revert()
+    closePicker()
+    persistentPicker = message.persistent === true
     pickerMode = message.mode ?? 'single'
     pickerLabel = message.label ?? 1
     pickerCopy = message.copy
     pickerOn = true
+    updateChromeSuppression()
     picker.enter()
   })
-  bridge.on('exit-picker', () => { teardown('host') })
+  bridge.on('exit-picker', (message) => {
+    if (!acceptPickerCommand(message.generation)) return
+    teardown('host')
+  })
   bridge.on('undo-selection', (message) => {
     queuedReverts.get(message.itemId)?.()
     queuedReverts.delete(message.itemId)
@@ -123,12 +163,14 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
 
   document.addEventListener('mousemove', (e) => {
     if (!pickerOn) return
+    if (zoomControls.ownsTarget(e.composedPath())) return
     const t = e.target
     if (t instanceof Element) picker.hover(t)
   }, true)
 
   document.addEventListener('click', (e) => {
     if (!pickerOn || activeBubble) return
+    if (zoomControls.ownsTarget(e.composedPath())) return
     e.preventDefault(); e.stopPropagation()
     picker.select()
     const el = picker.current()
@@ -145,13 +187,56 @@ import { createEditBubble, type EditBubbleCopy } from './editBubble'
         if (revert) queuedReverts.set(itemId, revert)
         void emitSelection(el, change, 'queue', itemId)
       },
-      onCancel: () => { teardown('cancel-current') },
+      onCancel: () => {
+        if (!persistentPicker) { teardown('cancel-current'); return }
+        activeBubble?.revert()
+        closePicker()
+        pickerOn = true
+        picker.enter()
+        updateChromeSuppression()
+      },
       mode: pickerMode,
       copy: pickerCopy,
     })
+    updateChromeSuppression()
   }, true)
 
-  const onReady = () => { bridge.reportReady(); bridge.reportNavigated() }
+  // Space is a temporary pass-through only while hovering. Text entry in the
+  // edit bubble remains normal, and Escape always leaves persistent mode.
+  document.addEventListener('keydown', (event) => {
+    if (!persistentPicker) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      teardown('host')
+      return
+    }
+    if (event.code !== 'Space' || activeBubble || !pickerOn) return
+    const target = event.composedPath()[0]
+    if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    temporarilyBrowsing = true
+    pickerOn = false
+    picker.exit()
+    updateChromeSuppression()
+  }, true)
+  const resumeAfterBrowsing = () => {
+    if (!persistentPicker || !temporarilyBrowsing) return
+    temporarilyBrowsing = false
+    pickerOn = true
+    picker.enter()
+    updateChromeSuppression()
+  }
+  document.addEventListener('keyup', (event) => {
+    if (event.code !== 'Space' || !temporarilyBrowsing) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    resumeAfterBrowsing()
+  }, true)
+  window.addEventListener('blur', resumeAfterBrowsing)
+
+  const onReady = () => { bridge.send({ type: 'ready', supportsPickerGeneration: true }); bridge.reportNavigated() }
   if (document.readyState !== 'loading') onReady()
   else document.addEventListener('DOMContentLoaded', onReady)
   window.addEventListener('popstate', () => bridge.reportNavigated())

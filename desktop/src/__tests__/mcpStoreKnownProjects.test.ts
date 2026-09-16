@@ -152,7 +152,7 @@ describe('fetchServersForKnownProjects', () => {
     const server = useMcpStore.getState().servers[0]!
     const toggled = await useMcpStore.getState().toggleServer(server, server.projectPath)
 
-    expect(toggled.activeInCurrentContext).toBe(true)
+    expect(toggled.server.activeInCurrentContext).toBe(true)
     expect(useMcpStore.getState().servers).toHaveLength(1)
     expect(useMcpStore.getState().servers[0]).toMatchObject({
       enabled: false,
@@ -162,6 +162,38 @@ describe('fetchServersForKnownProjects', () => {
     await useMcpStore.getState().fetchServersForKnownProjects('C:\\UE\\StrangeAutumn')
     expect(useMcpStore.getState().servers).toHaveLength(1)
     expect(useMcpStore.getState().servers[0]?.enabled).toBe(false)
+  })
+
+  it('preserves the saved state and failed runtime receipt after toggling', async () => {
+    const server = record('echo', 'project', { projectPath: '/tmp/qa-005-project' })
+    const disabled = { ...server, enabled: false, status: 'disabled' as const }
+    const sessionSync = { applied: false, reason: 'failed' as const, error: 'Control timeout' }
+    vi.mocked(mcpApi.toggle).mockResolvedValue({ server: disabled, sessionSync })
+    useMcpStore.setState({ servers: [server], selectedServer: server })
+
+    const result = await useMcpStore.getState().toggleServer(server, server.projectPath, 'session-1')
+
+    expect(result).toEqual({ server: disabled, sessionSync })
+    expect(useMcpStore.getState().servers).toEqual([disabled])
+    expect(useMcpStore.getState().selectedServer).toEqual(disabled)
+    expect(mcpApi.toggle).toHaveBeenCalledWith('echo', server.projectPath, 'session-1')
+  })
+
+  it('does not let an older connection check overwrite a completed disable', async () => {
+    const server = record('echo', 'project', { projectPath: '/tmp/qa-005-project' })
+    let finishCheck!: (response: { server: McpServerRecord }) => void
+    vi.mocked(mcpApi.status).mockReturnValue(new Promise((resolve) => { finishCheck = resolve }))
+    const disabled = { ...server, enabled: false, status: 'disabled' as const }
+    vi.mocked(mcpApi.toggle).mockResolvedValue({ server: disabled, sessionSync: { applied: true } })
+    useMcpStore.setState({ servers: [server], selectedServer: server })
+
+    const checking = useMcpStore.getState().refreshServerStatus(server, server.projectPath)
+    await useMcpStore.getState().toggleServer(server, server.projectPath, 'session-1')
+    finishCheck({ server: { ...server, status: 'connected' } })
+
+    expect(await checking).toMatchObject({ enabled: false, status: 'disabled' })
+    expect(useMcpStore.getState().servers).toEqual([disabled])
+    expect(useMcpStore.getState().selectedServer).toEqual(disabled)
   })
 
   it('keeps an inherited project server active when a later context finds the same declaration', async () => {

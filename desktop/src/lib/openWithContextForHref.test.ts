@@ -27,6 +27,13 @@ describe('openWithContextForHref', () => {
     expect(result).toEqual({ kind: 'file', absolutePath: '/w/docs/a.md', relPath: 'docs/a.md', previewable: true })
   })
 
+  it('CJK filename href → file context, so the Open-with menu can build', () => {
+    // Used to return null: the ASCII-only path parser refused the name, the menu
+    // got zero items and the button looked dead.
+    const result = openWithContextForHref('README-拍摄大纲.md', { sessionId: SESSION, serverBaseUrl: BASE, workDir: '/w' })
+    expect(result).toEqual({ kind: 'file', absolutePath: '/w/README-拍摄大纲.md', relPath: 'README-拍摄大纲.md', previewable: true })
+  })
+
   it('relative office document with workDir → actionable but not workspace-previewable', () => {
     const result = openWithContextForHref('reports/brief.docx', {
       sessionId: SESSION,

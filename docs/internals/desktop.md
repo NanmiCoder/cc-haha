@@ -82,7 +82,7 @@ Server 可绑定局域网可访问地址以支持 H5，但桌面 Renderer 使用
 ```text
 claude-sidecar server   --app-root <path> --host <host> --port <port>
 claude-sidecar cli      --app-root <path> [CLI arguments]
-claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp
+claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp|--wecom|--qq|--slack
 ```
 
 Sidecar 在导入业务模块前设置 `CLAUDE_APP_ROOT`、`CALLER_DIR` 和启动参数，因为 Server、CLI 与 Adapter 的顶层模块会读取这些值。

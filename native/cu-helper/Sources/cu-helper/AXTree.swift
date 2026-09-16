@@ -690,10 +690,10 @@ public enum AXTree {
         }
     }
 
-    /// Map one AX window to a Window Server id using public information only.
-    /// PID is pre-filtered by `cgWindowCandidates`; the AX/CG frames must match,
-    /// and normalized titles must either agree on both sides or be absent on both
-    /// sides. Every accepted branch requires exactly one candidate.
+    /// Associate the AX root with its actual WindowServer ID, validated against
+    /// this PID's current candidates. Only when that API is unavailable do we
+    /// require the older frame/title evidence. Chrome's AX title includes app
+    /// and profile names that its CG title omits; title equality is not identity.
     private static func mappedWindowID(
         _ window: AXUIElement,
         candidates: [CGWindowCandidate]
@@ -711,7 +711,8 @@ public enum AXTree {
         }
         return SnapshotWindowIdentityEvidence.mappedWindowID(
             axTitle: axTitle,
-            candidates: evidence
+            candidates: evidence,
+            nativeWindowID: WindowGeometry.axWindowID(of: window)
         )
     }
 
@@ -910,13 +911,15 @@ public enum AXTree {
         pid: pid_t,
         systemWide: AXUIElement
     ) -> AXUIElement? {
-        // Prefer the system-wide focus only when it belongs to the target app.
-        if let sysFocusedApp = copyElement(systemWide, kAXFocusedApplicationAttribute),
-           pidOf(sysFocusedApp) == pid,
-           let el = copyElement(systemWide, kAXFocusedUIElementAttribute) {
-            return el
-        }
-        return copyElement(app, kAXFocusedUIElementAttribute)
+        FocusedElementRouting.select(
+            targetPID: pid,
+            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            systemFocusedPID: {
+                copyElement(systemWide, kAXFocusedApplicationAttribute).map { pidOf($0) }
+            },
+            systemFocusedElement: { copyElement(systemWide, kAXFocusedUIElementAttribute) },
+            targetFocusedElement: { copyElement(app, kAXFocusedUIElementAttribute) }
+        )
     }
 
     // MARK: - Renderer (format authority: blueprint §1)
@@ -982,17 +985,29 @@ public enum AXTree {
 
             let elementFingerprint = knownFingerprint ?? fingerprint(of: element)
             let role = elementFingerprint.role
+            let attributes = RendererAttributeReuse(
+                title: elementFingerprint.title,
+                description: elementFingerprint.label,
+                // AXUnknown also represents a failed role read in fingerprint.
+                // Leave that case retryable instead of caching the fallback.
+                role: role == "AXUnknown" ? nil : role
+            )
             let subrole = elementFingerprint.subrole
             let baseRoleText = roleDescription(element, role: role, subrole: subrole)
-            let label = stringValue(element, kAXDescriptionAttribute)
+            let label = attributes.description { stringValue(element, kAXDescriptionAttribute) }
             let help = stringValue(element, kAXHelpAttribute)
             let value = sanitizedValue(element)
             let identifier = displayIdentifier(elementFingerprint.identifier)
-            let traits = traitList(element)
+            let traits = traitList(element) {
+                attributes.settable { readSettable(element, kAXValueAttribute) } ?? false
+            }
             let rawActions = actionNames(element)
             let prettyActions = meaningfulActions(rawActions, role: role)
             let placeholder = placeholderValue(element)
-            let childElements = AXTree.walkChildren(of: element)
+            let childElements = AXTree.walkChildren(
+                of: element,
+                role: attributes.role { stringValue(element, kAXRoleAttribute) }
+            )
             let childFingerprints = childElements.map(fingerprint(of:))
             let rowTexts = role == (kAXRowRole as String) ? flattenedRowTexts(element) : []
 
@@ -1002,7 +1017,8 @@ public enum AXTree {
                 label: label,
                 identifier: identifier,
                 explicitValue: value,
-                rowTexts: rowTexts
+                rowTexts: rowTexts,
+                attributes: attributes
             )
             let linkText = role == axLinkRole
                 ? markdownLinkText(element, title: title, label: label, value: value)
@@ -1124,7 +1140,7 @@ public enum AXTree {
                 roleText: roleText,
                 title: displayTitle,
                 value: value,
-                settable: isSettable(element, kAXValueAttribute),
+                settable: attributes.settable { readSettable(element, kAXValueAttribute) } ?? false,
                 frameGlobal: globalFrame(element),
                 rawActions: rawActions,
                 depth: depth
@@ -1314,9 +1330,10 @@ public enum AXTree {
             label: String?,
             identifier: String?,
             explicitValue: String?,
-            rowTexts: [String]
+            rowTexts: [String],
+            attributes: RendererAttributeReuse
         ) -> String? {
-            if let title = stringValue(element, kAXTitleAttribute), !title.isEmpty {
+            if let title = attributes.title(read: { stringValue(element, kAXTitleAttribute) }), !title.isEmpty {
                 return sanitize(title)
             }
             if role == (kAXRowRole as String) { return rowTexts.first }
@@ -1503,7 +1520,10 @@ public enum AXTree {
     /// skipped under the menu bar. THIS is the ordering `(windowIndex, path)`
     /// indexes — `resolve` calls the SAME function so locators round-trip exactly.
     static func walkChildren(of element: AXUIElement) -> [AXUIElement] {
-        let role = stringValue(element, kAXRoleAttribute)
+        walkChildren(of: element, role: stringValue(element, kAXRoleAttribute))
+    }
+
+    private static func walkChildren(of element: AXUIElement, role: String?) -> [AXUIElement] {
         let rows = copyElementArray(element, kAXRowsAttribute) ?? []
         let visibleChildren = copyElementArray(element, axVisibleChildrenAttribute) ?? []
         let attributes = childTraversalAttributes(
@@ -1628,12 +1648,12 @@ public enum AXTree {
 
     // MARK: - Traits (blueprint §1)
 
-    private static func traitList(_ element: AXUIElement) -> [String] {
+    private static func traitList(_ element: AXUIElement, isValueSettable: () -> Bool) -> [String] {
         var values: [String] = []
         if boolValue(element, kAXSelectedAttribute) == true { values.append("selected") }
         if boolValue(element, kAXExpandedAttribute) == true { values.append("expanded") }
         if boolValue(element, kAXEnabledAttribute) == false { values.append("disabled") }
-        if isSettable(element, kAXValueAttribute) {
+        if isValueSettable() {
             values.append("settable")
             if let valueType = valueTypeTrait(element) { values.append(valueType) }
         }
@@ -1842,10 +1862,10 @@ public enum AXTree {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private static func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
+    private static func readSettable(_ element: AXUIElement, _ attribute: String) -> Bool? {
         var settable = DarwinBoolean(false)
         let err = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
-        return err == .success && settable.boolValue
+        return err == .success ? settable.boolValue : nil
     }
 
     private static func pidOf(_ element: AXUIElement) -> pid_t {

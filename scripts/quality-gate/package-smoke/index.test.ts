@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -7,11 +7,17 @@ import {
   currentPackageSmokePlatform,
 } from './current'
 import {
-  inspectPackagedArtifacts,
+  inspectPackagedArtifacts as inspectPackage,
   parseCodesignMetadata,
   parseMachOMinimumMacosVersions,
   parsePackageSmokeArgs,
 } from './index'
+
+// These fixtures contain synthetic Mach-O headers, not runnable executables.
+// Resource execution has dedicated cases below with an explicit runner.
+function inspectPackagedArtifacts(rootDir: string, options: Parameters<typeof inspectPackage>[1]) {
+  return inspectPackage(rootDir, { hostPlatform: 'linux', ...options })
+}
 
 function createRepoRoot() {
   const rootDir = mkdtempSync(join(tmpdir(), 'package-smoke-'))
@@ -55,6 +61,9 @@ function writeFile(rootDir: string, relativePath: string, content: string | Uint
         '<plist><dict><key>LSMinimumSystemVersion</key><string>14.4</string></dict></plist>',
       )
       writeFileSync(join(helperRoot, 'MacOS', 'cc-haha-computer-use'), content)
+      const sequence = join(helperRoot, 'Resources', 'cu-helper_cc-haha-computer-use.bundle', 'LensSequence')
+      mkdirSync(sequence, { recursive: true })
+      writeFileSync(join(sequence, 'README.md'), 'Optional cursor frames are absent in this fixture.')
     }
   }
 }
@@ -126,6 +135,118 @@ describe('package smoke args', () => {
       team: 'TEAM123456',
       timestamp: 'Sep 1, 2026 at 18:43:53',
     })
+  })
+})
+
+describe('final macOS helper cursor resource verification', () => {
+  const executionLabel = 'macOS relocated cu-helper cursor resource execution'
+  const structureLabel = 'macOS cu-helper cursor resource directory'
+  const sequenceRelative = 'Contents/Resources/cu-helper_cc-haha-computer-use.bundle/LensSequence'
+
+  function fixture(arch: 'arm64' | 'x64' = 'arm64') {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    const app = 'desktop/build-artifacts/electron/mac/Claude Code Haha.app'
+    const resources = `${app}/Contents/Resources`
+    const binaries = `${resources}/app.asar.unpacked/src-tauri/binaries`
+    const triple = arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
+    const pty = `${resources}/app.asar.unpacked/node_modules/node-pty`
+    writeFile(rootDir, `${app}/Contents/Info.plist`)
+    writeFile(rootDir, `${app}/Contents/MacOS/Claude Code Haha`, thinMachO(arch))
+    writeFile(rootDir, `${resources}/app.asar`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/dist/index.html`)
+    writeFile(rootDir, `${binaries}/claude-sidecar-${triple}`, thinMachO(arch))
+    writeFile(rootDir, `${pty}/package.json`)
+    writeFile(rootDir, `${pty}/prebuilds/darwin-${arch}/pty.node`, thinMachO(arch))
+    writeFile(rootDir, `${pty}/prebuilds/darwin-${arch}/spawn-helper`, thinMachO(arch))
+    const helper = join(rootDir, binaries, 'cc-haha-computer-use.app')
+    return { rootDir, helper, sequence: join(helper, sequenceRelative) }
+  }
+
+  test.each(['arm64', 'x64'] as const)('executes the %s final helper from a disposable standalone path with isolated state', async arch => {
+    const source = fixture(arch)
+    let temporaryRoot = ''
+    const report = await inspectPackage(source.rootDir, {
+      platform: 'macos', arch, packageKind: 'dir', hostPlatform: 'macos', hostArch: arch,
+      commandRunner: (command, args, options) => {
+        expect(args).toEqual(['--probe-cursor-resources'])
+        expect(command.startsWith(source.helper)).toBe(false)
+        expect(command).toContain('Relocated Helper.app/Contents/MacOS/cc-haha-computer-use')
+        expect(options?.timeout).toBe(10_000)
+        expect(options?.maxBuffer).toBe(1024 * 1024)
+        temporaryRoot = options!.cwd
+        expect(options?.env.HOME).toBe(join(temporaryRoot, 'home'))
+        expect(options?.env.CFFIXED_USER_HOME).toBe(options?.env.HOME)
+        expect(options?.env.CLAUDE_CONFIG_DIR).toBe(join(temporaryRoot, 'home', '.claude'))
+        expect(options?.env.OPENAI_API_KEY).toBeUndefined()
+        const resourceDirectory = join(dirname(dirname(command)), 'Resources/cu-helper_cc-haha-computer-use.bundle/LensSequence')
+        expect(existsSync(join(resourceDirectory, 'README.md'))).toBe(true)
+        return { status: 0, stdout: JSON.stringify({ resourceDirectory, frameCount: 0, proceduralFallback: true }) }
+      },
+    })
+    expect(report.passed).toBe(true)
+    expect(report.passedChecks.some(check => check.label === executionLabel)).toBe(true)
+    expect(existsSync(temporaryRoot)).toBe(false)
+    expect(existsSync(source.sequence)).toBe(true)
+  })
+
+  test.each(['missing', 'file', 'external-symlink', 'external-frame-symlink'] as const)('rejects a final package with %s cursor resources before any execution', async mode => {
+    const source = fixture()
+    let executed = false
+    if (mode !== 'external-frame-symlink') rmSync(source.sequence, { recursive: true })
+    if (mode === 'file') writeFileSync(source.sequence, 'not a directory')
+    if (mode === 'external-symlink') symlinkSync(source.rootDir, source.sequence, 'dir')
+    if (mode === 'external-frame-symlink') {
+      const external = join(source.rootDir, 'build-tree-frame.png')
+      writeFileSync(external, 'outside the packaged helper')
+      symlinkSync(external, join(source.sequence, 'frame_0.png'))
+    }
+    const report = await inspectPackage(source.rootDir, {
+      platform: 'macos', arch: 'arm64', packageKind: 'dir', hostPlatform: 'macos', hostArch: 'arm64',
+      commandRunner: () => { executed = true; throw new Error('must not run an invalid package') },
+    })
+    expect(executed).toBe(false)
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some(check => check.label === structureLabel)).toBe(true)
+    expect(report.passedChecks.some(check => check.label === executionLabel)).toBe(false)
+  })
+
+  test.each(['crash', 'invalid-json', 'external-directory', 'invalid-frames'] as const)('fails the final package when the resource diagnostic reports %s', async mode => {
+    const source = fixture()
+    let temporaryRoot = ''
+    const report = await inspectPackage(source.rootDir, {
+      platform: 'macos', arch: 'arm64', packageKind: 'dir', hostPlatform: 'macos', hostArch: 'arm64',
+      commandRunner: (command, _args, options) => {
+        temporaryRoot = options!.cwd
+        if (mode === 'crash') return { status: null, stderr: 'terminated by signal' }
+        if (mode === 'invalid-json') return { status: 0, stdout: 'not JSON' }
+        const resourceDirectory = mode === 'external-directory' ? source.sequence
+          : join(dirname(dirname(command)), 'Resources/cu-helper_cc-haha-computer-use.bundle/LensSequence')
+        return { status: 0, stdout: JSON.stringify({
+          resourceDirectory, frameCount: mode === 'invalid-frames' ? -1 : 0, proceduralFallback: true,
+        }) }
+      },
+    })
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some(check => check.label === executionLabel)).toBe(true)
+    expect(existsSync(temporaryRoot)).toBe(false)
+  })
+
+  test.each([
+    { platform: 'macos', arch: 'arm64', note: 'target x86_64, host arm64' },
+    { platform: 'linux', arch: 'x64', note: 'host platform is linux' },
+  ])('records a skipped execution on $platform/$arch without counting it as a passed probe', async host => {
+    const source = fixture('x64')
+    let executed = false
+    const report = await inspectPackage(source.rootDir, {
+      platform: 'macos', arch: 'x64', packageKind: 'dir', hostPlatform: host.platform, hostArch: host.arch,
+      commandRunner: () => { executed = true; return { status: 1 } },
+    })
+    expect(report.passed).toBe(true)
+    expect(executed).toBe(false)
+    expect(report.passedChecks.some(check => check.label === executionLabel)).toBe(false)
+    expect(report.notes.join('\n')).toContain(`SKIPPED: ${executionLabel}`)
+    expect(report.notes.join('\n')).toContain(host.note)
   })
 })
 

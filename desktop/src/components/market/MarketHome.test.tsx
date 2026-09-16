@@ -256,3 +256,10 @@ describe('MarketHome infinite scroll', () => {
     expect(loadMore).toHaveBeenCalledTimes(1)
   })
 })
+
+it('keeps featured skill packages inside the existing scroll surface alongside search and installed skills', () => {
+  render(<MarketHome onRequestInstall={vi.fn()} featured={<div data-testid="curated-skill-packages" />} />)
+  expect(screen.getByTestId('market-scroll')).toContainElement(screen.getByTestId('curated-skill-packages'))
+  expect(screen.getByTestId('market-search-input')).toBeInTheDocument()
+  expect(screen.getByTestId('market-installed-entry')).toBeInTheDocument()
+})

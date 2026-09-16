@@ -539,7 +539,16 @@ function getModelFamilyInfo(
 
   // Fable family
   if (canonical.includes('claude-fable-5')) {
-    const currentName = getMarketingNameForModel(getDefaultFableModel())
+    const defaultModel = getDefaultFableModel()
+    // The alias can lag a newly selectable release; a different version is not
+    // necessarily an upgrade for a user who has already pinned Fable 5.1.
+    if (
+      canonical === 'claude-fable-5-1' &&
+      getCanonicalName(defaultModel) === 'claude-fable-5'
+    ) {
+      return null
+    }
+    const currentName = getMarketingNameForModel(defaultModel)
     if (currentName) {
       return { alias: 'Fable', currentVersionName: currentName }
     }

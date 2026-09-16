@@ -10,13 +10,18 @@ import { enableConfigs } from '../../utils/config.js'
 import { get3PModelCapabilityOverride } from '../../utils/model/modelSupportOverrides.js'
 import { buildProviderManagedEnv } from '../../server/services/providerRuntimeEnv.js'
 import type { SavedProvider } from '../../server/types/provider.js'
-import { queryWithModel } from './claude.js'
+import { queryModelWithStreaming, queryWithModel } from './claude.js'
+import { createUserMessage } from '../../utils/messages.js'
+import { asSystemPrompt } from '../../utils/systemPromptType.js'
+import { getEmptyToolPermissionContext } from '../../Tool.js'
+import type { Message } from '../../types/message.js'
 
 function sseEvent(name: string, data: unknown): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
-function successfulResponse(model: string): string {
+function successfulResponse(model: string, withThinking = false): string {
+  const textIndex = withThinking ? 1 : 0
   return [
     sseEvent('message_start', {
       type: 'message_start',
@@ -31,17 +36,28 @@ function successfulResponse(model: string): string {
         usage: { input_tokens: 1, output_tokens: 0 },
       },
     }),
+    ...(withThinking ? [
+      sseEvent('content_block_start', {
+        type: 'content_block_start', index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' },
+      }),
+      sseEvent('content_block_delta', {
+        type: 'content_block_delta', index: 0,
+        delta: { type: 'signature_delta', signature: 'fixture-signature' },
+      }),
+      sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    ] : []),
     sseEvent('content_block_start', {
       type: 'content_block_start',
-      index: 0,
+      index: textIndex,
       content_block: { type: 'text', text: '' },
     }),
     sseEvent('content_block_delta', {
       type: 'content_block_delta',
-      index: 0,
+      index: textIndex,
       delta: { type: 'text_delta', text: 'OK' },
     }),
-    sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    sseEvent('content_block_stop', { type: 'content_block_stop', index: textIndex }),
     sseEvent('message_delta', {
       type: 'message_delta',
       delta: { stop_reason: 'end_turn', stop_sequence: null },
@@ -298,6 +314,8 @@ async function captureQueryRequest({
   globalThinkingEnabled,
   provider,
   responseFactory,
+  continuationSystemPrompts,
+  localProxy = false,
   env,
 }: {
   model: string
@@ -307,7 +325,9 @@ async function captureQueryRequest({
   configureCapabilityOverrides?: boolean
   globalThinkingEnabled?: boolean
   provider?: SavedProvider
-  responseFactory?: (model: string, body: Record<string, unknown>) => Response
+  responseFactory?: (model: string, body: Record<string, unknown>, headers: Headers) => Response
+  continuationSystemPrompts?: string[][]
+  localProxy?: boolean
   env?: Readonly<Record<string, string | undefined>>
 }): Promise<{
   content: unknown
@@ -325,7 +345,7 @@ async function captureQueryRequest({
       requestHeaders.push(new Headers(request.headers))
       const body = await request.json() as Record<string, unknown>
       requests.push(body)
-      return responseFactory?.(model, body) ?? new Response(successfulResponse(model), {
+      return responseFactory?.(model, body, request.headers) ?? new Response(successfulResponse(model), {
         headers: { 'content-type': 'text/event-stream' },
       })
     },
@@ -362,7 +382,7 @@ async function captureQueryRequest({
     delete process.env.CLAUDE_CODE_EFFORT_LEVEL
     delete process.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT
     delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS
-    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.port}`
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.port}${localProxy ? "/proxy/providers/fixture" : ""}`
     delete process.env.ANTHROPIC_AUTH_TOKEN
     process.env.ANTHROPIC_API_KEY = 'loopback-test-key'
     process.env.ANTHROPIC_MODEL = model
@@ -386,19 +406,46 @@ async function captureQueryRequest({
     clearCapabilityCache()
     enableConfigs()
 
-    const result = await queryWithModel({
-      userPrompt: 'Reply exactly OK',
-      signal: new AbortController().signal,
-      options: {
-        model,
-        querySource: 'insights',
-        agents: [],
-        isNonInteractiveSession: true,
-        hasAppendSystemPrompt: false,
-        mcpTools: [],
-        effortValue,
-      },
-    })
+    const options = {
+      model,
+      querySource: 'insights' as const,
+      agents: [],
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      mcpTools: [],
+      effortValue,
+    }
+    let result
+    if (continuationSystemPrompts) {
+      const history: Message[] = []
+      for (const [index, systemPrompt] of [[], ...continuationSystemPrompts].entries()) {
+        history.push(createUserMessage({ content: index === 0 ? 'Reply exactly OK' : 'Continue' }))
+        const assistants = []
+        for await (const message of queryModelWithStreaming({
+          messages: history,
+          systemPrompt: asSystemPrompt(systemPrompt),
+          thinkingConfig: { type: 'disabled' },
+          tools: [],
+          signal: new AbortController().signal,
+          options: {
+            ...options,
+            enablePromptCaching: false,
+            getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+          },
+        })) {
+          if (message.type === 'assistant') assistants.push(message)
+        }
+        history.push(...assistants)
+        result = assistants.at(-1)
+      }
+    } else {
+      result = await queryWithModel({
+        userPrompt: 'Reply exactly OK',
+        signal: new AbortController().signal,
+        options,
+      })
+    }
+    if (!result) throw new Error('No assistant response received')
 
     return {
       content: result.message.content,
@@ -421,6 +468,25 @@ async function captureQueryRequest({
     await rm(configDir, { recursive: true, force: true })
   }
 }
+
+test('does not replay a policy-blocked stream through non-streaming fallback', async () => {
+  let calls = 0
+  const result = await captureQueryRequest({
+    model: 'gpt-6-astra',
+    continuationSystemPrompts: [],
+    responseFactory: model => {
+      calls += 1
+      return new Response(calls === 1 ? sseEvent('error', {
+        type: 'error',
+        error: { type: 'permission_error', code: 'cyber_policy', message: 'Request blocked by safety policy' },
+      }) : successfulResponse(model), {
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    },
+  })
+  expect(result.requests).toHaveLength(1)
+  expect(JSON.stringify(result.content)).toContain('Request blocked by safety policy')
+})
 
 test('keeps required-thinking models enabled when the caller requests disabled thinking', async () => {
   const { content, requests } = await captureQueryRequest({
@@ -541,6 +607,51 @@ test('normalizes a disabled parent thinking mode to adaptive for Fable', async (
   expect(requests[0]?.thinking).not.toEqual({ type: 'disabled' })
 }, 10_000)
 
+for (const [disableBetas, disableAdaptive] of [[false, false], [true, false], [false, true]]) {
+  test(`keeps Fable 5.1 replay usable after a system change (disable betas: ${disableBetas}, adaptive: ${disableAdaptive})`, async () => {
+    let originalSystem: string | undefined
+    let responseIndex = 0
+    const { content, requests, requestHeaders } = await captureQueryRequest({
+      model: 'claude-fable-5-1',
+      configureCapabilityOverrides: false,
+      continuationSystemPrompts: [[], ['Additional working directories: /tmp/project-two']],
+      env: {
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: disableBetas ? '1' : undefined,
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: disableAdaptive ? '1' : undefined,
+      },
+      responseFactory: (model, body, headers) => {
+        const system = JSON.stringify(body.system)
+        const changed = originalSystem !== undefined && system !== originalSystem
+        originalSystem ??= system
+        const thinking = body.thinking as { block_binding?: { prefix_mismatch_behavior?: string } }
+        if (changed && (
+          thinking?.block_binding?.prefix_mismatch_behavior !== 'drop_block' ||
+          !headers.get('anthropic-beta')?.includes('thinking-binding-controls-2026-08-01')
+        )) {
+          return Response.json({ type: 'error', error: {
+            type: 'invalid_request_error', message: 'The block is bound to a different conversation',
+          } }, { status: 400 })
+        }
+        const response = successfulResponse(model, true).replaceAll('msg_required_thinking', `msg_replay_${responseIndex++}`)
+        return new Response(response, { headers: { 'content-type': 'text/event-stream' } })
+      },
+    })
+
+    expect(content).toContainEqual({ type: 'text', text: 'OK' })
+    expect(requests).toHaveLength(3)
+    for (let index = 0; index < requests.length; index++) {
+      expect(requests[index]?.model).toBe('claude-fable-5-1')
+      expect(requests[index]?.thinking).toEqual({
+        type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' },
+      })
+      expect(requestHeaders[index]?.get('anthropic-beta')).toContain('thinking-binding-controls-2026-08-01')
+    }
+    for (const request of requests.slice(1)) {
+      expect(JSON.stringify(request.messages)).toContain('fixture-signature')
+    }
+  }, 10_000)
+}
+
 test('drops a tool call truncated at the output-token boundary', async () => {
   const { content, apiError, error, requests } = await captureQueryRequest({
     model: 'deepseek-v4-flash',
@@ -640,3 +751,38 @@ function clearCapabilityCache() {
     cache?: { clear?: () => void }
   }).cache?.clear?.()
 }
+
+
+test('marks model defaults separately from explicit proxy output budgets', async () => {
+  const defaults = await captureQueryRequest({ model: 'fixture-output-model', localProxy: true,
+    configureCapabilityOverrides: false,
+    env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: undefined, CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined },
+  })
+  expect(defaults.requests[0]?.max_tokens).toBe(32_000)
+  expect(defaults.requestHeaders[0]?.get('x-cc-haha-output-budget-source')).toBe('default')
+
+  const configured = await captureQueryRequest({ model: 'fixture-output-model', localProxy: true,
+    configureCapabilityOverrides: false,
+    env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '131072', CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined },
+  })
+  expect(configured.requests[0]?.max_tokens).toBe(131_072)
+  expect(configured.requestHeaders[0]?.get('x-cc-haha-output-budget-source')).toBe('explicit')
+}, 10_000)
+
+test('does not attach internal budget provenance to direct provider requests', async () => {
+  const { requestHeaders } = await captureQueryRequest({ model: 'fixture-output-model',
+    configureCapabilityOverrides: false,
+  })
+  expect(requestHeaders[0]?.has('x-cc-haha-output-budget-source')).toBe(false)
+}, 10_000)
+
+test('invalid global output overrides fall back to the configured provider budget', async () => {
+  for (const globalBudget of ['0', 'NaN', 'garbage', '1.5', '123bad', '64']) {
+    const result = await captureQueryRequest({ model: 'fixture-output-model', localProxy: true,
+      configureCapabilityOverrides: false,
+      env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '96000', CLAUDE_CODE_MAX_OUTPUT_TOKENS: globalBudget },
+    })
+    expect(result.requests[0]?.max_tokens).toBe(globalBudget === '64' ? 64 : 96_000)
+    expect(result.requestHeaders[0]?.get('x-cc-haha-output-budget-source')).toBe('explicit')
+  }
+}, 10_000)

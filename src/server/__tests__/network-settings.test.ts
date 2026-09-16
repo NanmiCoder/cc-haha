@@ -15,6 +15,7 @@ import {
   loadNetworkSettings,
   normalizeNetworkSettings,
 } from '../services/networkSettings.js'
+import { SettingsService } from '../services/settingsService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
 let tmpDir: string
@@ -64,7 +65,8 @@ describe('network settings', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  it('normalizes missing and legacy-invalid settings to the 600s system-proxy default', () => {
+  it('normalizes missing and legacy-invalid settings to the 1800s system-proxy default', () => {
+    expect(DEFAULT_AI_REQUEST_TIMEOUT_MS).toBe(1_800_000)
     expect(normalizeNetworkSettings({})).toEqual({
       aiRequestTimeoutMs: DEFAULT_AI_REQUEST_TIMEOUT_MS,
       proxy: {
@@ -191,7 +193,7 @@ describe('network settings', () => {
   it('clamps AI request timeouts and trims manual proxy URLs', () => {
     expect(normalizeNetworkSettings({
       network: {
-        aiRequestTimeoutMs: 9_999_999,
+        aiRequestTimeoutMs: Number.MAX_SAFE_INTEGER,
         proxy: {
           mode: 'manual',
           url: '  http://127.0.0.1:7890  ',
@@ -210,6 +212,22 @@ describe('network settings', () => {
         aiRequestTimeoutMs: 100,
       },
     }).aiRequestTimeoutMs).toBe(MIN_AI_REQUEST_TIMEOUT_MS)
+  })
+
+  it.each([14_400_000, 21_600_000, 2_147_483_000])('preserves a long request budget through save, reload, and provider environment (%i ms)', async timeoutMs => {
+    const service = new SettingsService()
+    await service.updateUserSettings({ network: { aiRequestTimeoutMs: timeoutMs } })
+    const settings = await loadNetworkSettings()
+
+    expect(settings.aiRequestTimeoutMs).toBe(timeoutMs)
+    expect(buildNetworkEnvironment(settings).API_TIMEOUT_MS).toBe(String(timeoutMs))
+  })
+
+  it('caps only at the largest whole-second budget that does not overflow JavaScript timers', () => {
+    expect(MAX_AI_REQUEST_TIMEOUT_MS).toBe(2_147_483_000)
+    expect(normalizeNetworkSettings({
+      network: { aiRequestTimeoutMs: 2_147_483_648 },
+    }).aiRequestTimeoutMs).toBe(2_147_483_000)
   })
 
   it('loads persisted user network settings for provider requests', async () => {

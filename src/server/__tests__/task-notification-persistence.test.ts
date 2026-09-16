@@ -82,20 +82,33 @@ describe('background task notification persistence', () => {
       timestamp: '2026-07-18T00:00:00.000Z',
     })}\n`, 'utf8')
 
+    const realOpen = fs.open
     const realWriteFile = fs.writeFile
+    let appendClosed = false
     let markAppendStarted!: () => void
     const appendStarted = new Promise<void>((resolve) => {
       markAppendStarted = resolve
     })
-    spyOn(fs, 'writeFile').mockImplementation((filePath: any, data: any, options: any) => {
-      if (options && typeof options === 'object' && options.flag === 'a') {
+    spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args)
+      const realClose = handle.close.bind(handle)
+      spyOn(handle, 'close').mockImplementation(async () => {
+        await realClose()
+        appendClosed = true
+      })
+      spyOn(handle, 'writeFile').mockImplementation((_data, options) => {
         markAppendStarted()
+        const signal = typeof options === 'object' ? options?.signal : undefined
         return new Promise<void>((resolve) => {
-          if (options.signal?.aborted) resolve()
-          else options.signal?.addEventListener('abort', () => resolve(), { once: true })
+          if (signal?.aborted) resolve()
+          else signal?.addEventListener('abort', () => resolve(), { once: true })
         })
-      }
-      return realWriteFile(filePath, data, options)
+      })
+      return handle
+    })
+    spyOn(fs, 'writeFile').mockImplementation((...args) => {
+      expect(appendClosed).toBe(true)
+      return realWriteFile(...args)
     })
 
     const service = new SessionService()
@@ -129,27 +142,39 @@ describe('background task notification persistence', () => {
       timestamp: '2026-07-18T00:00:00.000Z',
     })}\n`, 'utf8')
 
-    const realWriteFile = fs.writeFile
+    const realOpen = fs.open
     let appendAttempts = 0
+    let abortedAppendClosed = false
     let markAppendStarted!: () => void
     const appendStarted = new Promise<void>((resolve) => {
       markAppendStarted = resolve
     })
-    spyOn(fs, 'writeFile').mockImplementation((filePath: any, data: any, options: any) => {
-      if (options && typeof options === 'object' && options.flag === 'a') {
-        appendAttempts++
-        if (appendAttempts > 1) return realWriteFile(filePath, data, options)
+    spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args)
+      appendAttempts++
+      if (appendAttempts > 1) return handle
+      const realClose = handle.close.bind(handle)
+      spyOn(handle, 'close').mockImplementation(async () => {
+        await realClose()
+        abortedAppendClosed = true
+      })
+      spyOn(handle, 'writeFile').mockImplementation((_data, options) => {
         markAppendStarted()
+        const signal = typeof options === 'object' ? options?.signal : undefined
         return new Promise<void>((_resolve, reject) => {
           const rejectAbort = () => {
             const error = new Error('The operation was aborted')
             error.name = 'AbortError'
             reject(error)
           }
-          if (options.signal?.aborted) rejectAbort()
-          else options.signal?.addEventListener('abort', rejectAbort, { once: true })
+          if (signal?.aborted) rejectAbort()
+          else signal?.addEventListener('abort', rejectAbort, { once: true })
         })
-      }
+      })
+      return handle
+    })
+    spyOn(fs, 'writeFile').mockImplementation(() => {
+      expect(abortedAppendClosed).toBe(true)
       return Promise.reject(new Error('transcript replacement failed'))
     })
 

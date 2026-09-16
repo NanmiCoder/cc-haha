@@ -7,7 +7,7 @@ import {
   isSameMcpServer,
   mcpProjectPathKey,
 } from '../lib/mcpIdentity'
-import type { McpServerRecord, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 type McpStore = {
   servers: McpServerRecord[]
@@ -19,7 +19,7 @@ type McpStore = {
   createServer: (name: string, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
   updateServer: (server: McpServerRecord, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
   deleteServer: (server: McpServerRecord, cwd?: string) => Promise<void>
-  toggleServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpServerRecord>
+  toggleServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpToggleResult>
   reconnectServer: (server: McpServerRecord, cwd?: string) => Promise<McpServerRecord>
   refreshServerStatus: (server: McpServerRecord, cwd?: string) => Promise<McpServerRecord>
   selectServer: (server: McpServerRecord | null) => void
@@ -214,7 +214,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       selectedServer: state.selectedServer && isSameMcpServer(state.selectedServer, server) ? updated : state.selectedServer,
       error: null,
     }))
-    return updated
+    return { ...response, server: updated }
   },
 
   reconnectServer: async (server, cwd) => {
@@ -232,7 +232,12 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   },
 
   refreshServerStatus: async (server, cwd) => {
+    const snapshot = get().servers.find((item) => isSameMcpServer(item, server))
     const response = await mcpApi.status(server.name, cwd)
+    const current = get().servers.find((item) => isSameMcpServer(item, server))
+    // A toggle, edit, or refresh completed while this probe was in flight.
+    // Keep its newer state instead of restoring an old enabled connection.
+    if (current !== snapshot) return current ?? server
     const updated = preserveCurrentContextActivity(
       attachProjectPath(response.server, cwd ?? server.projectPath),
       server,

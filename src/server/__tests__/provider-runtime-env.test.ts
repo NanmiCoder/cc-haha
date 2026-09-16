@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 
 import {
+  activeProviderNeedsProxy,
   getManagedEnvKeys,
   mergeActiveProviderManagedEnv,
   readActiveProviderManagedEnv,
@@ -35,6 +36,40 @@ describe('providerRuntimeEnv', () => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
     await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  test('routes Anthropic providers without nested tool media through the proxy', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'provider-media-compat',
+      providers: [{
+        id: 'provider-media-compat',
+        presetId: 'custom',
+        name: 'Media compatibility',
+        apiKey: 'sk-media',
+        baseUrl: 'https://media.example.test',
+        apiFormat: 'anthropic',
+        models: { main: 'model', haiku: 'model', sonnet: 'model', opus: 'model' },
+        supportsNestedToolResultMedia: false,
+      }],
+    })
+
+    expect(activeProviderNeedsProxy(tmpDir)).toBe(true)
+
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'provider-media-native',
+      providers: [{
+        id: 'provider-media-native',
+        presetId: 'custom',
+        name: 'Native media',
+        apiKey: 'sk-media',
+        baseUrl: 'https://media.example.test',
+        apiFormat: 'anthropic',
+        models: { main: 'model', haiku: 'model', sonnet: 'model', opus: 'model' },
+        supportsNestedToolResultMedia: true,
+      }],
+    })
+
+    expect(activeProviderNeedsProxy(tmpDir)).toBe(false)
   })
 
   test('normalizes and preserves Grok Official as the active runtime provider', async () => {

@@ -181,7 +181,7 @@ import { provisionContentReplacementState, reconstructContentReplacementState, t
 import { partialCompactConversation } from '../services/compact/compact.js';
 import type { LogOption } from '../types/logs.js';
 import type { AgentColorName } from '../tools/AgentTool/agentColorManager.js';
-import { fileHistoryMakeSnapshot, type FileHistoryState, fileHistoryRewind, type FileHistorySnapshot, copyFileHistoryForResume, fileHistoryEnabled, fileHistoryHasAnyChanges } from '../utils/fileHistory.js';
+import { fileHistoryCompleteSnapshot, fileHistoryMakeSnapshot, type FileHistoryState, fileHistoryRewind, type FileHistorySnapshot, copyFileHistoryForResume, fileHistoryEnabled, fileHistoryHasAnyChanges } from '../utils/fileHistory.js';
 import { type AttributionState, incrementPromptCount } from '../utils/commitAttribution.js';
 import { recordAttributionSnapshot } from '../utils/sessionStorage.js';
 import { computeStandaloneAgentContext, restoreAgentFromSession, restoreSessionStateFromLog, restoreWorktreeForResume, exitRestoredWorktree } from '../utils/sessionRestore.js';
@@ -2795,6 +2795,7 @@ export function REPL({
     resetTurnHookDuration();
     resetTurnToolDuration();
     resetTurnClassifierDuration();
+    try {
     for await (const event of query({
       messages: messagesIncludingNewMessages,
       systemPrompt,
@@ -2805,6 +2806,12 @@ export function REPL({
       querySource: getQuerySourceForREPL()
     })) {
       onQueryEvent(event);
+    }
+    } finally {
+      const checkpointMessage = messagesIncludingNewMessages.findLast(selectableUserMessagesFilter)
+      if (checkpointMessage) {
+        await fileHistoryCompleteSnapshot(updater => setAppState(prev => ({ ...prev, fileHistory: updater(prev.fileHistory) })), checkpointMessage.uuid).catch(logError)
+      }
     }
     void fireCompanionObserver(messagesRef.current, reaction => setAppState(prev => prev.companionReaction === reaction ? prev : {
         ...prev,

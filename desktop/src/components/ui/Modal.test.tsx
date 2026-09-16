@@ -56,7 +56,7 @@ describe('Modal', () => {
     )
 
     const dialog = screen.getByRole('dialog', { name: 'Preview' })
-    expect(dialog).toHaveClass('bg-[var(--color-terminal-bg)]')
+    expect(dialog).toHaveClass('bg-[var(--color-media-bg)]')
     expect(dialog).toHaveClass('h-[calc(100dvh-24px)]')
     expect(dialog).not.toHaveClass('dialog-panel')
     expect(screen.getByRole('img', { name: 'Preview' }).parentElement).not.toHaveClass('px-6')

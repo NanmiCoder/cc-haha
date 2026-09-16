@@ -9,6 +9,7 @@ import { logForDebugging } from '../debug.js'
 import { ensureInstalledHelper } from './cuHelperInstall.js'
 import { attestDaemonSocketPeer } from './cuHelperPeerAttestation.js'
 import { getRuntimePaths } from './pythonBridge.js'
+import { NativeCommandError } from '../../vendor/computer-use-mcp/nativeError.js'
 
 /**
  * Long-lived `cu-helper daemon` client (macOS only).
@@ -48,7 +49,7 @@ const CONNECTION_SCOPED_COMMANDS = new Set([
  * command was dispatched — the daemon couldn't install/start/connect, or the
  * socket rejected the write synchronously.
  * A command that the daemon ran and rejected (e.g. `not_trusted`, `unknown_key`)
- * rejects with a plain `Error` instead. The bridge uses this distinction to fall
+ * rejects with `NativeCommandError` instead. The bridge uses this distinction to fall
  * back to the one-shot CLI ONLY on infra failure — never silently swallowing a
  * real command error (which would just fail the same way on the CLI, minus the
  * overlay). See helperBridge.ts.
@@ -112,6 +113,7 @@ let daemonStartCount = 0
 
 let overlayDesiredVisible = false
 let overlayActualVisible = false
+let overlayCleanupRequested = false
 let overlayDesiredPayload: Record<string, unknown> = {}
 let overlayDesiredKey = '{}'
 let overlayActualKey: string | undefined
@@ -357,6 +359,7 @@ async function connectWithRetry(
   sock: string,
   timeoutMs: number,
   getLaunchError: () => Error | undefined = () => undefined,
+  connect: (socketPath: string) => net.Socket = socketPath => net.connect(socketPath),
 ): Promise<net.Socket> {
   const deadline = Date.now() + timeoutMs
   let lastErr: Error | undefined
@@ -365,21 +368,48 @@ async function connectWithRetry(
     if (launchError) throw launchError
     try {
       return await new Promise<net.Socket>((resolve, reject) => {
-        const s = net.connect(sock)
-        s.once('connect', () => resolve(s))
-        s.once('error', err => {
+        const s = connect(sock)
+        const cleanup = () => {
+          clearTimeout(timer)
+          s.removeListener('connect', onConnect)
+          s.removeListener('close', onClose)
+        }
+        const onConnect = () => {
+          cleanup()
+          resolve(s)
+        }
+        const fail = (error: Error) => {
+          cleanup()
           s.destroy()
-          reject(err instanceof Error ? err : new Error(String(err)))
-        })
+          reject(error)
+        }
+        const onClose = () => fail(new Error('daemon socket closed before connecting'))
+        // The outer retry deadline cannot interrupt an unresolved connect.
+        // Bound the actual attempt and retire its socket before retrying.
+        const timer = setTimeout(() => fail(new Error('daemon socket connection timed out')), Math.max(0, deadline - Date.now()))
+        s.once('connect', onConnect)
+        s.once('close', onClose)
+        // Keep an error listener after connect until the daemon state attaches
+        // its own handlers; attestation happens between those two steps.
+        s.once('error', err => fail(err instanceof Error ? err : new Error(String(err))))
       })
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
-      await new Promise(r => setTimeout(r, 100))
+      const remaining = deadline - Date.now()
+      if (remaining > 0) await new Promise(r => setTimeout(r, Math.min(100, remaining)))
     }
   }
   throw new Error(
     `cu-helper daemon socket not ready within ${timeoutMs}ms: ${lastErr?.message ?? 'unknown'}`,
   )
+}
+
+export function __connectWithRetryForTests(
+  sock: string,
+  timeoutMs: number,
+  connect: (socketPath: string) => net.Socket,
+): Promise<net.Socket> {
+  return connectWithRetry(sock, timeoutMs, undefined, connect)
 }
 
 /** Tear down current state (on death/error) so the next call respawns fresh. */
@@ -391,6 +421,7 @@ function resetState(reason: string, expectedGeneration?: number): void {
 
   overlayDesiredVisible = false
   overlayActualVisible = false
+  overlayCleanupRequested = false
   overlayActualKey = undefined
   overlayRevision++
   activeTurnId = undefined
@@ -543,7 +574,7 @@ function attachSocketHandlers(state: DaemonState): void {
       const line = state.buf.slice(0, nl)
       state.buf = state.buf.slice(nl + 1)
       if (!line.trim()) continue
-      let msg: { id?: string; ok?: boolean; result?: unknown; error?: { message?: string } }
+      let msg: { id?: string; ok?: boolean; result?: unknown; error?: { message?: string; code?: unknown } }
       try { msg = JSON.parse(line) } catch { continue }
       const id = msg.id
       if (!id) continue
@@ -552,7 +583,10 @@ function attachSocketHandlers(state: DaemonState): void {
       state.pending.delete(id)
       clearTimeout(pending.timer)
       if (msg.ok) pending.resolve(msg.result)
-      else pending.reject(new Error(msg.error?.message || 'cu-helper daemon command failed'))
+      else pending.reject(new NativeCommandError(
+        msg.error?.message || 'cu-helper daemon command failed',
+        typeof msg.error?.code === 'string' ? msg.error.code : undefined,
+      ))
     }
   })
   // The daemon's death is observed via the socket closing — NOT via `proc`,
@@ -624,13 +658,20 @@ function dispatchDaemonCommand<T>(
   const isTurnScoped = !CONNECTION_SCOPED_COMMANDS.has(command)
   const turnId = activeTurnId
     ?? (isTurnScoped ? (activeTurnId = randomUUID()) : `connection-${state.generation}`)
+  // Native keyboard macros now complete each chord through its own input
+  // boundary. Keep the native deadline and client timer aligned, without
+  // extending screenshots, clicks, or single-key requests. This counts only
+  // separators for budgeting; native KeyMapping remains the validating parser.
+  const multipleChords = command === 'press_key' && typeof payload.key === 'string'
+    && payload.key.replace(/\s*\+\s*/g, '+').trim().split(/\s+/).length > 1
+  const timeoutMs = multipleChords ? Math.min(60_000, requestTimeoutMs * 3) : requestTimeoutMs
   const request = {
     id,
     requestId: id,
     cmd: command,
     payload,
     clientApiVersion: CU_HELPER_PROTOCOL_VERSION,
-    deadlineUnixMilliseconds: Date.now() + requestTimeoutMs,
+    deadlineUnixMilliseconds: Date.now() + timeoutMs,
     sessionId: getSessionId(),
     turnId,
   }
@@ -646,7 +687,7 @@ function dispatchDaemonCommand<T>(
       // Retire a daemon that missed its response deadline. Other requests that
       // were already in flight are also result-unknown, never replayable infra.
       resetState(`command ${command} timed out`, state.generation)
-    }, requestTimeoutMs)
+    }, timeoutMs)
     state.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer })
     try {
       state.socket.write(`${JSON.stringify(request)}\n`)
@@ -697,7 +738,12 @@ function needsOverlayReconciliation(): boolean {
   // sleep assertion) still needs an explicit turn_end at host cleanup. The
   // keyed SCStream consumer deliberately survives that boundary and retires on
   // target/config changes or daemon teardown.
-  if (!overlayDesiredVisible) return overlayActualVisible || activeTurnId !== undefined
+  // A failed visual-feedback request also leaves the overlay hidden, but must
+  // not release the active turn's snapshots. Only explicit host cleanup owns
+  // that lifetime boundary.
+  if (!overlayDesiredVisible) {
+    return overlayCleanupRequested && (overlayActualVisible || activeTurnId !== undefined)
+  }
   return !overlayActualVisible || overlayActualKey !== overlayDesiredKey
 }
 
@@ -725,7 +771,7 @@ async function reconcileOverlay(): Promise<void> {
         overlayActualVisible = false
         overlayActualKey = undefined
         logForDebugging(`cu-helper overlay_show failed: ${String(err)}`, { level: 'debug' })
-        return
+        continue
       }
       continue
     }
@@ -734,6 +780,7 @@ async function reconcileOverlay(): Promise<void> {
     // pending show completes this branch sees the already-owned daemon and
     // serially ends the turn. This also covers read-only turns whose overlay
     // was never visible.
+    overlayCleanupRequested = false
     if (!statePromise || activeDaemonGeneration === undefined) {
       overlayActualVisible = false
       overlayActualKey = undefined
@@ -770,6 +817,7 @@ export function overlayShow(
   target: Record<string, unknown> = {},
 ): Promise<void> {
   overlayDesiredVisible = true
+  overlayCleanupRequested = false
   overlayDesiredPayload = { ...target }
   overlayDesiredKey = JSON.stringify(overlayDesiredPayload)
   overlayRevision++
@@ -779,6 +827,7 @@ export function overlayShow(
 /** Hide the overlay, serialized after any pending show (best-effort). */
 export function overlayHide(): Promise<void> {
   overlayDesiredVisible = false
+  overlayCleanupRequested = true
   overlayRevision++
   return scheduleOverlayReconciliation()
 }
@@ -817,6 +866,7 @@ export function __resetDaemonClientForTests(): void {
   activeDaemonGeneration = undefined
   overlayDesiredVisible = false
   overlayActualVisible = false
+  overlayCleanupRequested = false
   overlayDesiredPayload = {}
   overlayDesiredKey = '{}'
   overlayActualKey = undefined

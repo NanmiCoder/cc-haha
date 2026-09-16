@@ -1,12 +1,13 @@
 import '@testing-library/jest-dom'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { act } from 'react'
+import { act, useState } from 'react'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Hoisted mocks (vi.hoisted runs before module evaluation)
 // ──────────────────────────────────────────────────────────────────────────────
-const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState } = vi.hoisted(() => {
+const { reviewOpenSpy, openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState } = vi.hoisted(() => {
+  const reviewOpenSpy = vi.fn()
   const openPreviewSpy = vi.fn().mockResolvedValue(undefined)
   const browserOpenSpy = vi.fn()
   const openTargetSpy = vi.fn().mockResolvedValue(undefined)
@@ -17,7 +18,7 @@ const { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTar
   ])
   const openSystemFileSpy = vi.fn().mockResolvedValue(undefined)
   const panelState = { isOpen: false }
-  return { openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState }
+  return { reviewOpenSpy, openPreviewSpy, browserOpenSpy, openTargetSpy, ensureTargetsMock, getTargetsForPathMock, openSystemFileSpy, panelState }
 })
 
 // Mock openTargetStore
@@ -43,26 +44,20 @@ vi.mock('../../stores/openTargetStore', () => ({
   ),
 }))
 
-// Mock browserPanelStore
-vi.mock('../../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: Object.assign(
-    (selector: (s: { open: () => void }) => unknown) =>
-      selector({ open: browserOpenSpy }),
-    {
-      getState: vi.fn(() => ({ open: browserOpenSpy })),
+// The unified open entry point replaced the per-store `open` / `openPreview`
+// pair: every caller now names a target and the controller decides the tab.
+vi.mock('../../lib/workspace/openTarget', () => ({
+  workspaceOpen: {
+    file: (sessionId: string, path: string, options?: Record<string, unknown>) =>
+      openPreviewSpy(sessionId, path, 'file', options?.origin),
+    browser: (sessionId: string, url?: string) => browserOpenSpy(sessionId, url),
+    review: (sessionId: string, options?: Record<string, unknown>) => {
+      reviewOpenSpy(sessionId, options)
+      return openPreviewSpy(sessionId, options?.path, 'diff', options?.origin)
     },
-  ),
-}))
-
-// Mock workspacePanelStore
-vi.mock('../../stores/workspacePanelStore', () => ({
-  useWorkspacePanelStore: Object.assign(
-    (selector: (s: { openPreview: () => Promise<void>; isPanelOpen: () => boolean }) => unknown) =>
-      selector({ openPreview: openPreviewSpy, isPanelOpen: () => panelState.isOpen }),
-    {
-      getState: vi.fn(() => ({ openPreview: openPreviewSpy, isPanelOpen: () => panelState.isOpen })),
-    },
-  ),
+    terminal: vi.fn(),
+  },
+  openWorkspaceTarget: vi.fn(),
 }))
 
 // Mock @tauri-apps/plugin-shell
@@ -119,7 +114,7 @@ function makeCheckpoint(
     code: {
       available: true,
       filesChanged,
-      insertions: 10,
+      insertions: filesChanged.length > 0 ? 10 : 0,
       deletions: 0,
     },
     target: {
@@ -143,8 +138,11 @@ function renderCard(
   onUndo: () => void = vi.fn(),
 ) {
   const checkpoint = makeCheckpoint(filesChanged, restoreAvailable, unverifiedChangeSources)
-  return render(
-    <CurrentTurnChangeCard
+  function Card() {
+    const [expanded, setExpanded] = useState(false)
+    return <CurrentTurnChangeCard
+      expanded={expanded}
+      onExpandedChange={setExpanded}
       sessionId="s1"
       checkpoint={checkpoint}
       workDir="/w/proj"
@@ -152,8 +150,16 @@ function renderCard(
       isUndoing={false}
       isLatest={isLatest}
       onUndo={onUndo}
-    />,
-  )
+    />
+  }
+  return render(<Card />)
+}
+
+function renderExpandedCard(...args: Parameters<typeof renderCard>) {
+  const view = renderCard(...args)
+  const toggle = screen.queryByRole('button', { name: /chat.turnChangesExpand/ })
+  if (toggle) fireEvent.click(toggle)
+  return view
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -161,6 +167,61 @@ function renderCard(
 // ──────────────────────────────────────────────────────────────────────────────
 afterEach(() => {
   cleanup()
+})
+
+describe('CurrentTurnChangeCard – disclosure', () => {
+  it('keeps incomplete coverage visible while files are collapsed', () => {
+    const onUndo = vi.fn()
+    renderCard(['/w/proj/src/main.ts'], true, true, ['Bash'], onUndo)
+    expect(screen.queryByText('main.ts')).not.toBeInTheDocument()
+    expect(screen.getByText('chat.turnChangesPartialCoverageSubtitle')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' }))
+    expect(onUndo).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    [true, true, []],
+    [true, true, ['Bash']],
+    [false, true, ['Bash']],
+    [true, false, ['Bash']],
+  ] as const)('hides an empty file-change card (latest=%s, restorable=%s, sources=%j)', (isLatest, restoreAvailable, sources) => {
+    const { container } = renderCard([], isLatest, restoreAvailable, [...sources])
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('starts collapsed and preserves undo and change totals', () => {
+    renderCard(['/w/proj/src/main.ts'])
+    expect(screen.queryByText('main.ts')).not.toBeInTheDocument()
+    expect(screen.getByText('+10')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).toBeEnabled()
+    const toggle = screen.getByRole('button', { name: /chat.turnChangesExpand/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(screen.getByText('main.ts'))
+    fireEvent.click(toggle)
+    expect(screen.queryByText('main.ts')).not.toBeInTheDocument()
+  })
+
+  it('updates visibility when checkpoint files arrive or become empty', () => {
+    const props = {
+      sessionId: 's1',
+      workDir: '/w/proj',
+      error: null,
+      isUndoing: false,
+      isLatest: true,
+      expanded: true,
+      onExpandedChange: vi.fn(),
+      onUndo: vi.fn(),
+    }
+    const view = render(<CurrentTurnChangeCard {...props} checkpoint={makeCheckpoint([])} />)
+    expect(view.container).toBeEmptyDOMElement()
+    view.rerender(<CurrentTurnChangeCard {...props} checkpoint={makeCheckpoint(['/w/proj/src/main.ts'], true, ['Bash'])} />)
+    expect(screen.getByText('main.ts')).toBeInTheDocument()
+    expect(screen.getByText('chat.turnChangesPartialCoverageSubtitle')).toBeInTheDocument()
+    view.rerender(<CurrentTurnChangeCard {...props} checkpoint={makeCheckpoint([], true, ['Bash'])} />)
+    expect(view.container).toBeEmptyDOMElement()
+  })
 })
 
 describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
@@ -172,13 +233,13 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
   })
 
   it('renders the filename (not just full path) for each file', () => {
-    renderCard(['/w/proj/README.md', '/w/proj/src/index.ts'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/src/index.ts'])
     expect(screen.getByText('README.md')).toBeInTheDocument()
     expect(screen.getByText('index.ts')).toBeInTheDocument()
   })
 
   it('sorts previewable changed files before source-only files', () => {
-    renderCard([
+    renderExpandedCard([
       '/w/proj/package.json',
       '/w/proj/preview.md',
       '/w/proj/src/main.ts',
@@ -197,24 +258,24 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
   })
 
   it('renders the extension badge for a markdown file', () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     // The type subtitle contains the ext in uppercase: "· MD"
     expect(screen.getByText(/MD/)).toBeInTheDocument()
   })
 
   it('renders the extension badge for a TypeScript file', () => {
-    renderCard(['/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/src/main.ts'])
     expect(screen.getByText(/TS/)).toBeInTheDocument()
   })
 
   it('renders the extension badge for an HTML file', () => {
-    renderCard(['/w/proj/index.html'])
+    renderExpandedCard(['/w/proj/index.html'])
     expect(screen.getByText(/HTML/)).toBeInTheDocument()
   })
 
   it('keeps incomplete checkpoint files visible and still offers undo for the conversation', () => {
     const onUndo = vi.fn()
-    renderCard(['/w/proj/src/main.ts', '/outside/generated.ts'], true, false, undefined, onUndo)
+    renderExpandedCard(['/w/proj/src/main.ts', '/outside/generated.ts'], true, false, undefined, onUndo)
 
     expect(screen.getByText('main.ts')).toBeInTheDocument()
     expect(screen.getByText('generated.ts')).toBeInTheDocument()
@@ -229,7 +290,7 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
 
   it('keeps undo usable and warns instead of blocking when coverage is partial', () => {
     const onUndo = vi.fn()
-    renderCard(['/w/proj/src/main.ts'], true, true, ['Bash', 'TaskCreate'], onUndo)
+    renderExpandedCard(['/w/proj/src/main.ts'], true, true, ['Bash', 'TaskCreate'], onUndo)
 
     // Warn about what undo will NOT reverse...
     expect(screen.getByText('chat.turnChangesPartialCoverageSubtitle')).toBeInTheDocument()
@@ -267,7 +328,7 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
   })
 
   it('shows no coverage warning when every change source is accounted for', () => {
-    renderCard(['/w/proj/src/main.ts'], true, true, [])
+    renderExpandedCard(['/w/proj/src/main.ts'], true, true, [])
 
     expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle', { exact: false }))
       .toBeNull()
@@ -276,7 +337,7 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
   })
 
   it('prefers the conversation-only message over the coverage warning when restore is unavailable', () => {
-    renderCard(['/w/proj/src/main.ts'], true, false, ['Bash'])
+    renderExpandedCard(['/w/proj/src/main.ts'], true, false, ['Bash'])
 
     // Both conditions hold, but "files cannot be restored at all" is the one
     // that changes what the user can do, so it wins the subtitle.
@@ -295,15 +356,16 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
   })
 
   it('clicking a file row calls openPreview(sessionId, displayPath, "diff")', () => {
-    renderCard(['/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/src/main.ts'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     // displayPath is the workDir-relative path (matches the workspace file tree)
     expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'src/main.ts', 'diff', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
+    expect(reviewOpenSpy).toHaveBeenCalledWith('s1', expect.objectContaining({ source: { kind: 'turn', turnKey: 'msg-1', userMessageIndex: 0 } }))
   })
 
   it('passes the workDir-relative displayPath (not the absolute path) to openPreview', () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'diff', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
@@ -312,7 +374,7 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
   it('clicking an outside-workspace html changed file opens the in-app browser via local-file', () => {
     // The file lives outside the workdir (absolute displayPath) — no diff baseline,
     // so html renders directly in the in-app browser via the /local-file route.
-    renderCard(['/other/place/todo.html'])
+    renderExpandedCard(['/other/place/todo.html'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     expect(browserOpenSpy).toHaveBeenCalledWith('s1', localFileUrl('http://127.0.0.1:4321', '/other/place/todo.html'))
@@ -320,7 +382,7 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
   })
 
   it('clicking an outside-workspace non-html changed file opens a file preview (not a diff)', () => {
-    renderCard(['/other/place/notes.txt'])
+    renderExpandedCard(['/other/place/notes.txt'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     expect(openPreviewSpy).toHaveBeenCalledWith('s1', '/other/place/notes.txt', 'file', expect.objectContaining({ sourceTurnKey: 'msg-1' }))
@@ -328,7 +390,7 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
   })
 
   it('does NOT render an inline diff surface after clicking a row', () => {
-    renderCard(['/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/src/main.ts'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
     fireEvent.click(row)
     // No inline diff is rendered inside the card anymore — the diff opens in the
@@ -340,7 +402,7 @@ describe('CurrentTurnChangeCard – row opens the workspace diff', () => {
   })
 
   it('each file row exposes a single "open in workspace" button (no expand/collapse toggle)', () => {
-    renderCard(['/w/proj/README.md', '/w/proj/src/index.ts'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/src/index.ts'])
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(2)
   })
 })
@@ -353,25 +415,25 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('renders an "open-with" button for each previewable file', () => {
-    renderCard(['/w/proj/README.md', '/w/proj/index.html'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/index.html'])
     // aria-label is the i18n key itself (identity mock)
     const buttons = screen.getAllByRole('button', { name: 'openWith.title' })
     expect(buttons).toHaveLength(2)
   })
 
   it('renders an "open-with" button for a source file while its row still opens workspace', () => {
-    renderCard(['/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/src/main.ts'])
     expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(1)
     expect(screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toBeInTheDocument()
   })
 
   it('mixed turn: every real changed file gets the open-with button', () => {
-    renderCard(['/w/proj/README.md', '/w/proj/src/main.ts', '/w/proj/index.html'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/src/main.ts', '/w/proj/index.html'])
     expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(3)
   })
 
   it('keeps open-with secondary while every row retains its workspace chevron', () => {
-    renderCard(['/w/proj/README.md', '/w/proj/index.html', '/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/index.html', '/w/proj/src/main.ts'])
 
     expect(screen.getAllByRole('button', { name: 'openWith.title' })).toHaveLength(3)
     const rows = screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
@@ -379,13 +441,13 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('shows the same destination chevron on every changed-file row', () => {
-    const { container } = renderCard(['/w/proj/README.md', '/w/proj/src/main.ts'])
+    const { container } = renderExpandedCard(['/w/proj/README.md', '/w/proj/src/main.ts'])
 
     expect(container.querySelectorAll('.lucide-chevron-right')).toHaveLength(2)
   })
 
   it('clicking README.md open-with opens menu with workspace preview item', async () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -400,7 +462,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     // This card built its dependencies by hand instead of using the shared
     // factory, so it silently lacked the two clipboard rows the prose links and
     // the file tree both offer.
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -412,7 +474,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('clicking workspace preview item in README.md menu calls openPreview', async () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -424,13 +486,13 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
       fireEvent.click(previewItem)
     })
 
-    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'file')
+    expect(openPreviewSpy).toHaveBeenCalledWith('s1', 'README.md', 'file', undefined)
   })
 
   it('clicking a standalone index.html (no manifest in change-set) offers both workspace preview and in-app browser', async () => {
     // A hand-authored single-page index.html is statically previewable, so the
     // menu offers the in-app browser alongside the workspace source view.
-    renderCard(['/w/proj/index.html'])
+    renderExpandedCard(['/w/proj/index.html'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -445,7 +507,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
     // With a package.json in the same turn, the root index.html is a build
     // template that needs a dev server — static preview would render blank — so
     // only the workspace source view is offered.
-    renderCard(['/w/proj/index.html', '/w/proj/package.json', '/w/proj/vite.config.ts'])
+    renderExpandedCard(['/w/proj/index.html', '/w/proj/package.json', '/w/proj/vite.config.ts'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -457,7 +519,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('clicking built dist index.html open-with opens menu with in-app browser item', async () => {
-    renderCard(['/w/proj/dist/index.html'])
+    renderExpandedCard(['/w/proj/dist/index.html'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -468,7 +530,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('loads targets for the concrete file when open-with is clicked', async () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -479,7 +541,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('opens an office changed file with the system application instead of the binary workspace preview', () => {
-    renderCard(['/w/proj/reports/brief.docx'])
+    renderExpandedCard(['/w/proj/reports/brief.docx'])
 
     fireEvent.click(screen.getByRole('button', { name: /turnChangesOpenFileAria/ }))
 
@@ -488,7 +550,7 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('open-with button does not also trigger the row workspace-open (stopPropagation)', async () => {
-    renderCard(['/w/proj/README.md'])
+    renderExpandedCard(['/w/proj/README.md'])
     const [openWithBtn] = screen.getAllByRole('button', { name: 'openWith.title' })
 
     await act(async () => {
@@ -510,13 +572,13 @@ describe('CurrentTurnChangeCard – conversation continuity', () => {
   })
 
   it('truthfully labels a historical row as opening the current workspace diff', () => {
-    renderCard(['/w/proj/src/main.ts'], false)
+    renderExpandedCard(['/w/proj/src/main.ts'], false)
 
     expect(screen.getByText('chat.turnChangesCurrentWorkspaceDiff')).toBeInTheDocument()
   })
 
   it('records a stable opener id and semantic turn key before opening the diff', () => {
-    renderCard(['/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/src/main.ts'])
     const row = screen.getByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })
 
     fireEvent.click(row)
@@ -542,14 +604,14 @@ describe('CurrentTurnChangeCard – collapse long file lists', () => {
   }
 
   it('does NOT render a show-more toggle with ≤5 files', () => {
-    renderCard(makeFiles(5))
+    renderExpandedCard(makeFiles(5))
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(5)
     expect(screen.queryByText('chat.turnChangesShowMore')).not.toBeInTheDocument()
     expect(screen.queryByText('chat.turnChangesShowLess')).not.toBeInTheDocument()
   })
 
   it('with 8 files shows only 5 rows + a "show more" toggle (remaining = 3)', () => {
-    renderCard(makeFiles(8))
+    renderExpandedCard(makeFiles(8))
     // only the first 5 workspace-open rows are rendered
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(5)
     // the show-more toggle is present (identity-mock key). The real key carries the
@@ -561,7 +623,7 @@ describe('CurrentTurnChangeCard – collapse long file lists', () => {
   })
 
   it('clicking "show more" reveals all 8 rows and shows "show less"; clicking again re-collapses', () => {
-    renderCard(makeFiles(8))
+    renderExpandedCard(makeFiles(8))
     const showMore = screen.getByText('chat.turnChangesShowMore')
 
     fireEvent.click(showMore)

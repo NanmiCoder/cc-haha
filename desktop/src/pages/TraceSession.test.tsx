@@ -484,13 +484,9 @@ describe('TraceSession', () => {
   })
 
   it('applies poll updates and short-circuits identical snapshots', async () => {
-    let releaseFirstPoll!: (revision: TraceSessionRevision) => void
-    const firstPoll = new Promise<TraceSessionRevision>((resolve) => {
-      releaseFirstPoll = resolve
-    })
     vi.mocked(tracesApi.getRevision)
       .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 1, changed: true, reset: false })
-      .mockImplementationOnce(() => firstPoll)
+      .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
       .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 3, changed: true, reset: false })
       .mockResolvedValue({ sessionId: SESSION_ID, revision: 4, changed: true, reset: false })
     vi.mocked(sessionsApi.getTrace)
@@ -507,19 +503,35 @@ describe('TraceSession', () => {
         },
         calls: [baseTrace.calls[0]!, makeCall({ id: 'call-2', startedAt: '2026-06-09T10:00:08.000Z' })],
       })
-    await renderReady(20)
+    // Advance polls only after each state is asserted. A real 20ms interval can
+    // invalidate the detail cache before the initial assertion under coverage.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await renderReady(20)
 
-    fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
-    await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
-    await act(async () => {
-      releaseFirstPoll({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
-    })
-    await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(3))
+      fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
+      await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
+      expect(sessionsApi.getTrace).toHaveBeenCalledTimes(1)
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
 
-    await screen.findByText('claude-sonnet-4-5 x2')
-    expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(1)
-    const detail = within(screen.getByTestId('trace-detail'))
-    expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
+      for (const expectedTraceCalls of [2, 3]) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+        expect(sessionsApi.getTrace).toHaveBeenCalledTimes(expectedTraceCalls)
+        expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+        expect(screen.queryByText('claude-sonnet-4-5 x2')).not.toBeInTheDocument()
+      }
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      expect(sessionsApi.getTrace).toHaveBeenCalledTimes(4)
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('claude-sonnet-4-5 x2')).toBeInTheDocument()
+      expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(1)
+      const detail = within(screen.getByTestId('trace-detail'))
+      expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
+    } finally {
+      cleanup()
+      vi.useRealTimers()
+    }
   })
 
   it('does not refetch full messages for identical trace polls', async () => {

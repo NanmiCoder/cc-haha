@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
   IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_BASE_URL_ENV_KEY,
+  IMAGE_GENERATION_API_KEY_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
 } from '../../services/imageGeneration/config.js'
@@ -11,11 +13,16 @@ import {
   getBundledSkills,
 } from '../bundledSkills.js'
 import { registerImagegenSkill } from './imagegen.js'
+import { PROVIDER_PRESETS } from '../../server/config/providerPresets.js'
+import { buildProviderManagedEnv } from '../../server/services/providerRuntimeEnv.js'
+import { ImageGenTool, ImageEditTool } from '../../tools/ImageGenTool/ImageGenTool.js'
 
 const ENV_KEYS = [
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_BASE_URL_ENV_KEY,
+  IMAGE_GENERATION_API_KEY_ENV_KEY,
 ] as const
 const originalEnv = Object.fromEntries(
   ENV_KEYS.map((key) => [key, process.env[key]]),
@@ -31,6 +38,28 @@ afterEach(() => {
 })
 
 describe('bundled imagegen skill', () => {
+  test('enables the skill and native tools from the ApiSmart preset without exposing its key', async () => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === 'apismart')!
+    const env = buildProviderManagedEnv({
+      id: 'apismart-test', presetId: preset.id, name: preset.name,
+      baseUrl: preset.baseUrl, apiKey: 'fake-apismart-image-key', apiFormat: preset.apiFormat,
+      models: preset.defaultModels, imageGeneration: preset.defaultImageGeneration,
+    })
+    for (const key of ENV_KEYS) process.env[key] = env[key]
+    registerImagegenSkill()
+    const skill = getBundledSkills().find(command => command.name === 'imagegen')!
+    expect(skill.isEnabled?.()).toBe(true)
+    expect(ImageGenTool.isEnabled()).toBe(true)
+    expect(ImageEditTool.isEnabled()).toBe(true)
+    if (skill.type !== 'prompt') throw new Error('Expected bundled imagegen prompt')
+    const prompt = JSON.stringify(await skill.getPromptForCommand('Generate a poster', {} as ToolUseContext))
+    expect(prompt).toContain('ImageGen')
+    expect(prompt).not.toContain('fake-apismart-image-key')
+    delete process.env[IMAGE_GENERATION_MODEL_ENV_KEY]
+    expect(skill.isEnabled?.()).toBe(false)
+    expect(ImageGenTool.isEnabled()).toBe(false)
+  })
+
   test('joins the skill prompt to the native ImageGen tool without credentials', async () => {
     process.env[IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY] = 'openai_oauth'
     process.env[IMAGE_GENERATION_PROVIDER_ID_ENV_KEY] = 'openai-official'

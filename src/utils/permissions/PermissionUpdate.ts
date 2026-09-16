@@ -24,6 +24,12 @@ import {
 } from './permissionRuleParser.js'
 import { addPermissionRulesToSettings } from './permissionsLoader.js'
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+// permissionSetup imports this module back (`applyPermissionUpdate`), so a
+// static import would close a cycle. Resolve it at call time instead.
+const permissionSetupModule = require('./permissionSetup.js') as typeof import('./permissionSetup.js')
+/* eslint-enable @typescript-eslint/no-require-imports */
+
 // Re-export for backwards compatibility
 export type { AdditionalWorkingDirectory, WorkingDirectorySource }
 
@@ -57,14 +63,39 @@ export function applyPermissionUpdate(
   update: PermissionUpdate,
 ): ToolPermissionContext {
   switch (update.type) {
-    case 'setMode':
+    case 'setMode': {
       logForDebugging(
         `Applying permission update: Setting mode to '${update.mode}'`,
       )
+      // Same gate the CLI applies to its own mode switches: a session that
+      // cannot use bypassPermissions (launched without the capability, or the
+      // org policy disables it) must not get it through a permission update
+      // either. Drops the mode change; the rest of the batch still applies.
+      if (
+        update.mode === 'bypassPermissions' &&
+        !context.isBypassPermissionsModeAvailable
+      ) {
+        logForDebugging(
+          'Ignoring permission update: bypassPermissions is not available in this session',
+          { level: 'warn' },
+        )
+        return context
+      }
+      // Changing modes is not just a field write: leaving plan mode sets the
+      // exit attachments and undoes what entering it stashed (auto-mode state,
+      // rules stripped on the way in). The CLI's own switches run that
+      // transition in handleSetPermissionMode; a mode arriving through an
+      // update — the plan-approval dialog, a host, an edit suggestion — used to
+      // skip it and leave a half-applied plan exit behind.
       return {
-        ...context,
+        ...permissionSetupModule.transitionPermissionMode(
+          context.mode,
+          update.mode,
+          context,
+        ),
         mode: update.mode,
       }
+    }
 
     case 'addRules': {
       const ruleStrings = update.rules.map(rule =>

@@ -1,8 +1,64 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ELECTRON_EVENT_CHANNELS, ELECTRON_IPC_CHANNELS } from '../../../electron/ipc/channels'
+import { ELECTRON_EVENT_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from '../../../electron/ipc/channels'
+import { validateElectronIpcPayload } from '../../../electron/ipc/capabilities'
 import { createElectronHost } from './electronHost'
+import { PUBLIC_ACCESS_CONSENT_VERSION, type WorkspaceBrowserMenuOptions } from './types'
 
 describe('electron desktop host', () => {
+  it('routes public access through validated local IPC without exposing management in browsers', async () => {
+    const invoke = vi.fn().mockResolvedValue({ hasCredential: true })
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    await host.publicAccess.saveCredential('fixture-ngrok-token')
+    await host.publicAccess.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await host.publicAccess.setAutoStart(false)
+    await host.publicAccess.stop()
+    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, 'fixture-ngrok-token')
+    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
+    expect(invoke).toHaveBeenNthCalledWith(4, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
+  })
+
+  it('carries a terminal startup identity through the production IPC validator and early events', async () => {
+    const handlers = new Map<string, (event: unknown) => void>()
+    const host = createElectronHost({
+      async invoke<T>(channel: ElectronIpcChannel, payload?: unknown) {
+        expect(validateElectronIpcPayload(channel, payload)).toBe(true)
+        const request = payload as { requestId: string }
+        handlers.get(ELECTRON_EVENT_CHANNELS.terminalOutput)?.({ session_id: 9, requestId: request.requestId, data: 'prompt' })
+        handlers.get(ELECTRON_EVENT_CHANNELS.terminalExit)?.({ session_id: 9, requestId: request.requestId, code: 0 })
+        return { session_id: 9, shell: '/fixture/sh', cwd: '/fixture' } as T
+      },
+      async subscribe(channel, handler) {
+        handlers.set(channel, handler as (event: unknown) => void)
+        return () => { handlers.delete(channel) }
+      },
+    })
+    const output = vi.fn()
+    const exit = vi.fn()
+    await host.terminal.onOutput(output)
+    await host.terminal.onExit(exit)
+    await host.terminal.spawn({ cols: 80, rows: 24, requestId: 'fixture-start' })
+    expect(output).toHaveBeenCalledWith({ session_id: 9, requestId: 'fixture-start', data: 'prompt' })
+    expect(exit).toHaveBeenCalledWith({ session_id: 9, requestId: 'fixture-start', code: 0 })
+  })
+
+  it('preserves native browser menu selection, cancellation and errors through the narrow IPC contract', async () => {
+    const options: WorkspaceBrowserMenuOptions = {
+      x: 20, y: 44, zoomFactor: 1.2, hasPage: true, canOpenExternal: true,
+      labels: { find: 'Find', print: 'Print', zoom: 'Zoom', zoomIn: 'Larger', zoomOut: 'Smaller', zoomReset: 'Reset', capture: 'Capture', pickElement: 'Pick', downloads: 'Downloads', history: 'History', openExternal: 'External' },
+    }
+    const invoke = vi.fn().mockResolvedValueOnce('find').mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('popup failed'))
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    await expect(host.browser.showMenu('wb-1', options)).resolves.toBe('find')
+    expect(invoke).toHaveBeenLastCalledWith(ELECTRON_IPC_CHANNELS.workspaceBrowserShowMenu, { tabId: 'wb-1', ...options })
+    await expect(host.browser.showMenu('wb-1', options)).resolves.toBeNull()
+    await expect(host.browser.showMenu('wb-1', options)).rejects.toThrow('popup failed')
+    await expect(host.browser.showMenu('wb-1', { ...options, x: NaN })).rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
+
   it('synchronizes locale preferences through narrow app IPC boundaries', async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce('jp')
@@ -141,6 +197,88 @@ describe('electron desktop host', () => {
     await host.preview.setZoom(0.8)
 
     expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.previewSetZoom, 0.8)
+  })
+
+  it('addresses every multi-page browser call by tab id', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const subscribe = vi.fn().mockResolvedValue(vi.fn())
+    const host = createElectronHost({ invoke, subscribe })
+    const handler = vi.fn()
+
+    await host.browser.create('wb-1', {
+      storageId: 'wsb-1',
+      url: 'https://example.com',
+      bounds: { x: 0, y: 40, width: 800, height: 600 },
+      visible: false,
+    })
+    await host.browser.navigate('wb-1', 'https://example.com/next')
+    await host.browser.goBack('wb-1')
+    await host.browser.goForward('wb-1')
+    await host.browser.reload('wb-1', { ignoreCache: true })
+    await host.browser.stop('wb-1')
+    await host.browser.setBounds('wb-1', { x: 1, y: 2, width: 3, height: 4 })
+    await host.browser.setVisible('wb-1', false)
+    await host.browser.setZoom('wb-1', 1.25)
+    await host.browser.find('wb-1', 'invoice', { matchCase: true })
+    await host.browser.stopFind('wb-1')
+    await host.browser.capture('wb-1', 'full')
+    await host.browser.message('wb-1', { v: 1, type: 'exit-picker' })
+    await host.browser.printToPdf('wb-1')
+    await host.browser.close('wb-1')
+    await host.browser.onEvent(handler)
+
+    expect(invoke.mock.calls).toEqual([
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, {
+        tabId: 'wb-1',
+        storageId: 'wsb-1',
+        url: 'https://example.com',
+        bounds: { x: 0, y: 40, width: 800, height: 600 },
+        visible: false,
+      }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserNavigate, { tabId: 'wb-1', url: 'https://example.com/next' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserGoBack, { tabId: 'wb-1' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserGoForward, { tabId: 'wb-1' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserReload, { tabId: 'wb-1', ignoreCache: true }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserStop, { tabId: 'wb-1' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserSetBounds, { tabId: 'wb-1', bounds: { x: 1, y: 2, width: 3, height: 4 } }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserSetVisible, { tabId: 'wb-1', visible: false }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserSetZoom, { tabId: 'wb-1', factor: 1.25 }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserFind, { tabId: 'wb-1', text: 'invoice', options: { matchCase: true } }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserStopFind, { tabId: 'wb-1' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserCapture, { tabId: 'wb-1', kind: 'full' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserMessage, { tabId: 'wb-1', payload: { v: 1, type: 'exit-picker' } }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf, { tabId: 'wb-1' }],
+      [ELECTRON_IPC_CHANNELS.workspaceBrowserClose, { tabId: 'wb-1' }],
+    ])
+    expect(subscribe).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, handler)
+  })
+
+  it('advertises the multi-page browser only where a native host implements it', () => {
+    const host = createElectronHost({ invoke: vi.fn(), subscribe: vi.fn() })
+
+    expect(host.capabilities.workspaceBrowser).toBe(true)
+  })
+
+  it('returns a presentation snapshot through its own addressed IPC without requesting a chat capture', async () => {
+    const invoke = vi.fn().mockResolvedValue('data:image/png;base64,BACKDROP')
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    await expect(host.browser.snapshot('wb-1')).resolves.toBe('data:image/png;base64,BACKDROP')
+    expect(invoke.mock.calls).toEqual([[ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot, { tabId: 'wb-1' }]])
+    await expect(host.browser.snapshot('')).rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an unaddressed browser call before it reaches Electron IPC', async () => {
+    const invoke = vi.fn()
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+
+    await expect(host.browser.navigate('', 'https://example.com')).rejects.toThrow(
+      'Invalid Electron IPC payload',
+    )
+    await expect(host.browser.capture('wb-1', 'element' as 'full')).rejects.toThrow(
+      'Invalid Electron IPC payload',
+    )
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('keeps event subscriptions behind named event channels', async () => {

@@ -1,4 +1,5 @@
 import { getDesktopHost } from '../lib/desktopHost'
+import { isPublicAccessRuntime } from '../lib/publicAccessRuntime'
 
 const ENV_BASE_URL =
   typeof import.meta !== 'undefined' &&
@@ -187,6 +188,8 @@ export function rawRecordDiagnosticEvent(event: {
   sessionId?: string
   details?: unknown
 }) {
+  // Pairing material and remote content must never enter local diagnostics.
+  if (isPublicAccessRuntime()) return Promise.resolve()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), DIAGNOSTICS_REQUEST_TIMEOUT_MS)
   return fetch(`${baseUrl}${DIAGNOSTICS_PATH}`, {

@@ -360,18 +360,24 @@ describe('callHelper platform routing', () => {
     expect(used).toBe('py')
   })
 
-  test('Windows marks agent activity on an injecting command', async () => {
-    // Windows drives through SendInput, so the user's real cursor moves. The
-    // badge is the only thing telling them the movement is not theirs, which
-    // matters because grabbing the mouse mid-action is what makes the two
-    // input streams interleave.
-    let badges = 0
+  test('Windows prepares the virtual cursor before dispatching an injecting command', async () => {
+    const events: string[] = []
+    let shownCommand = ''
+    let shownPayload: Record<string, unknown> = {}
     await callHelper('click', { x: 1, y: 2 }, {
       platform: 'win32',
-      callPy: ok,
-      showCursorBadge: () => { badges += 1 },
+      callPy: async () => { events.push('action'); return true as never },
+      showCursorBadge: async (command, payload) => {
+        events.push('overlay:start')
+        shownCommand = command
+        shownPayload = payload
+        await Promise.resolve()
+        events.push('overlay:ready')
+      },
     })
-    expect(badges).toBe(1)
+    expect(events).toEqual(['overlay:start', 'overlay:ready', 'action'])
+    expect(shownCommand).toBe('click')
+    expect(shownPayload).toEqual({ x: 1, y: 2 })
   })
 
   test('Windows leaves the badge alone for read-only commands', async () => {

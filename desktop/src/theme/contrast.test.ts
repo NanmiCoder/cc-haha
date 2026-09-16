@@ -175,6 +175,29 @@ describe('status palette contrast', () => {
   }
 })
 
+describe('workspace language icon palette', () => {
+  for (const [theme, selectors] of Object.entries(THEME_BLOCKS)) {
+    it(`keeps TypeScript blue and its small letters readable in ${theme}`, () => {
+      const fill = parseColor(resolve('--color-file-typescript-container', selectors))
+      const text = parseColor(resolve('--color-on-file-typescript-container', selectors))
+      expect(contrast(text, fill)).toBeGreaterThanOrEqual(AA_SMALL_TEXT)
+      // The app's info palette can be brown. A language badge must retain its
+      // identity when the selected application theme changes.
+      expect(text.b).toBeGreaterThan(text.r)
+      expect(text.b).toBeGreaterThan(text.g)
+    })
+
+    it(`keeps JavaScript yellow with readable dark letters in ${theme}`, () => {
+      const fill = parseColor(resolve('--color-file-javascript-container', selectors))
+      const text = parseColor(resolve('--color-on-file-javascript-container', selectors))
+      expect(contrast(text, fill)).toBeGreaterThanOrEqual(AA_SMALL_TEXT)
+      expect(fill.r).toBeGreaterThan(fill.b + 30)
+      expect(fill.g).toBeGreaterThan(fill.b + 30)
+      expect(luminance(text)).toBeLessThan(luminance(fill))
+    })
+  }
+})
+
 describe('control boundary contrast', () => {
   // `--color-border` is a hairline separator (~1.2:1) and must never be used
   // as a control boundary; `--color-border-strong` exists for that. The

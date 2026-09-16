@@ -78,6 +78,7 @@ export function SessionChatSurface({
   activityRail,
   sidePanel,
   overlay,
+  chatColumnHidden = false,
 }: {
   surfaceKind: 'main' | 'agent'
   agentRunKind?: 'subagent' | 'team-member'
@@ -91,6 +92,12 @@ export function SessionChatSurface({
   activityRail?: ReactNode
   sidePanel?: ReactNode
   overlay?: ReactNode
+  /**
+   * Maximised workspace. The column is hidden rather than unmounted so the
+   * conversation keeps its scroll position, its draft and its subscriptions —
+   * restoring the split has to come back to exactly what was there.
+   */
+  chatColumnHidden?: boolean
 }) {
   return (
     <div
@@ -106,6 +113,7 @@ export function SessionChatSurface({
             'relative flex min-h-0 min-w-0 flex-col overflow-hidden',
             'transition-[padding] duration-200 ease-out motion-reduce:transition-none',
             activityRailOpen ? 'pr-[352px]' : '',
+            chatColumnHidden ? 'hidden' : '',
             compact
               ? compactColumnClassName ?? 'min-w-[400px] flex-1 bg-[var(--color-surface)]'
               : isMobileLayout

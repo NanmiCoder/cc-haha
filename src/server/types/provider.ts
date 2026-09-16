@@ -11,6 +11,7 @@ export const CLAUDE_OFFICIAL_PROVIDER_ID = 'claude-official'
 export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
 export const GROK_OFFICIAL_PROVIDER_ID = 'grok-official'
 export const PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION = 4
+export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -66,6 +67,24 @@ export const ModelContextWindowsSchema = z.record(
 )
 export const ToolSearchEnabledSchema = z.boolean()
 export const DisableExperimentalBetasSchema = z.boolean()
+export const SupportsNestedToolResultMediaSchema = z.boolean()
+
+const RequestCapabilitySchema = z.enum(['auto', 'supported', 'unsupported'])
+const OutputTokenBudgetSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+
+// These options describe this endpoint's contract, not capabilities inferred
+// from a model name. Missing fields retain automatic behavior.
+export const RequestCompatibilitySchema = z.object({
+  maxOutputTokens: OutputTokenBudgetSchema.optional(),
+  outputTokenLimit: OutputTokenBudgetSchema.optional(),
+  outputTokenField: z.enum(['auto', 'max_tokens', 'max_completion_tokens', 'omit']).optional(),
+  sampling: RequestCapabilitySchema.optional(),
+  reasoning: RequestCapabilitySchema.optional(),
+  parallelTools: RequestCapabilitySchema.optional(),
+  structuredOutput: RequestCapabilitySchema.optional(),
+}).passthrough()
+
+export type RequestCompatibility = z.infer<typeof RequestCompatibilitySchema>
 
 export const ImageGenerationConfigSchema = z.object({
   model: z.string().trim().min(1),
@@ -88,6 +107,8 @@ export const SavedProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
 })
@@ -113,6 +134,8 @@ export const CreateProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   notes: z.string().optional(),
 })
@@ -130,6 +153,8 @@ export const UpdateProviderSchema = z.object({
   modelContextWindows: ModelContextWindowsSchema.nullable().optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
+  supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  requestCompatibility: RequestCompatibilitySchema.nullable().optional(),
   imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
   notes: z.string().optional(),
 })
@@ -140,6 +165,8 @@ export const TestProviderSchema = z.object({
   modelId: z.string().min(1),
   authStrategy: ProviderAuthStrategySchema.optional(),
   apiFormat: ApiFormatSchema.default('anthropic'),
+  supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
+  requestCompatibility: RequestCompatibilitySchema.optional(),
 })
 
 export const ReorderProvidersSchema = z.object({
@@ -170,6 +197,6 @@ export interface ProviderTestStepResult {
 export interface ProviderTestResult {
   /** Step 1: Basic connectivity — API reachable, key valid, model exists */
   connectivity: ProviderTestStepResult
-  /** Step 2: Proxy pipeline — full Anthropic→OpenAI→Anthropic round-trip (only for openai_* formats) */
+  /** Step 2: Proxy pipeline when the provider requires local request handling */
   proxy?: ProviderTestStepResult
 }

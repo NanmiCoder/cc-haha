@@ -11,6 +11,7 @@ import { normalizeOsPermissions } from './permissions.js'
 // Platform-routed helper: macOS → native cu-helper, Windows → Python helper.
 import { callHelper } from './helperBridge.js'
 import { maybeShowNativePermissionCard } from './nativePermissionCard.js'
+import { ComputerUseRepl } from './replRuntime.js'
 
 class DebugLogger implements Logger {
   silly(message: string, ...args: unknown[]): void {
@@ -37,6 +38,7 @@ export function getComputerUseHostAdapter(): ComputerUseHostAdapter {
   cached = {
     serverName: COMPUTER_USE_MCP_SERVER_NAME,
     logger: new DebugLogger(),
+    createReplRuntime: () => new ComputerUseRepl(),
     executor: createCliExecutor({
       getMouseAnimationEnabled: () => getChicagoSubGates().mouseAnimation,
       getHideBeforeActionEnabled: () => getChicagoSubGates().hideBeforeAction,

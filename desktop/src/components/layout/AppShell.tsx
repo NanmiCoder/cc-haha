@@ -27,6 +27,7 @@ import {
 } from '../../stores/projectDisplayNameStore'
 import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
 import { TabBar } from './TabBar'
+import { WorkspaceHeaderProvider } from './WorkspaceHeaderContext'
 import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -249,7 +250,7 @@ export function AppShell() {
 
   useEffect(() => {
     if (!ready || !isMobileShell) return
-    if (isChatTab(activeTab) || (!activeTab && !activeTabId)) return
+    if (isChatTab(activeTab) || activeTab?.type === 'settings' || (!activeTab && !activeTabId)) return
     const nextChatTab = tabs.find(isChatTab)
     if (nextChatTab) {
       setActiveTab(nextChatTab.sessionId)
@@ -370,7 +371,9 @@ export function AppShell() {
               aria-controls="sidebar-shell"
               aria-expanded={effectiveSidebarOpen}
             />
-            {isActiveChatTab ? (
+            {activeTab?.type === 'settings' ? (
+              <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">{t('sidebar.settings')}</h1>
+            ) : isActiveChatTab ? (
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">
                   {mobileSessionTitle}
@@ -399,8 +402,10 @@ export function AppShell() {
             ) : null}
           </div>
         ) : null}
-        {!isMobileShell ? <TabBar /> : null}
-        <ContentRouter />
+        <WorkspaceHeaderProvider>
+          {!isMobileShell ? <TabBar /> : null}
+          <ContentRouter />
+        </WorkspaceHeaderProvider>
       </main>
       <ToastContainer />
       <UpdateChecker />

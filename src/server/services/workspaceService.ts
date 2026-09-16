@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises'
+import { watch, type FSWatcher } from 'node:fs'
 import { execFile as execFileCallback } from 'node:child_process'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
@@ -112,6 +113,8 @@ export type WorkspaceTreeResult = {
   entries: WorkspaceTreeEntry[]
   error?: string
 }
+
+export type WorkspaceWatchChange = { paths: string[]; directories: string[] }
 
 export type WorkspaceDiffResult = {
   state: 'ok' | 'missing' | 'not_git_repo' | 'error'
@@ -486,6 +489,86 @@ export class WorkspaceService {
       truncated: content.length < stat.stat.size,
       readBytes: content.length,
     }
+  }
+
+  /** Watch only the requested directory levels, never the whole repository. */
+  async watchDirectories(
+    sessionId: string,
+    directoryPaths: string[],
+    onChange: (event: WorkspaceWatchChange) => void,
+    signal: AbortSignal,
+    onError?: (error: Error) => void,
+  ): Promise<() => void> {
+    const requested = [...new Set(directoryPaths)]
+    if (requested.length === 0 || requested.length > 64) throw new Error('Watch requires 1 to 64 directory paths')
+    const targets = new Map<string, { absolutePath: string; relativePath: string }>()
+    // Validate the entire request before registering anything, so a bad later
+    // path cannot leak watchers attached for earlier paths.
+    for (const directoryPath of requested) {
+      signal.throwIfAborted()
+      let resolved = await this.resolveWorkspacePath(sessionId, directoryPath)
+      let stat = await this.safeStat(resolved.canonicalTargetPath)
+      // A previously loaded directory may have been deleted. Its nearest live
+      // parent still tells us when it is recreated.
+      while (stat.kind === 'missing' && resolved.relativePath !== '') {
+        const parent = path.dirname(resolved.absolutePath)
+        if (parent === resolved.absolutePath) break
+        resolved = await this.resolveWorkspacePath(sessionId, parent)
+        stat = await this.safeStat(resolved.canonicalTargetPath)
+      }
+      if (stat.kind !== 'ok' || !stat.stat.isDirectory()) throw new Error(`Watch directory is unavailable: ${directoryPath}`)
+      targets.set(resolved.canonicalTargetPath, {
+        absolutePath: resolved.canonicalTargetPath,
+        relativePath: resolved.relativePath,
+      })
+    }
+    signal.throwIfAborted()
+
+    const watchers: FSWatcher[] = []
+    const paths = new Set<string>()
+    const directories = new Set<string>()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    const stop = () => {
+      if (stopped) return
+      stopped = true
+      if (timer !== undefined) clearTimeout(timer)
+      signal.removeEventListener('abort', stop)
+      for (const watcher of watchers) watcher.close()
+      paths.clear()
+      directories.clear()
+    }
+    signal.addEventListener('abort', stop, { once: true })
+    try {
+      for (const target of targets.values()) {
+        const watcher = watch(target.absolutePath, { recursive: false }, (_eventType, filename) => {
+          if (stopped || signal.aborted) return
+          const name = filename?.toString()
+          if (name && isVcsMetadataDirectoryName(name.split(/[\\/]/)[0]!)) return
+          directories.add(target.relativePath)
+          if (name) paths.add(this.normalizeRelativePath(path.join(target.relativePath, name)))
+          if (timer !== undefined) return
+          timer = setTimeout(() => {
+            timer = undefined
+            if (stopped || signal.aborted) return
+            const event = { paths: [...paths], directories: [...directories] }
+            paths.clear()
+            directories.clear()
+            onChange(event)
+          }, 60)
+        })
+        watchers.push(watcher)
+        watcher.on('error', (error) => {
+          stop()
+          onError?.(error)
+        })
+      }
+    } catch (error) {
+      stop()
+      throw error
+    }
+    if (signal.aborted) stop()
+    return stop
   }
 
   async readTree(

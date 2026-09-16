@@ -30,6 +30,10 @@ describe('systemFileOpen', () => {
     expect(resolveAbsoluteOpenPath('/tmp/brief.docx', '/work/project')).toBe('/tmp/brief.docx')
   })
 
+  it('preserves a Windows UNC target without treating it as workspace-relative', () => {
+    expect(resolveAbsoluteOpenPath('\\\\server\\share\\brief.docx', 'C:/repo')).toBe('\\\\server\\share\\brief.docx')
+  })
+
   it('uses the guarded Electron shell bridge when available', async () => {
     await openLocalFileWithSystem('/tmp/brief.docx')
 

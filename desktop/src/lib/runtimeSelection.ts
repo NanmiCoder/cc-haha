@@ -18,6 +18,34 @@ import {
   type ModelReasoningProviderKind,
 } from '../../../src/shared/modelReasoning'
 
+const PROVIDER_MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus', 'fable'] as const
+
+function baseProviderModelId(modelId: string): string {
+  return modelId.trim().replace(/\[1m\]$/i, '').replace(/:1m$/i, '').trim()
+}
+
+export function resolveProviderSlotModelId(
+  provider: SavedProvider,
+  slot: keyof SavedProvider['models'],
+): string {
+  const modelId = provider.models[slot]?.trim() ?? ''
+  const enabled = slot === 'fable' ? undefined : provider.model1mSupport?.[slot]
+  // Missing flags are legacy configuration: preserve explicit model suffixes.
+  if (!modelId || enabled === undefined) return modelId
+  const baseModelId = baseProviderModelId(modelId)
+  return enabled ? `${baseModelId}[1m]` : baseModelId
+}
+
+export function resolveProviderRuntimeModelId(provider: SavedProvider, modelId: string): string {
+  const candidates = PROVIDER_MODEL_SLOTS
+    .filter((slot) => provider.models[slot]?.trim() &&
+      baseProviderModelId(provider.models[slot]!) === baseProviderModelId(modelId))
+    .map((slot) => resolveProviderSlotModelId(provider, slot))
+  // A provider can map one ID to slots with different capabilities. Preserve
+  // an exact runtime choice; otherwise reconcile old IDs in main-first order.
+  return candidates.find((candidate) => candidate === modelId.trim()) ?? candidates[0] ?? modelId
+}
+
 export function resolveActiveProviderRuntimeSelection(
   activeId: string | null,
   activeProviderName: string | null,
@@ -32,7 +60,7 @@ export function resolveActiveProviderRuntimeSelection(
   const inferredProviderId = activeId ?? activeProvider?.id ?? null
   if (!inferredProviderId) return null
 
-  const providerMainModelId = activeProvider?.models.main.trim()
+  const providerMainModelId = activeProvider ? resolveProviderSlotModelId(activeProvider, 'main') : undefined
 
   return {
     providerId: inferredProviderId,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { feature } from 'bun:bundle'
 import {
   resetSettingsCache,
@@ -8,14 +8,23 @@ import {
 process.env.ANTHROPIC_API_KEY = 'test-key'
 
 let capturedQuery: Record<string, unknown> | undefined
-mock.module('../../utils/sideQuery.js', () => ({
-  sideQuery: async (options: Record<string, unknown>) => {
+const sideQueryModule = await import('../../utils/sideQuery.js')
+
+beforeEach(() => {
+  spyOn(sideQueryModule, 'sideQuery').mockImplementation(async options => {
     capturedQuery = options
     return {
+      id: 'msg_critique',
+      type: 'message',
+      role: 'assistant',
+      model: 'test-model',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
       content: [{ type: 'text', text: 'critique complete' }],
-    }
-  },
-}))
+    } as Awaited<ReturnType<typeof sideQueryModule.sideQuery>>
+  })
+})
 
 const transcriptClassifierEnabled = feature('TRANSCRIPT_CLASSIFIER')
   ? true

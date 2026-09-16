@@ -5,6 +5,7 @@ import '@testing-library/jest-dom'
 import { McpSettings } from '../pages/McpSettings'
 import { sessionsApi } from '../api/sessions'
 import { mcpApi } from '../api/mcp'
+import { useUIStore } from '../stores/uiStore'
 import { useMcpStore } from '../stores/mcpStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -31,6 +32,8 @@ vi.mock('../api/mcp', async (importOriginal) => {
   }
 })
 
+const originalAddToast = useUIStore.getState().addToast
+
 async function renderLoadedMcpSettings() {
   const result = render(<McpSettings />)
   await waitFor(() => {
@@ -41,6 +44,7 @@ async function renderLoadedMcpSettings() {
 
 describe('McpSettings', () => {
   beforeEach(() => {
+    useUIStore.setState({ addToast: originalAddToast, toasts: [] })
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({
       projects: [{
         projectPath: '/workspace/selected-project',
@@ -455,7 +459,7 @@ describe('McpSettings', () => {
     expect(screen.getByText('Configured')).toBeInTheDocument()
     expect(screen.getByText('Not loaded in the current chat. Open a chat in this project to use it.')).toBeInTheDocument()
     expect(screen.queryByText('Connected')).not.toBeInTheDocument()
-    expect(screen.getByText('Connected in current chat').parentElement?.parentElement).toHaveTextContent('0')
+    expect(screen.getByText('Connection checks for current project').parentElement?.parentElement).toHaveTextContent('0')
     expect(refreshServerStatus).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -545,7 +549,7 @@ describe('McpSettings', () => {
   })
 
   it('uses the active cwd when toggling a server', async () => {
-    const toggleServer = vi.fn().mockResolvedValue(undefined)
+    const toggleServer = vi.fn()
     const server = {
       name: 'global-user',
       scope: 'user',
@@ -562,6 +566,7 @@ describe('McpSettings', () => {
       config: { type: 'http', url: 'https://example.com/mcp', headers: {} },
     } as const
 
+    toggleServer.mockResolvedValue({ server: { ...server, enabled: false }, sessionSync: { applied: true } })
     useMcpStore.setState({
       servers: [server],
       toggleServer,
@@ -574,6 +579,57 @@ describe('McpSettings', () => {
     })
 
     expect(toggleServer).toHaveBeenCalledWith(server, '/workspace/project', 'session-1')
+  })
+
+  it.each([
+    [{ applied: false, reason: 'failed', error: 'Control timeout' }, 'warning', 'Control timeout'],
+    [{ applied: false, reason: 'not_running' }, 'warning', 'chat is not running'],
+    [{ applied: false, reason: 'different_project' }, 'warning', 'different project'],
+    [{ applied: false, reason: 'no_session' }, 'warning', 'No chat was selected'],
+    [undefined, 'warning', 'not confirmed'],
+    [{ applied: true }, 'success', 'Disabled MCP server'],
+  ] as const)('reports the runtime receipt after a saved toggle: %j', async (sessionSync, type, message) => {
+    const server = {
+      name: 'echo', scope: 'project', transport: 'stdio', enabled: true,
+      status: 'connected', statusLabel: 'Connected', configLocation: '/tmp/config', summary: 'echo',
+      canEdit: true, canRemove: true, canReconnect: true, canToggle: true,
+      config: { type: 'stdio', command: 'echo', args: [], env: {} },
+    } as const
+    const addToast = vi.fn()
+    useUIStore.setState({ addToast })
+    useMcpStore.setState({
+      servers: [server],
+      toggleServer: vi.fn().mockResolvedValue({
+        server: { ...server, enabled: false, status: 'disabled' }, sessionSync,
+      }),
+    })
+    await renderLoadedMcpSettings()
+    await act(async () => { fireEvent.click(screen.getByRole('switch')) })
+    expect(addToast).toHaveBeenCalledWith({ type, message: expect.stringContaining(message) })
+    if (type === 'warning') {
+      expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }))
+    }
+  })
+
+  it('warns when enabling saved settings could not connect the server', async () => {
+    const server = {
+      name: 'echo', scope: 'project', transport: 'stdio', enabled: false,
+      status: 'disabled', statusLabel: 'Disabled', configLocation: '/tmp/config', summary: 'echo',
+      canEdit: true, canRemove: true, canReconnect: true, canToggle: true,
+      config: { type: 'stdio', command: 'echo', args: [], env: {} },
+    } as const
+    const addToast = vi.fn()
+    useUIStore.setState({ addToast })
+    useMcpStore.setState({
+      servers: [server],
+      toggleServer: vi.fn().mockResolvedValue({
+        server: { ...server, enabled: true, status: 'failed', statusDetail: 'Command is unavailable' },
+        sessionSync: { applied: true },
+      }),
+    })
+    await renderLoadedMcpSettings()
+    await act(async () => { fireEvent.click(screen.getByRole('switch')) })
+    expect(addToast).toHaveBeenCalledWith({ type: 'warning', message: 'Command is unavailable' })
   })
 
   it('clears the selected MCP server when returning to the list', async () => {

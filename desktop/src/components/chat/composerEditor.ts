@@ -6,10 +6,10 @@
  * on the plain-text projection from composerMentions.ts — these functions are
  * the only place that knows how the projection maps onto PM positions.
  */
-import { Node as PMNode, Schema } from 'prosemirror-model'
+import { Node as PMNode, Schema, type DOMOutputSpec } from 'prosemirror-model'
 import type { Command } from 'prosemirror-state'
 import type { ComposerMention } from '../../lib/composerMentions'
-import { findMentionRanges, mentionToken, tokenOccurrences } from '../../lib/composerMentions'
+import { findMentionRanges, mentionToken, tokenOccurrences, safeMentionIcon } from '../../lib/composerMentions'
 
 export const AT_MENTION_NODE = 'atMention'
 
@@ -35,24 +35,29 @@ export const composerSchema = new Schema({
         label: { default: '' },
         path: { default: '' },
         isDirectory: { default: false },
+        kind: { default: null }, id: { default: null }, description: { default: null },
+        icon: { default: null }, modelText: { default: null },
       },
-      toDOM: (node) => [
-        'span',
-        {
-          class: node.attrs.isDirectory
-            ? 'composer-mention composer-mention--directory'
-            : 'composer-mention',
-          'data-mention-path': node.attrs.path as string,
-          'data-mention-label': node.attrs.label as string,
-          title: node.attrs.path as string,
-        },
-        ['span', {
-          class: 'material-symbols-outlined composer-mention-icon',
-          // The icon is decoration; the label already carries the meaning.
-          'aria-hidden': 'true',
-        }, node.attrs.isDirectory ? 'folder' : 'draft'],
-        `@${node.attrs.label as string}`,
-      ],
+      toDOM: (node): DOMOutputSpec => {
+        const kind = node.attrs.kind === 'skill' || node.attrs.kind === 'plugin' ? node.attrs.kind : undefined
+        const icon = safeMentionIcon(node.attrs.icon)
+        const attrs: Record<string, string | number> = {
+          class: `composer-mention${kind ? ` composer-mention--${kind}` : node.attrs.isDirectory ? ' composer-mention--directory' : ''}`,
+          'data-mention-path': node.attrs.path,
+          'data-mention-label': node.attrs.label,
+          title: kind ? node.attrs.description || node.attrs.label : node.attrs.path,
+        }
+        if (kind) {
+          Object.assign(attrs, { 'data-mention-kind': kind, 'data-mention-id': node.attrs.id || '',
+            'data-mention-description': node.attrs.description || '', 'data-mention-icon': icon || '',
+            'data-mention-model-text': node.attrs.modelText || '', role: 'button', tabindex: 0,
+            'aria-label': node.attrs.label, 'aria-haspopup': 'dialog' })
+        }
+        const symbol: DOMOutputSpec = icon
+          ? ['img', { class: 'composer-mention-brand-icon', src: `${import.meta.env.BASE_URL}${icon.slice(1)}`, alt: '', draggable: 'false' }]
+          : ['span', { class: 'material-symbols-outlined composer-mention-icon', 'aria-hidden': 'true' }, kind === 'plugin' ? 'extension' : kind === 'skill' ? 'deployed_code' : node.attrs.isDirectory ? 'folder' : 'draft']
+        return ['span', attrs, symbol, `@${node.attrs.label as string}`]
+      },
       parseDOM: [
         {
           tag: 'span.composer-mention',
@@ -62,6 +67,10 @@ export const composerSchema = new Schema({
             label: dom.getAttribute('data-mention-label') ?? '',
             path: dom.getAttribute('data-mention-path') ?? '',
             isDirectory: dom.classList.contains('composer-mention--directory'),
+            kind: ['skill', 'plugin'].includes(dom.getAttribute('data-mention-kind') || '') ? dom.getAttribute('data-mention-kind') : null,
+            id: dom.getAttribute('data-mention-id'), description: dom.getAttribute('data-mention-description'),
+            icon: safeMentionIcon(dom.getAttribute('data-mention-icon') || undefined) || null,
+            modelText: dom.getAttribute('data-mention-model-text'),
           }),
         },
       ],
@@ -95,6 +104,7 @@ export function buildComposerDoc(text: string, mentions: ComposerMention[]): PMN
         label: range.mention.label,
         path: range.mention.path,
         isDirectory: range.mention.isDirectory,
+        ...extensionMentionAttrs(range.mention),
       }))
       cursor = range.end - lineStart
       rangeIndex += 1
@@ -123,6 +133,7 @@ export function projectComposerDoc(doc: PMNode): { text: string; mentions: Compo
           label: inline.attrs.label as string,
           path: inline.attrs.path as string,
           isDirectory: inline.attrs.isDirectory as boolean,
+          ...extensionMentionAttrs(inline.attrs),
           tokenOrdinal: 0, // resolved below
         }
         atoms.push({ projectedStart: text.length, mention })
@@ -152,7 +163,9 @@ export function serializeComposerDoc(doc: PMNode): string {
     if (index > 0) text += '\n'
     block.forEach((inline) => {
       if (inline.type.name === AT_MENTION_NODE) {
-        text += `@"${inline.attrs.path as string}"`
+        text += inline.attrs.kind === 'skill' || inline.attrs.kind === 'plugin'
+          ? (inline.attrs.modelText || `Use ${inline.attrs.kind} ${JSON.stringify(inline.attrs.label)} for this request.`)
+          : `@"${inline.attrs.path as string}"`
       } else if (inline.isText) {
         text += inline.text ?? ''
       }
@@ -263,4 +276,12 @@ export function deleteAdjacentMentionAtom(direction: 'backward' | 'forward'): Co
     }
     return true
   }
+}
+
+function extensionMentionAttrs(attrs: Record<string, unknown>): Partial<ComposerMention> {
+  if (attrs.kind !== 'skill' && attrs.kind !== 'plugin') return {}
+  return { kind: attrs.kind, id: typeof attrs.id === 'string' ? attrs.id : undefined,
+    description: typeof attrs.description === 'string' ? attrs.description : undefined,
+    icon: safeMentionIcon(typeof attrs.icon === 'string' ? attrs.icon : undefined),
+    modelText: typeof attrs.modelText === 'string' ? attrs.modelText : undefined }
 }

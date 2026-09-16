@@ -10,7 +10,7 @@ import type {
   AnthropicResponse,
   AnthropicContentBlock,
 } from './types.js'
-import { parseOpenAIToolArguments } from './toolArguments.js'
+import { parseResponsesToolArguments, responsesTerminalStop } from './openaiResponsesTerminal.js'
 import { openaiUsageToAnthropic } from './usage.js'
 import { encodeOpenAIReasoningEnvelope } from './openaiReasoning.js'
 
@@ -26,10 +26,13 @@ export function openaiResponsesToAnthropic(
   model: string,
   options: OpenAIResponsesToAnthropicOptions = {},
 ): AnthropicResponse {
+  const terminal = responsesTerminalStop(response)
+  if (!Array.isArray(response.output)) throw new Error('Invalid OpenAI Responses output: expected an array')
   const content: AnthropicContentBlock[] = []
   let hasToolUse = false
 
-  for (const item of response.output || []) {
+  for (const item of response.output) {
+    if (item.type === 'function_call' && terminal === 'max_tokens') continue
     convertOutputItem(item, content, options)
     if (item.type === 'function_call') hasToolUse = true
   }
@@ -45,7 +48,7 @@ export function openaiResponsesToAnthropic(
     role: 'assistant',
     content,
     model: response.model || model,
-    stop_reason: mapStatus(response.status, hasToolUse),
+    stop_reason: terminal === 'max_tokens' ? 'max_tokens' : hasToolUse ? 'tool_use' : 'end_turn',
     stop_sequence: null,
     usage: openaiUsageToAnthropic(response.usage),
   }
@@ -68,11 +71,12 @@ function convertOutputItem(
       break
     }
     case 'function_call': {
+      if (!item.call_id || !item.name) throw new Error('Invalid OpenAI Responses tool identity')
       content.push({
         type: 'tool_use',
         id: item.call_id,
         name: item.name,
-        input: parseOpenAIToolArguments(item.arguments),
+        input: parseResponsesToolArguments(item.arguments),
       })
       break
     }
@@ -96,15 +100,5 @@ function convertOutputItem(
       }
       break
     }
-  }
-}
-
-function mapStatus(status: string, hasToolUse: boolean): string {
-  switch (status) {
-    case 'completed': return hasToolUse ? 'tool_use' : 'end_turn'
-    case 'failed': return 'end_turn'
-    case 'cancelled': return 'end_turn'
-    case 'incomplete': return 'max_tokens'
-    default: return 'end_turn'
   }
 }

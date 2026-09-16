@@ -3,8 +3,16 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openBrowser } = vi.hoisted(() => ({ openBrowser: vi.fn() }))
-vi.mock('../../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: { getState: () => ({ open: openBrowser }) },
+// The unified open entry point replaced the per-store `open` / `openPreview`
+// pair: every caller now names a target and the controller decides the tab.
+vi.mock('../../lib/workspace/openTarget', () => ({
+  workspaceOpen: {
+    file: (...args: unknown[]) => openPreviewFn(...args),
+    browser: (...args: unknown[]) => openBrowser(...args),
+    review: (...args: unknown[]) => openPreviewFn(...args),
+    terminal: vi.fn(),
+  },
+  openWorkspaceTarget: vi.fn(),
 }))
 
 vi.mock('../../lib/desktopRuntime', async (orig) => ({
@@ -21,11 +29,6 @@ vi.mock('../../stores/openTargetStore', () => ({
 }))
 
 const openPreviewFn = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
-vi.mock('../../stores/workspacePanelStore', () => ({
-  useWorkspacePanelStore: {
-    getState: () => ({ statusBySession: {}, openPreview: openPreviewFn }),
-  },
-}))
 
 const shellOpen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: shellOpen }))
@@ -104,13 +107,45 @@ describe('AssistantOutputTargetCard', () => {
     fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
     // The trailing args are openPreview's optional `origin` and `reveal` (#1146);
     // a card has no line number to reveal, hence undefined.
-    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', 'file', undefined, undefined)
+    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {})
   })
 
   it('routes Open to the in-app browser for a localhost target', () => {
     render(<AssistantOutputTargetCard target={localhostTarget} sessionId="s1" />)
     fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
     expect(openBrowser).toHaveBeenCalledWith('s1', 'http://localhost:5173/')
+  })
+
+  // The trailing icon button is a discoverability affordance, not the hit area:
+  // clicking the file name / path anywhere on the row must open the target.
+  it('opens the workspace preview when the row body is clicked', () => {
+    render(<AssistantOutputTargetCard target={markdownTarget} sessionId="s1" />)
+    fireEvent.click(screen.getByText('readme.md'))
+    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {})
+  })
+
+  it('opens the in-app browser when a localhost row body is clicked', () => {
+    render(<AssistantOutputTargetCard target={localhostTarget} sessionId="s1" />)
+    // The badge sits inside the row body too — clicking it is not a dead zone.
+    fireEvent.click(screen.getByText('assistantOutputs.kind.localhost'))
+    expect(openBrowser).toHaveBeenCalledWith('s1', 'http://localhost:5173/')
+  })
+
+  it('exposes the row body as a pointer-cursor button, since button cursors default to the arrow', () => {
+    render(<AssistantOutputTargetCard target={markdownTarget} sessionId="s1" />)
+    const row = screen.getByLabelText('assistantOutputs.openAria')
+    expect(row.tagName).toBe('BUTTON')
+    expect(row).toHaveClass('cursor-pointer')
+  })
+
+  // The open-with control sits next to the row's own hit area; a full-row click
+  // handler that swallows it would open the file instead of the menu.
+  it('opens the open-with menu without opening the target when its trigger is clicked', async () => {
+    render(<AssistantOutputTargetCard target={localhostTarget} sessionId="s1" />)
+    fireEvent.click(screen.getByLabelText('openWith.title'))
+    expect(await screen.findByText('openWith.systemBrowser')).toBeInTheDocument()
+    expect(openBrowser).not.toHaveBeenCalled()
+    expect(openPreviewFn).not.toHaveBeenCalled()
   })
 
   it('does not render a copy button for output target cards', () => {

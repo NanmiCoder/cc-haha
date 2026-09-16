@@ -1,4 +1,6 @@
+import type { OpenAICodexTurnState } from '../openaiAuth/turnState.js'
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
+import { normalizeAnthropicBaseUrl } from './anthropicBaseUrl.js'
 import { randomUUID } from 'crypto'
 import type { GoogleAuth } from 'google-auth-library'
 import {
@@ -203,12 +205,16 @@ export async function getAnthropicClient({
   model,
   fetchOverride,
   source,
+  openAITurnState,
+  agentId,
 }: {
   apiKey?: string
   maxRetries: number
   model?: string
   fetchOverride?: ClientOptions['fetch']
   source?: string
+  openAITurnState?: OpenAICodexTurnState
+  agentId?: string
 }): Promise<Anthropic> {
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
@@ -271,7 +277,7 @@ export async function getAnthropicClient({
   const resolvedFetch = usingGrok
     ? buildGrokFetch(fetchOverride, source)
     : usingOpenAICodex
-      ? buildOpenAICodexFetch(fetchOverride, source)
+      ? buildOpenAICodexFetch(fetchOverride, source, openAITurnState, agentId)
       : buildFetch(fetchOverride, source)
   const stagingOAuthBaseUrl = process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.USE_STAGING_OAUTH)
@@ -451,8 +457,8 @@ export async function getAnthropicClient({
     authToken: isClaudeSubscriber && !usingOpenAICodex && !usingGrok
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
-    // Set baseURL from OAuth config when using staging OAuth
-    ...(stagingOAuthBaseUrl ? { baseURL: stagingOAuthBaseUrl } : {}),
+    // The SDK appends /v1 to every API path, including messages and token counts.
+    ...(baseURL ? { baseURL: normalizeAnthropicBaseUrl(baseURL) } : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

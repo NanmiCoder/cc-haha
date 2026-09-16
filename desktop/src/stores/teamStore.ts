@@ -23,6 +23,7 @@ import {
   reconstructRunActivityFromTranscript,
 } from './chatStore'
 import { useTabStore } from './tabStore'
+import { releaseWorkspaceSession } from '../lib/workspace/releaseSession'
 import { useActivityPanelStore } from './activityPanelStore'
 import type { MessageEntry } from '../types/session'
 
@@ -1159,6 +1160,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       }
       clearMemberSessionState(obsoleteMemberSessionIds)
       for (const obsoleteSessionId of obsoleteMemberSessionIds) {
+        releaseWorkspaceSession(obsoleteSessionId)
         useTabStore.getState().closeTab(obsoleteSessionId)
       }
       set((state) => ({
@@ -1725,6 +1727,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
     ))
     clearMemberSessionState(obsoleteSessionIds)
     for (const sessionId of obsoleteSessionIds) {
+      releaseWorkspaceSession(sessionId)
       useTabStore.getState().closeTab(sessionId)
     }
     deletedTeamNames.delete(teamName)

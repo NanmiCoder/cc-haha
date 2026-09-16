@@ -1,7 +1,14 @@
 import { create } from 'zustand'
 import { adaptersApi } from '../api/adapters'
 import type { AdapterFileConfig } from '../types/adapter'
-import type { DingtalkRegistrationBegin, DingtalkRegistrationPoll } from '../api/adapters'
+import type {
+  DingtalkRegistrationBegin,
+  DingtalkRegistrationPoll,
+  FeishuRegistrationBegin,
+  QrLoginPoll,
+  QrLoginStart,
+  SlackManifestInfo,
+} from '../api/adapters'
 import { getDesktopHost } from '../lib/desktopHost'
 
 /**
@@ -34,6 +41,28 @@ const CODE_TTL_MS = 60 * 60 * 1000 // 60 minutes
 let configRequestVersion = 0
 let configUpdateQueue: Promise<void> = Promise.resolve()
 
+export type ImPlatformKey =
+  | 'telegram'
+  | 'feishu'
+  | 'wechat'
+  | 'dingtalk'
+  | 'whatsapp'
+  | 'wecom'
+  | 'qq'
+  | 'slack'
+
+/** A QR poll answers with either the saved config or a not-yet state. */
+function isBoundConfig(result: QrLoginPoll): result is AdapterFileConfig {
+  return !('connected' in result) || (result as { connected?: unknown }).connected !== false
+}
+
+type QrPollOutcome = {
+  connected: boolean
+  status?: string
+  message?: string
+  qrDataUrl?: string
+}
+
 function generateCode(): string {
   const maxValid = Math.floor(256 / SAFE_ALPHABET.length) * SAFE_ALPHABET.length
   let code = ''
@@ -61,12 +90,24 @@ type AdapterStore = {
   pollWechatLogin: (sessionKey: string) => Promise<{ connected: boolean; status?: string; message?: string }>
   startWhatsAppLogin: () => Promise<{ qrDataUrl?: string; message: string; sessionKey: string }>
   pollWhatsAppLogin: (sessionKey: string) => Promise<{ connected: boolean; status?: string; message?: string; qrDataUrl?: string }>
-  removePairedUser: (platform: 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp', userId: string | number) => Promise<void>
+  removePairedUser: (platform: ImPlatformKey, userId: string | number) => Promise<void>
   beginDingtalkRegistration: () => Promise<DingtalkRegistrationBegin>
   pollDingtalkRegistration: (deviceCode: string) => Promise<DingtalkRegistrationPoll>
   unbindWechatAccount: () => Promise<void>
   unbindDingtalkBot: () => Promise<void>
   unbindWhatsAppAccount: () => Promise<void>
+  beginFeishuRegistration: () => Promise<FeishuRegistrationBegin>
+  pollFeishuRegistration: (sessionKey: string) => Promise<{ status: string; intervalSeconds?: number; message?: string }>
+  cancelFeishuRegistration: (sessionKey: string) => Promise<void>
+  unbindFeishuApp: () => Promise<void>
+  startWecomLogin: () => Promise<QrLoginStart>
+  pollWecomLogin: (sessionKey: string) => Promise<QrPollOutcome>
+  unbindWecomBot: () => Promise<void>
+  startQqLogin: () => Promise<QrLoginStart>
+  pollQqLogin: (sessionKey: string) => Promise<QrPollOutcome>
+  unbindQqBot: () => Promise<void>
+  getSlackManifest: () => Promise<SlackManifestInfo>
+  unbindSlackApp: () => Promise<void>
 }
 
 export const useAdapterStore = create<AdapterStore>((set, get) => ({
@@ -202,6 +243,88 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
   unbindWhatsAppAccount: async () => {
     configRequestVersion += 1
     const config = await adaptersApi.unbindWhatsApp()
+    set({ config })
+    set({ restartWarning: await notifyDesktopRestartAdapters() })
+  },
+
+  beginFeishuRegistration: () => adaptersApi.beginFeishuRegistration(),
+
+  pollFeishuRegistration: async (sessionKey) => {
+    const result = await adaptersApi.pollFeishuRegistration(sessionKey)
+    if (result.status === 'success') {
+      configRequestVersion += 1
+      set({ config: result.config })
+      void notifyDesktopRestartAdapters().then((restartWarning) => set({ restartWarning }))
+      return { status: 'success' }
+    }
+    return result
+  },
+
+  cancelFeishuRegistration: async (sessionKey) => {
+    await adaptersApi.cancelFeishuRegistration(sessionKey).catch(() => {})
+  },
+
+  unbindFeishuApp: async () => {
+    configRequestVersion += 1
+    const config = await adaptersApi.unbindFeishu()
+    set({ config })
+    set({ restartWarning: await notifyDesktopRestartAdapters() })
+  },
+
+  startWecomLogin: () => adaptersApi.startWecomLogin(),
+
+  pollWecomLogin: async (sessionKey) => {
+    const result = await adaptersApi.pollWecomLogin(sessionKey)
+    if (isBoundConfig(result)) {
+      configRequestVersion += 1
+      set({ config: result })
+      void notifyDesktopRestartAdapters().then((restartWarning) => set({ restartWarning }))
+      return { connected: true }
+    }
+    // No `qrDataUrl` here, unlike QQ: the WeCom console does not rotate a code,
+    // it expires and the user clicks rescan. If that ever changes, forward it
+    // the way `pollQqLogin` does — the shared `QrLoginPoll` type already allows
+    // it, so a silent drop is the failure mode to watch for.
+    return { connected: false, status: result.status, message: result.message }
+  },
+
+  unbindWecomBot: async () => {
+    configRequestVersion += 1
+    const config = await adaptersApi.unbindWecom()
+    set({ config })
+    set({ restartWarning: await notifyDesktopRestartAdapters() })
+  },
+
+  startQqLogin: () => adaptersApi.startQqLogin(),
+
+  pollQqLogin: async (sessionKey) => {
+    const result = await adaptersApi.pollQqLogin(sessionKey)
+    if (isBoundConfig(result)) {
+      configRequestVersion += 1
+      set({ config: result })
+      void notifyDesktopRestartAdapters().then((restartWarning) => set({ restartWarning }))
+      return { connected: true }
+    }
+    return {
+      connected: false,
+      status: result.status,
+      message: result.message,
+      qrDataUrl: result.qrDataUrl,
+    }
+  },
+
+  unbindQqBot: async () => {
+    configRequestVersion += 1
+    const config = await adaptersApi.unbindQq()
+    set({ config })
+    set({ restartWarning: await notifyDesktopRestartAdapters() })
+  },
+
+  getSlackManifest: () => adaptersApi.getSlackManifest(),
+
+  unbindSlackApp: async () => {
+    configRequestVersion += 1
+    const config = await adaptersApi.unbindSlack()
     set({ config })
     set({ restartWarning: await notifyDesktopRestartAdapters() })
   },

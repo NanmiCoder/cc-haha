@@ -1,17 +1,33 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const buildScript = path.resolve(import.meta.dirname, 'build.sh')
 const productIcon = path.resolve(import.meta.dirname, '../../desktop/src-tauri/icons/icon.icns')
 const fixtureDirectories: string[] = []
+const resourceBundleName = 'cu-helper_cc-haha-computer-use.bundle'
+
+function runFixtureCommand(command: string[], options: { cwd?: string, env?: Record<string, string | undefined> } = {}) {
+  // File-backed output also works on Bun versions where test subprocesses
+  // receive closed pipe descriptors (even /bin/echo exits 1 with no output).
+  // Keep the real shell result and diagnostics; never turn that failure into a skip.
+  const directory = mkdtempSync(path.join(tmpdir(), 'cu-helper-fixture-output-'))
+  fixtureDirectories.push(directory)
+  const stdout = path.join(directory, 'stdout')
+  const stderr = path.join(directory, 'stderr')
+  const result = Bun.spawnSync(command, {
+    ...options,
+    stdin: 'ignore', stdout: Bun.file(stdout), stderr: Bun.file(stderr),
+  })
+  return { exitCode: result.exitCode, stdout: readFileSync(stdout), stderr: readFileSync(stderr) }
+}
 
 function resolveArchitectureSpecificBuildPaths(arch: 'arm64' | 'x86_64') {
   const directory = mkdtempSync(path.join(tmpdir(), 'cu-helper-build-path-'))
   fixtureDirectories.push(directory)
   const binDir = path.join(directory, arch, `${arch}-apple-macosx`, 'release')
-  const result = Bun.spawnSync([
+  const result = runFixtureCommand([
     'bash',
     '-c',
     `
@@ -47,12 +63,17 @@ afterEach(() => {
   }
 })
 
-function wrapFixtureApp(missingIcon = false) {
+function wrapFixtureApp(options: { missingIcon?: boolean, missingResources?: boolean } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'cu-helper-app-icon-'))
   fixtureDirectories.push(directory)
   writeFileSync(path.join(directory, 'fixture-binary'), 'fixture executable')
+  const resourceBundle = path.join(directory, resourceBundleName)
+  if (!options.missingResources) {
+    mkdirSync(path.join(resourceBundle, 'LensSequence'), { recursive: true })
+    writeFileSync(path.join(resourceBundle, 'LensSequence', 'README.md'), 'optional frames fixture')
+  }
 
-  const result = Bun.spawnSync([
+  const result = runFixtureCommand([
     'bash',
     '-c',
     `
@@ -60,6 +81,7 @@ source "$1"
 TEST_BUNDLE_DIR="$2"
 BUILD_DIR="$TEST_BUNDLE_DIR/build"
 BIN_PATH="$TEST_BUNDLE_DIR/fixture-binary"
+RESOURCE_BUNDLE_PATH="$TEST_BUNDLE_DIR/cu-helper_cc-haha-computer-use.bundle"
 APP_PATH="$TEST_BUNDLE_DIR/cc-haha-computer-use.app"
 BUNDLE_ID="dev.cchaha.cu-helper"
 SIGN_IDENTITY="fixture-only"
@@ -78,7 +100,7 @@ wrap_app
     'cu-helper-app-icon-test',
     buildScript,
     directory,
-    missingIcon ? 'missing' : 'present',
+    options.missingIcon ? 'missing' : 'present',
   ], { cwd: directory })
 
   return {
@@ -89,12 +111,61 @@ wrap_app
   }
 }
 
+function probeFixtureApp(mode: 'packaged' | 'build-path' | 'external-symlink' | 'invalid-json' | 'crash', crossArch = false) {
+  const directory = mkdtempSync(path.join(tmpdir(), 'cu-helper-resource-probe-'))
+  fixtureDirectories.push(directory)
+  const app = path.join(directory, 'source.app')
+  const binary = path.join(app, 'Contents', 'MacOS', 'cc-haha-computer-use')
+  mkdirSync(path.dirname(binary), { recursive: true })
+  mkdirSync(path.join(app, 'Contents', 'Resources', resourceBundleName, 'LensSequence'), { recursive: true })
+  writeFileSync(path.join(app, 'Contents', 'Resources', resourceBundleName, 'LensSequence', 'README.md'), 'optional frames fixture')
+  const buildTreeResources = path.join(directory, 'build-tree', resourceBundleName, 'LensSequence')
+  mkdirSync(buildTreeResources, { recursive: true })
+  if (mode === 'external-symlink') {
+    const lensDirectory = path.join(app, 'Contents', 'Resources', resourceBundleName, 'LensSequence')
+    rmSync(lensDirectory, { recursive: true })
+    symlinkSync(buildTreeResources, lensDirectory)
+  }
+  writeFileSync(path.join(app, 'Contents', 'Resources', 'outside-resource-path'), buildTreeResources)
+  writeFileSync(binary, `#!/bin/bash
+set -eu
+[ "$1" = "--probe-cursor-resources" ] || exit 40
+case '${mode}' in
+  crash) exit 41 ;;
+  invalid-json) printf 'not-json'; exit 0 ;;
+  build-path) resource_dir="$(cat "$(dirname "$0")/../Resources/outside-resource-path")" ;;
+  *) resource_dir="$(cd "$(dirname "$0")/../Resources/${resourceBundleName}/LensSequence" && pwd -P)" ;;
+esac
+printf '{"resourceDirectory":"%s","frameCount":0,"proceduralFallback":true}\\n' "$resource_dir"
+`)
+  chmodSync(binary, 0o755)
+  const result = runFixtureCommand([
+    'bash', '-c', `
+source "$1"
+APP_PATH="$2"
+ARCH="$3"
+uname() { printf 'arm64\\n'; }
+verify_relocated_cursor_resources
+`, 'cu-helper-resource-probe-test', buildScript, app,
+    crossArch ? 'x86_64' : 'arm64',
+  ], {
+    env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory },
+    cwd: directory,
+  })
+  return {
+    exitCode: result.exitCode,
+    stderr: result.stderr.toString(),
+    leftovers: readdirSync(directory).filter(name => name.startsWith('cc-haha-cursor-probe.')),
+  }
+}
+
 function resolveTimestampArgument(identity: string, mode = 'auto') {
-  const result = Bun.spawnSync([
+  const result = runFixtureCommand([
     'bash',
     '-c',
     [
       'source "$1"',
+      'security() { return 1; }',
       'SIGN_IDENTITY="$2"',
       'CU_HELPER_TIMESTAMP_MODE="$3"',
       'resolve_timestamp_mode',
@@ -113,7 +184,7 @@ function resolveTimestampArgument(identity: string, mode = 'auto') {
 }
 
 function resolveIdentityWithOnlyDeveloperId() {
-  const result = Bun.spawnSync([
+  const result = runFixtureCommand([
     'bash',
     '-c',
     [
@@ -189,7 +260,7 @@ describe.skipIf(process.platform !== 'darwin')('cu-helper permission-list app ic
     const result = wrapFixtureApp()
     expect(result.exitCode).toBe(0)
 
-    const plist = Bun.spawnSync([
+    const plist = runFixtureCommand([
       '/usr/bin/plutil', '-convert', 'json', '-o', '-',
       path.join(result.contents, 'Info.plist'),
     ])
@@ -208,10 +279,54 @@ describe.skipIf(process.platform !== 'darwin')('cu-helper permission-list app ic
   })
 
   test('refuses to sign an app when the required product icon is missing', () => {
-    const result = wrapFixtureApp(true)
+    const result = wrapFixtureApp({ missingIcon: true })
 
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain('App icon not found')
     expect(existsSync(path.join(result.directory, 'contents-at-sign'))).toBe(false)
+  })
+})
+
+describe('cu-helper packaged cursor resources', () => {
+  test('copies the complete SwiftPM resource directory into standard Resources before signing', () => {
+    const result = wrapFixtureApp()
+    expect(result.exitCode).toBe(0)
+    const relative = path.join('Resources', resourceBundleName, 'LensSequence', 'README.md')
+    expect(readFileSync(path.join(result.contents, relative), 'utf8')).toBe('optional frames fixture')
+    expect(readFileSync(path.join(result.directory, 'contents-at-sign', relative), 'utf8')).toBe('optional frames fixture')
+    expect(existsSync(path.join(result.contents, 'MacOS', resourceBundleName))).toBe(false)
+  })
+
+  test('refuses to sign when the declared SwiftPM resource bundle was not produced', () => {
+    const result = wrapFixtureApp({ missingResources: true })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('Cursor resource bundle not found')
+    expect(existsSync(path.join(result.directory, 'contents-at-sign'))).toBe(false)
+  })
+})
+
+describe.skipIf(process.platform !== 'darwin')('cu-helper relocated resource probe', () => {
+  test('loads from the relocated app even when the optional frame directory has no PNGs', () => {
+    const result = probeFixtureApp('packaged')
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toContain('verified: relocated cursor resources')
+    expect(result.leftovers).toEqual([])
+  })
+
+  test.each(['build-path', 'external-symlink', 'invalid-json', 'crash'] as const)('rejects %s instead of accepting a false resource-load success', mode => {
+    const result = probeFixtureApp(mode)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('Cursor resource probe')
+    if (mode === 'build-path') expect(result.stderr).toContain('instead of relocated package')
+    if (mode === 'external-symlink') expect(result.stderr).toContain('outside relocated package')
+    expect(result.leftovers).toEqual([])
+  })
+
+  test('reports cross-architecture execution as skipped without running the probe', () => {
+    const result = probeFixtureApp('crash', true)
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toContain('skipped: cursor resource execution probe (target x86_64, host arm64)')
+    expect(result.stderr).not.toContain('verified: relocated cursor resources')
+    expect(result.leftovers).toEqual([])
   })
 })

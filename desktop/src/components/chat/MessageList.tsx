@@ -6,7 +6,7 @@ import { sessionsApi, type SessionRewindMode, type SessionTurnCheckpoint } from 
 import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
-import { useWorkspacePanelStore, type WorkspacePanelOrigin } from '../../stores/workspacePanelStore'
+import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -1253,14 +1253,12 @@ function buildTurnCardInsertionMap(
 
   const cardsByRenderIndex = new Map<number, TurnChangeCardModel[]>()
   turnChangeCards.forEach((card) => {
-    // An unverified-only turn has no structured files to list, but still needs
-    // the card for conversation rewind and the warning about changes left on disk.
-    // A conversation-only turn also has no files, but gets a lightweight action
-    // instead of pretending to be a file-change card.
+    // Tool usage alone does not establish a file change. Omit empty change
+    // cards even when Bash coverage is unverified; conversation-only targets
+    // keep their separate lightweight action.
     if (
       card.checkpoint.code.available &&
-      card.checkpoint.code.filesChanged.length === 0 &&
-      (card.checkpoint.unverifiedChangeSources?.length ?? 0) === 0
+      card.checkpoint.code.filesChanged.length === 0
     ) return
     const renderIndex =
       lastResponseIndexByTurnId.get(card.target.messageId) ??
@@ -2220,11 +2218,11 @@ export function MessageList({
 }: MessageListProps = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const resolvedSessionId = sessionId ?? activeTabId
-  const isWorkspacePanelOpen = useWorkspacePanelStore((state) =>
-    resolvedSessionId ? state.isPanelOpen(resolvedSessionId) : false,
+  const isWorkspacePanelOpen = useWorkspaceStore((state) =>
+    resolvedSessionId ? (state.bySession[resolvedSessionId]?.layout ?? 'hidden') !== 'hidden' : false,
   )
-  const workspacePanelOrigin = useWorkspacePanelStore((state) =>
-    resolvedSessionId ? state.originBySession[resolvedSessionId] ?? null : null,
+  const workspacePanelOrigin = useWorkspaceStore((state) =>
+    resolvedSessionId ? state.bySession[resolvedSessionId]?.origin ?? null : null,
   )
   const sessionState = useChatStore((s) =>
     resolvedSessionId ? s.sessions[resolvedSessionId] : undefined,
@@ -2339,6 +2337,8 @@ export function MessageList({
     streamingToolInput,
   })
   const t = useTranslation()
+  // Keep disclosure choices across virtualized row remounts and later turns.
+  const [expandedChangeCards, setExpandedChangeCards] = useState<Record<string, boolean>>({})
   const [turnChangeCards, setTurnChangeCards] = useState<TurnChangeCardModel[]>([])
   const [turnChangeLoadError, setTurnChangeLoadError] = useState<string | null>(null)
   const [turnActionErrors, setTurnActionErrors] = useState<Record<string, string>>({})
@@ -3369,7 +3369,7 @@ export function MessageList({
     paintConversationFindHighlights(root, activeConversationFindMatch)
   }, [activeConversationFindMatch, virtualTranscriptWindow.items])
 
-  const restoreWorkspacePanelOrigin = useCallback((origin: WorkspacePanelOrigin, attempt = 0) => {
+  const restoreWorkspaceOrigin = useCallback((origin: WorkspaceOrigin, attempt = 0) => {
     const container = scrollContainerRef.current
     const content = scrollContentRef.current
     if (!container || !content || !resolvedSessionId) return
@@ -3379,6 +3379,9 @@ export function MessageList({
     const opener = renderItem
       ? [...renderItem.querySelectorAll<HTMLElement>('[id]')]
           .find((node) => node.id === origin.sourceElementId)
+          ?? (origin.sourceElementId.startsWith('turn-change-opener-')
+            ? renderItem.querySelector<HTMLElement>('[data-turn-change-disclosure="true"]')
+            : null)
       : null
 
     if (renderItem && opener) {
@@ -3386,7 +3389,7 @@ export function MessageList({
         renderItem.scrollIntoView({ block: 'nearest' })
       }
       opener.focus({ preventScroll: true })
-      useWorkspacePanelStore.getState().clearOrigin(resolvedSessionId)
+      useWorkspaceStore.getState().setOrigin(resolvedSessionId, null)
       workspaceOriginRestoreFrameRef.current = null
       return
     }
@@ -3405,13 +3408,13 @@ export function MessageList({
     }
 
     if (attempt >= 7 || renderIndex < 0) {
-      useWorkspacePanelStore.getState().clearOrigin(resolvedSessionId)
+      useWorkspaceStore.getState().setOrigin(resolvedSessionId, null)
       workspaceOriginRestoreFrameRef.current = null
       return
     }
 
     workspaceOriginRestoreFrameRef.current = requestAnimationFrame(() => {
-      restoreWorkspacePanelOrigin(origin, attempt + 1)
+      restoreWorkspaceOrigin(origin, attempt + 1)
     })
   }, [
     renderItemKeys,
@@ -3440,9 +3443,9 @@ export function MessageList({
 
     workspaceOriginRestoreFrameRef.current = requestAnimationFrame(() => {
       workspaceOriginRestoreFrameRef.current = null
-      restoreWorkspacePanelOrigin(workspacePanelOrigin)
+      restoreWorkspaceOrigin(workspacePanelOrigin)
     })
-  }, [isWorkspacePanelOpen, resolvedSessionId, restoreWorkspacePanelOrigin, workspacePanelOrigin])
+  }, [isWorkspacePanelOpen, resolvedSessionId, restoreWorkspaceOrigin, workspacePanelOrigin])
 
   const renderTranscriptItem = (item: RenderItem, index: number) => {
     const cardsForItem = turnCardsByRenderIndex.get(index) ?? []
@@ -3543,6 +3546,11 @@ export function MessageList({
             <CurrentTurnChangeCard
               key={`turn-change-${card.target.messageId}`}
               sessionId={resolvedSessionId}
+              expanded={expandedChangeCards[`${resolvedSessionId}:${card.target.messageId}`] ?? false}
+              onExpandedChange={(expanded) => setExpandedChangeCards((current) => ({
+                ...current,
+                [`${resolvedSessionId}:${card.target.messageId}`]: expanded,
+              }))}
               checkpoint={card.checkpoint}
               workDir={card.workDir}
               error={error}

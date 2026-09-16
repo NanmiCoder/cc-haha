@@ -33,6 +33,44 @@ function renderAdapterSettings(
       expiresInSeconds: 60,
     })),
     pollDingtalkRegistration: vi.fn(async () => ({ status: 'PENDING' })),
+    // The scan-to-bind flows and the Slack manifest all reach the server, so
+    // every one of them is stubbed by default; a test that cares overrides it.
+    beginFeishuRegistration: vi.fn(async () => ({
+      sessionKey: 'feishu-session',
+      verificationUri: 'https://open.feishu.cn/page/launcher',
+      expiresInSeconds: 600,
+      // The hook polls at whatever cadence the server reports, so a short one
+      // keeps these tests inside a normal waitFor window.
+      intervalSeconds: 0.02,
+      message: 'scan me',
+      qrDataUrl: 'data:image/png;base64,feishu',
+    })),
+    pollFeishuRegistration: vi.fn(async () => ({ status: 'waiting' })),
+    cancelFeishuRegistration: vi.fn(async () => {}),
+    unbindFeishuApp: vi.fn(async () => {}),
+    startWecomLogin: vi.fn(async () => ({
+      sessionKey: 'wecom-session',
+      verificationUrl: 'https://work.weixin.qq.com/ai/qc/confirm',
+      pollIntervalMs: 20,
+      message: 'scan me',
+      qrDataUrl: 'data:image/png;base64,wecom',
+    })),
+    pollWecomLogin: vi.fn(async () => ({ connected: false, status: 'waiting' })),
+    unbindWecomBot: vi.fn(async () => {}),
+    startQqLogin: vi.fn(async () => ({
+      sessionKey: 'qq-session',
+      verificationUrl: 'https://qq.example/scan',
+      pollIntervalMs: 20,
+      message: 'scan me',
+      qrDataUrl: 'data:image/png;base64,qq',
+    })),
+    pollQqLogin: vi.fn(async () => ({ connected: false, status: 'waiting' })),
+    unbindQqBot: vi.fn(async () => {}),
+    getSlackManifest: vi.fn(async () => ({
+      manifest: '{\n  "settings": {\n    "socket_mode_enabled": true\n  }\n}',
+      createAppUrl: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+    })),
+    unbindSlackApp: vi.fn(async () => {}),
     ...overrides,
   } as Partial<ReturnType<typeof useAdapterStore.getState>>)
 
@@ -50,7 +88,16 @@ describe('AdapterSettings IM setup entry', () => {
     renderAdapterSettings({})
 
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent)
-    expect(tabs).toEqual(['Telegram', 'Feishu', 'WeChat', 'DingTalk', 'WhatsApp'])
+    expect(tabs).toEqual([
+      'Telegram',
+      'Feishu',
+      'WeChat',
+      'DingTalk',
+      'WhatsApp',
+      'WeCom',
+      'QQ',
+      'Slack',
+    ])
     expect(screen.getByRole('tab', { name: 'Telegram' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByLabelText('Bot Token')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'documentation link' })).toHaveAttribute(
@@ -343,5 +390,345 @@ describe('AdapterSettings account unbind confirmation', () => {
     expect(screen.getByText('WhatsApp is not bound')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scan to Bind' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('e.g. 15551234567@s.whatsapp.net')).toBeInTheDocument()
+  })
+})
+
+describe('AdapterSettings scan-to-bind panels', () => {
+  it('renders the Feishu QR after starting a scan and clears it on success', async () => {
+    const beginFeishuRegistration = vi.fn(async () => ({
+      sessionKey: 'feishu-session',
+      verificationUri: 'https://open.feishu.cn/page/launcher',
+      expiresInSeconds: 600,
+      intervalSeconds: 0.02,
+      message: 'Waiting for the Feishu scan...',
+      qrDataUrl: 'data:image/png;base64,feishu',
+    }))
+    const pollFeishuRegistration = vi.fn(async () => ({ status: 'success' }))
+    renderAdapterSettings({}, { beginFeishuRegistration, pollFeishuRegistration })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Feishu' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Create' }))
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Feishu authorization QR code')).toHaveAttribute(
+        'src',
+        'data:image/png;base64,feishu',
+      )
+    })
+    expect(beginFeishuRegistration).toHaveBeenCalledTimes(1)
+
+    await waitFor(() => {
+      expect(pollFeishuRegistration).toHaveBeenCalledWith('feishu-session')
+    })
+    // Success clears the code: leaving it on screen invites a second scan that
+    // would create a second bot.
+    await waitFor(() => {
+      expect(screen.queryByAltText('Feishu authorization QR code')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Feishu bot created and bound.')).toBeInTheDocument()
+  })
+
+  it('stops polling and reports the reason when the Feishu code expires', async () => {
+    const pollFeishuRegistration = vi.fn(async () => ({
+      status: 'expired',
+      message: 'QR expired, generate a new one.',
+    }))
+    renderAdapterSettings({}, { pollFeishuRegistration })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Feishu' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Create' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('QR expired, generate a new one.')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(screen.queryByAltText('Feishu authorization QR code')).not.toBeInTheDocument()
+    })
+    const callsAfterExpiry = pollFeishuRegistration.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(pollFeishuRegistration.mock.calls.length).toBe(callsAfterExpiry)
+  })
+
+  it('offers a rebind label and an unbind button once Feishu is configured', () => {
+    renderAdapterSettings({ feishu: { appId: 'cli_1', appSecret: '****cret' } })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Feishu' }))
+
+    expect(screen.getByRole('button', { name: 'Scan Again' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Unbind Feishu bot' })).toBeInTheDocument()
+  })
+
+  it('renders the WeCom QR and shows the bound bot id', async () => {
+    renderAdapterSettings({ wecom: { botId: 'bot-42' } })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'WeCom' }))
+    expect(screen.getByText('bot-42')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scan Again' }))
+
+    await waitFor(() => {
+      expect(screen.getByAltText('WeCom authorization QR code')).toBeInTheDocument()
+    })
+  })
+
+  it('redraws the QQ QR when the connector rotates the code', async () => {
+    let polls = 0
+    const pollQqLogin = vi.fn(async () => {
+      polls += 1
+      return polls === 1
+        ? { connected: false, status: 'waiting', qrDataUrl: 'data:image/png;base64,rotated' }
+        : { connected: false, status: 'waiting' }
+    })
+    renderAdapterSettings({}, { pollQqLogin })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'QQ' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Bind' }))
+
+    await waitFor(() => {
+      expect(screen.getByAltText('QQ authorization QR code')).toHaveAttribute(
+        'src',
+        'data:image/png;base64,qq',
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByAltText('QQ authorization QR code')).toHaveAttribute(
+        'src',
+        'data:image/png;base64,rotated',
+      )
+    })
+    // A later poll that carries no new image must not blank the one on screen.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(screen.getByAltText('QQ authorization QR code')).toHaveAttribute(
+      'src',
+      'data:image/png;base64,rotated',
+    )
+  })
+
+  it('shows the Slack manifest link and JSON only after the tab is opened', async () => {
+    const getSlackManifest = vi.fn(async () => ({
+      manifest: '{"settings":{"socket_mode_enabled":true}}',
+      createAppUrl: 'https://api.slack.com/apps?new_app=1',
+    }))
+    renderAdapterSettings({}, { getSlackManifest })
+
+    expect(getSlackManifest).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Slack' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /create app from manifest/i })).toHaveAttribute(
+        'href',
+        'https://api.slack.com/apps?new_app=1',
+      )
+    })
+    expect(screen.getByText('{"settings":{"socket_mode_enabled":true}}')).toBeInTheDocument()
+    expect(screen.getByLabelText('Bot Token')).toBeInTheDocument()
+    expect(screen.getByLabelText('App-Level Token')).toBeInTheDocument()
+  })
+})
+
+describe('AdapterSettings saving the new platforms', () => {
+  it('sends only the editable allowlist for the QR-bound platforms', async () => {
+    const updateConfig = vi.fn(async (_patch: Partial<AdapterFileConfig>) => {})
+    renderAdapterSettings(
+      {
+        wecom: { botId: 'bot-1', secret: '****cret', allowedUsers: ['zhangsan'] },
+        qq: { appId: 'app-1', appSecret: '****cret', allowedUsers: ['openid-1'] },
+      },
+      { updateConfig },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(1)
+    })
+    const patch = updateConfig.mock.calls[0]![0]
+    // Credentials belong to the scan flow. Echoing them back on every Save is
+    // how a masked value overwrites a real one.
+    expect(patch.wecom).toEqual({ allowedUsers: ['zhangsan'] })
+    expect(patch.qq).toEqual({ allowedUsers: ['openid-1'] })
+  })
+
+  it('saves both Slack tokens because they are typed by hand', async () => {
+    const updateConfig = vi.fn(async (_patch: Partial<AdapterFileConfig>) => {})
+    renderAdapterSettings({}, { updateConfig })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Slack' }))
+    fireEvent.change(screen.getByLabelText('Bot Token'), { target: { value: 'xoxb-typed' } })
+    fireEvent.change(screen.getByLabelText('App-Level Token'), { target: { value: 'xapp-typed' } })
+    fireEvent.change(screen.getByLabelText('Allowed Users'), { target: { value: 'U1, U2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(1)
+    })
+    expect(updateConfig.mock.calls[0]![0].slack).toEqual({
+      botToken: 'xoxb-typed',
+      appToken: 'xapp-typed',
+      allowedUsers: ['U1', 'U2'],
+    })
+  })
+})
+
+describe('AdapterSettings unbind confirmation for the new platforms', () => {
+  it.each([
+    ['WeCom', { wecom: { botId: 'bot-1' } }, 'Unbind bot account', 'unbindWecomBot'],
+    ['QQ', { qq: { appId: 'app-1' } }, 'Unbind bot account', 'unbindQqBot'],
+    ['Slack', { slack: { botToken: 'xoxb-1' } }, 'Unbind Slack app', 'unbindSlackApp'],
+    ['Feishu', { feishu: { appId: 'cli_1', appSecret: 's' } }, 'Unbind Feishu bot', 'unbindFeishuApp'],
+  ] as const)('confirms before unbinding on the %s tab', async (tab, config, buttonName, action) => {
+    const unbind = vi.fn(async () => {})
+    renderAdapterSettings(config as AdapterFileConfig, { [action]: unbind })
+
+    fireEvent.click(screen.getByRole('tab', { name: tab }))
+    fireEvent.click(screen.getByRole('button', { name: buttonName }))
+
+    expect(unbind).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: buttonName })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(unbind).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: buttonName }))
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: buttonName })).getByRole('button', { name: buttonName }),
+    )
+
+    await waitFor(() => {
+      expect(unbind).toHaveBeenCalledTimes(1)
+    })
+  })
+})
+
+describe('AdapterSettings scan resilience', () => {
+  // A poll travels through the local server out to the vendor, so a 5xx or a
+  // timeout is ordinary. Tearing the code down on the first one makes the user
+  // rescan for a blip — the two older loops in this page ride it out.
+  it('keeps the QR on screen and retries after a transient poll failure', async () => {
+    let polls = 0
+    const pollQqLogin = vi.fn(async () => {
+      polls += 1
+      if (polls === 1) throw new Error('gateway timeout')
+      return { connected: false, status: 'waiting', message: 'still waiting' }
+    })
+    renderAdapterSettings({}, { pollQqLogin })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'QQ' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Bind' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('gateway timeout')).toBeInTheDocument()
+    })
+    expect(screen.getByAltText('QQ authorization QR code')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('still waiting')).toBeInTheDocument()
+    })
+    expect(screen.getByAltText('QQ authorization QR code')).toBeInTheDocument()
+  })
+
+  it('gives up once the failures stop looking transient', async () => {
+    const pollQqLogin = vi.fn(async () => {
+      throw new Error('vendor down')
+    })
+    renderAdapterSettings({}, { pollQqLogin })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'QQ' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Bind' }))
+
+    // Wait for the code to actually appear first — asserting its absence
+    // straight away would pass before the scan even started.
+    await waitFor(() => {
+      expect(screen.getByAltText('QQ authorization QR code')).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('vendor down')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(screen.queryByAltText('QQ authorization QR code')).not.toBeInTheDocument()
+    })
+    expect(pollQqLogin.mock.calls.length).toBe(3)
+
+    const settled = pollQqLogin.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(pollQqLogin.mock.calls.length).toBe(settled)
+  })
+
+  // The QR image is drawn server-side and that can fail silently. Without the
+  // URL the panel shows no image, no link, and a permanently disabled button.
+  it('falls back to the scannable URL when the server sent no image', async () => {
+    const startQqLogin = vi.fn(async () => ({
+      sessionKey: 'qq-session',
+      verificationUrl: 'https://qq.example/scan?token=1',
+      pollIntervalMs: 20,
+      message: 'scan me',
+    }))
+    renderAdapterSettings({}, { startQqLogin })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'QQ' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Scan to Bind' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'https://qq.example/scan?token=1' }))
+        .toHaveAttribute('href', 'https://qq.example/scan?token=1')
+    })
+    expect(screen.queryByAltText('QQ authorization QR code')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan to Bind' })).toBeEnabled()
+  })
+
+  it('reports a failed Slack unbind instead of closing the dialog silently', async () => {
+    const unbindSlackApp = vi.fn(async () => {
+      throw new Error('server said no')
+    })
+    renderAdapterSettings({ slack: { botToken: 'xoxb-1' } }, { unbindSlackApp })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Slack' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Unbind Slack app' }))
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Unbind Slack app' }))
+        .getByRole('button', { name: 'Unbind Slack app' }),
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('server said no')).toBeInTheDocument()
+    })
+  })
+})
+
+describe('AdapterSettings unbind dialog busy state', () => {
+  // `loading` is not cosmetic: it is what stops the user dismissing and
+  // re-firing an unbind that is still in flight. Pairing a row with another
+  // platform's flag would leave the dialog dismissable mid-request.
+  it.each([
+    ['WeCom', { wecom: { botId: 'bot-1' } }, 'Unbind bot account', 'unbindWecomBot'],
+    ['QQ', { qq: { appId: 'app-1' } }, 'Unbind bot account', 'unbindQqBot'],
+    ['Feishu', { feishu: { appId: 'cli_1', appSecret: 's' } }, 'Unbind Feishu bot', 'unbindFeishuApp'],
+    ['Slack', { slack: { botToken: 'xoxb-1' } }, 'Unbind Slack app', 'unbindSlackApp'],
+  ] as const)('keeps the %s dialog busy until its own request settles', async (tab, config, buttonName, action) => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const unbind = vi.fn(() => pending)
+    renderAdapterSettings(config as AdapterFileConfig, { [action]: unbind })
+
+    fireEvent.click(screen.getByRole('tab', { name: tab }))
+    fireEvent.click(screen.getByRole('button', { name: buttonName }))
+    const dialog = screen.getByRole('dialog', { name: buttonName })
+    fireEvent.click(within(dialog).getByRole('button', { name: buttonName }))
+
+    await waitFor(() => {
+      expect(unbind).toHaveBeenCalledTimes(1)
+    })
+    // Still in flight: cancelling must not dismiss it, and confirming again
+    // must not fire a second request.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('dialog', { name: buttonName })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: buttonName }))
+    expect(unbind).toHaveBeenCalledTimes(1)
+
+    release()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: buttonName })).not.toBeInTheDocument()
+    })
   })
 })

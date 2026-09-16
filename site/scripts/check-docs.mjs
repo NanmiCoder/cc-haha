@@ -269,8 +269,8 @@ async function checkLocaleRedirect() {
 async function main() {
   const { records } = await generateDocsManifest()
   const readmes = await Promise.all([
-    { locale: 'en', sourcePath: 'README.md' },
-    { locale: 'zh', sourcePath: 'README.zh-CN.md' }
+    { locale: 'en', sourcePath: 'README.en.md' },
+    { locale: 'zh', sourcePath: 'README.md' }
   ].map(async (readme) => {
     const absolutePath = path.join(paths.repoDir, readme.sourcePath)
     return {

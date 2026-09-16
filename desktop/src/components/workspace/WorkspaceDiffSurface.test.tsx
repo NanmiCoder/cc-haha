@@ -59,6 +59,30 @@ describe('WorkspaceDiffSurface', () => {
     highlightRequestSpy.mockImplementation(() => new Promise(() => {}))
   })
 
+  it('wraps split columns within the viewport without changing source coordinates', () => {
+    const { rerender } = render(<WorkspaceDiffSurface value={diff} path="src/a.ts" mode="split" wrapLines />)
+    expect(document.querySelector('[data-diff-mode="split"]')).toHaveStyle({ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' })
+    expect(getCodeRow('const b = 3')).toHaveStyle({ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' })
+    expect(getCodeRow('const b = 3')).toHaveClass('self-start')
+    expect(getCodeRow('const b = 3').closest('[data-diff-row-id]')).toHaveStyle({ gridTemplateColumns: 'var(--workspace-diff-gutter-width) minmax(0, 1fr)' })
+    expect(screen.getByRole('button', { name: 'Comment on src/a.ts new line 11' })).toBeInTheDocument()
+    rerender(<WorkspaceDiffSurface value={diff} path="src/a.ts" mode="split" wrapLines={false} />)
+    expect(getCodeRow('const b = 3')).toHaveStyle({ whiteSpace: 'pre' })
+  })
+
+  it('keeps hunk actions on compact separators in one file surface with distinct indices', () => {
+    const onApply = vi.fn()
+    render(<WorkspaceDiffSurface value={diff.replace('--- a/', 'index 123..456 100644\n--- a/')} path="src/a.ts" hideSingleFileHeader compactHunks hunkAction={{ label: 'Stage hunk', onApply }} />)
+    expect(screen.queryByText('index 123..456 100644')).not.toBeInTheDocument()
+    expect(screen.queryByText('@@ -10,2 +10,3 @@')).not.toBeInTheDocument()
+    const actions = screen.getAllByRole('button', { name: 'Stage hunk' })
+    expect(actions).toHaveLength(2)
+    expect(actions[0]!.closest('[data-diff-hunk-separator]')).toHaveTextContent('10–12')
+    fireEvent.click(actions[1]!)
+    expect(onApply).toHaveBeenCalledWith(1)
+    expect(screen.getByTestId('workspace-code').querySelectorAll('[role="grid"]')).toHaveLength(0)
+  })
+
   it('keeps one scroll surface while hiding redundant single-file patch chrome', () => {
     render(<WorkspaceDiffSurface value={diff} path="src/a.ts" hideSingleFileHeader />)
 
@@ -527,4 +551,19 @@ describe('WorkspaceDiffSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Comment on src/b.ts new line 11' }))
     expect(screen.getByRole('textbox', { name: 'Review comment' })).toHaveValue('')
   })
+
+  it('renders aligned split cells and submits comments with original-side line numbers', () => {
+    const onAddComment = vi.fn()
+    render(<WorkspaceDiffSurface value={diff} path="src/a.ts" mode="split" onAddComment={onAddComment} />)
+    const old = getCodeRow('const b = 2').closest<HTMLElement>('[data-diff-row-id]')!
+    const next = getCodeRow('const b = 3').closest<HTMLElement>('[data-diff-row-id]')!
+    expect(old.style.gridRow).toBe(next.style.gridRow)
+    expect(old.style.gridColumn).toBe('1')
+    expect(next.style.gridColumn).toBe('2')
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on src/a.ts old line 11' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Review comment' }), { target: { value: 'Keep the old behavior' } })
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Review comment' }), { key: 'Enter', ctrlKey: true })
+    expect(onAddComment).toHaveBeenCalledWith(expect.objectContaining({ side: 'old', lineStart: 11, lineEnd: 11, quote: 'const b = 2' }), 'Keep the old behavior')
+  })
+
 })

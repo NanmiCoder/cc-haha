@@ -185,9 +185,9 @@ describe('E2E: Full Flow', () => {
   // 3. Settings
   // =============================================
 
-  it('should get empty settings initially', async () => {
+  it('should expose the default team preference in initial settings', async () => {
     const { data } = await api('GET', '/api/settings/user')
-    expect(data).toEqual({})
+    expect(data).toEqual({ agentTeamsEnabled: true })
   })
 
   it('should update and read user settings', async () => {
@@ -216,8 +216,8 @@ describe('E2E: Full Flow', () => {
 
   it('should list available models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(4)
-    expect(data.models[0].name).toBe('Fable 5')
+    expect(data.models.length).toBe(5)
+    expect(data.models[0].name).toBe('Fable 5.1')
   })
 
   it('should switch model', async () => {

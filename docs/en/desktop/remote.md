@@ -12,7 +12,7 @@ A task is running on your computer and you want to check on it, or add one more 
 - **H5 Access** — open the same interface in a mobile browser: sessions, messages, attachments, permission buttons, all of it.
 - **IM Adapters** — talk to Claude directly inside WeChat, DingTalk, WhatsApp, Telegram, or Feishu.
 
-Both require your computer to be on with the app running. They expose the local desktop service; they don't move anything to a cloud.
+Both require your computer to be on with the app running. Tasks execute on your computer; public tunnels and IM platforms carry content through their respective service providers.
 
 ## H5 Access
 
@@ -25,7 +25,7 @@ Both require your computer to be on with the app running. They expose the local 
 3. Click **Generate token**. A QR code and an H5 link appear.
 4. Scan it with your phone, or click **Copy launch URL** and send it to your own device.
 
-The scanned link carries the server address and the token. Once your phone's browser connects, it remembers the connection and later visits go straight in.
+The scanned link carries the server address and token. Scan with your phone camera and open it in your usual Safari, Chrome, or system browser. Successful verification stores the connection in that browser's localStorage and removes the token from the address bar. Scanning again or opening a bookmark reconnects automatically. Temporary network failures do not forget pairing; choose **Retry** to use the saved credential. A revoked or regenerated token requires a fresh QR code.
 
 ![The mobile conversation view with a file-changes card](../../images/app/en/h5-session.webp)
 
@@ -61,7 +61,30 @@ Only when a task is idle *and* nothing is connected does the CLI process stop, a
 
 Session list and project switching, sending messages, stopping, streaming replies, image and file attachments, permission buttons, questions from Claude, `@` file references, copy and fork — the whole conversation flow.
 
-The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5.
+The **Settings** entry at the bottom of the sidebar provides **Model providers** and **General**. Add, edit, delete, reorder, or switch providers on your phone. Existing API keys are never returned; leave a key blank while editing to keep it. Changing a model or image request URL requires entering the corresponding API key again, so saved credentials are not automatically sent to a new address. General settings include theme, interface language, response language, output style, reasoning effort, send behavior, thinking, and workflow keywords. Theme and interface language affect this browser; Agent preferences are shared with the computer.
+
+Provider website login, configuration import, and desktop administration remain on the computer. The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5. Remote terminal execution is deferred: the current terminal is owned by Electron and requires a separate device-authorized transport with reconnect and revocation support.
+
+## Public access with ngrok
+
+Open **Settings → H5 Access → Public access · ngrok** to connect your own ngrok account. You do not need to install ngrok or run commands. LAN settings remain independent.
+
+1. Open the account link, sign up or sign in on ngrok's official website, and copy your **Authtoken**. This is the tunnel credential, not an API Key.
+2. Paste it in the desktop app. Read the access and privacy notice, then choose **Agree and enable public access**.
+3. Wait for the public address, generate a pairing QR code, scan it in your phone browser, and submit the pairing request.
+4. Approve the phone on the desktop. Bookmark the public address for later visits.
+
+Pairing codes expire after 5 minutes and can only be used once. Phone credentials last 30 days by default. Keep QR codes private. Revoke individual phones or turn off public access to disconnect remote clients immediately; running tasks continue.
+
+The public entry also supports the provider and General settings above. Unrestricted local directory browsing and path-based file previews remain desktop-only; session-scoped file and review APIs remain available.
+
+Once paired, public authorization persists in a secure browser cookie. Scanning again while it is valid opens the app without consuming another pairing code. Long-lived public credentials are not stored in localStorage. Camera scanning works in system browsers, but different browsers, private windows, and hostnames do not share authorization. If a scanner opens an embedded browser, switch to your preferred browser before pairing. Clearing browser data, expiration, or revocation requires pairing again.
+
+**Privacy:** Standard ngrok HTTPS tunnels terminate TLS at ngrok, which then forwards traffic through an encrypted tunnel to your computer. ngrok can technically access the conversations, commands, and files being transferred. This is not end-to-end encryption that prevents the relay from reading content. The Authtoken is stored in a separate private file in the active application data directory, without system keychain encryption. Your local account or an administrator may read it. Deleting the saved credential does not close your ngrok account; revoke the credential at ngrok if it may have leaked.
+
+Free accounts include an assigned development domain, with transfer and request quotas. Browsers may first show ngrok's warning page; continue to reach the app. The app never purchases an upgrade. See [ngrok's current free plan limits](https://ngrok.com/docs/pricing-limits/free-plan-limits).
+
+Automatic restoration on desktop startup is off by default. Enable it to reconnect on later launches. Your computer must remain running, connected, and awake. Connectivity varies by network. For authentication or quota errors, follow the settings panel guidance before retrying.
 
 ## IM Adapters
 
@@ -89,7 +112,8 @@ Paired users are listed below and can be unbound at any time; unbinding requires
 
 ### Other settings
 
-- **Default project** — the working directory for new IM sessions. Left empty, it uses your current user working directory.
+- **Default project** — the working directory for new IM sessions. Left empty, it uses your current user working directory. It's only a starting point — it doesn't restrict which projects the bot can reach.
+- **Allowed project directories** — the boundary for the bot: `/projects` only lists projects inside these directories. Left empty, it defaults to your home directory (plus the default project, if it is outside home).
 - **Streaming card mode** — updates the message content live, so it reads more like watching it type.
 - **Permission requests** — DingTalk can use an interactive card template ID for button-based approval. Without it, every platform falls back to the `/allow`, `/always`, and `/deny` text commands.
 

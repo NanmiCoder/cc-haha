@@ -1,5 +1,4 @@
 ﻿import type { BetaContentBlock, BetaUsage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
-import { randomUUID } from 'crypto'
 import type { Tools, ToolPermissionContext } from 'src/Tool.js'
 import { toolMatchesName } from 'src/Tool.js'
 import { TOOL_SEARCH_TOOL_NAME } from 'src/tools/ToolSearchTool/prompt.js'
@@ -14,21 +13,28 @@ import type { AgentDefinition } from 'src/tools/AgentTool/loadAgentsDir.js'
 
 const DEFAULT_API_VERSION = '2025-04-01-preview'
 
-type OpenAIToolCall = {
-  id: string
-  type: 'function'
-  function: {
-    name: string
-    arguments: string
-  }
+function requireAssociationId(id: string | undefined, field: string): string {
+  if (!id) throw new Error(`${field} missing call_id`)
+  return id
 }
 
-type OpenAIMessage = {
-  role: 'system' | 'user' | 'assistant' | 'tool'
-  content?: string | null
-  tool_calls?: OpenAIToolCall[]
-  tool_call_id?: string
-}
+type OpenAIContentPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string }
+  | { type: 'input_file'; file_url?: string; file_data?: string; filename?: string }
+
+type OpenAIInputItem =
+  | {
+      type: 'message'
+      role: 'user' | 'assistant'
+      content: string | OpenAIContentPart[]
+    }
+  | { type: 'function_call'; call_id: string; name: string; arguments: string }
+  | {
+      type: 'function_call_output'
+      call_id: string
+      output: string | OpenAIContentPart[]
+    }
 
 type OpenAIResponseOutputItem = {
   type?: string
@@ -199,8 +205,144 @@ function contentBlocksToText(content: unknown): string {
     .join('\n')
 }
 
-export function buildAzureOpenAIInput(messages: Array<{ type: string; message: { content: unknown } }>): OpenAIMessage[] {
-  const inputs: OpenAIMessage[] = []
+/**
+ * Model-visible document metadata (title/context) as synthetic prefix text.
+ * Both fields are visible to the model in the Anthropic protocol, so
+ * degradation keeps them instead of dropping them silently. Returns an empty
+ * string when neither is set, otherwise a newline-terminated prefix so the
+ * document body follows on its own line.
+ */
+function documentProvenanceText(document: { title?: string; context?: string }): string {
+  const lines = [
+    ...(document.title ? [`[Document: ${document.title}]`] : []),
+    ...(document.context ? [`[Document context: ${document.context}]`] : []),
+  ]
+  return lines.length > 0 ? `${lines.join('\n')}\n` : ''
+}
+
+function contentBlocksToOpenAIContent(
+  content: unknown,
+): string | OpenAIContentPart[] {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  const parts: OpenAIContentPart[] = []
+  // Only adjacent *text* blocks collapse into one string (joined without a
+  // separator — the wire shape carries no newline between them). Anything
+  // degraded from another block type keeps its array shape so block
+  // boundaries stay visible.
+  let allOriginalText = true
+  for (const block of content) {
+    if (!block || typeof block !== 'object' || !('type' in block)) continue
+    const typed = block as {
+      type?: string
+      text?: string
+      source?: {
+        type?: string
+        media_type?: string
+        data?: string
+        url?: string
+        file_id?: string
+        content?: unknown
+      }
+      title?: string
+      context?: string
+      content?: unknown
+    }
+    if (typed.type === 'text' && typeof typed.text === 'string') {
+      parts.push({ type: 'input_text', text: typed.text })
+    } else if (typed.type === 'search_result') {
+      // `source` is a URL string per the official Anthropic schema.
+      allOriginalText = false
+      const contentText = Array.isArray(typed.content)
+        ? typed.content
+            .filter((part): part is { type: 'text'; text: string } =>
+              typeof part === 'object' && part !== null && 'type' in part && part.type === 'text' && typeof part.text === 'string')
+            .map(part => part.text)
+        : []
+      const text = [
+        typed.title,
+        ...contentText,
+        typeof typed.source === 'string' ? typed.source : undefined,
+      ].filter((part): part is string => typeof part === 'string' && part.length > 0)
+        .join(' — ')
+      if (text) parts.push({ type: 'input_text', text })
+    } else if (typed.type === 'image' && typed.source) {
+      allOriginalText = false
+      const source = typed.source
+      if (typeof source.url === 'string') {
+        parts.push({ type: 'input_image', image_url: source.url })
+      } else if (source.type === 'file') {
+        parts.push({ type: 'input_text', text: '[Image omitted: file-based image source is not supported by this endpoint.]' })
+      } else if (typeof source.media_type === 'string' && typeof source.data === 'string') {
+        parts.push({
+          type: 'input_image',
+          image_url: `data:${source.media_type};base64,${source.data}`,
+        })
+      }
+    } else if (typed.type === 'document' && typed.source) {
+      allOriginalText = false
+      const source = typed.source
+      if (source.type === 'text' && typeof source.data === 'string') {
+        // Anthropic text documents carry plain text in `data` — not base64.
+        // Title/context are model-visible metadata, kept as a synthetic prefix.
+        parts.push({ type: 'input_text', text: `${documentProvenanceText(typed)}${source.data}` })
+      } else if (source.type === 'content') {
+        // Custom-content documents carry inline text and image blocks
+        // (citations/RAG). Keep both visible. Title/context are synthesized
+        // metadata, so they may carry their own separator (unlike the
+        // document's text blocks, which are never rewritten).
+        const provenance = documentProvenanceText(typed)
+        if (provenance) parts.push({ type: 'input_text', text: provenance })
+        if (typeof source.content === 'string') {
+          if (source.content) parts.push({ type: 'input_text', text: source.content })
+        } else if (Array.isArray(source.content)) {
+          for (const part of source.content) {
+            const media = contentBlocksToOpenAIContent([part])
+            if (Array.isArray(media)) parts.push(...media)
+            else if (media) parts.push({ type: 'input_text', text: media })
+          }
+        }
+      } else if (typeof source.media_type === 'string' && typeof source.data === 'string') {
+        // The input_file carries the title as filename, so the synthetic
+        // provenance prefix keeps the model-visible title/context text.
+        const provenance = documentProvenanceText(typed)
+        if (provenance) parts.push({ type: 'input_text', text: provenance })
+        parts.push({
+          type: 'input_file',
+          file_data: `data:${source.media_type};base64,${source.data}`,
+          ...(typed.title ? { filename: typed.title } : {}),
+        })
+      } else if (typeof source.url === 'string') {
+        // Azure Responses (2025-04-01-preview) does not accept file_url the
+        // way the OpenAI public API does. Keep the document visible with a
+        // text reference instead of silently dropping it. The reference text
+        // carries the title as its label, so only context needs a prefix.
+        const contextPrefix = typed.context ? `[Document context: ${typed.context}]\n` : ''
+        parts.push({
+          type: 'input_text',
+          text: `${contextPrefix}[Document: ${typed.title ?? source.url}](${source.url})`,
+        })
+      } else if (source.type === 'file') {
+        const contextPrefix = typed.context ? `[Document context: ${typed.context}]\n` : ''
+        parts.push({
+          type: 'input_text',
+          text: `${contextPrefix}[Document: ${typed.title ?? 'file'} omitted — file-based source]`,
+        })
+      }
+    }
+  }
+
+  if (allOriginalText && parts.every(part => part.type === 'input_text')) {
+    return parts.map(part => part.text).join('')
+  }
+  return parts
+}
+
+export function buildAzureOpenAIInput(
+  messages: Array<{ type: string; message: { content: unknown } }>,
+): OpenAIInputItem[] {
+  const inputs: OpenAIInputItem[] = []
 
   for (const msg of messages) {
     if (msg.type !== 'user' && msg.type !== 'assistant') continue
@@ -209,13 +351,30 @@ export function buildAzureOpenAIInput(messages: Array<{ type: string; message: {
     if (!Array.isArray(content)) {
       const text = contentBlocksToText(content)
       if (text.trim().length > 0) {
-        inputs.push({ role: msg.type, content: text })
+        inputs.push({ type: 'message', role: msg.type, content: text })
       }
       continue
     }
 
-    const textParts: string[] = []
-    const toolCalls: OpenAIToolCall[] = []
+    const contentParts: OpenAIContentPart[] = []
+    // Only messages made of adjacent text blocks collapse to a string; any
+    // non-text block keeps the array shape so block boundaries stay visible.
+    let hasNonTextBlock = false
+    const flushMessage = (): void => {
+      if (contentParts.length === 0) return
+      const messageContent = !hasNonTextBlock && contentParts.every(
+        part => part.type === 'input_text',
+      )
+        ? contentParts.map(part => part.text).join('')
+        : [...contentParts]
+      inputs.push({
+        type: 'message',
+        role: msg.type,
+        content: messageContent,
+      })
+      contentParts.length = 0
+      hasNonTextBlock = false
+    }
 
     for (const block of content) {
       if (!block || typeof block !== 'object' || !('type' in block)) continue
@@ -230,52 +389,37 @@ export function buildAzureOpenAIInput(messages: Array<{ type: string; message: {
       }
 
       if (typed.type === 'text' && typeof typed.text === 'string') {
-        textParts.push(typed.text)
-      }
-
-      if (typed.type === 'tool_use' && typed.name) {
-        const args =
-          typeof typed.input === 'string'
-            ? typed.input
-            : JSON.stringify(typed.input ?? {})
-        toolCalls.push({
-          id: typed.id ?? randomUUID(),
-          type: 'function',
-          function: {
-            name: typed.name,
-            arguments: args,
-          },
-        })
-      }
-
-      if (typed.type === 'tool_result' && msg.type === 'user') {
-        const resultText = contentBlocksToText(typed.content)
+        contentParts.push({ type: 'input_text', text: typed.text })
+      } else if ((typed.type === 'image' || typed.type === 'document' || typed.type === 'search_result') && msg.type === 'user') {
+        hasNonTextBlock = true
+        const media = contentBlocksToOpenAIContent([typed])
+        if (Array.isArray(media)) {
+          contentParts.push(...media)
+        } else if (media) {
+          contentParts.push({ type: 'input_text', text: media })
+        }
+      } else if (typed.type === 'tool_use' && typed.name) {
+        flushMessage()
         inputs.push({
-          role: 'tool',
-          tool_call_id: typed.tool_use_id ?? randomUUID(),
-          content: resultText,
+          type: 'function_call',
+          call_id: requireAssociationId(typed.id, 'tool_use'),
+          name: typed.name,
+          arguments:
+            typeof typed.input === 'string'
+              ? typed.input
+              : JSON.stringify(typed.input ?? {}),
         })
-      }
-    }
-
-    if (msg.type === 'assistant') {
-      const contentText = textParts.join('\n')
-      if (contentText || toolCalls.length > 0) {
+      } else if (typed.type === 'tool_result' && msg.type === 'user') {
+        flushMessage()
         inputs.push({
-          role: 'assistant',
-          content: contentText.length > 0 ? contentText : null,
-          ...(toolCalls.length > 0 && { tool_calls: toolCalls }),
+          type: 'function_call_output',
+          call_id: requireAssociationId(typed.tool_use_id, 'tool_result'),
+          output: contentBlocksToOpenAIContent(typed.content),
         })
       }
-      continue
     }
 
-    if (msg.type === 'user') {
-      const contentText = textParts.join('\n')
-      if (contentText.length > 0) {
-        inputs.push({ role: 'user', content: contentText })
-      }
-    }
+    flushMessage()
   }
 
   return inputs
@@ -303,7 +447,10 @@ function mapOutputItemToBlocks(item: OpenAIResponseOutputItem): BetaContentBlock
         typeof rawArgs === 'string' ? safeParseJSON(rawArgs) : rawArgs
       blocks.push({
         type: 'tool_use',
-        id: item.id ?? item.call_id ?? item.tool_call_id ?? randomUUID(),
+        id: requireAssociationId(
+          item.call_id ?? item.tool_call_id ?? (item.type === 'tool_call' ? item.id : undefined),
+          'function_call',
+        ),
         name,
         input: parsed ?? {},
       } as BetaContentBlock)

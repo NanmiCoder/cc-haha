@@ -1,13 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { getCwdState, setCwdState } from '../../bootstrap/state.js'
 import { enableConfigs } from '../../utils/config.js'
+import { invalidateComputerUseSkillGate } from '../../utils/computerUse/skillGate.js'
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
 import { clearPluginCache } from '../../utils/plugins/pluginLoader.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { handlePluginsApi } from '../api/plugins.js'
+import { handleComputerUseApi } from '../api/computer-use.js'
 import { handleSkillsApi, listSkillSlashCommands } from '../api/skills.js'
 
 let tmpHome: string
@@ -62,12 +64,14 @@ describe('Skills API', () => {
     clearInstalledPluginsCache()
     clearPluginCache('skills-api-test-setup')
     resetSettingsCache()
+    invalidateComputerUseSkillGate()
   })
 
   afterEach(async () => {
     clearInstalledPluginsCache()
     clearPluginCache('skills-api-test-teardown')
     resetSettingsCache()
+    invalidateComputerUseSkillGate()
     if (originalHome === undefined) {
       delete process.env.HOME
     } else {
@@ -88,6 +92,60 @@ describe('Skills API', () => {
 
     setCwdState(originalCwdState)
     await fs.rm(tmpHome, { recursive: true, force: true })
+  })
+
+  it('isolates concurrent mention requests by project enablement and installed scope', async () => {
+    const projectA = path.join(tmpHome, '普通目录 A')
+    const projectB = path.join(tmpHome, '普通目录 B')
+    const pluginsDir = path.join(tmpHome, '.claude', 'plugins')
+    const market = path.join(tmpHome, 'market')
+    const pluginRoot = path.join(market, 'plugins', 'draw')
+    await Promise.all([projectA, projectB].map(project => fs.mkdir(path.join(project, '.claude'), { recursive: true })))
+    await fs.mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.join(market, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+    await fs.writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'draw', version: '1.0.0', description: 'Drawing' }))
+    await writeSkill(path.join(pluginRoot, 'skills'), 'render', '---\ndescription: Draw a diagram.\n---\nDraw only on request.')
+    await fs.writeFile(path.join(market, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: 'test-market', owner: { name: 'Fixture' }, plugins: [{ name: 'draw', source: './plugins/draw', version: '1.0.0' }] }))
+    await fs.writeFile(path.join(pluginsDir, 'known_marketplaces.json'), JSON.stringify({ 'test-market': { source: { source: 'directory', path: market }, installLocation: market, lastUpdated: new Date(0).toISOString() } }))
+    const installed = (scope: 'user' | 'project') => ({ version: 2, plugins: { 'draw@test-market': [{ scope, ...(scope === 'project' ? { projectPath: projectA } : {}), installPath: pluginRoot, version: '1.0.0', installedAt: new Date(0).toISOString(), lastUpdated: new Date(0).toISOString() }] } })
+    await fs.writeFile(path.join(pluginsDir, 'installed_plugins.json'), JSON.stringify(installed('user')))
+    await fs.writeFile(path.join(tmpHome, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'draw@test-market': false } }))
+    await fs.writeFile(path.join(projectA, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'draw@test-market': true } }))
+    await fs.writeFile(path.join(projectB, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'draw@test-market': false } }))
+    const mentions = async (cwd: string) => {
+      const { req, url, segments } = makeRequest(`/api/skills/mentions?cwd=${encodeURIComponent(cwd)}`)
+      const response = await handleSkillsApi(req, url, segments)
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    const [a, b] = await Promise.all([mentions(projectA), mentions(projectB)])
+    expect(a.plugins.map((entry: { id: string }) => entry.id)).toEqual(['draw@test-market'])
+    expect(a.skills.map((entry: { name: string }) => entry.name)).toContain('draw:render')
+    expect(b.plugins).toEqual([])
+    // Local settings override project settings without changing the server cwd.
+    await fs.writeFile(path.join(projectA, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'draw@test-market': false } }))
+    expect((await mentions(projectA)).plugins).toEqual([])
+    await fs.rm(path.join(projectA, '.claude', 'settings.local.json'))
+    // Even enabled=true cannot borrow another project's installation.
+    await fs.writeFile(path.join(projectB, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'draw@test-market': true } }))
+    await fs.writeFile(path.join(pluginsDir, 'installed_plugins.json'), JSON.stringify(installed('project')))
+    const [scopedA, scopedB] = await Promise.all([mentions(projectA), mentions(projectB)])
+    expect(scopedA.plugins.map((entry: { id: string }) => entry.id)).toEqual(['draw@test-market'])
+    expect(scopedB.plugins).toEqual([])
+    expect(getCwdState()).toBe(tmpHome)
+  })
+
+  it('lists mention candidates using runtime skill identities without market placeholders', async () => {
+    await writeSkill(path.join(tmpHome, '.claude', 'skills'), 'mention-fixture', '---\nname: mention-fixture\ndescription: Temporary mention capability\n---\nUse temporary files only.\n')
+    const { req, url, segments } = makeRequest(`/api/skills/mentions?cwd=${encodeURIComponent(tmpHome)}`)
+    const response = await handleSkillsApi(req, url, segments)
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    const candidate = body.skills.find((item: { name: string }) => item.name === 'mention-fixture')
+    expect(candidate.kind).toBe('skill')
+    expect(candidate.modelText).toBe('Use the Skill tool with skill: "mention-fixture" for this request.')
+    expect(body.plugins.some((item: { source: string }) => item.source.endsWith('@haha-connectors'))).toBe(false)
   })
 
   it('lists user and project skills for the requested cwd', async () => {
@@ -771,14 +829,34 @@ describe('Skills API', () => {
       expect(simplify?.description ?? '').not.toBe('')
     })
 
-    it('offers /computer-use so it can be picked before the first message', async () => {
-      // The native engine is macOS-only and the skill hides itself elsewhere.
-      if (process.platform !== 'darwin') return
-      const names = (await listSkillSlashCommands(await emptyRepo())).map(
-        (c) => c.name,
-      )
+    it('offers /computer-use before the first message only while enabled in settings', async () => {
+      if (process.platform !== 'darwin' && process.platform !== 'win32') return
+      const repo = await emptyRepo()
+      let now = Date.now()
+      const clock = spyOn(Date, 'now').mockImplementation(() => now)
+      const names = async () => (await listSkillSlashCommands(repo)).map(c => c.name)
+      const setEnabled = async (enabled: boolean) => {
+        const url = new URL('http://localhost:3456/api/computer-use/authorized-apps')
+        const response = await handleComputerUseApi(new Request(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        }), url, url.pathname.split('/').filter(Boolean))
+        expect(response.status).toBe(200)
+        // The server and CLI read the same file in different processes; let
+        // the real gate expire its cache instead of forcing its value.
+        now += 3_001
+      }
 
-      expect(names).toContain('computer-use')
+      try {
+        expect(await names()).not.toContain('computer-use')
+        await setEnabled(true)
+        expect(await names()).toContain('computer-use')
+        await setEnabled(false)
+        expect(await names()).not.toContain('computer-use')
+      } finally {
+        clock.mockRestore()
+      }
     })
 
     it('can be asked to leave them out once the CLI has reported', async () => {

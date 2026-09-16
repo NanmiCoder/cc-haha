@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { parse } from 'yaml'
 
 describe('release desktop workflow', () => {
   function readReleaseWorkflow() {
@@ -193,14 +196,15 @@ describe('release desktop workflow', () => {
 
   test('release workflow signs and notarizes macOS builds only when signing preflight succeeds', () => {
     const workflow = readReleaseWorkflow()
+    const importIdentityStep = extractStep(workflow, 'Import macOS signing identity for native runtimes')
     const signedBuildStep = extractStep(workflow, 'Build signed macOS Electron release artifacts')
     const unsignedBuildStep = extractStep(workflow, 'Build unsigned Electron release artifacts')
 
     expect(workflow).toContain('app_bundle_dir: mac-arm64')
     expect(workflow).toContain('app_bundle_dir: mac')
     expect(signedBuildStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'")
-    expect(signedBuildStep).toContain('CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}')
-    expect(signedBuildStep).toContain('CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}')
+    expect(importIdentityStep).toContain('CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}')
+    expect(importIdentityStep).toContain('CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}')
     expect(signedBuildStep).toContain('APPLE_ID: ${{ secrets.APPLE_ID }}')
     expect(signedBuildStep).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}')
     expect(signedBuildStep).toContain('APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}')
@@ -257,6 +261,25 @@ describe('release desktop workflow', () => {
     expect(workflow.indexOf('Build unsigned Electron release artifacts')).toBeLessThan(workflow.indexOf('Verify packaged app structure'))
   })
 
+  test('macOS packaging reuses the native runtime keychain instead of importing the certificate again', () => {
+    const workflow = readReleaseWorkflow()
+    const importIdentityStep = extractStep(workflow, 'Import macOS signing identity for native runtimes')
+    const signedBuildStep = extractStep(workflow, 'Build signed macOS Electron release artifacts')
+    const cleanupStep = extractStep(workflow, 'Remove temporary macOS signing keychain')
+
+    expect(importIdentityStep).toContain('echo "CC_HAHA_CI_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"')
+    expect(signedBuildStep).toContain('export CSC_KEYCHAIN="${CC_HAHA_CI_KEYCHAIN:?macOS signing keychain was not prepared}"')
+    expect(signedBuildStep).not.toContain('CSC_LINK:')
+    expect(signedBuildStep).not.toContain('CSC_KEY_PASSWORD:')
+    expect(cleanupStep).toContain('security delete-keychain "$CC_HAHA_CI_KEYCHAIN"')
+    expect(workflow.indexOf('Import macOS signing identity for native runtimes')).toBeLessThan(
+      workflow.indexOf('Build signed macOS Electron release artifacts'),
+    )
+    expect(workflow.indexOf('Remove temporary macOS signing keychain')).toBeGreaterThan(
+      workflow.indexOf('Verify macOS launch policy'),
+    )
+  })
+
   test('release workflow requires signed macOS Computer Use and preserves SignPath draft policy', () => {
     const workflow = readReleaseWorkflow()
     const signingJob = workflow.match(
@@ -309,6 +332,63 @@ describe('release desktop workflow', () => {
     expect(buildJob).toContain('- signing-preflight')
     expect(workflow.indexOf('signing-preflight:')).toBeLessThan(workflow.indexOf('build:'))
     expect(workflow.indexOf('signing-preflight:')).toBeLessThan(workflow.indexOf('Upload release artifacts for final publish'))
+  })
+
+  test('an explicit manual Windows signing skip preserves macOS and default release requirements', async () => {
+    const workflow = parse(readReleaseWorkflow())
+    expect(workflow.on.workflow_dispatch.inputs.skip_windows_signing).toEqual({
+      description: 'Build unsigned Windows artifacts while SignPath onboarding is pending',
+      required: false,
+      default: false,
+      type: 'boolean',
+    })
+    const preflight = workflow.jobs['signing-preflight'].steps.find((step: { id?: string }) => step.id === 'validate')
+    expect(preflight.env.SKIP_WINDOWS_SIGNING).toBe("${{ github.event_name == 'workflow_dispatch' && inputs.skip_windows_signing == true }}")
+
+    const directory = mkdtempSync(join(tmpdir(), 'release-signing-preflight-'))
+    const configured = Object.fromEntries(Object.keys(preflight.env).map(key => [key, 'test-value']))
+    const cases = [
+      { name: 'configured release', env: {}, code: 0, outputs: 'macos_signed=true\nwindows_signed=true\n' },
+      { name: 'explicit skip with configured SignPath', env: { SKIP_WINDOWS_SIGNING: 'true' }, code: 0, outputs: 'macos_signed=true\nwindows_signed=false\n' },
+      { name: 'explicit skip without SignPath', env: { SKIP_WINDOWS_SIGNING: 'true', SIGNPATH_API_TOKEN: '' }, code: 0, outputs: 'macos_signed=true\nwindows_signed=false\n' },
+      { name: 'release missing SignPath without skip', env: { SIGNPATH_API_TOKEN: '' }, code: 1, outputs: 'macos_signed=true\nwindows_signed=false\n' },
+      { name: 'draft missing SignPath', env: { RELEASE_DRAFT: 'true', SIGNPATH_API_TOKEN: '' }, code: 0, outputs: 'macos_signed=true\nwindows_signed=false\n' },
+      { name: 'explicit skip still requires macOS credentials', env: { SKIP_WINDOWS_SIGNING: 'true', CSC_LINK: '' }, code: 1, outputs: 'macos_signed=false\n' },
+    ]
+    try {
+      for (const [index, scenario] of cases.entries()) {
+        const output = join(directory, `output-${index}`)
+        const logPath = join(directory, `log-${index}`)
+        // Capture inside the shell so Bun's test-output pipes cannot affect echo/printf exit codes.
+        const result = Bun.spawn(['bash', '-e', '-c', 'exec > "$PREFLIGHT_LOG" 2>&1\n' + preflight.run], {
+          env: {
+            ...configured,
+            RELEASE_DRAFT: 'false',
+            SKIP_WINDOWS_SIGNING: 'false',
+            ...scenario.env,
+            PATH: process.env.PATH,
+            HOME: directory,
+            GITHUB_OUTPUT: output,
+            PREFLIGHT_LOG: logPath,
+          },
+          stdout: 'ignore',
+          stderr: 'ignore',
+        })
+        const code = await result.exited
+        expect(code, `${scenario.name}: ${readFileSync(logPath, 'utf8')}`).toBe(scenario.code)
+        expect(readFileSync(output, 'utf8'), scenario.name).toBe(scenario.outputs)
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+
+    const unsignedBuild = extractStep(readReleaseWorkflow(), 'Build unsigned Electron release artifacts')
+    expect(unsignedBuild).toContain("matrix.smoke_platform == 'windows' && needs.signing-preflight.outputs.windows_signed != 'true'")
+    for (const name of ['Sign Windows application executables with SignPath', 'Sign Windows installer with SignPath']) {
+      expect(extractStep(readReleaseWorkflow(), name)).toContain("needs.signing-preflight.outputs.windows_signed == 'true'")
+    }
+    expect(extractStep(readReleaseWorkflow(), 'Verify Windows installer execution')).not.toContain('windows_signed')
+    expect(extractStep(readReleaseWorkflow(), 'Verify packaged app structure')).not.toContain('windows_signed')
   })
 
   test('release workflow signs project-owned Windows binaries before packaging and repairs updater metadata', () => {

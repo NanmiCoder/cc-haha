@@ -1,10 +1,14 @@
+import { getOutputBudgetHeaders } from '../services/api/outputBudget.js'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages.js'
 import {
   getLastApiCompletionTimestamp,
   setLastApiCompletionTimestamp,
 } from '../bootstrap/state.js'
-import { STRUCTURED_OUTPUTS_BETA_HEADER } from '../constants/betas.js'
+import {
+  STRUCTURED_OUTPUTS_BETA_HEADER,
+  THINKING_BINDING_CONTROLS_BETA_HEADER,
+} from '../constants/betas.js'
 import { CLAUDE_CODE_COMPAT_VERSION } from '../constants/claudeCodeCompatibility.js'
 import type { QuerySource } from '../constants/querySource.js'
 import {
@@ -17,9 +21,15 @@ import { getAPIMetadata } from '../services/api/claude.js'
 import { getAnthropicClient } from '../services/api/client.js'
 import { normalizeUsage } from '../services/api/emptyUsage.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
+import { getModelMaxOutputTokens } from './context.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
-import { shouldSendExplicitDisabledThinking } from './thinking.js'
+import {
+  modelRequiresThinking,
+  modelSupportsAdaptiveThinking,
+  modelUsesBoundThinking,
+  shouldSendExplicitDisabledThinking,
+} from './thinking.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -169,7 +179,34 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
         : []),
   ].filter((block): block is TextBlockParam => block !== null)
 
-  const thinkingConfig = resolveSideQueryThinkingConfig(thinking, max_tokens)
+  const requiredAdaptiveThinking =
+    modelRequiresThinking(model) && modelSupportsAdaptiveThinking(model)
+  // Side-query budgets normally cover only the structured/text answer. Required
+  // thinking must have headroom, including classifiers with a 64-token answer.
+  const maxTokens = requiredAdaptiveThinking && typeof thinking !== 'number'
+    ? Math.max(max_tokens, Math.min(max_tokens + 2048, getModelMaxOutputTokens(model).upperLimit))
+    : max_tokens
+  const thinkingConfig = resolveSideQueryThinkingConfig(thinking, maxTokens, model)
+  if (requiredAdaptiveThinking && modelUsesBoundThinking(model)) {
+    betas.push(THINKING_BINDING_CONTROLS_BETA_HEADER)
+  }
+
+  // Adaptive thinking cannot be combined with a forced tool choice. Keep the
+  // same tool-result contract, explicitly request it, and let callers validate
+  // the result (the permission classifier still fails closed on missing output).
+  const useAutoToolChoice = requiredAdaptiveThinking &&
+    (tool_choice?.type === 'tool' || tool_choice?.type === 'any')
+  const requestTools = useAutoToolChoice && tool_choice?.type === 'tool'
+    ? tools?.filter(tool => 'name' in tool && tool.name === tool_choice.name)
+    : tools
+  if (useAutoToolChoice) {
+    systemBlocks.push({
+      type: 'text',
+      text: tool_choice.type === 'tool'
+        ? `Respond by calling the ${tool_choice.name} tool exactly once with the complete result. Do not substitute a text response for the tool call.`
+        : 'Respond by calling one of the provided tools with the complete result. Do not substitute a text response for the tool call.',
+    })
+  }
 
   const normalizedModel = normalizeModelStringForAPI(model)
   const start = Date.now()
@@ -177,19 +214,21 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const response = await client.beta.messages.create(
     {
       model: normalizedModel,
-      max_tokens,
+      max_tokens: maxTokens,
       system: systemBlocks,
       messages,
-      ...(tools && { tools }),
-      ...(tool_choice && { tool_choice }),
+      ...(requestTools && { tools: requestTools }),
+      ...(tool_choice && { tool_choice: useAutoToolChoice
+        ? { type: 'auto' as const, disable_parallel_tool_use: true }
+        : tool_choice }),
       ...(output_format && { output_config: { format: output_format } }),
-      ...(temperature !== undefined && { temperature }),
+      ...(temperature !== undefined && !requiredAdaptiveThinking && { temperature }),
       ...(stop_sequences && { stop_sequences }),
       ...(thinkingConfig && { thinking: thinkingConfig }),
       ...(betas.length > 0 && { betas }),
       metadata: getAPIMetadata(),
     },
-    { signal },
+    { signal, headers: getOutputBudgetHeaders({}) },
   )
 
   const requestId =
@@ -220,7 +259,16 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
 export function resolveSideQueryThinkingConfig(
   thinking: SideQueryOptions['thinking'],
   maxTokens: number,
+  model?: string,
 ): BetaThinkingConfigParam | undefined {
+  if (model && modelRequiresThinking(model) && modelSupportsAdaptiveThinking(model)) {
+    return {
+      type: 'adaptive',
+      ...(modelUsesBoundThinking(model) && {
+        block_binding: { prefix_mismatch_behavior: 'drop_block' },
+      }),
+    }
+  }
   if (
     thinking === false ||
     (thinking === undefined && shouldSendExplicitDisabledThinking())

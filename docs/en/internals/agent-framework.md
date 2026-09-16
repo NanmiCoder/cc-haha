@@ -13,14 +13,14 @@ Deconstructing the architecture behind the world's most popular AI code editor �
 
 ## What This Framework Solves
 
-Watch Claude Code closely and a few behaviors need explaining:
+The runtime provides these execution mechanisms for the model:
 
-- It can modify dozens of files in a single conversation with extremely few errors
-- It automatically recovers from edge cases (token overflow, API timeouts, tool failures)
-- It can simultaneously manage multiple subagents collaborating on complex tasks
-- Long conversations don't degrade — they actually become more precise over time
+- Execute multiple file edits in one conversation
+- Recover from some token overflows, API timeouts, and tool failures
+- Manage multiple subagents collaborating on complex tasks
+- Trim tool results or generate summaries as context pressure grows
 
-None of that comes from the model alone; it is designed into the framework. The rest of this page walks the source in order.
+Task quality depends on the model, prompts, available tools, and runtime together. These mechanisms help work continue, but cannot guarantee correct edits or lossless long conversations. The rest of this page walks the source in order.
 
 ## The Core Agent Loop
 
@@ -67,16 +67,16 @@ The entire `while (true)` loop (`src/query.ts:307-1728`) consists of five phases
 
 #### Phase 1: Message Preparation & Smart Compression (lines 365-543)
 
-Before calling the API, conversation history goes through four layers of compression:
+Before calling the API, the loop checks the available context processing paths; it does not necessarily perform all four kinds of compression on every turn:
 
 | Compression Strategy | Mechanism | Trigger |
 |---------------------|-----------|---------|
-| **Snip Compression** | Smart deletion of redundant tokens in old messages | Every turn |
-| **Micro Compression** | In-place modification of cached message content | Every turn |
-| **Context Collapse** | Staged summarization of historical messages | When context nears limit |
-| **Auto Compact** | Full summary generation via Claude | When context is critically low |
+| **Snip Compression** | Entry point for trimming history | Requires `HISTORY_SNIP`; the module in this repository is a placeholder stub |
+| **Micro Compression** | Clear some old tool results, or use cache editing | When the time threshold is met, or feature, model, and main-thread conditions hold |
+| **Context Collapse** | Entry point for projecting historical summaries | Requires `CONTEXT_COLLAPSE`; the module in this repository is a placeholder stub |
+| **Auto Compact** | Ask the model to generate a summary | When auto-compaction is enabled and the model-specific threshold is reached |
 
-This is the key to Claude Code handling **extremely long conversations** without degradation — it doesn't simply truncate history, but **intelligently compresses while preserving critical information**.
+Compression frees context space but can lose detail. Read files or original evidence again when a detail needs verification. See “Context Management & Compression” below for the available paths.
 
 #### Phase 2: Streaming API Call (lines 652-954)
 
@@ -302,27 +302,27 @@ The model dynamically retrieves full definitions via the `ToolSearch` tool when 
 
 ## Context Management & Compression
 
-### The Secret Behind Unlimited Conversations
+### Continuing Within a Finite Window
 
-Claude Code claims "conversations have no context limit." Behind this is a **four-level compression system**:
+The model's context window remains finite. `src/query.ts` contains four kinds of processing entry points, whose availability depends on build features, model, and configuration. The diagram does not mean every path is implemented or enabled in the current build.
 
 ![Context Compression Strategy](./images/14-context-compression.png)
 
 #### Level 1: Snip Compression
 
-Smart trimming of processed messages — removes duplicate file content, overly long tool outputs, etc.
+`HISTORY_SNIP` gates the history-trimming entry point. The current `src/services/compact/snipCompact.ts` is a placeholder stub for external builds, so its presence does not establish that the app trims history through this path.
 
 #### Level 2: Micro Compression
 
-Modifies cached message content without changing the cache key. An "in-place optimization" strategy.
+`src/services/compact/microCompact.ts` checks the time threshold first and clears some old tool results when the conditions hold. Cache editing separately requires `CACHED_MICROCOMPACT`, model support, and a main-thread source. When conditions do not hold, it can return messages unchanged and leave context pressure to Auto Compact.
 
 #### Level 3: Context Collapse
 
-Staged summarization of historical messages. Not all-at-once summarization, but **progressive folding** — summarize the oldest messages first, keeping recent details intact.
+`CONTEXT_COLLAPSE` gates the historical-summary projection entry point. The current `src/services/contextCollapse/index.ts` is also a placeholder stub, so this entry point cannot be described as an enabled progressive summarization capability.
 
 #### Level 4: Auto Compact
 
-When all local optimizations are insufficient, Claude itself generates a complete conversation summary that replaces all historical messages.
+When auto-compaction is enabled and its threshold is reached, `src/services/compact/autoCompact.ts` attempts a summary and continues with the compacted messages. Thresholds use the model window resolved by the runtime; consecutive failures stop automatic retries. Summaries cannot guarantee retention of every historical detail.
 
 ### System Context Injection
 
@@ -557,7 +557,7 @@ When images or other media cause token overflow:
 | **Tool Execution** | After complete model response | During streaming |
 | **State Management** | External Memory objects | Built-in state assignment + loop |
 | **Error Recovery** | Manual orchestration required | 6 built-in recovery strategies |
-| **Context Compression** | Simple truncation or summary | Four-level progressive compression |
+| **Context Compression** | Simple truncation or summary | Trimming or summary paths enabled by build, model, and configuration |
 | **Multi-Agent** | Chain/Graph explicit orchestration | Unified tool interface + state machine |
 | **Extension Mechanisms** | Python class inheritance | Skills + Plugins + Hooks + MCP |
 | **Caching Strategy** | None | Global / session / per-turn three-level cache |
@@ -621,13 +621,13 @@ From source code analysis, we can distill these core design principles:
 
 ### Streaming First
 
-The entire architecture is designed around `AsyncGenerator` — everything is streamed:
+The core loop uses `AsyncGenerator` to report progress incrementally:
+
 - Model responses are streamed
 - Tools execute during streaming
 - Progress updates in real-time
-- Compression strategies are progressive
 
-Users **never have to wait** — they see the model thinking, tools executing, and results emerging.
+Users can see model and tool progress before the task finishes. Model responses, tool execution, and compaction still take time.
 
 ### Intelligent Caching
 
@@ -645,7 +645,8 @@ This dramatically reduces latency and cost for every API call.
 
 ### Graceful Degradation
 
-Six recovery strategies ensure Claude Code **almost never interrupts the user's workflow due to technical issues**:
+The runtime provides several recovery paths. Whether work can continue depends on the error type, configuration, and retry limits:
+
 - Token overflow? Auto-compress
 - API timeout? Auto-retry
 - Model failure? Fall back to alternate model
@@ -672,14 +673,14 @@ This avoids the "framework tax" — the abstraction layer that frameworks like L
 
 ### Tool-Driven Agent
 
-Claude Code's philosophy: **an agent's capability equals the capability of its tools**.
+Tool interfaces give the model entry points for taking action:
 
 - Spawn a subagent? That's a tool (`AgentTool`)
 - Manage a team? That's a tool (`TeamCreate`/`SendMessage`)
 - Edit a file? That's a tool (`FileEdit`)
 - Execute a skill? That's a tool (`SkillTool`)
 
-**All capabilities are exposed through the unified tool interface**, and the model uses natural language reasoning to decide which tool to use. No explicit orchestration logic needed — the model itself is the orchestrator.
+The model selects tools based on the task and context; the runtime handles scheduling, permission checks, and state updates. Tools define the available actions, while the model and prompts affect how those actions are selected, combined, and verified.
 
 ### Deep Developer Experience Integration
 

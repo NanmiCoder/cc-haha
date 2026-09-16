@@ -8,13 +8,15 @@
 bun run check:impact
 ```
 
-`check:impact` 会列出这次改动选中的检查。先运行对应的窄命令；准备声明 PR-ready、改动风险较高，或维护者需要复现完整 CI 时，再运行统一入口：
+`check:impact` 会列出这次改动选中的检查。普通任务运行这些检查；准备声明 PR-ready 或需要完整验证时，直接运行统一入口，不必先单独重复执行其全部检查：
 
 ```bash
 bun run verify
 ```
 
 `bun run verify` 会按改动路径执行被选中的 policy、产品、契约、持久化和 coverage lane，但不会调用真实模型。小范围贡献无需在本机重复所有无关模块；GitHub PR gate 会再次执行并严格核对 selected / skipped 状态。
+
+修复期间重跑受影响的窄检查，交付时补齐最终 diff 的验证证据；没有后续改动或未解决风险时，已通过的检查无需重跑。
 
 `git push` 不再自动运行本地质量门禁。需要质量检查时请手动运行 `bun run quality:push` 或 `bun run verify`；完整覆盖率仍以 `bun run verify` 为准。
 
@@ -42,8 +44,8 @@ artifacts/quality-runs/<timestamp>/logs/<lane>.log
 
 改动涉及用户可见 UI、跨 WebSocket/进程流程、Electron host 或 native/packaging 时，除了自动门禁外，还应在真机上验证相关流程。纯样式、纯工具或已有组件单元测试能够完整证明的改动，不要求重复无关流程：
 
-- 起本地服务 `SERVER_PORT=3456 bun run src/server/index.ts`
-- 起桌面端 `cd desktop && bun run dev`
+- 优先使用 `bun run check:desktop-ui-smoke` 的隔离 mock runtime 验证真实桌面 UI
+- 需要手动启动服务和桌面端时，复用 `scripts/quality-gate/sandbox.ts` 的临时配置和测试环境，避免服务读写真实 `~/.claude`；临时浏览器操作使用 `ego-browser` skill
 - 验证改动涉及的交互流程：页面渲染、按钮/表单行为、弹窗、快捷键、多窗口等
 - 必要时打本地 macOS 包 `desktop/scripts/build-macos-arm64.sh` 做完整验证
 

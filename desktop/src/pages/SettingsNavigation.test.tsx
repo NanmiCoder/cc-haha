@@ -14,7 +14,7 @@ vi.mock('../api/traces', () => ({
   },
 }))
 
-import { Settings } from './Settings'
+import { DesktopSettings as Settings } from './Settings'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 
@@ -78,7 +78,7 @@ describe('Settings section navigation', () => {
   it('keeps the rail on paper so the Settings tab meets its own content', () => {
     render(<Settings />)
 
-    const rail = screen.getByRole('button', { name: 'Providers' })
+    const rail = screen.getByRole('button', { name: 'Model Settings' })
       .closest('div[class*="w-[195px]"]')
 
     // This rail is what sits directly under the Settings tab, and the tab is

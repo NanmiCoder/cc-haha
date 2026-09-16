@@ -23,7 +23,7 @@ const OVERLAY_HIDE_TIMEOUT_MS = 2000
 
 /**
  * Turn-end cleanup for the chicago MCP surface: drop the activity indicator
- * (macOS cu-helper overlay, or the Windows cursor badge), auto-unhide apps
+ * (macOS cu-helper overlay, or the Windows virtual cursor), auto-unhide apps
  * that `prepareForAction` hid, then release the file-based lock.
  *
  * Called from three sites: natural turn end (`stopHooks.ts`), abort during

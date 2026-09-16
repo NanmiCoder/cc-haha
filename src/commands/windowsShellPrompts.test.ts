@@ -14,6 +14,7 @@ import {
   buildSecurityReviewPrompt,
   getSecurityReviewMarkdown,
 } from './security-review.js'
+import { getSimplePrompt } from '../tools/BashTool/prompt.js'
 
 function createTool(name: string, stdout: string) {
   const call = mock(async () => ({
@@ -136,7 +137,6 @@ describe('built-in command shell prompts', () => {
         resolveShell: () => 'powershell',
         execute: execute as never,
         getBranch: async () => 'main',
-        getPrAttribution: async () => '',
       },
     )
 
@@ -171,6 +171,34 @@ describe('built-in command shell prompts', () => {
         resolveShell: () => null,
       }),
     ).rejects.toThrow('No supported command shell is available')
+  })
+})
+
+describe('commit and PR prompts', () => {
+  test('never inject Claude attribution into commit or PR instructions', () => {
+    const previous = process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS
+    process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = 'false'
+    try {
+      const bashPrompt = getSimplePrompt()
+      // Non-vacuous: both the external and ant variants carry this line.
+      expect(bashPrompt).toContain('NEVER skip hooks')
+
+      const prompts = [
+        bashPrompt,
+        getCommitPrompt('bash'),
+        getCommitPushPrPrompt('main', 'bash'),
+      ]
+      for (const prompt of prompts) {
+        expect(prompt).not.toContain('Co-Authored-By')
+        expect(prompt).not.toContain('Generated with Claude Code')
+      }
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS
+      } else {
+        process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = previous
+      }
+    }
   })
 })
 

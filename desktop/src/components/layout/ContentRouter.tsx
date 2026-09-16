@@ -3,15 +3,13 @@ import { useTabStore } from '../../stores/tabStore'
 import { EmptySession } from '../../pages/EmptySession'
 import { ActiveSession } from '../../pages/ActiveSession'
 import { ScheduledTasks } from '../../pages/ScheduledTasks'
-import { Market } from '../../pages/Market'
+import { ExtensionMarket } from '@/pages/ExtensionMarket'
 import { Settings } from '../../pages/Settings'
 import { TerminalSettings } from '../../pages/TerminalSettings'
 import { TraceList } from '../../pages/TraceList'
 import { TraceSession } from '../../pages/TraceSession'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
-import { WorkbenchTab } from '../workbench/WorkbenchTab'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
-import { previewBridge } from '../../lib/previewBridge'
 import { returnToTraceList } from '../../lib/traceNavigation'
 
 export function ContentRouter() {
@@ -21,9 +19,15 @@ export function ContentRouter() {
   const terminalTabs = tabs.filter((tab) => tab.type === 'terminal')
 
   useEffect(() => {
-    if (activeTabType === 'session' || activeTabType === 'workbench') return
-    void previewBridge.close()
-  }, [activeTabType])
+    if (activeTabType !== 'workbench') return
+    const legacy = tabs.find(tab => tab.sessionId === activeTabId)
+    const source = legacy?.workbenchSessionId ?? legacy?.sourceSessionId
+    if (!source || !legacy) return
+    const store = useTabStore.getState()
+    if (tabs.some(tab => tab.sessionId === source)) store.setActiveTab(source)
+    else store.openTab(source, legacy.title)
+    store.closeTab(legacy.sessionId)
+  }, [activeTabId, activeTabType, tabs])
 
   let page: ReactNode = null
   if (!activeTabId || !activeTabType) {
@@ -32,8 +36,8 @@ export function ContentRouter() {
     page = <Settings />
   } else if (activeTabType === 'scheduled') {
     page = <ScheduledTasks />
-  } else if (activeTabType === 'market') {
-    page = <Market />
+  } else if (activeTabType === 'connectors' || activeTabType === 'market') {
+    page = <ExtensionMarket />
   } else if (activeTabType === 'trace') {
     const traceTabId = activeTabId
     const traceSessionId = tabs.find((t) => t.sessionId === traceTabId)?.traceSessionId
@@ -67,10 +71,9 @@ export function ContentRouter() {
       )
       : <EmptySession />
   } else if (activeTabType === 'workbench') {
-    const workbenchTab = tabs.find((t) => t.sessionId === activeTabId)
-    page = workbenchTab?.workbenchSessionId
-      ? <WorkbenchTab tabId={activeTabId} sessionId={workbenchTab.workbenchSessionId} />
-      : <EmptySession />
+    // An in-memory legacy tab returns to its task; restored storage is migrated
+    // before reaching this router. Never mount a second workspace controller.
+    page = <EmptySession />
   } else if (activeTabType === 'team') {
     const teamTab = tabs.find((t) => t.sessionId === activeTabId)
     page = teamTab?.teamLeadSessionId

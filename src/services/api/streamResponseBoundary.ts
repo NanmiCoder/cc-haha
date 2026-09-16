@@ -30,7 +30,6 @@ export function commitOutputLimitResponse(
 
 export function createOutputLimitErrorMessage({
   stopReason,
-  maxOutputTokens,
   truncatedToolUse,
 }: {
   stopReason: OutputLimitStopReason
@@ -39,8 +38,8 @@ export function createOutputLimitErrorMessage({
 }): AssistantMessage {
   const content = stopReason === 'max_tokens'
     ? truncatedToolUse
-      ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated after reaching the ${maxOutputTokens} output token maximum, so it was not executed.`
-      : `${API_ERROR_MESSAGE_PREFIX}: Claude's response exceeded the ${maxOutputTokens} output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.`
+      ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated at an upstream length limit, so it was not executed. Retry with a larger supported output budget or split the operation into smaller tool calls.`
+      : `${API_ERROR_MESSAGE_PREFIX}: The model's response was truncated at an upstream length limit (output or context). Check the provider's output budget and context limit.`
     : truncatedToolUse
       ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated at the context window limit, so it was not executed.`
       : `${API_ERROR_MESSAGE_PREFIX}: The model has reached its context window limit.`

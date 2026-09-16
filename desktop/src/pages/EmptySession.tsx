@@ -23,7 +23,10 @@ import { ModelSelector, type ModelSelectorHandle } from '../components/controls/
 import { AttachmentGallery } from '../components/chat/AttachmentGallery'
 import { ComposerDropOverlay } from '../components/chat/ComposerDropOverlay'
 import { ContextUsageIndicator } from '../components/chat/ContextUsageIndicator'
-import { FileSearchMenu, type FileSearchMenuHandle } from '../components/chat/FileSearchMenu'
+import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/components/chat/ComposerReferenceMenu'
+import { ComposerReferenceDetail } from '@/components/chat/ComposerReferenceDetail'
+import { composerReferencesApi } from '@/api/composerReferences'
+import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from '../components/chat/LocalSlashCommandPanel'
 import {
   getSlashCommandOptionId,
@@ -45,6 +48,7 @@ import { useComposerFileDrop } from '../components/chat/useComposerFileDrop'
 import { shouldSubmitOnEnter } from '../components/chat/sendShortcut'
 import { MentionComposer, type MentionComposerHandle } from '../components/chat/MentionComposer'
 import {
+  composerReferenceToMention,
   findMentionRanges,
   insertMentionIntoText,
   type ComposerMention,
@@ -105,10 +109,15 @@ function resolveCreateSessionErrorMessage(error: unknown, t: Translate): string 
   }
 }
 
+const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
+
 export function EmptySession() {
   const t = useTranslation()
   const [input, setInput] = useState('')
   const [mentions, setMentions] = useState<ComposerMention[]>([])
+  const [referenceDetail, setReferenceDetail] = useState<ComposerMention | null>(null)
+  const [referenceOptionId, setReferenceOptionId] = useState<string | undefined>()
+  const [referenceState, setReferenceState] = useState<{ cwd: string, items: ComposerReferenceCandidate[], loading: boolean, error: boolean } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [workDir, setWorkDir] = useState('')
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
@@ -124,6 +133,7 @@ export function EmptySession() {
   const [slashFilter, setSlashFilter] = useState('')
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const [slashCommands, setSlashCommands] = useState<SlashCommandOption[]>([])
+  const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
   const composerContainerRef = useRef<HTMLDivElement>(null)
@@ -132,9 +142,10 @@ export function EmptySession() {
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
-  const fileSearchRef = useRef<FileSearchMenuHandle>(null)
+  const fileSearchRef = useRef<ComposerReferenceMenuHandle>(null)
   const slashItemRefs = useRef<(HTMLElement | null)[]>([])
   const slashMenuId = useId()
+  const referenceMenuId = useId()
   const createSession = useSessionStore((state) => state.createSession)
   const sendMessage = useChatStore((state) => state.sendMessage)
   const connectToSession = useChatStore((state) => state.connectToSession)
@@ -149,6 +160,25 @@ export function EmptySession() {
   const activeProviderId = useProviderStore((state) => state.activeId)
   const [draftPermissionMode, setDraftPermissionMode] = useState<PermissionMode>(defaultPermissionMode)
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
+  const referenceCurrent = referenceState?.cwd === workDir ? referenceState : null
+  const composerReferences = referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES
+  useEffect(() => {
+    let active = true
+    setReferenceState(previous => ({ cwd: workDir, items: previous?.cwd === workDir ? previous.items : [], loading: true, error: false }))
+    void composerReferencesApi.list(workDir || undefined).then(data => {
+      if (active) setReferenceState({ cwd: workDir, items: [...data.plugins, ...data.skills], loading: false, error: false })
+    }).catch(() => {
+      if (active) setReferenceState({ cwd: workDir, items: [], loading: false, error: true })
+    })
+    return () => { active = false }
+  }, [workDir, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen])
+  useEffect(() => {
+    setReferenceDetail(null)
+    setReferenceOptionId(undefined)
+    setFileSearchOpen(false)
+    setSlashMenuOpen(false)
+  }, [workDir])
+
   const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
   const draftRuntimeSelectionKey = draftRuntimeSelection
     ? `${draftRuntimeSelection.providerId ?? 'official'}:${draftRuntimeSelection.modelId}:${draftRuntimeSelection.effortLevel ?? 'auto'}`
@@ -185,7 +215,7 @@ export function EmptySession() {
     // See ChatInput: this menu is found by id, and its absence used to mean
     // "ignore the press".
     isExempt: (target) => {
-      const menu = document.getElementById('file-search-menu')
+      const menu = document.getElementById(referenceMenuId)
       if (!menu) return true
       return target instanceof Node && menu.contains(target)
     },
@@ -199,6 +229,7 @@ export function EmptySession() {
     skillsApi.list(cwd)
       .then(({ skills }) => {
         if (cancelled) return
+        setSlashCommandsCwd(workDir)
         setSlashCommands(
           skills
             .filter((skill) => skill.userInvocable)
@@ -243,13 +274,17 @@ export function EmptySession() {
     }
   }, [workDir, lastPluginReloadSummary])
 
-  const allSlashCommands = useMemo(
-    () => appendAgentSlashCommands(
-      mergeSlashCommands(slashCommands, getLocalizedFallbackCommands(t)),
-      agentSlashCommands,
-    ),
-    [agentSlashCommands, slashCommands, t],
-  )
+  const allSlashCommands = useMemo(() => {
+    const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommandsCwd === workDir ? slashCommands : [], getLocalizedFallbackCommands(t)), agentSlashCommands)
+    const names = new Set(commands.map(command => command.name.toLowerCase()))
+    for (const reference of composerReferences) {
+      const name = reference.kind === 'plugin' ? reference.id : reference.name
+      if (names.has(name.toLowerCase())) continue
+      names.add(name.toLowerCase())
+      commands.push({ name, description: reference.description, kind: reference.kind })
+    }
+    return commands
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
     setWorkDir(newWorkDir)
@@ -456,7 +491,7 @@ export function EmptySession() {
     // Ignore key events during IME composition (e.g. Chinese input method)
     if (event.isComposing || event.keyCode === 229) return false
 
-    // Route file search navigation keys to FileSearchMenu
+    // Route reference selection and directory navigation to the unified menu
     if (fileSearchOpen) {
       const key = event.key
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Tab' || key === 'Escape') {
@@ -489,6 +524,7 @@ export function EmptySession() {
         if (
           event.key === 'Enter' &&
           exactSlashCommand &&
+          !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
           selected?.name.toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           slashFilter.trim().toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           shouldSubmitOnEnter(event, chatSendBehavior)
@@ -589,13 +625,29 @@ export function EmptySession() {
 
   const selectSlashCommand = (command: string) => {
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
-    const replacement = replaceSlashCommand(input, cursorPos, command)
-    if (!replacement) return
-    setInput(replacement.value)
+    const option = allSlashCommands.find(item => item.name === command)
+    let nextCursor: number
+    const reference = (option?.kind === 'skill' || option?.kind === 'plugin')
+      ? composerReferences.find(item => item.kind === option.kind && (item.id === command || item.name === command))
+      : undefined
+    if (reference) {
+      const mention = composerReferenceToMention(reference)
+      const trigger = findSlashToken(input, cursorPos)
+      if (!trigger) return
+      const inserted = insertMentionIntoText(input, mentions, trigger.start, cursorPos, mention)
+      setInput(inserted.text)
+      setMentions(inserted.mentions)
+      nextCursor = inserted.cursorPos
+    } else {
+      const replacement = replaceSlashCommand(input, cursorPos, command)
+      if (!replacement) return
+      setInput(replacement.value)
+      nextCursor = replacement.cursorPos
+    }
     setSlashMenuOpen(false)
     requestAnimationFrame(() => {
       composerRef.current?.focus()
-      composerRef.current?.setSelectionOffsets(replacement.cursorPos)
+      composerRef.current?.setSelectionOffsets(nextCursor)
     })
   }
 
@@ -667,8 +719,14 @@ export function EmptySession() {
 
             <div className={isMobileComposer ? 'contents' : 'flex flex-col gap-3 p-4'}>
               {fileSearchOpen && (
-                <FileSearchMenu
+                <ComposerReferenceMenu
                   ref={fileSearchRef}
+                  id={referenceMenuId}
+                  compact={isMobileComposer}
+                  references={composerReferences}
+                  referencesLoading={referenceCurrent?.loading ?? true}
+                  referencesError={referenceCurrent?.error}
+                  onActiveChange={setReferenceOptionId}
                   cwd={workDir || ''}
                   filter={atFilter}
                   onNavigate={(relativePath) => {
@@ -684,15 +742,10 @@ export function EmptySession() {
                       composerRef.current?.setSelectionOffsets(newCursorPos)
                     })
                   }}
-                  onSelect={(path, name, isDirectory) => {
+                  onSelect={(mention) => {
                     if (atCursorPos < 0) return
-                    const referenceName = name.split('/').filter(Boolean).pop() ?? name
                     const tokenEnd = atCursorPos + 1 + atFilter.length
-                    const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, {
-                      label: isDirectory ? `${referenceName}/` : referenceName,
-                      path,
-                      isDirectory,
-                    })
+                    const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
                     setInput(inserted.text)
                     setMentions(inserted.mentions)
                     setFileSearchOpen(false)
@@ -722,6 +775,7 @@ export function EmptySession() {
                   ref={slashMenuRef}
                   id={slashMenuId}
                   groups={filteredCommandGroups}
+                  references={composerReferences}
                   selectedIndex={slashSelectedIndex}
                   itemRefs={slashItemRefs}
                   onSelect={selectSlashCommand}
@@ -740,6 +794,7 @@ export function EmptySession() {
                   rootRef={composerContainerRef}
                   value={input}
                   mentions={mentions}
+                  onMentionClick={setReferenceDetail}
                   onChange={handleComposerChange}
                   onKeyDown={handleComposerKeyDown}
                   onPaste={handleComposerPaste}
@@ -749,11 +804,11 @@ export function EmptySession() {
                     isMobileComposer ? 'max-h-[132px] min-h-[72px] py-1.5 text-base' : 'max-h-[200px] py-2'
                   }`}
                   aria={{
-                    role: isSlashMenuVisible ? 'combobox' : 'textbox',
-                    'aria-autocomplete': isSlashMenuVisible ? 'list' : undefined,
-                    'aria-expanded': isSlashMenuVisible ? 'true' : undefined,
-                    'aria-controls': isSlashMenuVisible ? slashMenuId : undefined,
-                    'aria-activedescendant': isSlashMenuVisible
+                    role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
+                    'aria-autocomplete': isSlashMenuVisible || fileSearchOpen ? 'list' : undefined,
+                    'aria-expanded': isSlashMenuVisible || fileSearchOpen ? 'true' : undefined,
+                    'aria-controls': fileSearchOpen ? referenceMenuId : isSlashMenuVisible ? slashMenuId : undefined,
+                    'aria-activedescendant': fileSearchOpen ? referenceOptionId : isSlashMenuVisible
                       ? getSlashCommandOptionId(slashMenuId, slashSelectedIndex)
                       : undefined,
                   }}
@@ -865,6 +920,7 @@ export function EmptySession() {
         </div>
       </div>
 
+      <ComposerReferenceDetail mention={referenceDetail} onClose={() => setReferenceDetail(null)} />
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
     </div>
   )

@@ -50,12 +50,18 @@ export const UI_ZOOM_STEP = APP_ZOOM_CONTROL_STEP
 export const UI_ZOOM_DEFAULT = DEFAULT_APP_ZOOM
 let desktopNotificationsSaveQueue: Promise<void> = Promise.resolve()
 
+/** Mirrors DEFAULT_SESSION_RETENTION_DAYS in src/utils/cleanup.ts. */
+export const DEFAULT_CLEANUP_PERIOD_DAYS = 365
+/** Mirrors MAX_SESSION_RETENTION_DAYS in src/server/api/settings.ts. */
+export const MAX_CLEANUP_PERIOD_DAYS = 3650
+
 type SettingsStore = {
   permissionMode: PermissionMode
   currentModel: ModelInfo | null
   effortLevel: EffortLevel
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
+  agentTeamsEnabled: boolean
   autoDreamEnabled: boolean
   autoModeOptInAccepted: boolean
   availableModels: ModelInfo[]
@@ -78,6 +84,8 @@ type SettingsStore = {
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
   network: NetworkSettings
+  /** null = never configured; the UI falls back to DEFAULT_CLEANUP_PERIOD_DAYS. */
+  cleanupPeriodDays: number | null
   traceCapture: TraceCaptureSettings
   h5Access: H5AccessSettings
   h5AccessDiagnostics: H5AccessDiagnostics | null
@@ -98,6 +106,7 @@ type SettingsStore = {
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
+  setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
   acceptAutoModeOptIn: () => Promise<void>
   setLocale: (locale: Locale) => void
@@ -111,6 +120,7 @@ type SettingsStore = {
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
+  setCleanupPeriodDays: (days: number) => Promise<void>
   setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
   enableH5Access: () => Promise<string>
   disableH5Access: () => Promise<void>
@@ -154,8 +164,11 @@ const DEFAULT_UPDATE_PROXY_SETTINGS: UpdateProxySettings = {
   url: '',
 }
 
+// Keep milliseconds within the signed 32-bit timer limit, matching the server.
+export const NETWORK_TIMEOUT_MAX_SECONDS = Math.floor(2_147_483_647 / 1000)
+
 const DEFAULT_NETWORK_SETTINGS: NetworkSettings = {
-  aiRequestTimeoutMs: 600_000,
+  aiRequestTimeoutMs: 1_800_000,
   proxy: {
     mode: 'system',
     url: '',
@@ -186,6 +199,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   effortLevel: 'max',
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
+  agentTeamsEnabled: true,
   autoDreamEnabled: false,
   autoModeOptInAccepted: false,
   availableModels: [],
@@ -204,6 +218,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   network: DEFAULT_NETWORK_SETTINGS,
+  cleanupPeriodDays: null,
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
   h5Access: DEFAULT_H5_ACCESS_SETTINGS,
   h5AccessDiagnostics: null,
@@ -262,6 +277,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
+        agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
         autoDreamEnabled: userSettings.autoDreamEnabled === true,
         autoModeOptInAccepted: userSettings.skipAutoPermissionPrompt === true,
         chatSendBehavior: normalizeChatSendBehavior(userSettings.chatSendBehavior),
@@ -272,6 +288,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
         network: normalizeNetworkSettings(userSettings.network),
+        cleanupPeriodDays: normalizeCleanupPeriodDays(userSettings.cleanupPeriodDays),
         traceCapture,
         h5Access: h5AccessResult.settings,
         h5AccessDiagnostics: h5AccessResult.diagnostics,
@@ -341,6 +358,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ workflowKeywordTriggerEnabled: enabled })
     } catch (error) {
       set({ workflowKeywordTriggerEnabled: prev })
+      throw error
+    }
+  },
+
+  setAgentTeamsEnabled: async (enabled) => {
+    const prev = get().agentTeamsEnabled
+    set({ agentTeamsEnabled: enabled })
+    try {
+      await settingsApi.updateUser({ agentTeamsEnabled: enabled })
+    } catch (error) {
+      set({ agentTeamsEnabled: prev })
       throw error
     }
   },
@@ -528,6 +556,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ network: next })
     } catch (error) {
       set({ network: prev })
+      throw error
+    }
+  },
+
+  setCleanupPeriodDays: async (days) => {
+    const next = normalizeCleanupPeriodDays(days)
+    if (next === null) {
+      throw new Error(`Invalid cleanup period: ${days}`)
+    }
+    const prev = get().cleanupPeriodDays
+    set({ cleanupPeriodDays: next })
+    try {
+      await settingsApi.updateUser({ cleanupPeriodDays: next })
+    } catch (error) {
+      set({ cleanupPeriodDays: prev })
       throw error
     }
   },
@@ -724,7 +767,7 @@ function normalizeNetworkSettings(
   settings: NetworkSettingsInput | undefined,
 ): NetworkSettings {
   const timeout = typeof settings?.aiRequestTimeoutMs === 'number' && Number.isFinite(settings.aiRequestTimeoutMs)
-    ? Math.min(Math.max(Math.round(settings.aiRequestTimeoutMs), 30_000), 1_800_000)
+    ? Math.min(Math.max(Math.round(settings.aiRequestTimeoutMs), 30_000), NETWORK_TIMEOUT_MAX_SECONDS * 1000)
     : DEFAULT_NETWORK_SETTINGS.aiRequestTimeoutMs
   const proxyMode = settings?.proxy?.mode === 'manual'
     ? 'manual'
@@ -741,6 +784,23 @@ function normalizeNetworkSettings(
         : '',
     },
   }
+}
+
+/**
+ * Returns the stored retention in days, or null when the user never set one
+ * (the UI then shows DEFAULT_CLEANUP_PERIOD_DAYS). 0 is a real value: it means
+ * "stop persisting transcripts", not "unset".
+ */
+function normalizeCleanupPeriodDays(value: unknown): number | null {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > MAX_CLEANUP_PERIOD_DAYS
+  ) {
+    return null
+  }
+  return value
 }
 
 function normalizeTraceCaptureSettings(

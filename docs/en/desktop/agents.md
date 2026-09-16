@@ -9,15 +9,15 @@ order: 3
 
 A subagent is a copy of Claude sent off with one clearly scoped job. It works in its own context and reports back only the conclusion.
 
-The point is that your main conversation doesn't get flooded. Ask "find every call site of `validateUser` in this repo" and, if the main agent searches itself, dozens of files end up in the context window. Delegate it and all that comes back is the list.
+A subagent can keep an independent investigation's intermediate work in its own context, then return conclusions and evidence to the main conversation. Investigating a module's authentication flow can be delegated; finding call sites of `validateUser` usually takes one targeted search and does not need a subagent.
 
 ## When to delegate
 
-- **Questions that require reading a lot of files** — finding usages, untangling dependencies, counting where a pattern occurs.
-- **Independent work that can run in parallel** — frontend, backend, and tests at the same time.
-- **The same thing from several angles** — several agents each reviewing the same code.
+- **An investigation that can stand on its own** — it requires multiple files and has a clear question, scope, and expected evidence.
+- **Independent work that can run in parallel** — such as separate frontend and backend investigations. For edits, assign file ownership and let the main agent integrate and verify the result.
+- **An independent review with a specific focus** — such as separate checks of permission boundaries and session recovery, instead of repeating an entire review without a distinct purpose.
 
-Conversely: if you already know the file and the line, just say so. No need for the detour.
+Delegation also costs startup time, context transfer, and integration. The main agent should usually handle simple searches, small edits with a known location, or short tasks whose result is needed before anything else can proceed.
 
 Delegated agents appear under **SubAgents** in the Activity panel with their tool activity streaming live. Open one to read its full transcript and final result. Background agents work the same way — you don't have to wait for them to finish to see what they're doing.
 

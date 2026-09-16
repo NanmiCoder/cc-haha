@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
@@ -12,8 +12,7 @@ import { isAbsoluteLocalPath, localFileUrl } from '../../lib/handlePreviewLink'
 import { shouldOfferStaticHtmlPreview } from '../../lib/htmlPreviewPolicy'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
-import { useBrowserPanelStore } from '../../stores/browserPanelStore'
-import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
+import { workspaceOpen } from '../../lib/workspace/openTarget'
 import { isWorkspacePreviewableFile } from '../../lib/fileCapabilities'
 import { openLocalFileWithSystem, reportOpenFailure } from '../../lib/systemFileOpen'
 
@@ -24,6 +23,8 @@ type CurrentTurnChangeCardProps = {
   error: string | null
   isUndoing: boolean
   isLatest: boolean
+  expanded: boolean
+  onExpandedChange: (expanded: boolean) => void
   onUndo: () => void
 }
 
@@ -42,8 +43,11 @@ export function CurrentTurnChangeCard({
   isUndoing,
   isLatest,
   onUndo,
+  expanded,
+  onExpandedChange,
 }: CurrentTurnChangeCardProps) {
   const t = useTranslation()
+  const filesId = useId()
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
   const [showAllFiles, setShowAllFiles] = useState(false)
 
@@ -84,17 +88,22 @@ export function CurrentTurnChangeCard({
     // absolute path). In-workdir files keep the diff view.
     if (isAbsoluteLocalPath(fileEntry.displayPath)) {
       if (shouldOfferStaticHtmlPreview(fileEntry.displayPath, { siblingFiles: files.map((entry) => entry.displayPath) })) {
-        useBrowserPanelStore.getState().open(sessionId, localFileUrl(getServerBaseUrl(), fileEntry.apiPath))
+        workspaceOpen.browser(sessionId, localFileUrl(getServerBaseUrl(), fileEntry.apiPath), { origin })
         return
       }
-      void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'file', origin)
+      workspaceOpen.file(sessionId, fileEntry.displayPath, { origin })
       return
     }
-    // Jump to the right-side workspace and open a diff tab. We pass the workDir-relative
-    // path (same format the workspace file tree passes to openPreview), so the diff tab
-    // is keyed/fetched identically to the tree-driven one.
-    void useWorkspacePanelStore.getState().openPreview(sessionId, fileEntry.displayPath, 'diff', origin)
-  }, [checkpoint.target.targetUserMessageId, sessionId, files])
+    // Jump to the right-side workspace and show this turn's own recorded change
+    // for that file. The `turn` source deliberately does not become a current-Git
+    // comparison: the card is about what this turn did, not about what the
+    // working tree happens to hold now.
+    workspaceOpen.review(sessionId, {
+      source: { kind: 'turn', turnKey: checkpoint.target.targetUserMessageId ?? '', userMessageIndex: checkpoint.target.userMessageIndex },
+      path: fileEntry.displayPath,
+      origin,
+    })
+  }, [checkpoint.target.targetUserMessageId, checkpoint.target.userMessageIndex, sessionId, files])
 
   const handleOpenWith = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     event.stopPropagation()
@@ -125,6 +134,8 @@ export function CurrentTurnChangeCard({
     })()
   }, [openWith, sessionId, t, files])
 
+  if (files.length === 0) return null
+
   const cardLabel = isLatest
     ? t('chat.turnChangesLatestCardLabel')
     : t('chat.turnChangesHistoricalCardLabel')
@@ -152,29 +163,27 @@ export function CurrentTurnChangeCard({
       className="mt-2 w-full overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]"
       aria-label={cardLabel}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-              {t('chat.turnChangesTitle', { count: files.length })}
-            </span>
-            <span className="rounded-[var(--radius-sm)] bg-[var(--color-diff-added-gutter)] px-2 py-0.5 font-mono text-[12px] font-semibold text-[var(--color-diff-added-text)]">
-              +{checkpoint.code.insertions}
-            </span>
-            <span className="rounded-[var(--radius-sm)] bg-[var(--color-diff-removed-gutter)] px-2 py-0.5 font-mono text-[12px] font-semibold text-[var(--color-diff-removed-text)]">
-              -{checkpoint.code.deletions}
-            </span>
-          </div>
-          <div
-            className={`mt-0.5 text-xs ${
-              hasUnverifiedChanges
-                ? 'text-[var(--color-warning)]'
-                : 'text-[var(--color-text-tertiary)]'
-            }`}
-          >
-            {subtitle}
-          </div>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-[var(--color-surface-container-low)] px-3 py-2">
+        <button
+          type="button"
+          data-chat-disclosure="true"
+          data-turn-change-disclosure="true"
+          aria-expanded={expanded}
+          aria-controls={filesId}
+          aria-label={t(expanded ? 'chat.turnChangesCollapse' : 'chat.turnChangesExpand', { count: files.length })}
+          onClick={() => {
+            setOpenWith(null)
+            onExpandedChange(!expanded)
+          }}
+          className="flex min-h-8 min-w-0 flex-1 basis-40 flex-wrap items-center gap-2 rounded-[var(--radius-md)] text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        >
+          {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+          <span className="font-semibold text-[var(--color-text-primary)]">
+            {t('chat.turnChangesTitle', { count: files.length })}
+          </span>
+          <span className="font-mono text-xs font-semibold text-[var(--color-diff-added-text)]">+{checkpoint.code.insertions}</span>
+          <span className="font-mono text-xs font-semibold text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
+        </button>
 
         {/* Never disabled: rolling the conversation back is always possible, even
             when the files are not restorable. The dialog picks what to touch. */}
@@ -191,72 +200,83 @@ export function CurrentTurnChangeCard({
         </Button>
       </div>
 
-      <div className="divide-y divide-[var(--color-border)]">
-        {visibleFiles.map((fileEntry) => {
-          const fileName = fileEntry.displayPath.split('/').pop() || fileEntry.displayPath
-          const typeInfo = describeFileType(fileEntry.displayPath)
-          const workspacePreviewable = isWorkspacePreviewableFile(fileEntry.displayPath)
-          return (
-            <div key={fileEntry.apiPath} className="flex items-center gap-2">
-              <button
-                type="button"
-                id={`turn-change-opener-${checkpoint.target.targetUserMessageId}-${encodeURIComponent(fileEntry.apiPath)}`}
-                data-source-turn-key={checkpoint.target.targetUserMessageId}
-                onClick={(event) => openChangedFile(event, fileEntry)}
-                aria-label={t(
-                  workspacePreviewable
-                    ? 'chat.turnChangesOpenInWorkspaceAria'
-                    : 'chat.turnChangesOpenFileAria',
-                  { path: fileEntry.displayPath },
-                )}
-                title={fileEntry.displayPath}
-                className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-md)] px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
-              >
-                <span className="material-symbols-outlined shrink-0 text-[22px] text-[var(--color-text-tertiary)]">{typeInfo.icon}</span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{fileName}</span>
-                  <span className="block truncate text-xs text-[var(--color-text-tertiary)]">{`${t(typeInfo.categoryKey as Parameters<typeof t>[0])} · ${typeInfo.ext}`}</span>
-                </span>
-                <ChevronRight size={17} strokeWidth={1.9} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-              </button>
-              <Button
-                variant="secondary"
-                size="base"
-                aria-label={t('openWith.title')}
-                onClick={(event) => handleOpenWith(event, fileEntry)}
-                className="mr-2 shrink-0"
-                icon={<ChevronDown size={14} strokeWidth={1.9} aria-hidden="true" />}
-                iconPosition="end"
-              >
-                {t('openWith.title')}
-              </Button>
-            </div>
-          )
-        })}
-      </div>
-
-      {canCollapse && (
-        <button
-          type="button"
-          onClick={() => setShowAllFiles((current) => !current)}
-          className="flex w-full items-center justify-center gap-1 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
-        >
-          {showAllFiles ? (
-            <>
-              {t('chat.turnChangesShowLess')}
-              <ChevronUp size={14} strokeWidth={1.9} />
-            </>
-          ) : (
-            <>
-              {t('chat.turnChangesShowMore', { count: String(files.length - COLLAPSED_COUNT) })}
-              <ChevronDown size={14} strokeWidth={1.9} />
-            </>
-          )}
-        </button>
+      {(expanded || !restoreAvailable || hasUnverifiedChanges) && (
+        <div className={`border-t border-[var(--color-border)] px-3 py-2 text-xs ${hasUnverifiedChanges ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-tertiary)]'}`}>
+          {subtitle}
+        </div>
       )}
 
+      <div id={filesId} hidden={!expanded}>
+        {expanded && <div className="divide-y divide-[var(--color-border)]">
+          {visibleFiles.map((fileEntry) => {
+            const fileName = fileEntry.displayPath.split('/').pop() || fileEntry.displayPath
+            const typeInfo = describeFileType(fileEntry.displayPath)
+            const workspacePreviewable = isWorkspacePreviewableFile(fileEntry.displayPath)
+            return (
+              <div key={fileEntry.apiPath} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id={`turn-change-opener-${checkpoint.target.targetUserMessageId}-${encodeURIComponent(fileEntry.apiPath)}`}
+                  data-source-turn-key={checkpoint.target.targetUserMessageId}
+                  onClick={(event) => openChangedFile(event, fileEntry)}
+                  aria-label={t(
+                    workspacePreviewable
+                      ? 'chat.turnChangesOpenInWorkspaceAria'
+                      : 'chat.turnChangesOpenFileAria',
+                    { path: fileEntry.displayPath },
+                  )}
+                  title={fileEntry.displayPath}
+                  className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-md)] px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                >
+                  <span className="material-symbols-outlined shrink-0 text-[22px] text-[var(--color-text-tertiary)]">{typeInfo.icon}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{fileName}</span>
+                    <span className="block truncate text-xs text-[var(--color-text-tertiary)]">{`${t(typeInfo.categoryKey as Parameters<typeof t>[0])} · ${typeInfo.ext}`}</span>
+                  </span>
+                  <ChevronRight size={17} strokeWidth={1.9} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                </button>
+                <Button
+                  variant="secondary"
+                  size="base"
+                  aria-label={t('openWith.title')}
+                  onClick={(event) => handleOpenWith(event, fileEntry)}
+                  className="mr-2 shrink-0"
+                  icon={<ChevronDown size={14} strokeWidth={1.9} aria-hidden="true" />}
+                  iconPosition="end"
+                >
+                  {t('openWith.title')}
+                </Button>
+              </div>
+            )
+          })}
+        </div>}
+
+        {expanded && canCollapse && (
+          <button
+            type="button"
+            data-chat-disclosure="true"
+            aria-expanded={showAllFiles}
+            onClick={() => setShowAllFiles((current) => !current)}
+            className="flex w-full items-center justify-center gap-1 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+          >
+            {showAllFiles ? (
+              <>
+                {t('chat.turnChangesShowLess')}
+                <ChevronUp size={14} strokeWidth={1.9} />
+              </>
+            ) : (
+              <>
+                {t('chat.turnChangesShowMore', { count: String(files.length - COLLAPSED_COUNT) })}
+                <ChevronDown size={14} strokeWidth={1.9} />
+              </>
+            )}
+          </button>
+        )}
+
+      </div>
+
       {error && (
-        <div className="border-t border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-xs text-[var(--color-on-error-container)]">
+        <div role="alert" className="border-t border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-xs text-[var(--color-on-error-container)]">
           {error}
         </div>
       )}

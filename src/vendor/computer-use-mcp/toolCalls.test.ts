@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 
 import type {
   AppStateResult,
@@ -10,18 +10,23 @@ import type {
 } from './executor.js'
 import {
   _test,
+  APP_INVENTORY,
   CUA_APP_VERSION,
   defersLockAcquire,
   frameAppStateEnvelope,
   handleToolCall,
   resetMouseButtonHeld,
 } from './toolCalls.js'
+import { bindSessionContext } from './mcpServer.js'
+import type { ComputerUseSessionContext } from './types.js'
 import { buildComputerUseTools } from './tools.js'
+import { bindSessionContext } from './mcpServer.js'
 import { COMPUTER_USE_INSTRUCTIONS } from './instructions.js'
 import { isSystemKeyCombo } from './keyBlocklist.js'
 import type {
   ComputerUseHostAdapter,
   ComputerUseOverrides,
+  ComputerUseSessionContext,
 } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -216,6 +221,8 @@ describe('buildComputerUseTools — current Codex tool face', () => {
   test('exposes the current Codex tools, including explicit paste', () => {
     expect(tools.map(t => t.name).sort()).toEqual(
       [
+        'js',
+        'js_reset',
         'click',
         'drag',
         'get_app_state',
@@ -227,6 +234,7 @@ describe('buildComputerUseTools — current Codex tool face', () => {
         'select_text',
         'set_value',
         'type_text',
+        'sequence',
       ].sort(),
     )
   })
@@ -250,7 +258,7 @@ describe('buildComputerUseTools — current Codex tool face', () => {
   test('every targeted tool requires an explicit app while list_apps does not', () => {
     for (const tool of tools) {
       const required = ((tool.inputSchema as any).required ?? []) as string[]
-      if (tool.name === 'list_apps') {
+      if (['list_apps', 'js', 'js_reset'].includes(tool.name)) {
         expect(required).not.toContain('app')
       } else {
         expect(required).toContain('app')
@@ -389,10 +397,11 @@ describe('buildComputerUseTools — current Codex tool face', () => {
     }
   })
 
-  test('list_apps describes the native alphabetical running-app order honestly', () => {
+  test('list_apps describes native running and recent inventory without implying access', () => {
     const description = tools.find(t => t.name === 'list_apps')!.description ?? ''
-    expect(description).toContain('alphabetical')
-    expect(description).not.toContain('most-recently-used')
+    expect(description).toContain('running and recently used')
+    expect(description).toContain('Discovery does not grant access')
+    expect(description).not.toContain('alphabetical')
   })
 
   test('every schema rejects unknown properties', () => {
@@ -410,8 +419,8 @@ describe('buildComputerUseTools — current Codex tool face', () => {
       expect(annotations, tool.name).toBeDefined()
       const readOnly = tool.name === 'list_apps' || tool.name === 'get_app_state'
       expect(annotations.readOnlyHint, tool.name).toBe(readOnly)
-      expect(annotations.idempotentHint, tool.name).toBe(readOnly)
-      expect(annotations.destructiveHint, tool.name).toBe(false)
+      expect(annotations.idempotentHint, tool.name).toBe(readOnly || tool.name === 'js_reset')
+      expect(annotations.destructiveHint, tool.name).toBe(tool.name === 'js')
       expect(annotations.openWorldHint, tool.name).toBe(false)
     }
   })
@@ -437,7 +446,7 @@ describe('buildComputerUseTools — current Codex tool face', () => {
       'normalized_0_100',
       ['Finder', 'Slack'],
     )
-    expect(withArgs).toHaveLength(11)
+    expect(withArgs).toHaveLength(14)
   })
 })
 
@@ -496,6 +505,39 @@ describe('frameAppStateEnvelope', () => {
     expect(imgs).toHaveLength(1)
     expect(imgs[0].mimeType).toBe('image/png')
     expect(imgs[0].data).toBe('AAAA')
+  })
+
+  test('preserves JPEG bytes and their declared MIME type from native capture', () => {
+    const result = frameAppStateEnvelope({
+      pid: 1, elementCount: 0, truncated: false, durationMs: 1, axText: 'Fixture',
+      screenshot: { base64: '/9j/2Q==', width: 1397, height: 768, mimeType: 'image/jpeg' },
+    })
+    expect(result.content.filter(block => block.type === 'image')).toEqual([
+      { type: 'image', data: '/9j/2Q==', mimeType: 'image/jpeg' },
+    ])
+  })
+
+  test('preserves declared JPEG and legacy PNG bytes with real decoded dimensions', async () => {
+    const { default: sharp } = await import('sharp')
+    for (const format of ['jpeg', 'png'] as const) {
+      const bytes = await sharp({ create: { width: 96, height: 64, channels: 3, background: '#4070a0' } })
+        .toFormat(format).toBuffer()
+      const out = frameAppStateEnvelope({
+        pid: 1, elementCount: 0, truncated: false, durationMs: 1, axText: 'App=x (pid 1)',
+        screenshot: { base64: bytes.toString('base64'), width: 96, height: 64,
+          ...(format === 'jpeg' ? { mimeType: 'image/jpeg' as const } : {}) },
+      })
+      const [image] = imageBlocks(out)
+      expect(image.mimeType).toBe(`image/${format}`)
+      const returned = Buffer.from(image.data, 'base64')
+      expect(returned.equals(bytes)).toBe(true)
+      const metadata = await sharp(returned).metadata()
+      expect(metadata.format).toBe(format)
+      expect(metadata.width).toBe(96)
+      expect(metadata.height).toBe(64)
+      // Force pixel decoding too, not just signature/metadata recognition.
+      expect((await sharp(returned).raw().toBuffer({ resolveWithObject: true })).info.width).toBe(96)
+    }
   })
 
   test('no image block when screenshot is absent (capture failed)', () => {
@@ -575,38 +617,7 @@ describe('arg parsing helpers', () => {
     expect(() => _test.parsePoint({}, 'from', 'from_x', 'from_y')).toThrow()
   })
 
-  test('policyDenyMessage: terminals refused with Codex text, normal apps pass', () => {
-    const msg = _test.policyDenyMessage({
-      bundleId: 'com.googlecode.iterm2',
-      displayName: 'iTerm2',
-    }, 'com.googlecode.iterm2')
-    expect(msg).toBe("Computer Use is not allowed to use the app 'com.googlecode.iterm2' for safety reasons.")
-    expect(_test.policyDenyMessage({
-      bundleId: 'com.apple.finder',
-      displayName: 'Finder',
-    })).toBeUndefined()
-  })
 
-  test('policyDenyMessage permanently denies the host and helper while a host override only adds', () => {
-    const customHostBundleId = 'com.example.custom-host'
-    for (const bundleId of [
-      'com.claude-code-haha.desktop',
-      'dev.cchaha.cu-helper',
-      customHostBundleId,
-    ]) {
-      expect(_test.policyDenyMessage({
-        bundleId,
-        displayName: bundleId,
-      }, bundleId, customHostBundleId)).toBe(
-        `Computer Use is not allowed to use the app '${bundleId}' for safety reasons.`,
-      )
-    }
-
-    expect(_test.policyDenyMessage({
-      bundleId: 'com.apple.TextEdit',
-      displayName: 'TextEdit',
-    }, 'TextEdit', customHostBundleId)).toBeUndefined()
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -677,15 +688,32 @@ describe('handleToolCall — gates', () => {
     expect(acquired).toBe(0)
   })
 
-  test('safety denylist refuses a terminal before the engine', async () => {
+  test('global enablement allows terminal state reads without per-app grants', async () => {
     const { engine, calls } = makeEngine()
     const r = await handleToolCall(makeAdapter({ engine }), 'get_app_state', { app: 'com.googlecode.iterm2' }, baseOverrides())
-    expect(r.isError).toBe(true)
-    expect(textOf(r)).toContain('for safety reasons')
-    expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
+    expect(r.isError).toBeFalsy()
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'getAppState'])
   })
 
-  test('configured host bundle is refused before permission or engine dispatch', async () => {
+  test('native browser actions follow the observed official Chrome App path with normal identity checks', async () => {
+    const executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    const identity = { pid: 812, bundleId: 'com.google.Chrome', executablePath, launchTime: 1812 }
+    for (const app of ['Google Chrome', 'com.google.Chrome', '/Applications/Google Chrome.app', '812']) {
+      const { engine, calls } = makeEngine({ resolveTarget: async () => ({
+        pid: 812, bundleId: 'com.google.Chrome', displayName: 'Google Chrome',
+        path: '/Applications/Google Chrome.app', executablePath, launchTime: 1812,
+        processIdentity: identity,
+      }) })
+      const adapter = makeAdapter({ engine })
+      expect((await handleToolCall(adapter, 'get_app_state', { app }, baseOverrides())).isError).not.toBe(true)
+      const result = await handleToolCall(adapter, 'drag', { app, from_x: 10, from_y: 20, to_x: 11, to_y: 20 }, baseOverrides())
+      expect(result.isError).not.toBe(true)
+      expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'getAppState', 'resolveTarget', 'drag'])
+      expect(calls.at(-1)?.args).toMatchObject({ target: { pid: 812, expectedProcessIdentity: identity } })
+    }
+  })
+
+  test('configured host bundle uses the same global consent as every app', async () => {
     const customHostBundleId = 'com.example.custom-host'
     const { engine, calls } = makeEngine({
       resolveTarget: async () => ({
@@ -723,10 +751,9 @@ describe('handleToolCall — gates', () => {
       }),
     )
 
-    expect(r.isError).toBe(true)
-    expect(r.telemetry?.error_kind).toBe('app_denied')
+    expect(r.isError).toBeFalsy()
     expect(permissionRequests).toBe(0)
-    expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'getAppState'])
   })
 
   test('missing engine → feature_unavailable', async () => {
@@ -805,9 +832,9 @@ describe('handleToolCall — gates', () => {
     }
   })
 
-  test('resolves alias and PID targets before permission, then dispatches to the canonical running PID', async () => {
+  test('resolves alias and PID targets and dispatches without an app permission prompt', async () => {
     for (const requestedApp of ['Notes', '812']) {
-      let permissionRequest: any
+      let permissionCalls = 0
       const { engine, calls } = makeEngine({
         resolveTarget: async (target: AppTarget) => {
           expect(target).toEqual(requestedApp === '812' ? { pid: 812 } : { app: 'Notes' })
@@ -833,37 +860,15 @@ describe('handleToolCall — gates', () => {
         { app: requestedApp, element_index: 'g17:1' },
         baseOverrides({
           allowedApps: [],
-          onPermissionRequest: async req => {
-            permissionRequest = req
-            return {
-              granted: [{
-                bundleId: 'com.apple.Notes',
-                displayName: 'Notes',
-                grantedAt: 2,
-                tier: 'full',
-              }],
-              denied: [],
-              flags: {
-                clipboardRead: false,
-                clipboardWrite: false,
-                systemKeyCombos: false,
-              },
-            }
+          onPermissionRequest: async () => {
+            permissionCalls++
+            throw new Error('must not prompt')
           },
         }),
       )
 
       expect(r.isError).toBeFalsy()
-      expect(permissionRequest.apps).toHaveLength(1)
-      expect(permissionRequest.apps[0]).toMatchObject({
-        requestedName: requestedApp,
-        alreadyGranted: false,
-        resolved: {
-          bundleId: 'com.apple.Notes',
-          displayName: 'Notes',
-          path: '/System/Applications/Notes.app',
-        },
-      })
+      expect(permissionCalls).toBe(0)
       expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'click'])
       expect(calls[1].args).toMatchObject({ target: { pid: 812 } })
     }
@@ -898,8 +903,9 @@ describe('handleToolCall — gates', () => {
     expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
   })
 
-  test('authorizes an installed path without launching it and dispatches get_app_state by exact path', async () => {
+  test('dispatches get_app_state by exact installed path without an app prompt', async () => {
     const path = '/Applications/Acme Notes.app'
+    let permissionCalls = 0
     const { engine, calls } = makeEngine({
       resolveTarget: async () => ({
         bundleId: 'com.acme.notes',
@@ -913,67 +919,20 @@ describe('handleToolCall — gates', () => {
       { app: path },
       baseOverrides({
         allowedApps: [],
-        onPermissionRequest: async req => ({
-          granted: [{
-            bundleId: req.apps[0].resolved!.bundleId,
-            displayName: req.apps[0].resolved!.displayName,
-            grantedAt: 2,
-            tier: 'full',
-          }],
-          denied: [],
-          flags: {
-            clipboardRead: false,
-            clipboardWrite: false,
-            systemKeyCombos: false,
-          },
-        }),
+        onPermissionRequest: async () => {
+          permissionCalls++
+          throw new Error('must not prompt')
+        },
       }),
     )
 
     expect(r.isError).toBeFalsy()
+    expect(permissionCalls).toBe(0)
     expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'getAppState'])
     expect(calls[1].args).toEqual({ app: path })
   })
 
-  test('a permission denial or mismatched grant never reaches the mutation engine', async () => {
-    for (const granted of [[], [{
-      bundleId: 'com.other.app',
-      displayName: 'Other',
-      grantedAt: 2,
-      tier: 'full' as const,
-    }]]) {
-      const { engine, calls } = makeEngine({
-        resolveTarget: async () => ({
-          pid: 812,
-          bundleId: 'com.apple.Notes',
-          displayName: 'Notes',
-        }),
-      })
-      const r = await handleToolCall(
-        makeAdapter({ engine }),
-        'type_text',
-        { app: 'Notes', text: 'secret' },
-        baseOverrides({
-          allowedApps: [],
-          onPermissionRequest: async () => ({
-            granted,
-            denied: [{ bundleId: 'com.apple.Notes', reason: 'user_denied' }],
-            flags: {
-              clipboardRead: false,
-              clipboardWrite: false,
-              systemKeyCombos: false,
-            },
-          }),
-        }),
-      )
-
-      expect(r.isError).toBe(true)
-      expect(r.telemetry?.error_kind).toBe('app_not_granted')
-      expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
-    }
-  })
-
-  test('an ungranted target without a permission handler fails closed', async () => {
+  test('an empty legacy allowlist still permits a supported target without a permission handler', async () => {
     const { engine, calls } = makeEngine({
       resolveTarget: async () => ({
         pid: 812,
@@ -990,12 +949,11 @@ describe('handleToolCall — gates', () => {
       baseOverrides({ allowedApps: [], onPermissionRequest: undefined }),
     )
 
-    expect(r.isError).toBe(true)
-    expect(r.telemetry?.error_kind).toBe('app_not_granted')
-    expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
+    expect(r.isError).toBeFalsy()
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'click'])
   })
 
-  test('an exact preauthorization bypasses the permission handler', async () => {
+  test('legacy preauthorization data is not consulted or prompted for', async () => {
     let permissionCalls = 0
     const { engine, calls } = makeEngine({
       resolveTarget: async () => ({
@@ -1024,42 +982,72 @@ describe('handleToolCall — gates', () => {
     expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'typeText'])
   })
 
-  test('resolved user-denied and policy-denied aliases fail before mutation', async () => {
-    const cases = [
-      {
-        resolved: { pid: 812, bundleId: 'com.apple.Notes', displayName: 'Notes' },
-        overrides: { userDeniedBundleIds: ['com.apple.Notes'] },
+  test('legacy user-denied app state no longer blocks a supported app', async () => {
+    const { engine, calls } = makeEngine({
+      resolveTarget: async () => ({
+        pid: 812,
+        bundleId: 'com.apple.Notes',
+        displayName: 'Notes',
+        executablePath: '/System/Applications/Notes.app/Contents/MacOS/Notes',
+        launchTime: 1812,
+      }),
+    })
+    const r = await handleToolCall(
+      makeAdapter({ engine }),
+      'type_text',
+      { app: 'Notes', text: 'allowed' },
+      baseOverrides({ allowedApps: [], userDeniedBundleIds: ['com.apple.Notes'] }),
+    )
+
+    expect(r.isError).toBeFalsy()
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'typeText'])
+  })
+
+  test.each([
+    ['com.google.Chrome', 'Google Chrome'],
+    ['com.claude-code-haha.desktop', 'Claude Code Haha'],
+    ['dev.cchaha.cu-helper', 'Computer Use Helper'],
+    ['com.test.host', 'Custom Host'],
+    ['com.googlecode.iterm2', 'iTerm2'],
+    ['com.microsoft.VSCode', 'Visual Studio Code'],
+    ['com.tradingview.tradingviewapp.desktop', 'TradingView'],
+    ['com.spotify.client', 'Spotify'],
+    [undefined, 'Netflix'],
+    [undefined, 'Windows Terminal'],
+  ])('global enablement permits reading and operating %s (%s) without app approval', async (bundleId, displayName) => {
+    let permissionCalls = 0
+    const { engine, calls } = makeEngine({
+      resolveTarget: async () => ({
+        pid: 900,
+        bundleId,
+        displayName,
+        launchTime: 1900,
+      }),
+    })
+    const overrides = baseOverrides({
+      allowedApps: [],
+      userDeniedBundleIds: bundleId ? [bundleId] : [],
+      onPermissionRequest: async () => {
+        permissionCalls++
+        throw new Error('global consent must not ask for per-app approval')
       },
-      {
-        resolved: { pid: 900, bundleId: 'com.googlecode.iterm2', displayName: 'iTerm2' },
-        overrides: {},
-      },
-    ]
-    for (const entry of cases) {
-      let permissionCalls = 0
-      const { engine, calls } = makeEngine({ resolveTarget: async () => entry.resolved })
-      const r = await handleToolCall(
-        makeAdapter({ engine }),
-        'type_text',
-        { app: 'friendly alias', text: 'blocked' },
-        baseOverrides({
-          allowedApps: [{
-            bundleId: entry.resolved.bundleId,
-            displayName: entry.resolved.displayName,
-            grantedAt: 1,
-          }],
-          ...entry.overrides,
-          onPermissionRequest: async () => {
-            permissionCalls++
-            throw new Error('must not prompt')
-          },
-        }),
-      )
-      expect(r.isError).toBe(true)
-      expect(r.telemetry?.error_kind).toBe('app_denied')
-      expect(permissionCalls).toBe(0)
-      expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
+    })
+    for (const app of [displayName, ...(bundleId ? [bundleId] : []), `/Applications/${displayName}.app`, '900']) {
+      for (const [name, args, method] of [
+        ['get_app_state', {}, 'getAppState'],
+        ['click', { x: 10, y: 20 }, 'click'],
+        ['type_text', { text: 'hello' }, 'typeText'],
+      ] as const) {
+        calls.length = 0
+        const r = await handleToolCall(makeAdapter({ engine }), name, { app, ...args }, overrides)
+
+        expect(r.isError).toBeFalsy()
+        expect(calls.map(call => call.method)).toEqual(['resolveTarget', method])
+        const target = name === 'get_app_state' ? calls[1].args : (calls[1].args as { target: AppTarget }).target
+        expect(target).toMatchObject({ pid: 900, expectedProcessIdentity: { pid: 900, launchTime: 1900 } })
+      }
     }
+    expect(permissionCalls).toBe(0)
   })
 
   test('invalid app values return bad_args without resolving a target', async () => {
@@ -1208,7 +1196,7 @@ describe('handleToolCall — gates', () => {
   })
 
   test('press_key blocks every dangerous macOS shortcut alias when systemKeyCombos is false', async () => {
-    const metaAliases = ['cmd', 'super', 'command', 'meta']
+    const metaAliases = ['cmd', 'super', 'command', 'meta', 'Super_L', 'Super_R', 'Meta_L', 'Meta_R']
     const dangerous = [
       ...metaAliases.flatMap(meta => [
         `${meta}+q`,
@@ -1368,6 +1356,19 @@ describe('handleToolCall — gates', () => {
 // ---------------------------------------------------------------------------
 
 describe('handleToolCall — tool dispatch', () => {
+  test('keeps structured app inventory across dispatch with one enumeration', async () => {
+    const apps = [{ id: 'dev.test.Editor', displayName: 'Editor', isRunning: false, useCount: 4 }]
+    const { engine, calls } = makeEngine()
+    let enumerations = 0
+    engine.listAppsInfo = async () => { ++enumerations; return apps }
+    const r = await handleToolCall(makeAdapter({ engine }), 'list_apps', {}, baseOverrides())
+    expect(r.isError).not.toBe(true)
+    expect(r[APP_INVENTORY]).toEqual(apps)
+    expect(textOf(r)).toBe('Editor — dev.test.Editor')
+    expect(enumerations).toBe(1)
+    expect(calls).toEqual([])
+  })
+
   test('list_apps returns the engine text verbatim', async () => {
     const { engine } = makeEngine({ listApps: async () => 'A — a.b [running]' })
     const r = await handleToolCall(makeAdapter({ engine }), 'list_apps', {}, baseOverrides())
@@ -1614,7 +1615,7 @@ describe('handleToolCall — tool dispatch', () => {
 
   test('server guidance treats AX diffs and timed-out paste as non-authoritative', () => {
     expect(COMPUTER_USE_INSTRUCTIONS).toContain('An empty AX diff does')
-    expect(COMPUTER_USE_INSTRUCTIONS).toContain('paste({ app, text, format: "text" })')
+    expect(COMPUTER_USE_INSTRUCTIONS).toContain('app.paste(text,{format:"text"})')
     expect(COMPUTER_USE_INSTRUCTIONS).toContain('treat the result as unknown')
   })
 
@@ -1794,5 +1795,283 @@ describe('handleToolCall — error passthrough', () => {
 describe('resetMouseButtonHeld', () => {
   test('is a safe no-op (preserved export)', () => {
     expect(() => resetMouseButtonHeld()).not.toThrow()
+  })
+})
+
+// A sequence is a bounded set of existing native operations, not a script.
+describe('same-app sequence', () => {
+  const steps = [{ tool: 'press_key', key: 's x 1 period 3 5 Return' }, { tool: 'click', x: 12, y: 24 }]
+  test.each([
+    'com.google.Chrome',
+    'com.claude-code-haha.desktop',
+    'dev.cchaha.cu-helper',
+    'com.test.host',
+  ])('global consent also covers sequences targeting %s', async bundleId => {
+    const { engine, calls } = makeEngine({
+      getAppState: async () => ({
+        pid: 1234, appName: bundleId, bundleId, elementCount: 0,
+        truncated: false, durationMs: 1, axText: '',
+        screenshot: { base64: 'PNG', width: 10, height: 10 },
+      }),
+    })
+    const result = await handleToolCall(
+      makeAdapter({ engine }), 'sequence', { app: bundleId, steps },
+      baseOverrides({
+        allowedApps: [], userDeniedBundleIds: [bundleId],
+        onPermissionRequest: async () => { throw new Error('must not ask for app approval') },
+      }),
+    )
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toMatchObject({ status: 'completed', completedSteps: 2 })
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'pressKey', 'click', 'getAppState'])
+    const target = (calls[1].args as { target: AppTarget }).target
+    expect(target.expectedProcessIdentity?.bundleId).toBe(bundleId)
+    expect((calls[2].args as { target: AppTarget }).target).toEqual(target)
+    expect(calls[3].args).toEqual(target)
+    expect(imageBlocks(result)).toHaveLength(1)
+  })
+  test('runs in order against one proven identity and returns one final screenshot', async () => {
+    const { engine, calls } = makeEngine({ getAppState: () => ({ pid: 1234, appName: 'Finder', bundleId: 'com.apple.finder', windowTitle: 'Docs', elementCount: 0, truncated: false, durationMs: 1, axText: '', screenshot: { base64: 'PNG', width: 10, height: 10 } }) })
+    const result = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps }, baseOverrides())
+    expect(result.isError).not.toBe(true)
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey', 'click', 'getAppState'])
+    const first = (calls[1]!.args as any).target
+    expect(first.expectedProcessIdentity).toBeDefined()
+    expect((calls[2]!.args as any).target).toEqual(first)
+    expect(calls[3]!.args).toEqual(first)
+    expect(result.structuredContent?.completedSteps).toBe(2)
+    expect(imageBlocks(result)).toHaveLength(1)
+  })
+  test('validates all steps before any engine or permission call', async () => {
+    for (const invalid of [
+      { tool: 'click', x: -1, y: 0 },
+      { tool: 'press_key', key: 'a super+q' },
+      { tool: 'press_key', key: 'a', app: 'Terminal' },
+      { tool: 'sequence', steps: [] },
+      { tool: 'press_key', key: Array(129).fill('a').join(' ') },
+    ]) {
+      const { engine, calls } = makeEngine()
+      const adapter = makeAdapter({ engine })
+      adapter.ensureOsPermissions = async () => { throw new Error('must preflight first') }
+      const r = await handleToolCall(adapter, 'sequence', { app: 'Finder', steps: [steps[0], invalid] }, baseOverrides())
+      expect(r.isError).toBe(true)
+      expect(calls).toHaveLength(0)
+    }
+  })
+  test('stops at first native failure without replay or subsequent input', async () => {
+    const { engine, calls } = makeEngine({ click: () => { throw new Error('execution result is unknown: timed out') } })
+    const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps: [...steps, steps[0]] }, baseOverrides())
+    expect(r.isError).toBe(true)
+    expect(r.structuredContent).toMatchObject({ completedSteps: 1, failedStepIndex: 1, resultUnknown: true })
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey', 'click'])
+  })
+  test('cancellation after an awaited action prevents every subsequent dispatch', async () => {
+    let aborted = false
+    const { engine, calls } = makeEngine({ pressKey: () => { aborted = true } })
+    const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps }, baseOverrides({ isAborted: () => aborted }))
+    expect(r.isError).toBe(true)
+    expect(r.structuredContent).toMatchObject({ completedSteps: 1, status: 'cancelled' })
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey'])
+  })
+  test('revoked kill switch stops a sequence and a fresh call never dispatches', async () => {
+    let disabled = false
+    const { engine, calls } = makeEngine({ pressKey: () => { disabled = true } })
+    const adapter = makeAdapter({ engine }); adapter.isDisabled = () => disabled
+    const r = await handleToolCall(adapter, 'sequence', { app: 'Finder', steps }, baseOverrides())
+    expect(r.isError).toBe(true)
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey'])
+  })
+  test('enforces step and aggregate chord budgets before dispatch', async () => {
+    for (const list of [[], Array(257).fill(steps[0]), Array(17).fill({ tool: 'press_key', key: Array(128).fill('a').join(' ') })]) {
+      const { engine, calls } = makeEngine()
+      const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps: list }, baseOverrides())
+      expect(r.isError).toBe(true)
+      expect(calls).toHaveLength(0)
+    }
+  })
+  test('standalone macOS keyboard macros use the same 128-chord preflight limit', async () => {
+    const { engine, calls } = makeEngine()
+    const r = await handleToolCall(makeAdapter({ engine }), 'press_key', {
+      app: 'Finder', key: Array(129).fill('a').join(' '),
+    }, baseOverrides())
+    expect(r.isError).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+})
+
+function sessionContext(extra: Partial<ComputerUseSessionContext> = {}): ComputerUseSessionContext {
+  return {
+    getAllowedApps: () => [], getGrantFlags: () => ({ clipboardRead: true, clipboardWrite: true, systemKeyCombos: false }),
+    getUserDeniedBundleIds: () => [], getSelectedDisplayId: () => undefined,
+    ...extra,
+  }
+}
+
+describe('sequence session coordination', () => {
+  test('ordinary actions cannot interleave; queued cancellation never reaches the engine', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const { engine, calls } = makeEngine({ pressKey: async () => { entered(); await waiting } })
+    const dispatch = bindSessionContext(makeAdapter({ engine }), 'pixels', sessionContext())
+    const sequence = dispatch('sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }, { tool: 'click', x: 1, y: 2 }] })
+    await started
+    const abort = new AbortController()
+    const cancelled = dispatch('click', { app: 'TextEdit', x: 9, y: 9 }, abort.signal)
+    const ordinary = dispatch('click', { app: 'Finder', x: 3, y: 4 })
+    abort.abort()
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey'])
+    release()
+    await sequence
+    expect((await cancelled).isError).toBe(true)
+    await ordinary
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey', 'click', 'getAppState', 'resolveTarget', 'click'])
+    expect((calls.at(-1)!.args as any).x).toBe(3)
+  })
+  test('explicit call signal stays cancelled and stops a running sequence', async () => {
+    const abort = new AbortController()
+    const { engine, calls } = makeEngine({ pressKey: () => abort.abort() })
+    const dispatch = bindSessionContext(makeAdapter({ engine }), 'pixels', sessionContext({ isAborted: () => false }))
+    const r = await dispatch('sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }, { tool: 'press_key', key: 'b' }] }, abort.signal)
+    expect(r.structuredContent).toMatchObject({ status: 'cancelled', completedSteps: 1 })
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey'])
+  })
+  test('another session holder prevents a sequence from resolving or acting', async () => {
+    const { engine, calls } = makeEngine()
+    const dispatch = bindSessionContext(makeAdapter({ engine }), 'pixels', sessionContext({ checkCuLock: async () => ({ holder: 'other', isSelf: false }) }))
+    const r = await dispatch('sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }] })
+    expect(r.telemetry?.error_kind).toBe('cu_lock_held')
+    expect(calls).toHaveLength(0)
+  })
+  test('deadline is cooperative: no detached or subsequent mutation after in-flight completion', async () => {
+    let now = 0
+    const clock = spyOn(performance, 'now').mockImplementation(() => now)
+    try {
+      const { engine, calls } = makeEngine({ pressKey: () => { now = 60_001 } })
+      const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }, { tool: 'press_key', key: 'b' }] }, baseOverrides())
+      expect(r.structuredContent).toMatchObject({ status: 'deadline_exceeded', completedSteps: 1 })
+      expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey'])
+    } finally { clock.mockRestore() }
+  })
+  test('native stale identity stops input without resolving a replacement process', async () => {
+    const { engine, calls } = makeEngine({ click: () => { throw new Error('The target process changed') } })
+    const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps: [{ tool: 'click', x: 1, y: 2 }, { tool: 'press_key', key: 'a' }] }, baseOverrides())
+    expect(r.isError).toBe(true)
+    expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'click'])
+  })
+  test('reports successful mutations separately from a missing final screenshot', async () => {
+    const { engine } = makeEngine()
+    const r = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }] }, baseOverrides())
+    expect(r.isError).toBe(true)
+    expect(r.structuredContent).toMatchObject({ status: 'observation_failed', completedSteps: 1 })
+  })
+})
+
+test('abort while awaiting lock check never acquires a new turn lock', async () => {
+  const abort = new AbortController()
+  let acquired = false
+  const { engine, calls } = makeEngine()
+  const dispatch = bindSessionContext(makeAdapter({ engine }), 'pixels', sessionContext({
+    checkCuLock: async () => { abort.abort(); return { holder: undefined, isSelf: false } },
+    acquireCuLock: async () => { acquired = true },
+  }))
+  expect((await dispatch('sequence', { app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }] }, abort.signal)).isError).toBe(true)
+  expect(acquired).toBe(false)
+  expect(calls).toHaveLength(0)
+})
+
+test('sequence treats a generic exception after mutation as result-unknown', async () => {
+  let effectApplied = false
+  const { engine, calls } = makeEngine({ click: () => {
+    effectApplied = true
+    throw new Error('reply decoding failed')
+  } })
+  const r = await handleToolCall(makeAdapter({ engine }), 'sequence', {
+    app: 'Finder', steps: [{ tool: 'click', x: 1, y: 2 }, { tool: 'press_key', key: 'a' }],
+  }, baseOverrides())
+  expect(effectApplied).toBe(true)
+  expect(r.structuredContent).toMatchObject({ completedSteps: 0, failedStepIndex: 0, resultUnknown: true })
+  expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'click'])
+})
+
+test('cancellation after final observation reports it was captured but not delivered', async () => {
+  let aborted = false
+  const { engine, calls } = makeEngine({ getAppState: () => {
+    aborted = true
+    return { pid: 1234, appName: 'Finder', bundleId: 'com.apple.finder', windowTitle: 'Docs', elementCount: 0, truncated: false, durationMs: 1, axText: '', screenshot: { base64: 'PNG', width: 10, height: 10 } }
+  } })
+  const r = await handleToolCall(makeAdapter({ engine }), 'sequence', {
+    app: 'Finder', steps: [{ tool: 'press_key', key: 'a' }],
+  }, baseOverrides({ isAborted: () => aborted }))
+  expect(r.structuredContent).toMatchObject({ status: 'cancelled', completedSteps: 1, observationSkipped: false, observationDelivered: false })
+  expect(calls.map(c => c.method)).toEqual(['resolveTarget', 'pressKey', 'getAppState'])
+  expect(imageBlocks(r)).toHaveLength(0)
+})
+
+describe('canvas action batches', () => {
+  const state: AppStateResult = {
+    pid: 1234, appName: 'X', bundleId: 'com.test.X', elementCount: 0,
+    truncated: false, durationMs: 1, axText: 'Canvas changed',
+    screenshot: { base64: 'PNG', width: 600, height: 400 },
+  }
+
+  test('the compatibility sequence executes short drags and observes only once', async () => {
+    const args = { app: 'X', steps: [
+      { tool: 'drag', from_x: 240, from_y: 320, to_x: 241, to_y: 320 },
+      { tool: 'drag', from_x: 280, from_y: 320, to_x: 281, to_y: 320 },
+    ] }
+    const { engine, calls } = makeEngine({ getAppState: () => state })
+    const result = await handleToolCall(makeAdapter({ engine }), 'sequence', args, baseOverrides())
+    expect(result.isError).toBeFalsy()
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'drag', 'drag', 'getAppState'])
+    expect(calls[1]!.args).toMatchObject({ from: { x: 240, y: 320 }, to: { x: 241, y: 320 } })
+    expect(calls[2]!.args).toMatchObject({ from: { x: 280, y: 320 }, to: { x: 281, y: 320 } })
+    expect(imageBlocks(result)).toHaveLength(1)
+  })
+
+  test('repeated coordinates and a zero-distance drag retain their ordered input', async () => {
+    const { engine, calls } = makeEngine({ getAppState: () => state })
+    const steps = [
+      { tool: 'click', x: 100, y: 200 },
+      { tool: 'click', x: 100, y: 200 },
+      { tool: 'drag', from_x: 100, from_y: 200, to_x: 100, to_y: 200 },
+    ]
+    const result = await handleToolCall(makeAdapter({ engine }), 'sequence', { app: 'X', steps }, baseOverrides())
+    expect(result.structuredContent).toMatchObject({ status: 'completed', completedSteps: 3 })
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'click', 'click', 'drag', 'getAppState'])
+    expect(calls[1]!.args).toEqual(calls[2]!.args)
+    expect(calls[3]!.args).toMatchObject({ from: { x: 100, y: 200 }, to: { x: 100, y: 200 } })
+  })
+
+  test('a batch requires a proven process lifetime before any mutation', async () => {
+    const { engine, calls } = makeEngine({ resolveTarget: async () => ({ pid: 1234, bundleId: 'com.test.host' }) })
+    const result = await handleToolCall(makeAdapter({ engine }), 'sequence', {
+      app: 'com.test.host', steps: [{ tool: 'click', x: 1, y: 2 }],
+    }, baseOverrides())
+    expect(result.telemetry?.error_kind).toBe('executor_threw')
+    expect(result.isError).toBe(true)
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget'])
+  })
+
+  test('Windows never advertises or dispatches the macOS sequence face', async () => {
+    expect(buildComputerUseTools({ platform: 'win32', screenshotFiltering: 'none' }).some(tool => tool.name === 'sequence')).toBe(false)
+    const { engine, calls } = makeEngine()
+    const adapter = makeAdapter({ engine, platform: 'win32' })
+    adapter.ensureOsPermissions = async () => { throw new Error('must not reach permissions') }
+    const result = await handleToolCall(adapter, 'sequence', {
+      app: 'X', steps: [{ tool: 'click', x: 1, y: 2 }],
+    }, baseOverrides())
+    expect(result.telemetry?.error_kind).toBe('bad_args')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('final capture failure never repeats already completed canvas actions', async () => {
+    const { engine, calls } = makeEngine({ getAppState: () => { throw new Error('capture unavailable') } })
+    const result = await handleToolCall(makeAdapter({ engine }), 'sequence', {
+      app: 'X', steps: [{ tool: 'click', x: 1, y: 2 }],
+    }, baseOverrides())
+    expect(result.structuredContent).toMatchObject({ status: 'observation_failed', completedSteps: 1, resultUnknown: false })
+    expect(calls.map(call => call.method)).toEqual(['resolveTarget', 'click', 'getAppState'])
   })
 })

@@ -7,6 +7,7 @@ import {
   setBaseUrl,
 } from '../api/client'
 import { getDesktopHost } from './desktopHost'
+import { isPublicAccessRuntime } from './publicAccessRuntime'
 
 export const H5_SERVER_URL_STORAGE_KEY = 'cc-haha-h5-server-url'
 export const H5_TOKEN_STORAGE_KEY = 'cc-haha-h5-token'
@@ -129,23 +130,17 @@ export async function saveAndVerifyH5Connection(serverUrl: string, token: string
 
   setBaseUrl(normalizedServerUrl)
   setAuthToken(normalizedToken)
-  rememberStoredH5ServerUrl(normalizedServerUrl)
+  if (!readStoredH5Connection().token) rememberStoredH5ServerUrl(normalizedServerUrl)
 
   try {
     await waitForHealth(normalizedServerUrl)
     await verifyH5Access()
   } catch (error) {
-    clearStoredH5Token()
+    forgetRejectedH5Token(error, normalizedServerUrl, normalizedToken)
     throw normalizeBrowserH5Error(error, normalizedServerUrl)
   }
 
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, normalizedToken)
-    } catch {
-      // Ignore storage failures after a successful verification.
-    }
-  }
+  rememberVerifiedH5Connection(normalizedServerUrl, normalizedToken)
 
   return normalizedServerUrl
 }
@@ -186,6 +181,16 @@ export async function initializeDesktopServerUrl() {
 }
 
 async function initializeBrowserServerUrl(fallbackUrl: string) {
+  if (isPublicAccessRuntime()) {
+    const origin = window.location.origin
+    setBaseUrl(origin)
+    setAuthToken(null)
+    await waitForHealth(origin)
+    // RemoteAccessGate has already authenticated the host-only device cookie.
+    // Do not read legacy localStorage or query-string connection credentials.
+    markDesktopServerReady()
+    return origin
+  }
   const query = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search)
     : null
@@ -206,7 +211,7 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     requestedUrl === sameOriginUrl
   // A bearer token belongs to exactly one H5 server. A query-selected server
   // must never inherit credentials paired with a different authority.
-  const token = queryToken ?? (stored.serverUrl === requestedUrl ? stored.token : null)
+  let token = (stored.serverUrl === requestedUrl ? stored.token : null) ?? queryToken
   const browserH5Runtime = requiresH5AuthForServerUrl(requestedUrl)
 
   setBaseUrl(requestedUrl)
@@ -229,7 +234,7 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     }
 
     if (browserH5Runtime) {
-      clearStoredH5Token()
+      setAuthToken(null)
       throw normalizeBrowserH5Error(error, requestedUrl)
     }
     throw error
@@ -245,7 +250,7 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     // Keep the existing recovery UX for a first-time connection, but never
     // replace a paired server while withholding its token from a new one.
     if (!stored.token) rememberStoredH5ServerUrl(requestedUrl)
-    clearStoredH5Token()
+    setAuthToken(null)
     throw new H5ConnectionRequiredError(
       'Enter your H5 token to continue.',
       requestedUrl,
@@ -254,20 +259,28 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
   }
 
   try {
-    await verifyH5Access()
+    try {
+      await verifyH5Access()
+    } catch (error) {
+      // Prefer the browser's working pairing over a stale camera QR. A fresh
+      // QR can replace a revoked token, but network failures never erase it.
+      if (!queryToken || queryToken === token || normalizeBrowserH5Error(error, requestedUrl).reason !== 'invalid-token') throw error
+      forgetRejectedH5Token(error, requestedUrl, token)
+      token = queryToken
+      setAuthToken(token)
+      await verifyH5Access()
+    }
   } catch (error) {
-    clearStoredH5Token()
+    forgetRejectedH5Token(error, requestedUrl, token)
     throw normalizeBrowserH5Error(error, requestedUrl)
   }
 
-  rememberStoredH5ServerUrl(requestedUrl)
-
-  if (queryToken && typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, queryToken)
-    } catch {
-      // Ignore storage failures after successful verification.
-    }
+  rememberVerifiedH5Connection(requestedUrl, token)
+  if (typeof window !== 'undefined') {
+    const url = new URL(window.location.href)
+    url.searchParams.delete('h5Token')
+    url.searchParams.delete('token')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
   }
 
   markDesktopServerReady()
@@ -476,4 +489,28 @@ function clearStoredH5Token() {
   }
 
   setAuthToken(null)
+}
+
+/** Only an explicit rejection of the saved credential may forget a pairing. */
+function forgetRejectedH5Token(error: unknown, serverUrl: string, token: string) {
+  const stored = readStoredH5Connection()
+  if (normalizeBrowserH5Error(error, serverUrl).reason === 'invalid-token' &&
+    stored.serverUrl === serverUrl && stored.token === token) {
+    clearStoredH5Token()
+  } else {
+    setAuthToken(null)
+  }
+}
+
+function rememberVerifiedH5Connection(serverUrl: string, token: string) {
+  if (typeof window === 'undefined') return
+  try {
+    // Retain the old storage shape. If a write fails mid-switch, never leave
+    // another server's token paired with the newly written URL.
+    if (readStoredH5Connection().serverUrl !== serverUrl) window.localStorage.removeItem(H5_TOKEN_STORAGE_KEY)
+    window.localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, serverUrl)
+    window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, token)
+  } catch {
+    // Storage restrictions do not prevent the current authenticated connection.
+  }
 }

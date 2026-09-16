@@ -204,7 +204,7 @@ describe('Markdown subagent to OpenAI request integration', () => {
     const fetchOverride: typeof fetch = async (input, init) => {
       upstreamCalls.push({
         url: String(input),
-        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        body: JSON.parse(init?.body instanceof Uint8Array ? Buffer.from(await Bun.zstdDecompress(init.body)).toString('utf8') : String(init?.body)) as Record<string, unknown>,
       })
       return Response.json({
         id: 'resp_subagent_integration',

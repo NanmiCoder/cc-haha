@@ -73,13 +73,18 @@ afterAll(async () => {
 })
 
 describe('Computer Use API authorized app config', () => {
-  it('defaults Computer Use enabled for existing users without config', async () => {
+  it('defaults Computer Use off until the risk confirmation is accepted', async () => {
     const res = await callAuthorizedApps('GET')
 
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({
-      enabled: true,
+      enabled: false,
       authorizedApps: [],
+      grantFlags: {
+        clipboardRead: true,
+        clipboardWrite: true,
+        systemKeyCombos: true,
+      },
     })
   })
 
@@ -484,63 +489,21 @@ describe('runPipInstallWithFallback', () => {
   })
 })
 
-describe('computeRuntimeGrantAdditions', () => {
-  it('maps new grants to AuthorizedApp entries with ISO authorizedAt', async () => {
-    const { computeRuntimeGrantAdditions } = await importComputerUseApi()
-    const grantedAt = Date.UTC(2026, 0, 2, 3, 4, 5)
-
-    const additions = computeRuntimeGrantAdditions(
-      [],
-      [{ bundleId: 'com.apple.Notes', displayName: 'Notes', grantedAt }],
+describe('retired per-app authorization endpoint', () => {
+  it('cannot emit a runtime approval request', async () => {
+    const response = await callComputerUseAction(
+      'request-access',
+      'POST',
+      JSON.stringify({
+        sessionId: 'session-1',
+        request: { requestId: 'request-1', apps: [] },
+      }),
     )
 
-    expect(additions).toEqual([
-      {
-        bundleId: 'com.apple.Notes',
-        displayName: 'Notes',
-        authorizedAt: new Date(grantedAt).toISOString(),
-      },
-    ])
-  })
-
-  it('dedupes grants already present in the stored config by bundleId', async () => {
-    const { computeRuntimeGrantAdditions } = await importComputerUseApi()
-
-    const additions = computeRuntimeGrantAdditions(
-      [{ bundleId: 'com.apple.Notes', displayName: 'Notes' }],
-      [
-        { bundleId: 'com.apple.Notes', displayName: 'Notes', grantedAt: 1 },
-        { bundleId: 'com.apple.Safari', displayName: 'Safari', grantedAt: 2 },
-      ],
-    )
-
-    expect(additions.map((a) => a.bundleId)).toEqual(['com.apple.Safari'])
-  })
-
-  it('dedupes duplicate bundleIds within the same grant batch', async () => {
-    const { computeRuntimeGrantAdditions } = await importComputerUseApi()
-
-    const additions = computeRuntimeGrantAdditions(
-      [],
-      [
-        { bundleId: 'com.apple.Safari', displayName: 'Safari', grantedAt: 1 },
-        { bundleId: 'com.apple.Safari', displayName: 'Safari (dup)', grantedAt: 2 },
-      ],
-    )
-
-    expect(additions).toHaveLength(1)
-    expect(additions[0]).toMatchObject({ bundleId: 'com.apple.Safari', displayName: 'Safari' })
-  })
-
-  it('skips grants without a bundleId and returns [] for an empty batch', async () => {
-    const { computeRuntimeGrantAdditions } = await importComputerUseApi()
-
-    expect(computeRuntimeGrantAdditions([], [])).toEqual([])
-    expect(
-      computeRuntimeGrantAdditions([], [
-        { bundleId: '', displayName: 'No Bundle', grantedAt: 1 },
-      ]),
-    ).toEqual([])
+    expect(response.status).toBe(410)
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'APP_AUTHORIZATION_REMOVED',
+    })
   })
 })
 

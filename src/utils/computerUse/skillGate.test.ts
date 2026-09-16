@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
   invalidateComputerUseSkillGate,
@@ -13,6 +13,7 @@ import { resolveStoredComputerUseConfig } from './preauthorizedConfig.js'
  * long as the server is connected, which would put them in front of users who
  * deliberately turned the feature off.
  */
+beforeEach(() => invalidateComputerUseSkillGate())
 afterEach(() => invalidateComputerUseSkillGate())
 
 const configWith = (enabled: boolean) => () => JSON.stringify({ enabled })

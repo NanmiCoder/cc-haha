@@ -126,7 +126,7 @@ export type ServerMessage =
       turnActive: boolean
     }
   | { type: 'user_message_replay'; content: string }
-  | { type: 'message_complete'; usage: TokenUsage }
+  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
@@ -177,6 +177,14 @@ export type TokenUsage = {
   output_tokens: number
   cache_read_tokens?: number
   cache_creation_tokens?: number
+}
+
+/** Mirrors the server's `TurnTiming`: milliseconds, `decode_ms` excludes prefill and tools. */
+export type TurnTiming = {
+  duration_ms: number
+  duration_api_ms: number
+  ttft_ms: number
+  decode_ms: number
 }
 
 export type ChatState = 'idle' | 'thinking' | 'compacting' | 'tool_executing' | 'streaming' | 'permission_pending'

@@ -22,7 +22,11 @@
 const CANONICAL_MODIFIER: Readonly<Record<string, string>> = {
   // Key::Meta — "meta"|"super"|"command"|"cmd"|"windows"|"win"
   meta: "meta",
+  meta_l: 'meta',
+  meta_r: 'meta',
   super: "meta",
+  super_l: 'meta',
+  super_r: 'meta',
   command: "meta",
   cmd: "meta",
   windows: "meta",
@@ -30,18 +34,24 @@ const CANONICAL_MODIFIER: Readonly<Record<string, string>> = {
   // Key::Control + LControl + RControl
   ctrl: "ctrl",
   control: "ctrl",
+  control_l: 'ctrl',
+  control_r: 'ctrl',
   lctrl: "ctrl",
   lcontrol: "ctrl",
   rctrl: "ctrl",
   rcontrol: "ctrl",
   // Key::Shift + LShift + RShift
   shift: "shift",
+  shift_l: 'shift',
+  shift_r: 'shift',
   lshift: "shift",
   rshift: "shift",
   // Key::Alt and Key::Option — distinct Rust variants but same keycode on
   // darwin (kVK_Option). Collapse: cmd+alt+escape and cmd+option+escape
   // both Force Quit.
   alt: "alt",
+  alt_l: 'alt',
+  alt_r: 'alt',
   option: "alt",
   opt: "alt",
 };

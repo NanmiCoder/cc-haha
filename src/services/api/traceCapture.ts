@@ -485,6 +485,20 @@ function isTraceRecord(value: unknown): value is TraceJsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * Wait for all in-flight trace appends (including their index projections) to
+ * finish. Test teardown should drain before clearing state: a background
+ * projection still running after `clearTraceCaptureStateForTests` would
+ * re-open the index database and hold a file handle past the temp dir
+ * removal on Windows.
+ */
+export async function drainTraceCaptureForTests(): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const pending = [...traceWriteQueues.values()]
+    if (pending.length === 0) return
+    await Promise.allSettled(pending)
+  }
+}
 export function clearTraceCaptureStateForTests(): void {
   traceWriteQueues.clear()
   traceReadCache.clear()

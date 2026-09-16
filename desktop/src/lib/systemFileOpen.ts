@@ -18,7 +18,7 @@ export function reportOpenFailure(path: string): void {
 
 export function resolveAbsoluteOpenPath(path: string, workDir?: string): string {
   if (path === '~' || path.startsWith('~/') || path.startsWith('~\\')) return path
-  if (path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path) || !workDir) return path
+  if (path.startsWith('/') || path.startsWith('\\\\') || /^[a-zA-Z]:[\\/]/.test(path) || !workDir) return path
   return `${workDir.replace(/[\\/]+$/, '')}/${path.replace(/^[\\/]+/, '')}`
 }
 

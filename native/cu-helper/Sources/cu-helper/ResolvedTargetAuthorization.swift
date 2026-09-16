@@ -1,10 +1,10 @@
 import Darwin
 import Foundation
 
-/// Authoritative native policy applied only after a resolver has produced a
+/// Native process-identity validation applied after a resolver has produced a
 /// real running process and its current process-lifetime identity. Selector
 /// form is deliberately absent, so PID/name/bundle/frontmost/launch paths have
-/// no policy bypass.
+/// no process-identity bypass. Global Computer Use consent covers every app.
 enum ResolvedTargetAuthorization {
     static func authorize(
         resolved: ResolvedAppTarget,
@@ -41,13 +41,6 @@ enum ResolvedTargetAuthorization {
                     "The resolved application changed process identity before native policy validation."
                 )
             }
-        }
-
-        guard AppTargetPolicy.decision(bundleID: actualBundleID) == .allow else {
-            throw CUError(
-                "app_denied",
-                "Computer Use is not allowed to use the app '\(actualBundleID)' for safety reasons."
-            )
         }
 
         guard let target = ProvenProcessTarget(pid: pid, identity: identity) else {

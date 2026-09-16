@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { useElementWidth } from './useElementWidth'
 
 const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
@@ -81,6 +81,25 @@ describe('useElementWidth', () => {
     resizeTo(320)
 
     expect(screen.getByTestId('width')).toHaveTextContent('320')
+  })
+
+  it('keeps observing after StrictMode replays effects and cleans up on unmount', () => {
+    stubLayout(400)
+    stubResizeObserver()
+
+    const view = render(<StrictMode><Probe /></StrictMode>)
+    expect(screen.getByTestId('width')).toHaveTextContent('400')
+
+    // The desktop bootstrap uses StrictMode. Its effect replay disconnects
+    // the first observer while retaining the DOM node and its callback ref.
+    resizeTo(560)
+    expect(screen.getByTestId('width')).toHaveTextContent('560')
+    resizeTo(320)
+    expect(screen.getByTestId('width')).toHaveTextContent('320')
+    expect(observers.size).toBe(1)
+
+    view.unmount()
+    expect(observers.size).toBe(0)
   })
 
   it('still measures once when the environment has no ResizeObserver', () => {

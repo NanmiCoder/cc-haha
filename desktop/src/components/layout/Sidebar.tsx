@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Bell, Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
+import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -15,6 +16,7 @@ import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
 import { ProjectEditorModal, type ProjectEditorSubmission } from './ProjectEditorModal'
 import { SidebarTaskList } from './SidebarTaskList'
+import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
 import {
   buildSidebarTaskGroups,
   getSessionProjectKey,
@@ -25,7 +27,7 @@ import {
 } from './sidebarTaskGroups'
 import { sessionsApi } from '../../api/sessions'
 import type { SessionListItem } from '../../types/session'
-import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
+import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID, CONNECTORS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import {
@@ -54,7 +56,6 @@ const PROJECT_HIDDEN_STORAGE_KEY = 'cc-haha-sidebar-hidden-projects'
 const PROJECT_ORGANIZATION_STORAGE_KEY = 'cc-haha-sidebar-project-organization'
 const PROJECT_SORT_STORAGE_KEY = 'cc-haha-sidebar-project-sort'
 const PROJECT_GROUP_VISIBLE_COUNT = 6
-const PROJECT_GROUP_SCROLL_COUNT = 12
 
 type SidebarProjectOrganization = 'project' | 'recentProject' | 'time'
 type SidebarProjectSortBy = 'createdAt' | 'updatedAt'
@@ -113,6 +114,7 @@ export function Sidebar({
 }: SidebarProps) {
   const t = useTranslation()
   const sessions = useSessionStore((s) => s.sessions)
+  const projectHistory = useSessionStore((s) => s.projectHistory)
   const isLoading = useSessionStore((s) => s.isLoading)
   const error = useSessionStore((s) => s.error)
   const indexStatus = useSessionStore((s) => s.indexStatus)
@@ -769,6 +771,7 @@ export function Sidebar({
     if (!pendingDeleteSessionId) return
     await deleteSession(pendingDeleteSessionId)
     disconnectSession(pendingDeleteSessionId)
+    releaseWorkspaceSession(pendingDeleteSessionId)
     closeTab(pendingDeleteSessionId)
     setPendingDeleteSessionId(null)
   }, [closeTab, deleteSession, disconnectSession, pendingDeleteSessionId])
@@ -795,7 +798,7 @@ export function Sidebar({
       handleBatchSessionClick(event, session.id)
       return
     }
-    useTabStore.getState().openTab(session.id, session.title)
+    useSessionStore.getState().openHistoricalSession(session)
     useChatStore.getState().connectToSession(session.id)
     closeMobileDrawer()
   }, [closeMobileDrawer, handleBatchSessionClick, isBatchMode])
@@ -820,6 +823,7 @@ export function Sidebar({
       const result = await deleteSessions(ids)
       for (const sessionId of result.successes) {
         disconnectSession(sessionId)
+        releaseWorkspaceSession(sessionId)
         closeTab(sessionId)
       }
 
@@ -1050,19 +1054,20 @@ export function Sidebar({
         )}
         {!isMobile && (
           <NavItem
-            active={activeTabId === MARKET_TAB_ID}
+            active={activeTabId === MARKET_TAB_ID || activeTabId === CONNECTORS_TAB_ID}
             collapsed={!expanded}
-            label={t('sidebar.market')}
+            label={t('sidebar.extensions')}
             touchFriendly={isMobile}
             onClick={() => {
-              useTabStore.getState().openTab(MARKET_TAB_ID, t('sidebar.market'), 'market')
+              useTabStore.getState().openTab(MARKET_TAB_ID, t('sidebar.extensions'), 'market')
               closeMobileDrawer()
             }}
             icon={<StorefrontIcon />}
           >
-            {t('sidebar.market')}
+            {t('sidebar.extensions')}
           </NavItem>
         )}
+
       </div>
 
       {expanded ? (
@@ -1170,6 +1175,7 @@ export function Sidebar({
             )}
             <div
               ref={sessionScrollAreaRef}
+              onScroll={(event) => notifyProjectHistoryAtSidebarBottom(event.currentTarget)}
               data-testid="sidebar-session-scroll-area"
               className="sidebar-scroll-area min-h-0 flex-1 overflow-y-auto px-3 pb-20"
             >
@@ -1230,9 +1236,10 @@ export function Sidebar({
                   ? []
                   : getVisibleProjectSessions(project.sessions, sessionsExpanded, activeTabId)
                 const hiddenCount = project.sessions.length - visibleItems.length
+                const showSessionFoldControl = project.sessions.length > PROJECT_GROUP_VISIBLE_COUNT
                 const groupIds = project.sessions.map((session) => session.id)
                 const groupSelectedCount = groupIds.filter((id) => selectedSessionIds.has(id)).length
-                const hasInternalScroll = sessionsExpanded && project.sessions.length > PROJECT_GROUP_SCROLL_COUNT
+                const history = projectHistory[project.key]
                 const isProjectDragging = draggingProjectKey === project.key
                 const isProjectPinned = pinnedProjectKeys.has(project.key)
                 const dropBefore = projectDropTarget?.key === project.key && projectDropTarget.position === 'before'
@@ -1348,9 +1355,20 @@ export function Sidebar({
                     </div>
                     {!projectCollapsed && (
                       <div className="mt-0.5 pl-5">
-                        <div
-                          className={hasInternalScroll ? 'max-h-[420px] overflow-y-auto pr-1' : undefined}
-                          data-testid={`sidebar-project-session-list-${domSafeProjectKey(project.key)}`}
+                        <ProjectSessionList
+                          projectKey={project.key}
+                          outerScrollRef={sessionScrollAreaRef}
+                          testId={`sidebar-project-session-list-${domSafeProjectKey(project.key)}`}
+                          expanded={sessionsExpanded}
+                          hasHiddenSessions={hiddenCount > 0}
+                          itemCount={visibleItems.length}
+                          nextCursor={history?.nextCursor}
+                          isLoading={history?.isLoading ?? false}
+                          hasMore={history?.hasMore ?? true}
+                          error={history?.error}
+                          onExpand={() => setExpandedProjectKeys((current) => new Set([...current, project.key]))}
+                          onLoadMore={() => useSessionStore.getState().loadMoreProjectSessions(project.key)}
+                          onRelease={() => useSessionStore.getState().releaseProjectHistory(project.key)}
                         >
                           {visibleItems.map((session) => (
                             <div
@@ -1426,8 +1444,8 @@ export function Sidebar({
                               )}
                             </div>
                           ))}
-                        </div>
-                        {(hiddenCount > 0 || sessionsExpanded) && (
+                        </ProjectSessionList>
+                        {showSessionFoldControl && (
                           <div className="mt-2 flex justify-start px-2.5">
                             <button
                               type="button"
@@ -1456,7 +1474,7 @@ export function Sidebar({
         <div className="flex-1" aria-hidden="true" />
       )}
 
-      {!isMobile && (
+      {(
         <div
           data-testid="sidebar-settings-dock"
           className={`sidebar-settings-dock absolute bottom-0 left-0 right-0 border-t border-[var(--color-border)] p-3 ${expanded ? '' : 'flex justify-center'}`}

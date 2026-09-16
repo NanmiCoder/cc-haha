@@ -1414,7 +1414,7 @@ async function checkPermissionsAndCallTool(
           )
         : await processToolResultBlock(tool, toolUseResult, toolUseID)
 
-      // Build content blocks - tool result first, then optional feedback
+      // Build content blocks - tool result first, then optional feedback.
       const contentBlocks: ContentBlockParam[] = [toolResultBlock]
       // Add accept feedback if user provided feedback when approving
       // (acceptFeedback only exists on PermissionAllowDecision, which is guaranteed here)

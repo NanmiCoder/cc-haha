@@ -14,6 +14,7 @@ const NODE_PTY_MANIFEST_FILE = '.cc-haha-node-pty-manifest.json'
 const MACOS_DOWNLOAD_XATTRS = ['com.apple.quarantine', 'com.apple.provenance']
 
 export type TerminalSpawnInput = {
+  requestId?: string
   cols?: number
   rows?: number
   cwd?: string
@@ -26,11 +27,13 @@ export type TerminalSpawnResult = {
 }
 
 export type TerminalOutputPayload = {
+  requestId?: string
   session_id: number
   data: string
 }
 
 export type TerminalExitPayload = {
+  requestId?: string
   session_id: number
   code: number
   signal?: string | null
@@ -619,6 +622,9 @@ export class ElectronTerminalService {
   }
 
   async spawn(input: TerminalSpawnInput, webContents: TerminalWebContentsLike): Promise<TerminalSpawnResult> {
+    // Additive IPC correlation: older callers still receive the original payload shape.
+    const correlation = typeof input.requestId === 'string' && input.requestId.length > 0
+      ? { requestId: input.requestId } : {}
     const cols = Math.max(MIN_TERMINAL_COLS, Math.floor(input.cols ?? 80))
     const rows = Math.max(MIN_TERMINAL_ROWS, Math.floor(input.rows ?? 24))
     const cwd = resolveTerminalCwd(input.cwd, this.env, this.cwd)
@@ -691,6 +697,7 @@ export class ElectronTerminalService {
       activePty.onData(data => {
         if (this.sessions.get(activeSessionId)?.pty !== activePty) return
         sendTerminalEvent(webContents, ELECTRON_EVENT_CHANNELS.terminalOutput, {
+          ...correlation,
           session_id: activeSessionId,
           data,
         } satisfies TerminalOutputPayload)
@@ -700,6 +707,7 @@ export class ElectronTerminalService {
         const active = this.removeSession(activeSessionId, activePty)
         if (!active) return
         sendTerminalEvent(webContents, ELECTRON_EVENT_CHANNELS.terminalExit, {
+          ...correlation,
           session_id: activeSessionId,
           code: exitCode,
           signal: signal == null ? null : String(signal),

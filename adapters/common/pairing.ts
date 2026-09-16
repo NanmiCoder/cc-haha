@@ -13,7 +13,15 @@ import * as crypto from 'node:crypto'
 import type { PairedUser, PairingState } from './config.js'
 
 const SAFE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' // 排除 0/O/1/I/L
-export type ImPlatform = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp'
+export type ImPlatform =
+  | 'telegram'
+  | 'feishu'
+  | 'wechat'
+  | 'dingtalk'
+  | 'whatsapp'
+  | 'wecom'
+  | 'qq'
+  | 'slack'
 
 // 速率限制：每个 userId 在 RATE_LIMIT_WINDOW_MS 内最多 RATE_LIMIT_MAX_ATTEMPTS 次失败尝试
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000 // 5 minutes

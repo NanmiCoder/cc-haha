@@ -7,11 +7,13 @@ export type TerminalSpawnResult = {
 }
 
 export type TerminalOutputPayload = {
+  requestId?: string
   session_id: number
   data: string
 }
 
 export type TerminalExitPayload = {
+  requestId?: string
   session_id: number
   code: number
   signal?: string | null
@@ -30,8 +32,13 @@ function getTerminalHost() {
 export const terminalApi = {
   isAvailable: () => getDesktopHost().capabilities.terminal,
 
-  spawn(input: { cols: number; rows: number; cwd?: string }) {
-    return getTerminalHost().spawn(input)
+  spawn(input: { cols: number; rows: number; cwd?: string; requestId?: string }) {
+    const host = getTerminalHost()
+    if (host.supportsStartupCorrelation) return host.spawn(input)
+    // The Web renderer can hot-update before the native preload/main process.
+    // Old strict IPC validators reject newly added keys, even optional ones.
+    const { requestId: _requestId, ...legacyInput } = input
+    return host.spawn(legacyInput)
   },
 
   write(sessionId: number, data: string) {

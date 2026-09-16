@@ -374,8 +374,9 @@ describe('Business Flow: Models & Effort', () => {
 
   it('should return available fallback models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(4)
+    expect(data.models.length).toBe(5)
     const names = data.models.map((m: any) => m.name)
+    expect(names).toContain('Fable 5.1')
     expect(names).toContain('Fable 5')
     expect(names).toContain('Opus 4.8')
     expect(names).toContain('Sonnet 5')
@@ -396,6 +397,19 @@ describe('Business Flow: Models & Effort', () => {
     const { data } = await api('GET', '/api/models/current')
     expect(data.model.id).toBe('claude-opus-4-8')
     expect(data.model.name).toBe('Opus 4.8')
+  })
+
+  it('should select Fable 5.1 with its reasoning catalog intact', async () => {
+    const { status } = await api('PUT', '/api/models/current', {
+      modelId: 'claude-fable-5-1',
+    })
+    expect(status).toBe(200)
+    const { data } = await api('GET', '/api/models/current')
+    expect(data.model).toMatchObject({
+      id: 'claude-fable-5-1', name: 'Fable 5.1', context: '1m',
+      defaultReasoningEffort: 'high',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
   })
 
   it('should switch to Haiku 4.5', async () => {

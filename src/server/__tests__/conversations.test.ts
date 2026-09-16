@@ -10,6 +10,7 @@ import * as fs from 'fs/promises'
 import { readFileSync } from 'node:fs'
 import * as path from 'path'
 import * as os from 'os'
+import { withResolvers } from '../../utils/withResolvers.js'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
@@ -1968,29 +1969,6 @@ describe('WebSocket Chat Integration', () => {
     }
   }
 
-  async function withMockInitDelay<T>(
-    delayMs: number | undefined,
-    callback: () => Promise<T>,
-  ): Promise<T> {
-    const previousDelay = process.env.MOCK_SDK_INIT_DELAY_MS
-
-    if (delayMs && delayMs > 0) {
-      process.env.MOCK_SDK_INIT_DELAY_MS = String(delayMs)
-    } else {
-      delete process.env.MOCK_SDK_INIT_DELAY_MS
-    }
-
-    try {
-      return await callback()
-    } finally {
-      if (previousDelay === undefined) {
-        delete process.env.MOCK_SDK_INIT_DELAY_MS
-      } else {
-        process.env.MOCK_SDK_INIT_DELAY_MS = previousDelay
-      }
-    }
-  }
-
   async function withMockStreamDelay<T>(
     delayMs: number | undefined,
     callback: () => Promise<T>,
@@ -2792,7 +2770,7 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('should return initial context for a prewarmed empty session on the first inspection request', async () => {
-    await withMockInitDelay(500, async () => {
+    await withMockInitMode('on_first_user', async () => {
       const createRes = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2800,7 +2778,27 @@ describe('WebSocket Chat Integration', () => {
       })
       expect(createRes.status).toBe(201)
       const { sessionId } = await createRes.json() as { sessionId: string }
+      const sdkAttached = withResolvers<void>()
+      const inspectionStarted = withResolvers<void>()
+      const originalAttach = conversationService.attachSdkConnection.bind(conversationService)
+      const originalRequestControl = conversationService.requestControl.bind(conversationService)
+      let releaseSdkConnection: (() => void) | undefined
+      const attachSpy = spyOn(conversationService, 'attachSdkConnection').mockImplementation((id, socket) => {
+        if (id !== sessionId) return originalAttach(id, socket)
+        // Hold the real SDK transport until the first inspection is already waiting.
+        releaseSdkConnection = () => { originalAttach(id, socket) }
+        sdkAttached.resolve()
+        return true
+      })
+      const controlSpy = spyOn(conversationService, 'requestControl').mockImplementation((...args) => {
+        const result = originalRequestControl(...args)
+        if (args[0] === sessionId && args[1].subtype === 'get_context_usage') {
+          inspectionStarted.resolve()
+        }
+        return result
+      })
       const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      const inspectionAbort = new AbortController()
 
       try {
         await new Promise<void>((resolve, reject) => {
@@ -2825,17 +2823,21 @@ describe('WebSocket Chat Integration', () => {
           }
         })
 
-        await waitUntil(
-          () => conversationService.hasSession(sessionId),
-          `prewarmed CLI process for ${sessionId}`,
-        )
+        await sdkAttached.promise
+        expect(conversationService.getSessionInitMessage(sessionId)).toBeNull()
 
         const startedAt = performance.now()
-        const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=1&contextOnly=1`)
+        const inspection = fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=1&contextOnly=1`, {
+          signal: inspectionAbort.signal,
+        })
+        await inspectionStarted.promise
+        releaseSdkConnection!()
+        const res = await inspection
         const elapsedMs = performance.now() - startedAt
         expect(res.status).toBe(200)
         const body = await res.json() as any
 
+        expect(conversationService.getSessionInitMessage(sessionId)).toBeNull()
         expect(body.context.model).toBe('mock-opus')
         expect(body.context.totalTokens).toBeGreaterThan(0)
         expect(body.context.percentage).toBe(13)
@@ -2843,6 +2845,9 @@ describe('WebSocket Chat Integration', () => {
         expect(body.errors).toEqual({})
         expect(elapsedMs).toBeLessThan(2_000)
       } finally {
+        inspectionAbort.abort()
+        attachSpy.mockRestore()
+        controlSpy.mockRestore()
         ws.close()
         conversationService.stopSession(sessionId)
       }

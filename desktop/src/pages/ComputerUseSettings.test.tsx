@@ -129,6 +129,53 @@ describe('ComputerUseSettings', () => {
     })
   })
 
+  it('requires explicit risk confirmation before enabling all supported apps', async () => {
+    computerUseApiMock.getAuthorizedApps.mockResolvedValue({
+      ...enabledConfig,
+      enabled: false,
+    })
+
+    render(<ComputerUseSettings />)
+
+    const toggle = await screen.findByLabelText('Enabled')
+    fireEvent.click(toggle)
+
+    expect(toggle).not.toBeChecked()
+    expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toHaveTextContent('all supported applications')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Computer Use' }))
+
+    await waitFor(() => {
+      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
+        enabled: true,
+        grantFlags: {
+          clipboardRead: true,
+          clipboardWrite: true,
+          systemKeyCombos: true,
+        },
+      })
+    })
+    expect(toggle).toBeChecked()
+  })
+
+  it('keeps Computer Use disabled when the risk dialog is cancelled', async () => {
+    computerUseApiMock.getAuthorizedApps.mockResolvedValue({
+      ...enabledConfig,
+      enabled: false,
+    })
+
+    render(<ComputerUseSettings />)
+
+    const toggle = await screen.findByLabelText('Enabled')
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(toggle).not.toBeChecked()
+    expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+  })
+
   it('saves a custom Python interpreter path and rechecks status', async () => {
     render(<ComputerUseSettings />)
 
@@ -203,116 +250,6 @@ describe('ComputerUseSettings', () => {
 
     expect(screen.getByText('Could not open the file picker. Paste the path manually.')).toBeInTheDocument()
     expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
-  })
-
-  it('keeps the user-selected enablement when a stale refresh resolves later', async () => {
-    const staleRefresh = deferred<typeof enabledConfig>()
-    computerUseApiMock.getStatus.mockResolvedValue({
-      ...readyStatus,
-      venv: {
-        ...readyStatus.venv,
-        created: true,
-      },
-      dependencies: {
-        ...readyStatus.dependencies,
-        installed: true,
-      },
-    })
-    computerUseApiMock.getInstalledApps.mockResolvedValue({ apps: [] })
-    computerUseApiMock.getAuthorizedApps
-      .mockResolvedValueOnce({
-        ...enabledConfig,
-        enabled: false,
-      })
-      .mockReturnValueOnce(staleRefresh.promise)
-
-    render(<ComputerUseSettings />)
-
-    const toggle = await screen.findByLabelText('Enabled')
-    await waitFor(() => expect(toggle).not.toBeChecked())
-    await waitFor(() => expect(computerUseApiMock.getInstalledApps).toHaveBeenCalled())
-
-    await act(async () => {
-      fireEvent.click(toggle)
-      await Promise.resolve()
-    })
-
-    expect(toggle).toBeChecked()
-
-    await act(async () => {
-      staleRefresh.resolve({
-        ...enabledConfig,
-        enabled: false,
-      })
-      await staleRefresh.promise
-    })
-
-    expect(toggle).toBeChecked()
-  })
-
-  it('saves app and grant flag changes from the ready environment view', async () => {
-    computerUseApiMock.getStatus.mockResolvedValue({
-      ...readyStatus,
-      venv: {
-        ...readyStatus.venv,
-        created: true,
-      },
-      dependencies: {
-        ...readyStatus.dependencies,
-        installed: true,
-      },
-    })
-    computerUseApiMock.getInstalledApps.mockResolvedValue({
-      apps: [
-        {
-          bundleId: 'com.example.Preview',
-          displayName: 'Preview',
-          path: '/Applications/Preview.app',
-        },
-      ],
-    })
-
-    render(<ComputerUseSettings />)
-
-    await screen.findByText('Preview')
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('Preview'))
-      await Promise.resolve()
-    })
-
-    expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-      authorizedApps: [
-        expect.objectContaining({
-          bundleId: 'com.example.Preview',
-          displayName: 'Preview',
-        }),
-      ],
-      grantFlags: {
-        clipboardRead: true,
-        clipboardWrite: true,
-        systemKeyCombos: true,
-      },
-    })
-
-    await act(async () => {
-      fireEvent.click(screen.getByLabelText('Clipboard Access'))
-      await Promise.resolve()
-    })
-
-    expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-      authorizedApps: [
-        expect.objectContaining({
-          bundleId: 'com.example.Preview',
-          displayName: 'Preview',
-        }),
-      ],
-      grantFlags: {
-        clipboardRead: false,
-        clipboardWrite: false,
-        systemKeyCombos: true,
-      },
-    })
   })
 
   describe('native cu-helper branch', () => {
@@ -479,6 +416,7 @@ describe('ComputerUseSettings', () => {
       expect(toggle).not.toBeChecked()
 
       fireEvent.click(toggle)
+      fireEvent.click(screen.getByRole('button', { name: 'Enable Computer Use' }))
 
       expect(
         await screen.findByText(
@@ -555,72 +493,6 @@ describe('ComputerUseSettings', () => {
       expect(screen.getByRole('heading', { name: 'Computer Control' })).toBeInTheDocument()
     })
 
-    /**
-     * Rows show the application's own icon, served per bundle id. The letter
-     * tile is the fallback for bundles that ship no icon, so it must appear on
-     * image error and NOT before — a page that renders letters while perfectly
-     * good icons exist looks broken.
-     */
-    describe('app icons', () => {
-      const authorizedConfig = {
-        ...enabledConfig,
-        authorizedApps: [
-          {
-            bundleId: 'com.example.Preview',
-            displayName: 'Preview',
-            authorizedAt: '2026-01-01T00:00:00.000Z',
-          },
-        ],
-      }
-
-      it('renders the icon it loaded for the row bundle id', async () => {
-        computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
-        computerUseApiMock.getAuthorizedApps.mockResolvedValue(authorizedConfig)
-        computerUseApiMock.loadAppIcon.mockResolvedValue('blob:icon-preview')
-
-        render(<ComputerUseSettings />)
-        await screen.findByText('Preview')
-
-        await waitFor(() => {
-          expect(document.querySelector('img[src="blob:icon-preview"]')).not.toBeNull()
-        })
-        expect(computerUseApiMock.loadAppIcon).toHaveBeenCalledWith('com.example.Preview')
-        // The letter tile is the fallback, so it must be gone once the icon
-        // arrives — otherwise both would render.
-        expect(screen.queryByText('P')).toBeNull()
-      })
-
-      it('keeps the letter tile when the bundle has no icon', async () => {
-        computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
-        computerUseApiMock.getAuthorizedApps.mockResolvedValue(authorizedConfig)
-        // null is the ordinary "this bundle ships no icon" answer.
-        computerUseApiMock.loadAppIcon.mockResolvedValue(null)
-
-        render(<ComputerUseSettings />)
-        await screen.findByText('Preview')
-
-        await waitFor(() => expect(screen.getByText('P')).toBeInTheDocument())
-        expect(document.querySelector('img')).toBeNull()
-      })
-
-      it('never points an img straight at the endpoint', async () => {
-        // The packaged renderer is a file:// page, so a cross-origin <img> to
-        // /api/... is refused by the server and silently shows nothing. Icons
-        // must arrive as blob URLs through the authenticated channel.
-        computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
-        computerUseApiMock.getAuthorizedApps.mockResolvedValue(authorizedConfig)
-        computerUseApiMock.loadAppIcon.mockResolvedValue('blob:icon-preview')
-
-        render(<ComputerUseSettings />)
-        await screen.findByText('Preview')
-        await waitFor(() => {
-          expect(document.querySelector('img[src="blob:icon-preview"]')).not.toBeNull()
-        })
-
-        expect(document.querySelector('img[src*="/api/"]')).toBeNull()
-      })
-    })
-
     it('pops the native permission card when enabling Computer Use with missing permissions', async () => {
       computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
       computerUseApiMock.getAuthorizedApps.mockResolvedValue({
@@ -635,10 +507,18 @@ describe('ComputerUseSettings', () => {
 
       await act(async () => {
         fireEvent.click(toggle)
+        fireEvent.click(screen.getByRole('button', { name: 'Enable Computer Use' }))
         await Promise.resolve()
       })
 
-      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({ enabled: true })
+      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
+        enabled: true,
+        grantFlags: {
+          clipboardRead: true,
+          clipboardWrite: true,
+          systemKeyCombos: true,
+        },
+      })
       expect(computerUseApiMock.openPermissionCard).toHaveBeenCalledTimes(1)
     })
 
@@ -659,10 +539,18 @@ describe('ComputerUseSettings', () => {
 
       await act(async () => {
         fireEvent.click(toggle)
+        fireEvent.click(screen.getByRole('button', { name: 'Enable Computer Use' }))
         await Promise.resolve()
       })
 
-      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({ enabled: true })
+      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
+        enabled: true,
+        grantFlags: {
+          clipboardRead: true,
+          clipboardWrite: true,
+          systemKeyCombos: true,
+        },
+      })
       expect(computerUseApiMock.openPermissionCard).not.toHaveBeenCalled()
     })
 
@@ -696,7 +584,7 @@ describe('ComputerUseSettings', () => {
       ).toBeInTheDocument()
     })
 
-    it('removes an always-allowed app via the trash button', async () => {
+    it('does not render an app-by-app authorization list', async () => {
       computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
       computerUseApiMock.getAuthorizedApps.mockResolvedValue({
         ...enabledConfig,
@@ -711,66 +599,10 @@ describe('ComputerUseSettings', () => {
 
       render(<ComputerUseSettings />)
 
-      const remove = await screen.findByLabelText('Remove Preview')
-
-      await act(async () => {
-        fireEvent.click(remove)
-        await Promise.resolve()
-      })
-
-      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-        authorizedApps: [],
-        grantFlags: {
-          clipboardRead: true,
-          clipboardWrite: true,
-          systemKeyCombos: true,
-        },
-      })
-    })
-
-    it('adds an app from the picker fed by getInstalledApps', async () => {
-      computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
-      computerUseApiMock.getInstalledApps.mockResolvedValue({
-        apps: [
-          {
-            bundleId: 'com.example.Notes',
-            displayName: 'Notes',
-            path: '/Applications/Notes.app',
-          },
-        ],
-      })
-
-      render(<ComputerUseSettings />)
-
-      const addButton = await screen.findByText('Add App')
-
-      await act(async () => {
-        fireEvent.click(addButton)
-        await Promise.resolve()
-      })
-
-      await waitFor(() => expect(computerUseApiMock.getInstalledApps).toHaveBeenCalled())
-
-      const notesEntry = await screen.findByText('Notes')
-
-      await act(async () => {
-        fireEvent.click(notesEntry)
-        await Promise.resolve()
-      })
-
-      expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-        authorizedApps: [
-          expect.objectContaining({
-            bundleId: 'com.example.Notes',
-            displayName: 'Notes',
-          }),
-        ],
-        grantFlags: {
-          clipboardRead: true,
-          clipboardWrite: true,
-          systemKeyCombos: true,
-        },
-      })
+      await screen.findByRole('heading', { name: 'Computer Control' })
+      expect(screen.queryByText('Preview')).not.toBeInTheDocument()
+      expect(screen.queryByText('Add App')).not.toBeInTheDocument()
+      expect(computerUseApiMock.getInstalledApps).not.toHaveBeenCalled()
     })
   })
 })

@@ -17,6 +17,8 @@ import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonF
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { addFileGlobRuleToGitignore } from '../../utils/git/gitignore.js'
+import { isEnvTruthy } from '../../utils/envUtils.js'
+import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
 
 export const VALID_PERMISSION_MODES = [
   'default',
@@ -101,6 +103,20 @@ export class SettingsService {
     return this.readJsonFile(this.getUserSettingsPath())
   }
 
+  /** Read-time upgrade for older settings that only stored the team env flag.
+   * Keep the original file intact until the user explicitly saves a choice.
+   */
+  async getAgentTeamsEnabled(): Promise<boolean> {
+    const user = await this.getUserSettings()
+    if (typeof user.agentTeamsEnabled === 'boolean') return user.agentTeamsEnabled
+    const managed = await this.readJsonFile(path.join(this.getConfigDir(), 'cc-haha', 'settings.json'))
+    const inherited = await getProcessEnvWithTerminalShellEnvironment()
+    const key = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'
+    const legacyValue = normalizeJsonObject(managed.env)?.[key] ??
+      normalizeJsonObject(user.env)?.[key] ?? inherited[key]
+    return typeof legacyValue === 'string' ? isEnvTruthy(legacyValue) : true
+  }
+
   /** 获取项目级设置 */
   async getProjectSettings(projectRoot?: string): Promise<Record<string, unknown>> {
     return this.readJsonFile(this.getProjectSettingsPath(projectRoot))
@@ -172,6 +188,9 @@ export class SettingsService {
 
   /** 更新用户级设置（顶层浅合并，并保留桌面终端的未知子字段） */
   async updateUserSettings(settings: Record<string, unknown>): Promise<void> {
+    if (Object.hasOwn(settings, 'agentTeamsEnabled') && typeof settings.agentTeamsEnabled !== 'boolean') {
+      throw ApiError.badRequest('agentTeamsEnabled must be a boolean')
+    }
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {
       const current = await this.readJsonFile(filePath)

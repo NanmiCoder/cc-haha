@@ -16,6 +16,17 @@ function assistant(uuid: string): AssistantMessage {
 }
 
 describe('stream response boundary', () => {
+  test('does not report an internal requested budget as a proven upstream limit', () => {
+    for (const truncatedToolUse of [true, false]) {
+      const error = createOutputLimitErrorMessage({
+        stopReason: 'max_tokens', maxOutputTokens: 32_000, truncatedToolUse,
+      })
+      const text = JSON.stringify(error.message.content)
+      expect(text).not.toContain('32000')
+      expect(text).toContain('upstream length limit')
+      if (truncatedToolUse) expect(text).toContain('not executed')
+    }
+  })
   test('drops a local tool block when max_tokens proves it was truncated', () => {
     const buffer = new StreamAssistantCommitBuffer<AssistantMessage>({
       deferToolUseCommit: true,

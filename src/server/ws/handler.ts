@@ -13,6 +13,7 @@ import type {
   PermissionMode,
   ServerMessage,
   TokenUsage,
+  TurnTiming,
 } from './events.js'
 import { RUNTIME_CONFIG_APPLIED_EVENT } from './events.js'
 import * as os from 'node:os'
@@ -32,7 +33,7 @@ import {
 } from '../services/providerRuntimeEnv.js'
 import { isOpenAIOfficialProviderId } from '../services/openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from '../services/grokOfficialProvider.js'
-import { getOpenAICodexModelCatalog } from '../../services/openaiAuth/modelCatalog.js'
+import { getDesktopOpenAICodexModelCatalog } from '../services/openaiModelCatalog.js'
 import {
   OPENAI_DEFAULT_MAIN_MODEL,
   getOpenAIModelCatalogEntry,
@@ -173,6 +174,7 @@ const sessionTitleState = new Map<string, {
   userMessageCount: number
   hasCustomTitle: boolean
   hasExistingTranscript: boolean
+  persistTitleSource: boolean
   firstUserMessage: string
   completedTurns: TitleConversationTurn[]
   activeTurn?: TitleConversationTurn & { count: number }
@@ -492,6 +494,31 @@ function usageNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+/**
+ * Generation timings the CLI reports on its `result` message.
+ *
+ * These used to be dropped here, which is why nothing downstream could say how fast tokens were
+ * being produced. `decode_ms` is the one that matters: it spans only the time the model spent
+ * emitting tokens, so `output_tokens / decode_ms` is a rate rather than a number diluted by
+ * prefill and tool execution. All four are 0/absent together when the turn produced no timed
+ * stream (non-streaming fallback, or a CLI too old to report them).
+ */
+function translateCliTiming(cliMsg: Record<string, unknown>): TurnTiming | undefined {
+  const durationMs = usageNumber(cliMsg.duration_ms)
+  const durationApiMs = usageNumber(cliMsg.duration_api_ms)
+  const decodeMs = usageNumber(cliMsg.decode_ms)
+  const ttftMs = usageNumber(cliMsg.ttft_ms)
+  if (durationMs === 0 && durationApiMs === 0 && decodeMs === 0 && ttftMs === 0) {
+    return undefined
+  }
+  return {
+    duration_ms: durationMs,
+    duration_api_ms: durationApiMs,
+    ttft_ms: ttftMs,
+    decode_ms: decodeMs,
+  }
+}
+
 function translateCliUsage(usage: unknown): TokenUsage {
   const record = usage && typeof usage === 'object'
     ? usage as Record<string, unknown>
@@ -762,6 +789,7 @@ async function handleUserMessage(
   message: Extract<ClientMessage, { type: 'user_message' }>,
   activeTurn: ActiveUserTurnState,
 ) {
+  const persistTitleSource = sessionService.shouldPersistSession()
   const { sessionId } = ws.data
 
   const desktopSlashCommand = getDesktopSlashCommand(message.content)
@@ -820,6 +848,7 @@ async function handleUserMessage(
       userMessageCount: 0,
       hasCustomTitle,
       hasExistingTranscript: (launchInfo?.transcriptMessageCount ?? 0) > 0,
+      persistTitleSource,
       firstUserMessage: '',
       completedTurns: [],
       startedGenerationKeys: new Set<string>(),
@@ -830,6 +859,7 @@ async function handleUserMessage(
   const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
   let titleTurnNumber: number | null = null
   if (titleInput) {
+    titleState.persistTitleSource &&= persistTitleSource
     titleState.userMessageCount++
     titleTurnNumber = titleState.userMessageCount
     titleState.activeTurn = {
@@ -2321,6 +2351,10 @@ function triggerTitleGeneration(
 ): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle || state.hasExistingTranscript) return
+  // Titles summarize cumulative input. Once it includes a private turn, later
+  // refreshes must remain in memory even if retention is enabled again.
+  state.persistTitleSource &&= sessionService.shouldPersistSession()
+  const persist = state.persistTitleSource
 
   const count = phase === 'turn-complete'
     ? completedTurnCount ?? state.userMessageCount
@@ -2337,7 +2371,7 @@ function triggerTitleGeneration(
         const text = state.firstUserMessage
         const placeholder = deriveTitle(text)
         if (placeholder) {
-          const saved = await saveAiTitle(sessionId, placeholder)
+          const saved = await saveAiTitle(sessionId, placeholder, persist)
           if (!saved) {
             state.hasCustomTitle = true
             return
@@ -2375,7 +2409,7 @@ function triggerTitleGeneration(
       )
       if (generationSeq !== state.generationSeq) return
       if (aiTitle) {
-        const saved = await saveAiTitle(sessionId, aiTitle)
+        const saved = await saveAiTitle(sessionId, aiTitle, persist && state.persistTitleSource)
         if (!saved) {
           state.hasCustomTitle = true
           return
@@ -2457,8 +2491,10 @@ function bindTitleSessionOutput(
 }
 
 function appendAssistantTextForTitle(sessionId: string, cliMsg: any): void {
-  const activeTurn = sessionTitleState.get(sessionId)?.activeTurn
-  if (!activeTurn) return
+  const state = sessionTitleState.get(sessionId)
+  const activeTurn = state?.activeTurn
+  if (!state || !activeTurn) return
+  state.persistTitleSource &&= sessionService.shouldPersistSession()
 
   const streamText = extractAssistantStreamTextForTitle(cliMsg)
   if (streamText) {
@@ -3225,6 +3261,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     case 'result': {
       // 对话结果（成功或错误）
       const usage = translateCliUsage(cliMsg.usage)
+      const timing = translateCliTiming(cliMsg)
       // Buffered assistant blocks can arrive as a batch after all raw events
       // for one provider message. Keep deduplication active across the entire
       // batch, then clear it only at the terminal result boundary.
@@ -3233,11 +3270,13 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       if (cliMsg.is_error) {
         // If the user requested stop, this "error" is just the interrupt
         // result — don't show it as an error in the chat UI.
+        // Timing survives an interrupt: the tokens really were generated and paid for,
+        // and a cancelled turn is exactly when a client wants to know what it cost.
         if (
           interruptedTurnResultMessages.get(cliMsg) === sessionId ||
           sessionStopRequested.has(sessionId)
         ) {
-          return [{ type: 'message_complete', usage }]
+          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
         }
 
         const resultMessage =
@@ -3247,7 +3286,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             : 'Unknown error')
         if (isDuplicateOfLastApiError(streamState.lastApiError, resultMessage)) {
           streamState.lastApiError = undefined
-          return [{ type: 'message_complete', usage }]
+          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
         }
         // 错误和完成消息都发送
         return [
@@ -3256,12 +3295,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             message: resultMessage,
             code: classifyRuntimeErrorCode(resultMessage, 'CLI_ERROR'),
           },
-          { type: 'message_complete', usage },
+          { type: 'message_complete', usage, ...(timing ? { timing } : {}) },
         ]
       }
 
       streamState.lastApiError = undefined
-      return [{ type: 'message_complete', usage }]
+      return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
     }
 
     case 'system': {
@@ -4097,7 +4136,7 @@ type RuntimeSettings = {
 }
 
 async function getDefaultOpenAIReasoningEffort(modelId: string): Promise<string> {
-  const catalog = await getOpenAICodexModelCatalog()
+  const catalog = await getDesktopOpenAICodexModelCatalog()
   return getOpenAIModelCatalogEntry(modelId, catalog)?.defaultReasoningEffort ?? 'medium'
 }
 
@@ -4142,7 +4181,7 @@ async function resolveRuntimeEffort(
       return { valid: false }
     }
 
-    const catalog = await getOpenAICodexModelCatalog()
+    const catalog = await getDesktopOpenAICodexModelCatalog()
     const model = getOpenAIModelCatalogEntry(modelId, catalog)
     return !model || model.supportedReasoningEfforts.includes(effort)
       ? { valid: true, effort }

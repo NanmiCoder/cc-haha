@@ -41,6 +41,31 @@ function makeRequest(
 }
 
 describe('provider presets API', () => {
+  // ApiSmart /v1/models and live calls verified these exact IDs on 2026-09-09.
+  // The unsuffixed names in its docs return 503 provider_not_available.
+  test('exposes ApiSmart with its live-verified Chat Completions defaults and sponsor link', async () => {
+    const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
+    const response = await handleProvidersApi(req, url, segments)
+    const { presets } = await response.json()
+    expect(presets.find((preset: { id: string }) => preset.id === 'apismart')).toMatchObject({
+      name: 'ApiSmart',
+      defaultImageGeneration: { model: 'doubao-seedream-5-0' },
+      baseUrl: 'https://gw.apismart.ai/v1',
+      apiFormat: 'openai_chat',
+      authStrategy: 'api_key',
+      needsApiKey: true,
+      defaultModels: {
+        main: 'deepseek-v4-pro-0813',
+        haiku: 'deepseek-v4-flash-0731-tem',
+        sonnet: 'deepseek-v4-pro-0813',
+        opus: 'deepseek-v4-pro-0813',
+      },
+      apiKeyUrl: 'https://www.apismart.ai',
+      websiteUrl: 'https://www.apismart.ai',
+      featured: true,
+    })
+  })
+
   test('GET /api/providers/presets returns the configured presets', async () => {
     const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
     const response = await handleProvidersApi(req, url, segments)
@@ -218,21 +243,21 @@ describe('provider presets API', () => {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     })
     expect(shengsuanyun?.modelContextWindows?.['anthropic/claude-opus-4.7']).toBe(1000000)
-    expect(xuanshuapi?.apiKeyUrl).toBe('https://www.xuanshuapi.com/register?aff=CC-HAHA&promo=CC-HAHA')
-    expect(xuanshuapi?.promoText).toContain('5 美元')
-    expect(xuanshuapi?.featured).toBe(true)
+    expect(xuanshuapi?.apiKeyUrl).toBeUndefined()
+    expect(xuanshuapi?.promoText).toBeUndefined()
+    expect(xuanshuapi?.featured).toBeUndefined()
     expect(xuanshuapi?.defaultEnv).toEqual({
       CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5',
     })
     expect(xuanshuapi?.modelContextWindows?.['claude-sonnet-5']).toBe(1000000)
-    expect(fennoai?.apiKeyUrl).toBe('https://api.fenno.ai/s/WD8c')
-    expect(fennoai?.promoText).toContain('1.99 美元')
-    expect(fennoai?.featured).toBe(true)
+    expect(fennoai?.apiKeyUrl).toBeUndefined()
+    expect(fennoai?.promoText).toBeUndefined()
+    expect(fennoai?.featured).toBeUndefined()
     expect(fennoai?.modelContextWindows?.['claude-sonnet-5']).toBe(1000000)
     expect(fennoai?.modelContextWindows?.['claude-haiku-4-5']).toBe(200000)
-    expect(qiniuai?.apiKeyUrl).toBe('https://s.qiniu.com/IZbyya')
-    expect(qiniuai?.promoText).toContain('Token')
-    expect(qiniuai?.featured).toBe(true)
+    expect(qiniuai?.apiKeyUrl).toBeUndefined()
+    expect(qiniuai?.promoText).toBeUndefined()
+    expect(qiniuai?.featured).toBeUndefined()
     expect(qiniuai?.modelContextWindows?.['deepseek/deepseek-v4-flash']).toBe(1000000)
     expect(qiniuai?.modelContextWindows?.['z-ai/glm-5.2']).toBe(1000000)
     expect(qiniuai?.modelContextWindows?.['moonshotai/kimi-k3']).toBe(262144)
@@ -279,7 +304,7 @@ describe('provider presets API', () => {
   })
 
   test('retired presets keep the runtime config saved providers resolve from them', () => {
-    for (const id of ['shengsuanyun', 'jiekouai']) {
+    for (const id of ['shengsuanyun', 'jiekouai', 'xuanshuapi', 'fennoai', 'qiniuai']) {
       const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === id)
 
       expect(preset?.deprecated).toBe(true)

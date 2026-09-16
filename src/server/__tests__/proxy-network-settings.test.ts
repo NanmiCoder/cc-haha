@@ -6,6 +6,7 @@ import { handleProxyRequest, withStreamIdleTimeout } from '../proxy/handler.js'
 import { ProviderService } from '../services/providerService.js'
 import {
   clearTraceCaptureStateForTests,
+  drainTraceCaptureForTests,
   traceCaptureService,
 } from '../services/traceCaptureService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
@@ -28,6 +29,7 @@ async function teardown() {
     delete process.env.CLAUDE_CONFIG_DIR
   }
   resetSettingsCache()
+  await drainTraceCaptureForTests()
   clearTraceCaptureStateForTests()
   await fs.rm(tmpDir, { recursive: true, force: true })
 }
@@ -44,6 +46,40 @@ async function waitForTraceCall(sessionId: string) {
 describe('proxy network settings', () => {
   beforeEach(setup)
   afterEach(teardown)
+
+  for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+    for (const upstreamStatus of [503, 200, 'thrown'] as const) {
+      test(`${apiFormat} preserves policy refusal despite upstream ${upstreamStatus}`, async () => {
+        const provider = await new ProviderService().addProvider({
+          presetId: 'custom', name: 'Policy fixture', baseUrl: 'https://api.example.com',
+          apiKey: 'sk-test', apiFormat,
+          models: { main: 'test-model', haiku: 'test-model', sonnet: 'test-model', opus: 'test-model' },
+        })
+        const originalFetch = globalThis.fetch
+        const upstreamFetch = mock(async () => {
+          if (upstreamStatus === 'thrown') {
+            throw Object.assign(new Error('Request denied'), { code: 'cyber_policy' })
+          }
+          return Response.json({
+            error: { code: 'cyber_policy', message: 'Request denied' },
+          }, { status: upstreamStatus })
+        })
+        globalThis.fetch = upstreamFetch as unknown as typeof fetch
+        try {
+          const req = new Request(`http://localhost:3456/proxy/providers/${provider.id}/v1/messages`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'test-model', max_tokens: 64, messages: [{ role: 'user', content: 'hello' }] }),
+          })
+          const res = await handleProxyRequest(req, new URL(req.url))
+          expect(res.status).toBe(403)
+          expect(await res.json()).toMatchObject({ error: { type: 'permission_error', code: 'cyber_policy' } })
+          expect(upstreamFetch).toHaveBeenCalledTimes(1)
+        } finally {
+          globalThis.fetch = originalFetch
+        }
+      })
+    }
+  }
 
   test('uses configured AI request timeout for non-stream upstream requests', async () => {
     await fs.writeFile(

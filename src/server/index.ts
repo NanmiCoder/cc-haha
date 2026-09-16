@@ -30,6 +30,7 @@ import { handleStaticH5Request } from './staticH5.js'
 import {
   classifyH5Request,
   isH5AccessControlPath,
+  isLocalCredentialOnlyPath,
   requiresLocalAccessCredential,
   shouldBlockDisabledH5Access,
   shouldRequireH5Token,
@@ -49,6 +50,7 @@ import {
   isPetSessionInProjection,
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
+import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 function readArgValue(flag: string): string | undefined {
@@ -120,6 +122,8 @@ export async function startBackgroundIndexesInPriorityOrder(
   if (!options.signal?.aborted) await startSearch()
 }
 
+const publicAccessServers = new Set<PublicAccessServer>()
+
 let backgroundIndexStartupController: AbortController | undefined
 let backgroundIndexStartup: Promise<void> | undefined
 
@@ -164,6 +168,16 @@ function h5AccessControlRejectedResponse(): Response {
   )
 }
 
+function localCredentialRejectedResponse(): Response {
+  return Response.json(
+    {
+      error: 'Forbidden',
+      message: 'This action can only be performed from the local desktop app.',
+    },
+    { status: 403 },
+  )
+}
+
 function h5AccessDisabledResponse(): Response {
   return Response.json(
     {
@@ -179,7 +193,10 @@ function isH5AccessControlRequest(
   url: URL,
   context: H5RequestContext,
 ): boolean {
-  if (!isH5AccessControlPath(url.pathname)) {
+  if (
+    !isH5AccessControlPath(url.pathname) &&
+    !isLocalCredentialOnlyPath(url.pathname)
+  ) {
     return false
   }
 
@@ -233,6 +250,13 @@ export function startServer(port = PORT, host = HOST) {
     process.env.SERVER_AUTH_REQUIRED === '1'
   const h5AccessService = new H5AccessService()
 
+  const publicAccess = new PublicAccessServer({
+    handleApiRequest,
+    handleStatic: handleStaticH5Request,
+    websocket: handleWebSocket,
+    serverPort: () => serverPort,
+  })
+  publicAccessServers.add(publicAccess)
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
   try {
@@ -243,6 +267,7 @@ export function startServer(port = PORT, host = HOST) {
 
       async fetch(req, server) {
         const url = new URL(req.url)
+        if (isPublicAccessControlPath(url.pathname)) return publicAccess.control(req)
 
         // Startup probes must not wait on migrations, config reads, or auth.
         // Electron deliberately uses this endpoint to decide when the sidecar
@@ -334,7 +359,9 @@ export function startServer(port = PORT, host = HOST) {
         const h5AccessControlBlocked = isH5AccessControlRequest(req, url, h5RequestContext)
 
         if (h5AccessControlBlocked) {
-          return h5AccessControlRejectedResponse()
+          return isLocalCredentialOnlyPath(url.pathname)
+            ? localCredentialRejectedResponse()
+            : h5AccessControlRejectedResponse()
         }
 
         if (h5AccessDisabledBlocked) {
@@ -510,7 +537,7 @@ export function startServer(port = PORT, host = HOST) {
           try {
             const response = await settleResponseOnRequestAbort(
               req,
-              handleApiRequest(req, url),
+              handleApiRequest(req, url, { remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
             )
             return withCors(response, cors)
           } catch (error) {
@@ -575,9 +602,17 @@ export function startServer(port = PORT, host = HOST) {
 
       websocket: handleWebSocket,
     })
+    const stop = server.stop.bind(server)
+    server.stop = (closeActiveConnections?: boolean) => {
+      publicAccess.disable()
+      publicAccessServers.delete(publicAccess)
+      return stop(closeActiveConnections)
+    }
     serverPort = server.port
     ProviderService.setServerPort(serverPort)
   } catch (error) {
+    publicAccess.disable()
+    publicAccessServers.delete(publicAccess)
     const message = error instanceof Error && error.message
       ? error.message
       : `Failed to start server. Is port ${port} in use?`
@@ -613,6 +648,8 @@ let shutdownInProgress: Promise<void> | null = null
 export async function stopServerRuntimeForShutdown(
   options: { waitForCli?: boolean } = {},
 ): Promise<void> {
+  for (const remote of publicAccessServers) remote.disable()
+  publicAccessServers.clear()
   teamWatcher.stop()
   cronScheduler.stop()
   backgroundIndexStartupController?.abort()

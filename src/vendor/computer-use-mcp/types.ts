@@ -222,6 +222,9 @@ export interface ComputerUseHostAdapter {
   logger: Logger;
   executor: ComputerExecutor;
 
+  /** A fresh persistent kernel per bound session. The host owns isolation. */
+  createReplRuntime?(): import('./replProtocol.js').ComputerUseReplRuntime;
+
   /**
    * TCC state check — Accessibility + Screen Recording on macOS. Pure check,
    * no dialog, no relaunch. When either is missing, `request_access` threads

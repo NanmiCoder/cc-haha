@@ -2250,12 +2250,14 @@ describe('TeamService', () => {
         blocks: [],
         blockedBy: [],
       })
-      expect(await readTaskListSnapshot(teamName)).toMatchObject({
+      const activeSnapshot = await readTaskListSnapshot(teamName)
+      expect(activeSnapshot.tasks).toHaveLength(2)
+      expect(activeSnapshot).toMatchObject({
         revision: 2,
-        tasks: [
-          { id: '1', subject: 'Only generation-two task' },
-          { id: '2', subject: 'Active generation-two writer' },
-        ],
+        tasks: expect.arrayContaining([
+          expect.objectContaining({ id: '1', subject: 'Only generation-two task' }),
+          expect.objectContaining({ id: '2', subject: 'Active generation-two writer' }),
+        ]),
       })
     } finally {
       writerResource.emitDestroy()

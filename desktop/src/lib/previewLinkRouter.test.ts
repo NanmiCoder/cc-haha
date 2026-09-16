@@ -15,6 +15,13 @@ describe('classifyPreviewLink', () => {
     expect(classifyPreviewLink('docs/report.md').kind).toBe('file-preview')
     expect(classifyPreviewLink('src/app.ts').kind).toBe('file-preview')
   })
+  it('routes CJK filenames instead of silently ignoring them', () => {
+    // The href of an output card is a path the turn really wrote; the ASCII-only
+    // prose scanner must not decide its fate. Before the split, these classified
+    // as `ignored` and the card click did nothing at all.
+    expect(classifyPreviewLink('README-拍摄大纲.md')).toMatchObject({ kind: 'file-preview', path: 'README-拍摄大纲.md' })
+    expect(classifyPreviewLink('review-02-技术视角.md')).toMatchObject({ kind: 'file-preview', path: 'review-02-技术视角.md' })
+  })
   it('sends source files to the code view even when the path is absolute', () => {
     // The code view is the only surface that can reveal a line; a browser
     // surface would just dump the source as plain text.

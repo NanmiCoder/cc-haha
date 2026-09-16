@@ -35,7 +35,7 @@ describe('evaluateChangePolicy', () => {
       'docs/index.md',
       'site/src/App.tsx',
       'README.md',
-      'README.zh-CN.md',
+      'README.en.md',
     ])
 
     expect(result.blocked).toBe(false)
@@ -91,6 +91,20 @@ describe('evaluateChangePolicy', () => {
 
     expect(result.checks.desktop).toBe(false)
     expect(result.checks.desktopNative).toBe(true)
+  })
+
+  test.each([
+    'native/cu-helper/Sources/cu-helper/VirtualCursor.swift',
+    'native/cu-helper/Tests/CuHelperTests/VirtualCursorResourceTests.swift',
+    'native/cu-helper/Sources/cu-helper/Resources/LensSequence/frame_000.png',
+    'native/cu-helper/Package.swift',
+    'native/cu-helper/build.sh',
+  ])('requires the native and macOS Swift jobs for a standalone change to %s', file => {
+    const result = evaluateChangePolicy([file])
+    expect(result.areas).toEqual(['desktop'])
+    expect(result.checks.desktopNative).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.blocked).toBe(false)
   })
 
   test('routes provider runtime changes to the offline provider contract', () => {

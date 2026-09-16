@@ -1,13 +1,13 @@
 ---
 title: IM Integrations
 nav_title: Overview
-description: Bridge Feishu, Telegram, WeChat, DingTalk, or WhatsApp private chats into the Desktop app and continue the same session from your phone.
+description: Bridge Feishu, Telegram, WeChat, DingTalk, WhatsApp, WeCom, QQ, or Slack private chats into the Desktop app and continue the same session from your phone.
 order: 0
 ---
 
 # IM Integrations
 
-A session running in the Desktop app can be reached from a private chat on your phone. Once bound, a message in Feishu, Telegram, WeChat, DingTalk, or WhatsApp drives the Claude Code session on your own machine: start a long task before you leave, then follow the progress, approve permissions, and switch projects from the road.
+A session running in the Desktop app can be reached from a private chat on your phone. Once bound, a message in Feishu, Telegram, WeChat, DingTalk, WhatsApp, WeCom, QQ, or Slack drives the Claude Code session on your own machine: start a long task before you leave, then follow the progress, approve permissions, and switch projects from the road.
 
 The chat partner is a bot or account you bound yourself. Messages reach your local Desktop app; no intermediate service holds your code.
 
@@ -16,23 +16,27 @@ The chat partner is a bot or account you bound yourself. Messages reach your loc
 ## What you get
 
 - **The same session, continued.** Messages sent from your phone enter the Claude Code session on your computer, where file edits, commands, and reads really happen.
+- **Resume history.** `/sessions` lists history in the current project; `/sessions <project name or absolute path>` opens another project. Use `/resume <number>` to continue, including sessions created on Desktop.
 - **Project switching.** `/projects` lists recent projects and switches to the one you pick; `/new` starts a fresh session.
-- **Permission approval.** When Claude wants to write a file or run a risky command, the request is pushed to the chat. Feishu and DingTalk send interactive cards, Telegram sends buttons, WeChat and WhatsApp expect a text reply.
+- **Permission approval.** When Claude wants to write a file or run a risky command, the request is pushed to the chat. Feishu and DingTalk send interactive cards, Telegram sends buttons, and every other platform expects a text reply.
 - **Status and stop.** `/status` reports the current project, model, and run state; `/stop` interrupts the current turn.
 
 The Desktop app has to stay running. The chat side is only a remote control.
 
 ## Choosing a platform
 
-All five expose the same capabilities. They differ in setup cost and approval experience.
+All eight expose the same capabilities. They differ in setup cost and approval experience.
 
 | Platform | How you connect | Best for | Known limits |
 |---|---|---|---|
-| Feishu | Create a bot from the official template, paste its App ID and App Secret | Teams that want one-tap permission approval | Private (`p2p`) chats only; menu changes require publishing a new app version |
+| Feishu | Scan a QR code in Settings; the bot is created and its credentials stored for you | Teams that want one-tap permission approval | Private (`p2p`) chats only; menu changes require publishing a new app version |
 | Telegram | Ask `@BotFather` for a Bot Token, paste it into Settings | Individuals who can reach Telegram; fastest setup | Private chats only |
 | WeChat | Scan a QR code in Settings to log in a bot account | People who only want WeChat | Private chats only; permission approval is text replies |
 | DingTalk | Scan a QR code in Settings; credentials are filled in for you | Organizations already on DingTalk | Private chats only; interactive approval cards need an extra template ID |
 | WhatsApp | Scan from **Linked devices** on your phone | Users outside mainland China | Personal linked-device login, not the official Cloud API; personal private chats only |
+| WeCom | Scan a QR code in Settings to create an AI bot | Organizations on Enterprise WeChat | Private chats only; permission approval is text replies |
+| QQ | Scan a QR code in Settings; credentials are filled in for you | Individuals on QQ | Private (C2C) chats only, no groups or guilds; text approval |
+| Slack | Create the app from a pre-filled manifest, paste two tokens | Teams on Slack | Direct messages only; no QR flow, tokens are pasted by hand |
 
 If you have no preference, start with Telegram or Feishu — their approval flows are the most comfortable.
 
@@ -41,7 +45,7 @@ If you have no preference, start with Telegram or Feishu — their approval flow
 Binding happens in two layers: first the Desktop app gets platform credentials, then your personal account is authorized with a pairing code. The second layer is identical everywhere.
 
 1. Open **Settings → IM Adapters**.
-2. Bind one platform in its tab: Feishu and Telegram take credentials, WeChat, DingTalk, and WhatsApp use a QR code.
+2. Bind one platform in its tab: Feishu, WeChat, DingTalk, WhatsApp, WeCom, and QQ use a QR code; Telegram and Slack take credentials.
 3. Pick a directory under **Default Project**.
 4. Select **Save**.
 5. Back at the top, in **Pairing**, select **Generate Code** to get a six-character code.
@@ -60,6 +64,43 @@ Paired accounts appear under **Paired Users**, where **Unbind** revokes one of t
 
 Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` changes the directory; `/clear` empties the context while keeping the project binding.
 
+## Find an old session from your phone
+
+Send `/sessions` to list history for your current project. Without a session binding, it starts with a project picker. Use `/sessions projects` to choose a different project, or `/sessions <project name or absolute path>` to open one directly. Ambiguous names show a list to choose from.
+
+Each page shows eight sessions with their title, update time, message count, and a marker for the current session. Reply with a number shown on that page or send `/resume <number>` to continue the selected conversation. Use `/sessions next` and `/sessions prev` to turn pages. Accessible worktree sessions are grouped under their project and resume in their original working directory.
+
+Browsing preserves the current binding. `/cancel` exits selection; ordinary chat text also leaves the history picker and continues your current conversation. Lists expire after 15 minutes. Finish pending approvals or send `/stop` and wait for the current turn to stop before switching. If a session was deleted, its directory is unavailable, or connecting fails, the original binding is retained.
+
+Telegram also keeps its `/resume` project and session button menu. The text commands above work on all platforms.
+
+## Allowed project directories decide which projects it can touch
+
+**Default Project** only decides where new sessions start — it is **not** the access boundary. The real boundary is **Allowed project directories**: the bot can only list, open, and start sessions in projects inside those directories, which constrains `/projects`, `/sessions`, and picking a project by name or absolute path.
+
+Leaving it empty means the default: your home directory (plus the default project, if it is outside home). Most people never need to change it. To narrow it to a few directories, add them to the list in Settings.
+
+The configuration lives in `~/.claude/adapters.json`, and each platform can be narrowed on its own:
+
+```json
+{
+  "allowedProjectRoots": ["~/work", "~/side"],
+  "whatsapp": { "allowedProjectRoots": ["~/work/sandbox"] }
+}
+```
+
+A per-platform setting **replaces** (does not add to) the global one: in the config above, WhatsApp can only touch `~/work/sandbox`, while every other platform gets `~/work` and `~/side`. The Settings UI edits the global copy, so once a platform is configured separately, changes made there no longer affect it.
+
+Running an adapter standalone (without the Desktop app) also accepts the `ADAPTER_ALLOWED_PROJECT_ROOTS` environment variable, with directories separated by the platform path delimiter (`:` on macOS / Linux, `;` on Windows). This environment variable outranks both file layers.
+
+A few boundary rules:
+
+- A directory must be an existing absolute path (`~` is expanded). Paths that do not exist are ignored and logged; if none resolve, the default is used rather than locking the bot out.
+- The default never inherits roots such as `/` or `/Users`. When the Desktop app is launched as a GUI, the sidecar's working directory is `/`, and taking that as the boundary is the same as having none.
+- If **Default Project** falls outside the allowed set, a new session starts in the first allowed directory and a line is logged — so `/new` does not fail when the two settings disagree.
+
+Pairing is still the first gate: an unpaired sender cannot issue commands at all, and this directory list is a second line of defense on top of it. Note that the home directory also contains sensitive paths like `~/.claude` and `~/.ssh`; for stronger isolation, narrow the list to specific project directories.
+
 ## Common commands
 
 Entry points differ slightly per platform — Feishu can expose commands as a bot menu — but these work everywhere:
@@ -68,10 +109,13 @@ Entry points differ slightly per platform — Feishu can expose commands as a bo
 - `/status` — current project, model, and run state
 - `/projects` — list recent projects and switch
 - `/new` — start a new session, optionally with a project number or path
+- `/sessions [project]` — list old sessions; `/sessions projects` chooses another project
+- `/resume <number>` — continue a session from the list
+- `/cancel` — exit selection and keep the current session
 - `/clear` — clear context, keep the project binding
 - `/stop` — stop the current generation
 
-WeChat, DingTalk, and Feishu also accept Chinese aliases such as `帮助`, `状态`, `项目列表`, `新会话`, `清空`, and `停止`.
+Feishu, WeChat, DingTalk, WeCom, QQ, and Slack also accept Chinese aliases such as `帮助`, `状态`, `项目列表`, `新会话`, `清空`, and `停止`.
 
 ## Security
 
@@ -87,8 +131,11 @@ For a full mobile interface rather than a chat window, see [H5 access](../deskto
 
 ## Per-platform guides
 
-- [Feishu](./feishu.md) — template bot, card approval
+- [Feishu](./feishu.md) — scan to create a bot, card approval
 - [Telegram](./telegram.md) — BotFather token, button approval
 - [WeChat](./wechat.md) — QR-bound account, text approval
 - [DingTalk](./dingtalk.md) — QR authorization, AI Card streaming
 - [WhatsApp](./whatsapp.md) — personal linked device, text approval
+- [WeCom](./wecom.md) — scan to create an AI bot, streaming replies
+- [QQ](./qq.md) — QR authorization, private-chat streaming
+- [Slack](./slack.md) — app manifest, Socket Mode connection

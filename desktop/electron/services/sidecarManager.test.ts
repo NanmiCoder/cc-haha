@@ -20,6 +20,7 @@ import {
   appendHostDiagnostic,
   buildSidecarEnv,
   clearProxyEnv,
+  ADAPTER_FLAGS,
   createAdapterPlan,
   createServerPlan,
   electronHostDiagnosticsFile,
@@ -219,6 +220,33 @@ describe('Electron sidecar manager', () => {
       expect(whatsappAdapter.args).toEqual(['adapters', '--app-root', '/app', '--whatsapp'])
     } finally {
       rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  // The flag list is the contract between this planner, the launcher's ADAPTERS
+  // table and the runtime's spawn loop; a platform missing from any one of them
+  // simply never starts.
+  it('plans a sidecar for every supported adapter flag', () => {
+    expect(ADAPTER_FLAGS).toEqual([
+      '--feishu',
+      '--telegram',
+      '--wechat',
+      '--dingtalk',
+      '--whatsapp',
+      '--wecom',
+      '--qq',
+      '--slack',
+    ])
+
+    for (const flag of ADAPTER_FLAGS) {
+      const plan = createAdapterPlan({
+        desktopRoot: '/app/desktop',
+        appRoot: '/app',
+        serverUrl: 'http://127.0.0.1:4567',
+        flag,
+        env: {},
+      })
+      expect(plan.args).toEqual(['adapters', '--app-root', '/app', flag])
     }
   })
 
@@ -755,5 +783,35 @@ describe('Electron sidecar manager', () => {
     } finally {
       await close(server)
     }
+  })
+})
+
+/**
+ * The adapter flag list lives in four places, in three languages: this module,
+ * the launcher's `ADAPTERS` table, the Electron spawn loop and the Tauri shell.
+ *
+ * The first two are type-checked against `AdapterFlag`, and the spawn loop is
+ * covered by the count assertions in `serverRuntime.test.ts`. The launcher
+ * table is only exercised by the opt-in compiled smoke, and `lib.rs` by nothing
+ * at all — a platform missing from either one simply never starts, with no
+ * failing test anywhere. Reading the sources is crude, but it is the only
+ * check that spans a TypeScript entrypoint and a Rust file.
+ */
+describe('adapter flag parity across the launch path', () => {
+  const repoRoot = path.resolve(import.meta.dirname, '../../..')
+
+  /** TypeScript quotes with `'`, Rust with `"`. */
+  const quoted = (source: string, flag: string) =>
+    source.includes(`'${flag}'`) || source.includes(`"${flag}"`)
+
+  it.each([
+    ['the sidecar launcher table', 'desktop/sidecars/claude-sidecar.ts'],
+    ['the Tauri shell spawn list', 'desktop/src-tauri/src/lib.rs'],
+    ['the Electron spawn loop', 'desktop/electron/services/serverRuntime.ts'],
+  ])('lists every adapter flag in %s', (_label, relativePath) => {
+    const source = readFileSync(path.join(repoRoot, relativePath), 'utf8')
+
+    const missing = ADAPTER_FLAGS.filter((flag) => !quoted(source, flag))
+    expect(missing).toEqual([])
   })
 })

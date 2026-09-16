@@ -23,6 +23,8 @@ import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import {
   normalizeRuntimeSelection,
   resolveDefaultRuntimeSelection,
+  resolveProviderRuntimeModelId,
+  resolveProviderSlotModelId,
 } from '../../lib/runtimeSelection'
 import { useHahaOAuthStore } from '../../stores/hahaOAuthStore'
 import { useHahaOpenAIOAuthStore } from '../../stores/hahaOpenAIOAuthStore'
@@ -97,7 +99,12 @@ function getProviderModelCapabilityOverride(
 ): string | undefined {
   return getModelReasoningCapabilityOverride(
     modelId,
-    provider.models,
+    {
+      ...provider.models,
+      haiku: resolveProviderSlotModelId(provider, 'haiku'),
+      sonnet: resolveProviderSlotModelId(provider, 'sonnet'),
+      opus: resolveProviderSlotModelId(provider, 'opus'),
+    },
     PROVIDER_PRESET_DEFAULT_ENVS.get(provider.presetId) ?? {},
   )
 }
@@ -133,10 +140,10 @@ function buildProviderModels(
   labels: Record<'main' | 'haiku' | 'sonnet' | 'opus', string>,
 ): ModelInfo[] {
   const entries: Array<{ id: string; label: string }> = [
-    { id: provider.models.main.trim(), label: labels.main },
-    { id: provider.models.haiku.trim(), label: labels.haiku },
-    { id: provider.models.sonnet.trim(), label: labels.sonnet },
-    { id: provider.models.opus.trim(), label: labels.opus },
+    { id: resolveProviderSlotModelId(provider, 'main'), label: labels.main },
+    { id: resolveProviderSlotModelId(provider, 'haiku'), label: labels.haiku },
+    { id: resolveProviderSlotModelId(provider, 'sonnet'), label: labels.sonnet },
+    { id: resolveProviderSlotModelId(provider, 'opus'), label: labels.opus },
   ]
 
   const byId = new Map<string, { id: string; labels: string[] }>()
@@ -442,10 +449,21 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       storeModel?.id,
     )
     : null
+  const requestedRuntimeProvider = providers.find(
+    (provider) => provider.id === requestedRuntimeSelection?.providerId,
+  )
   const activeRuntimeSelection = requestedRuntimeSelection && providerChoices.some(
     (choice) => choice.providerId === requestedRuntimeSelection.providerId,
   )
-    ? requestedRuntimeSelection
+    ? {
+      ...requestedRuntimeSelection,
+      modelId: requestedRuntimeProvider
+        ? resolveProviderRuntimeModelId(
+          requestedRuntimeProvider,
+          requestedRuntimeSelection.modelId,
+        )
+        : requestedRuntimeSelection.modelId,
+    }
     : null
 
   const selectedProviderChoice = activeRuntimeSelection
@@ -814,7 +832,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   return (
     <div
       data-testid="model-selector-shell"
-      className={`relative min-w-0 ${fluid || appearance === 'field' ? 'flex-1' : 'shrink-0'}`}
+      className={`relative min-w-0 ${appearance === 'field' ? 'flex-1' : fluid ? 'shrink' : 'shrink-0'}`}
     >
       {/* No fill at rest: on the composer row the model name is type, not a
           control chip — the handoff reserves filled pills for the permission
@@ -851,10 +869,10 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           className={`flex min-w-0 items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
             appearance === 'field'
               ? 'h-full w-full rounded-[var(--radius-md)] px-3 text-left'
-              : `rounded-l-[var(--radius-md)] focus-visible:rounded-[var(--radius-md)] ${compact ? `${fluid ? 'flex-1' : ''} max-w-[112px] py-1.5 pl-2.5 pr-1` : 'max-w-[220px] py-2 pl-2.5 pr-1'}`
+              : `rounded-l-[var(--radius-md)] focus-visible:rounded-[var(--radius-md)] ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px] py-1.5 pl-2.5 pr-1' : 'max-w-[220px] py-1.5 pl-2.5 pr-1'}`
           }`}
         >
-          <span className={`${appearance === 'field' ? 'text-sm font-normal' : compact ? 'text-xs font-semibold' : 'text-[15px] font-semibold'} min-w-0 flex-1 truncate text-[var(--color-text-primary)]`}>
+          <span className={`${appearance === 'field' ? 'text-sm font-normal' : compact ? 'text-xs font-medium' : 'text-[13px] font-medium'} min-w-0 flex-1 truncate text-[var(--color-text-primary)]`}>
             {buttonModelLabel}
           </span>
           {!canEditRuntimeEffort && !compact && buttonProviderLabel && (
@@ -879,7 +897,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               setOpen(false)
               setEffortOpen(!effortOpen)
             }}
-            className={`rounded-r-[var(--radius-md)] pr-2.5 text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-md)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${compact ? 'pl-1 text-[10px]' : 'pl-1.5 text-[13.5px]'}`}
+            className={`shrink-0 rounded-r-[var(--radius-md)] pr-2.5 text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-md)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${compact ? 'pl-1 text-[10px]' : 'pl-1.5 text-[12px]'}`}
           >
             {effortLabels[selectedRuntimeEffort]}
           </button>

@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  __connectWithRetryForTests,
   __prepareDaemonSocketDirectoryForTests,
   __resetDaemonClientForTests,
   __daemonStartCountForTests,
@@ -69,6 +70,48 @@ afterEach(() => {
 })
 
 describe('cu-helper daemon system commands', () => {
+  test('readiness deadline also bounds a socket that never emits connect or error', async () => {
+    const socket = new FakeSocket()
+    let attempts = 0
+    const request = __connectWithRetryForTests('/fixture/never-connects.sock', 20, () => {
+      attempts++
+      return socket as never
+    }).catch(error => error)
+    let guard: ReturnType<typeof setTimeout> | undefined
+    const result = await Promise.race([
+      request,
+      new Promise<string>(resolve => { guard = setTimeout(() => resolve('still pending'), 150) }),
+    ])
+    clearTimeout(guard)
+    expect(result).toBeInstanceOf(Error)
+    expect(result.message).toMatch(/socket not ready within 20ms/)
+    expect(attempts).toBe(1)
+    expect(socket.destroyed).toBe(true)
+    expect(socket.listenerCount('connect')).toBe(0)
+  })
+
+  test('readiness deadline is cleared after connecting successfully', async () => {
+    const socket = new FakeSocket()
+    const request = __connectWithRetryForTests('/fixture/ready.sock', 20, () => {
+      queueMicrotask(() => socket.emit('connect'))
+      return socket as never
+    })
+    expect(await request).toBe(socket as never)
+    await new Promise(resolve => setTimeout(resolve, 35))
+    expect(socket.destroyed).toBe(false)
+  })
+
+  test('a socket that closes before connecting is retired within the readiness deadline', async () => {
+    const socket = new FakeSocket()
+    const request = __connectWithRetryForTests('/fixture/closed.sock', 20, () => {
+      queueMicrotask(() => socket.emit('close'))
+      return socket as never
+    })
+    await expect(request).rejects.toThrow(/socket closed before connecting/)
+    expect(socket.destroyed).toBe(true)
+    expect(socket.listenerCount('connect')).toBe(0)
+  })
+
   test('uses trusted absolute binaries for process probing and LaunchServices', async () => {
     const { __daemonProcessCommandsForTests } = await import('./cuHelperDaemon.js')
     expect(
@@ -130,6 +173,33 @@ describe('cu-helper daemon system commands', () => {
 })
 
 describe('cu-helper daemon failure classification', () => {
+  test('only multi-chord keyboard requests extend both native deadline and response timer to a bounded budget', async () => {
+    const socket = new FakeSocket()
+    __setDaemonSocketForTests(socket as never)
+    const timerSpy = spyOn(globalThis, 'setTimeout')
+    try {
+      const cases = [
+        ['press_key', { key: 'a b c d' }, 60_000],
+        ['press_key', { key: 'ctrl + a' }, 20_000],
+        ['press_key', { key: 'Return' }, 20_000],
+        ['get_app_state', { key: 'a b' }, 20_000],
+      ] as const
+      for (const [index, [command, payload, budget]] of cases.entries()) {
+        const before = Date.now()
+        const request = callDaemon(command, payload)
+        await waitForWriteCount(socket, index + 1)
+        const envelope = JSON.parse(socket.writes[index]!)
+        expect(envelope.deadlineUnixMilliseconds).toBeGreaterThanOrEqual(before + budget)
+        expect(envelope.deadlineUnixMilliseconds).toBeLessThanOrEqual(Date.now() + budget)
+        expect(timerSpy.mock.calls.at(-1)?.[1]).toBe(budget)
+        reply(socket, index, { ok: true, result: true })
+        await expect(request).resolves.toBe(true)
+      }
+    } finally {
+      timerSpy.mockRestore()
+    }
+  })
+
   test('helper installation/start resolution failure is daemon infrastructure failure', async () => {
     // A bare executable can satisfy the availability probe but cannot be
     // launched as the helper .app daemon. The bridge must be allowed to use the
@@ -179,13 +249,14 @@ describe('cu-helper daemon failure classification', () => {
     await waitForWrite(socket)
     const id = JSON.parse(socket.writes[0]!).id
     socket.emit('data', Buffer.from(
-      `${JSON.stringify({ id, ok: false, error: { message: 'grant_flag_required' } })}\n`,
+      `${JSON.stringify({ id, ok: false, error: { message: 'grant_flag_required', code: 'not_trusted' } })}\n`,
     ))
 
     const error = await request
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(DaemonUnavailableError)
     expect(error.message).toBe('grant_flag_required')
+    expect(error.nativeCode).toBe('not_trusted')
   })
 
   test('every request carries negotiated protocol, deadline, and stable turn identity', async () => {
@@ -443,11 +514,34 @@ describe('cu-helper overlay reconciliation', () => {
     await show
 
     expect(isOverlayShown()).toBe(false)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(socket.writes).toHaveLength(1)
     const hide = overlayHide()
     await waitForWriteCount(socket, 2)
     expect(JSON.parse(socket.writes[1]!)).toMatchObject({ cmd: 'turn_end' })
     reply(socket, 1, { ok: true, result: true })
     await hide
+  })
+
+  test('cleanup requested during a failed show waits until turn_end completes', async () => {
+    const socket = new FakeSocket()
+    __setDaemonSocketForTests(socket as never)
+
+    const show = overlayShow({ app: 'TextEdit' })
+    await waitForWriteCount(socket, 1)
+    let cleanupCompleted = false
+    const hide = overlayHide().then(() => { cleanupCompleted = true })
+    reply(socket, 0, { ok: false, error: { message: 'target_not_running' } })
+    await waitForWriteCount(socket, 2)
+    expect(JSON.parse(socket.writes[1]!)).toMatchObject({ cmd: 'turn_end' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(cleanupCompleted).toBe(false)
+
+    reply(socket, 1, { ok: true, result: true })
+    await Promise.all([show, hide])
+    expect(cleanupCompleted).toBe(true)
+    expect(isOverlayShown()).toBe(false)
+    expect(socket.writes).toHaveLength(2)
   })
 
   test('cleanup ends a read-only turn even when no overlay was shown', async () => {

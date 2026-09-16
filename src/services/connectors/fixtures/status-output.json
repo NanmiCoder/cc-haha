@@ -1,0 +1,12 @@
+{
+  "sources": {
+    "feishuNotConfigured": "@larksuite/cli 1.0.95 darwin-arm64 native: auth status --json, exit 1, stdout empty, structured error on stderr, empty temporary HOME",
+    "dingtalkSignedOut": "dingtalk-workspace-cli 1.0.61 darwin-arm64 native: auth status --format json, empty temporary HOME and DWS_CONFIG_DIR",
+    "wecomSignedOut": "@wecom/cli 1.2.1 auth show --status, pinned native command help and upstream crates/wecom-cli/src/cmd/auth.rs",
+    "feishuVerified": "Synthetic success fixture matching larksuite/cli v1.0.95 cmd/auth/status.go; not a live account result"
+  },
+  "feishuNotConfigured": {"ok":false,"error":{"type":"config","subtype":"not_configured","message":"not configured"}},
+  "dingtalkSignedOut": {"success":true,"authenticated":false,"message":"未登录"},
+  "wecomSignedOut": "unauthorized\n",
+  "feishuVerified": {"identity":"user","verified":true}
+}

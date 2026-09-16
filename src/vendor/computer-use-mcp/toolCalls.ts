@@ -1,12 +1,16 @@
 /**
- * Tool dispatch for the Codex-compatible computer-use face (blueprint §7).
+ * Tool dispatch for CC-haha's macOS native semantic API and batch sequence.
  *
- * Ten semantic tools, dispatched to the native `cu-helper` AX engine
+ * Semantic tools dispatched to the native `cu-helper` AX engine
  * (`adapter.executor.engine`, a thin wrapper over the daemon's NDJSON
  * commands):
  *
  *   list_apps, get_app_state, click, perform_secondary_action, set_value,
- *   select_text, scroll, drag, press_key, type_text, paste
+ *   select_text, scroll, drag, press_key, type_text, paste, sequence
+ *
+ * The historical third-party blueprint informed the original API names. It is
+ * not the current official Codex contract; sequence is our bounded batch API,
+ * not Codex's persistent JavaScript entry point.
  *
  * ## Three properties this file exists to hold
  *
@@ -17,17 +21,17 @@
  * before any mutation, because a bare pid can be recycled between the moment
  * we resolved it and the moment we act on it.
  *
- * **2. Authorization happens after resolution, on the resolved identity.**
- * The model names an app loosely ("Notes", a path, a pid). `resolveTarget` is
- * the single seam that turns that into one real running process; every policy
- * check then runs against *that* process's bundle id, not against the string
- * the model typed. Checking the string instead would let "friendly alias"
- * walk past a denylist that names the bundle id.
+ * **2. One global consent covers every app.** Once Computer Use is enabled
+ * in Settings and its consent dialog is confirmed, no app category, bundle
+ * id, display name, host identity, or legacy app grant may deny access.
+ * `resolveTarget` identifies the actual process for dispatch and lifetime
+ * checks; it is not a second app-authorization step.
  *
- * **3. Mutating tools never take an implicit snapshot.** They return a fixed
+ * **3. Standalone mutations never take an implicit snapshot.** They return a fixed
  * receipt and the model calls `get_app_state` when it wants to see the result.
  * An implicit re-snapshot after every action doubles the AX traversals and the
- * window captures for a state the model often doesn't read.
+ * window captures for a state the model often doesn't read. `sequence` explicitly
+ * opts into one final observation after its known action batch.
  *
  * ## Enforcement order (every call)
  *
@@ -39,13 +43,10 @@
  *   4. Global CU lock (`overrides.checkCuLock`).
  *   5. Engine presence.
  *   6. `resolveTarget` → one running process + its lifetime identity.
- *   7. Denylists against the RESOLVED identity (policy, intrinsic, user).
- *   8. Per-app grant (allowlist, else the host's approval dialog).
- *   9. Proven process lifetime — mutating tools only.
- *  10. Engine dispatch.
+ *   7. Proven process lifetime — mutating tools only.
+ *   8. Engine dispatch.
  *
- * The Codex `<app_state>` envelope is framed HERE, in TS, not in Swift
- * (blueprint §7). Swift renders the inner tree text (the format authority);
+ * The `<app_state>` envelope is framed here in TS. Swift renders the inner tree;
  * we wrap it in the version banner + optional <app_specific_instructions> +
  * <app_state> tags, and attach the window screenshot as a second content
  * block when one came back.
@@ -53,28 +54,24 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import {
-  getDefaultTierForApp,
-  getDeniedCategoryForApp,
-  isIntrinsicAppDenied,
-  isPolicyDenied,
-} from "./deniedApps.js";
+import { NATIVE_ERROR, NATIVE_SERVER_ERROR_CODES, toNativeErrorMetadata, type NativeErrorMetadata } from './nativeError.js'
 import type {
   AppStateResult,
   AppTarget,
   CodexComputerEngine,
   CodexMouseButton,
+  NativeAppInfo,
   ProcessIdentity,
   ResolvedAppTarget,
   ScreenshotResult,
 } from "./executor.js";
+import { formatNativeAppList } from './executor.js'
+import { buildComputerUseTools } from "./tools.js";
 import { isSystemKeyCombo } from "./keyBlocklist.js";
-import { SENTINEL_BUNDLE_IDS } from "./sentinelApps.js";
 import type {
   ComputerUseHostAdapter,
   ComputerUseOverrides,
   CuGrantFlags,
-  CuPermissionRequest,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -117,26 +114,34 @@ export interface CuCallTelemetry {
 }
 
 /**
- * `CallToolResult` augmented with piggybacked telemetry. The Codex face attaches
+ * `CallToolResult` augmented with piggybacked telemetry. The semantic API attaches
  * its window screenshot as a normal `image` content block inside `content`, NOT
  * via this out-of-band `screenshot` stash — that field is retained only so the
  * host wrapper's screenshot-stash plumbing (`bindSessionContext` in mcpServer.ts)
  * keeps type-checking; the semantic engine never populates it, so that branch is
  * inert (no pixel-compare consumer remains).
  */
+export const RESOLVED_APP_PATH = Symbol('computer-use-resolved-app-path')
+export const APP_INVENTORY = Symbol('computer-use-app-inventory')
+export const NATIVE_CALL_NOT_DISPATCHED = Symbol('computer-use-native-call-not-dispatched')
+
 export type CuCallToolResult = CallToolResult & {
+  /** Internal binding metadata. Symbols are never serialized into MCP output. */
+  [RESOLVED_APP_PATH]?: string
+  [APP_INVENTORY]?: NativeAppInfo[]
+  [NATIVE_ERROR]?: NativeErrorMetadata
+  [NATIVE_CALL_NOT_DISPATCHED]?: true
   screenshot?: ScreenshotResult;
   telemetry?: CuCallTelemetry;
 };
 
 // ---------------------------------------------------------------------------
-// Codex envelope framing (blueprint §7)
+// App-state envelope framing
 // ---------------------------------------------------------------------------
 
 /**
  * Our Computer Use "CUA App Version", surfaced in the `get_app_state` banner.
- * Codex prints a monotonic build number here (observed 750 / 770). This is our
- * own product's value; it only needs to be stable and present so harnesses that
+ * This is our own product's value; it only needs to be stable and present so harnesses that
  * key off the banner have something to read.
  */
 export const CUA_APP_VERSION = "1";
@@ -151,7 +156,7 @@ const MUTATION_RECEIPT =
   "Action completed. Call `get_app_state` to fetch the updated UI state.";
 
 /**
- * Frame a daemon `AppStateResult` into the Codex content blocks.
+ * Frame a daemon `AppStateResult` into the app-state content blocks.
  *
  * Text block:
  *   Computer Use state (CUA App Version: <v>)
@@ -193,7 +198,7 @@ export function frameAppStateEnvelope(state: AppStateResult): CuCallToolResult {
     content.push({
       type: "image",
       data: state.screenshot.base64,
-      mimeType: "image/png",
+      mimeType: state.screenshot.mimeType ?? 'image/png',
     });
   }
 
@@ -205,10 +210,20 @@ export function frameAppStateEnvelope(state: AppStateResult): CuCallToolResult {
 // ---------------------------------------------------------------------------
 
 function errorResult(text: string, errorKind?: CuErrorKind): CuCallToolResult {
+  // The official client rejects a forbidden app with a plain Error before
+  // sending input. Only the actual permission failure has this server cause.
+  const errorName = errorKind === 'tcc_not_granted' ? 'permissionsNotGranted' : undefined
   return {
     content: [{ type: "text", text }],
     isError: true,
     telemetry: errorKind ? { error_kind: errorKind } : undefined,
+    ...(['app_denied', 'bad_args', 'tcc_not_granted', 'grant_flag_required', 'cu_lock_held', 'feature_unavailable'].includes(errorKind ?? '')
+      ? { [NATIVE_CALL_NOT_DISPATCHED]: true as const } : {}),
+    ...(errorName === undefined ? {} : { [NATIVE_ERROR]: {
+      name: 'SkyComputerUseError' as const, message: text,
+      code: NATIVE_SERVER_ERROR_CODES[errorName], errorName,
+      request: null, requestType: 'jsonRPC' as const,
+    } }),
   };
 }
 
@@ -322,7 +337,7 @@ function optionalBoolean(value: unknown, key: string): boolean | undefined {
 }
 
 /** Parse `{x, y}` from either a nested object `{from:{x,y}}` or flat
- *  `from_x/from_y` (Codex's drag sample uses the flat form). */
+ *  `from_x/from_y` (the public schema uses the flat form). */
 function parsePoint(
   args: Record<string, unknown>,
   nestedKey: string,
@@ -345,8 +360,7 @@ function parsePoint(
 }
 
 /**
- * Mouse buttons, in Codex's vocabulary plus the single-letter aliases the
- * official face accepts and the 1..5 numeric convention.
+ * Accepted mouse-button names, single-letter aliases and legacy numeric values.
  */
 const MOUSE_BUTTON_ALIASES: Readonly<Record<string, CodexMouseButton>> = {
   left: "left",
@@ -359,7 +373,7 @@ const MOUSE_BUTTON_ALIASES: Readonly<Record<string, CodexMouseButton>> = {
   r: "right",
 };
 
-/** Map mouse_button (string name, short alias, or Codex's numeric 1..5). */
+/** Map mouse_button (string name, short alias, or legacy numeric 1..5). */
 function parseMouseButton(value: unknown): CodexMouseButton | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") {
@@ -466,46 +480,10 @@ export function defersLockAcquire(toolName: string): boolean {
 }
 
 /** Preserved no-op export (mcpServer.ts + the old lock path call it on a fresh
- *  lock holder). The Codex face holds no cross-call mouse-button state, so there
+ *  lock holder). The semantic API holds no cross-call mouse-button state, so there
  *  is nothing to clear — kept for call-site compatibility. */
 export function resetMouseButtonHeld(): void {
   /* no cross-call mouse state in the semantic engine */
-}
-
-// ---------------------------------------------------------------------------
-// Safety denylist (Codex's exact refusal text)
-// ---------------------------------------------------------------------------
-
-/**
- * Refusal check against a RESOLVED target — the real bundle id and display
- * name of the process we are about to drive, not the string the model typed.
- *
- * "Denied" spans three lists:
- *   • the intrinsic set (our own app and helper) — permanent, ungrantable;
- *   • the category denylist (browsers, terminals/IDEs, trading apps), matching
- *     Codex's behavior of refusing iTerm/Chrome;
- *   • the media/DRM policy list (Netflix, Spotify, Kindle, …).
- *
- * `requestedApp` only shapes the message — the model should see the name it
- * used. `hostBundleId` extends the intrinsic set for builds whose bundle id
- * differs from the shipped default.
- */
-function policyDenyMessage(
-  resolved: { bundleId?: string; displayName?: string },
-  requestedApp?: string,
-  hostBundleId?: string,
-): string | undefined {
-  const bundleId = resolved.bundleId;
-  const displayName = resolved.displayName ?? bundleId ?? requestedApp ?? "";
-  const denied =
-    isIntrinsicAppDenied(bundleId, hostBundleId) ||
-    getDeniedCategoryForApp(bundleId, displayName) !== null ||
-    isPolicyDenied(bundleId, displayName);
-  if (!denied) return undefined;
-  const shown = requestedApp ?? displayName ?? bundleId ?? "";
-  // Matches Codex: "Computer Use is not allowed to use the app '<app>' for
-  // safety reasons."
-  return `Computer Use is not allowed to use the app '${shown}' for safety reasons.`;
 }
 
 /**
@@ -513,11 +491,11 @@ function policyDenyMessage(
  *
  * The guidance is static per app, so re-sending it on every `get_app_state`
  * spends tokens to restate something the model already has — and in a long
- * session it crowds out the state the model actually asked for. Codex tracks
- * the same thing per client session and only ever emits the block once.
+ * session it crowds out the state the model actually asked for. Track this
+ * per client session and emit the block once.
  *
  * Keyed by bundle id where the daemon resolved one, else by what the model
- * asked for, mirroring Codex's own fallback.
+ * asked for.
  */
 const deliveredAppInstructions = new Set<string>();
 
@@ -553,6 +531,7 @@ interface ParsedRequest {
   /** What the model typed, for messages and the approval dialog. */
   requestedApp?: string;
   mutating: boolean;
+  steps?: ParsedRequest[];
   run(engine: CodexComputerEngine, target: AppTarget): Promise<CuCallToolResult>;
 }
 
@@ -572,6 +551,7 @@ const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "list_apps",
   "get_app_state",
   ...MUTATING_TOOLS,
+  "sequence",
 ]);
 
 function parseRequest(
@@ -583,7 +563,59 @@ function parseRequest(
   if (name === "list_apps") {
     return {
       mutating: false,
-      run: async engine => okText(await engine.listApps()),
+      run: async engine => {
+        if (!engine.listAppsInfo) return okText(await engine.listApps())
+        const apps = await engine.listAppsInfo()
+        return { ...okText(formatNativeAppList(apps)), [APP_INVENTORY]: apps }
+      },
+    };
+  }
+
+  if (name === "sequence") {
+    if (platform !== "darwin") {
+      throw new BadArgs("sequence is only available on macOS");
+    }
+    if (Object.keys(args).some(key => key !== "app" && key !== "steps")) {
+      throw new BadArgs("sequence accepts only app and steps");
+    }
+    const target = parseTarget(args);
+    if (!Array.isArray(args.steps) || args.steps.length < 1 || args.steps.length > 256) {
+      throw new BadArgs("sequence requires 1–256 steps");
+    }
+    const schemas = buildComputerUseTools({ platform: "darwin" });
+    let chords = 0;
+    const steps = args.steps.map((value, index) => {
+      const step = asRecord(value);
+      const tool = step.tool;
+      if (typeof tool !== "string" || !MUTATING_TOOLS.has(tool)) {
+        throw new BadArgs(`sequence step ${index}: expected an existing mutation tool`);
+      }
+      const schema = schemas.find(t => t.name === tool)!.inputSchema;
+      const allowed = new Set([
+        "tool",
+        ...Object.keys(schema.properties ?? {}).filter(key => key !== "app"),
+      ]);
+      if (Object.keys(step).some(key => !allowed.has(key))) {
+        throw new BadArgs(`sequence step ${index}: unknown argument or per-step app override`);
+      }
+      if (tool === "press_key" && typeof step.key === "string") {
+        const count = step.key.replace(/\s*\+\s*/g, "+").trim().split(/\s+/).length;
+        chords += count;
+        if (count > 128 || chords > 2048) {
+          throw new BadArgs("sequence exceeds its keyboard chord budget");
+        }
+      }
+      const { tool: _tool, ...input } = step;
+      return parseRequest(tool, { ...input, app: args.app }, grantFlags, platform);
+    });
+    return {
+      target,
+      requestedApp: (args.app as string).trim(),
+      mutating: true,
+      steps,
+      run: async () => {
+        throw new Error("sequence requires guarded dispatch");
+      },
     };
   }
 
@@ -769,6 +801,9 @@ function parseRequest(
 
     case "press_key": {
       const key = requiredString(args, "key");
+      if (platform === "darwin" && key.replace(/\s*\+\s*/g, "+").trim().split(/\s+/).length > 128) {
+        throw new BadArgs("press_key supports at most 128 key chords; use shorter sequences");
+      }
       // The grant bit comes from the SESSION, never from the model's arguments —
       // otherwise the model could authorize its own cmd+q by passing a flag.
       const systemKeyCombos = grantFlags?.systemKeyCombos === true;
@@ -903,35 +938,6 @@ function dispatchTarget(
   return identity ? { pid, expectedProcessIdentity: identity } : { pid };
 }
 
-/** Build the approval-dialog request for a single resolved target. */
-function buildPermissionRequest(
-  resolved: ResolvedAppTarget,
-  requestedApp: string,
-  screenshotFiltering: "native" | "none",
-): CuPermissionRequest {
-  const bundleId = resolved.bundleId ?? "";
-  const displayName = resolved.displayName ?? requestedApp;
-  return {
-    requestId: `cu-${bundleId || requestedApp}`,
-    reason: `Computer Use needs access to ${displayName}.`,
-    apps: [
-      {
-        requestedName: requestedApp,
-        resolved: {
-          bundleId,
-          displayName,
-          path: resolved.path ?? "",
-        },
-        isSentinel: SENTINEL_BUNDLE_IDS.has(bundleId),
-        alreadyGranted: false,
-        proposedTier: getDefaultTierForApp(bundleId, displayName),
-      },
-    ],
-    requestedFlags: {},
-    screenshotFiltering,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Top-level dispatch
 // ---------------------------------------------------------------------------
@@ -962,7 +968,11 @@ export async function handleToolCall(
     );
   }
 
-  // Unknown tool → clean error (defensive; ListTools only advertises the ten).
+  if (overrides.isAborted?.()) {
+    return errorResult("Computer Use was cancelled; no action was dispatched.", "other");
+  }
+
+  // Unknown tool → clean error; ListTools advertises only supported tools.
   if (!KNOWN_TOOLS.has(name)) {
     return errorResult(`Unknown computer-use tool "${name}".`, "bad_args");
   }
@@ -1003,6 +1013,10 @@ export async function handleToolCall(
     );
   }
 
+  if (overrides.isAborted?.() || adapter.isDisabled()) {
+    return errorResult("Computer Use stopped before dispatch.", "other");
+  }
+
   // ─── Gate 4: global CU lock ──────────────────────────────────────────
   const deferAcquire = defersLockAcquire(name);
   const lock = overrides.checkCuLock?.();
@@ -1041,41 +1055,7 @@ export async function handleToolCall(
     const resolved = await engine.resolveTarget(request.target);
     const requestedApp = request.requestedApp ?? "";
 
-    // ─── Gate 7: denylists, against the RESOLVED identity ──────────────
-    const denied = policyDenyMessage(
-      resolved,
-      requestedApp,
-      adapter.executor.capabilities.hostBundleId,
-    );
-    if (denied) return errorResult(denied, "app_denied");
-
-    if (
-      resolved.bundleId !== undefined &&
-      overrides.userDeniedBundleIds?.includes(resolved.bundleId)
-    ) {
-      return errorResult(
-        `Computer Use is not allowed to use the app '${requestedApp}' — it is ` +
-          "on your deny list. Remove it in Settings if access is needed.",
-        "app_denied",
-      );
-    }
-
-    // ─── Gate 8: per-app grant ─────────────────────────────────────────
-    const authorized = await authorizeResolvedTarget(
-      resolved,
-      requestedApp,
-      overrides,
-      adapter,
-    );
-    if (!authorized) {
-      return errorResult(
-        `Computer Use is not authorized to control '${requestedApp}'. Ask the ` +
-          "user to grant access, then retry.",
-        "app_not_granted",
-      );
-    }
-
-    // ─── Gate 9: proven process lifetime (mutations only) ──────────────
+    // ─── Gate 7: proven process lifetime (mutations only) ──────────────
     if (request.mutating && !provenIdentity(resolved)) {
       return errorResult(
         `Resolving '${requestedApp}' did not prove the running process ` +
@@ -1086,50 +1066,164 @@ export async function handleToolCall(
     }
 
     // ─── Dispatch ──────────────────────────────────────────────────────
-    return await request.run(engine, dispatchTarget(resolved, request.target));
+    if (overrides.isAborted?.() || adapter.isDisabled()) {
+      return errorResult("Computer Use stopped before dispatch.", "other");
+    }
+    const pinned = dispatchTarget(resolved, request.target);
+    if (request.steps) {
+      return await runSequence(request.steps, engine, pinned, requestedApp, adapter, overrides);
+    }
+    const result = await request.run(engine, pinned)
+    if (name === 'get_app_state' && resolved.path) result[RESOLVED_APP_PATH] = resolved.path
+    return result
   } catch (err) {
     // A daemon-level error (staleness warning, not_trusted, invalid action,
-    // not-settable, …). Surface its message verbatim — these strings are part
-    // of the Codex-compatible protocol (e.g. the §6 "user changed '<app>'"
-    // warning, "Element handle g17:99 not found in snapshot (has M elements).",
-    // "<action> is not a valid secondary action for <handle>").
+    // not-settable, …). Preserve its diagnostic so the caller can inspect the
+    // current state before choosing another action.
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`[${serverName}] tool=${name} failed: ${msg}`, err);
-    return errorResult(msg, "executor_threw");
+    return { ...errorResult(msg, 'executor_threw'), [NATIVE_ERROR]: toNativeErrorMetadata(err) }
   }
 }
 
-/**
- * True when the resolved process is allowed to be driven — already granted, or
- * granted by the user in response to the approval dialog.
- *
- * Fails closed in both no-answer cases: no handler wired, or a handler whose
- * response doesn't name this exact bundle id.
- */
-async function authorizeResolvedTarget(
-  resolved: ResolvedAppTarget,
+/** Never detach this loop with Promise.race: a timed-out loop must not keep injecting. */
+async function runSequence(
+  steps: ParsedRequest[],
+  engine: CodexComputerEngine,
+  target: AppTarget,
   requestedApp: string,
-  overrides: ComputerUseOverrides,
   adapter: ComputerUseHostAdapter,
-): Promise<boolean> {
-  const bundleId = resolved.bundleId;
-  if (bundleId === undefined) return false;
+  overrides: ComputerUseOverrides,
+): Promise<CuCallToolResult> {
+  const started = performance.now();
+  let completedSteps = 0;
+  const stepDurationsMs: number[] = [];
+  const summary = (status: string, extra: Record<string, unknown> = {}) => ({
+    status,
+    completedSteps,
+    totalSteps: steps.length,
+    elapsedMs: Math.round(performance.now() - started),
+    stepDurationsMs,
+    ...extra,
+  });
+  const stop = (observationSkipped = true): CuCallToolResult | undefined => {
+    let status: string | undefined;
+    if (overrides.isAborted?.()) {
+      status = "cancelled";
+    } else if (adapter.isDisabled()) {
+      status = "disabled";
+    } else if (performance.now() - started >= 60_000) {
+      status = "deadline_exceeded";
+    }
+    if (!status) {
+      return undefined;
+    }
+    return {
+      ...errorResult(
+        `Sequence ${status}; stopped after ${completedSteps} completed steps. ` +
+          "No further actions dispatched. Inspect the current state before continuing; " +
+          "do not replay completed steps.",
+        "other",
+      ),
+      structuredContent: summary(status, {
+        resultUnknown: false,
+        observationSkipped,
+        observationDelivered: false,
+      }),
+    };
+  };
 
-  if (overrides.allowedApps?.some(app => app.bundleId === bundleId)) {
-    return true;
+  for (const step of steps) {
+    const stopped = stop();
+    if (stopped) {
+      return stopped;
+    }
+    const stepStarted = performance.now();
+    try {
+      const result = await step.run(engine, target);
+      stepDurationsMs.push(Math.round(performance.now() - stepStarted));
+      if (result.isError) {
+        return {
+          ...result,
+          structuredContent: summary("failed", {
+            failedStepIndex: completedSteps,
+            resultUnknown: true,
+            observationSkipped: true,
+          }),
+        };
+      }
+      completedSteps++;
+    } catch (err) {
+      stepDurationsMs.push(Math.round(performance.now() - stepStarted));
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ...errorResult(
+          `Sequence step ${completedSteps} failed: ${message}. ` +
+            "Inspect the app before retrying; completed steps were not rolled back.",
+          "executor_threw",
+        ),
+        structuredContent: summary("failed", {
+          failedStepIndex: completedSteps,
+          resultUnknown: true,
+          observationSkipped: true,
+        }),
+      };
+    }
+    const stoppedAfter = stop();
+    if (stoppedAfter) {
+      return stoppedAfter;
+    }
   }
 
-  const request = overrides.onPermissionRequest;
-  if (!request) return false;
-
-  const response = await request(
-    buildPermissionRequest(
-      resolved,
-      requestedApp,
-      adapter.executor.capabilities.screenshotFiltering,
-    ),
-  );
-  return response.granted.some(grant => grant.bundleId === bundleId);
+  try {
+    const state = await engine.getAppState(target);
+    const stopped = stop(false);
+    if (stopped) {
+      return stopped;
+    }
+    const result = frameAppStateEnvelope(instructionsOncePerApp(state, requestedApp));
+    if (!state.screenshot?.base64) {
+      return {
+        ...result,
+        isError: true,
+        telemetry: { error_kind: "capture_failed" },
+        structuredContent: summary("observation_failed", { resultUnknown: false }),
+        content: [
+          {
+            type: "text",
+            text: `All ${completedSteps} steps completed, but the final screenshot is unavailable. ` +
+              "The AX state alone does not verify the visual result. " +
+              "Call get_app_state before continuing; do not replay completed steps.",
+          },
+          ...result.content,
+        ],
+      };
+    }
+    return {
+      ...result,
+      structuredContent: summary("completed", { resultUnknown: false }),
+      content: [
+        {
+          type: "text",
+          text: `Sequence completed ${completedSteps} steps. The following is the actual final app state.`,
+        },
+        ...result.content,
+      ],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ...errorResult(
+        `All ${completedSteps} sequence steps completed, but final observation failed: ${message}. ` +
+          "Call get_app_state before continuing; do not replay completed steps.",
+        "capture_failed",
+      ),
+      structuredContent: summary("observation_failed", {
+        resultUnknown: false,
+        observationSkipped: false,
+      }),
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,7 +1239,6 @@ export const _test = {
   parseDirection,
   parseTarget,
   parsePoint,
-  policyDenyMessage,
   provenIdentity,
   dispatchTarget,
   CUA_APP_VERSION,

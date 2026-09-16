@@ -3,6 +3,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import { randomUUID } from 'crypto'
 import last from 'lodash-es/last.js'
 import {
+  addToTotalGenerationDuration,
   getSessionId,
   isSessionPersistenceDisabled,
 } from 'src/bootstrap/state.js'
@@ -53,6 +54,8 @@ import {
   type FileHistoryState,
   fileHistoryEnabled,
   fileHistoryMakeSnapshot,
+  fileHistoryCompleteSnapshot,
+  withFileHistoryCompletion,
 } from './utils/fileHistory.js'
 import {
   cloneFileStateCache,
@@ -60,7 +63,7 @@ import {
 } from './utils/fileStateCache.js'
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
 import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.js'
-import { getInMemoryErrors } from './utils/log.js'
+import { getInMemoryErrors, logError } from './utils/log.js'
 import { countToolCalls, SYNTHETIC_MESSAGES } from './utils/messages.js'
 import {
   getMainLoopModel,
@@ -190,6 +193,11 @@ export class QueryEngine {
   private abortController: AbortController
   private permissionDenials: SDKPermissionDenial[]
   private totalUsage: NonNullableUsage
+  // Generation timing for this turn, summed over every API request it made. `decodeMs`
+  // excludes prefill and tool execution, so it is the denominator a tokens/sec reading
+  // needs; `ttftMs` is kept for the request-to-first-token wait it deliberately omits.
+  private totalDecodeMs = 0
+  private totalTtftMs = 0
   private hasHandledOrphanedPermission = false
   private readFileState: FileStateCache
   // Turn-scoped skill discovery tracking (feeds was_discovered on
@@ -643,6 +651,11 @@ export class QueryEngine {
         is_error: false,
         duration_ms: Date.now() - startTime,
         duration_api_ms: getTotalAPIDuration(),
+        // Generation-only timings for this turn. `duration_api_ms` covers the whole request
+        // including prefill, so a tokens/sec reading built from it understates fast models on
+        // long contexts; decode_ms is the span tokens were actually being emitted over.
+        ttft_ms: this.totalTtftMs,
+        decode_ms: this.totalDecodeMs,
         num_turns: messages.length - 1,
         result: resultText ?? '',
         stop_reason: null,
@@ -660,24 +673,29 @@ export class QueryEngine {
       return
     }
 
+    const checkpointMessages = messagesFromUserInput.filter(messageSelector().selectableUserMessagesFilter)
     if (fileHistoryEnabled() && persistSession) {
-      messagesFromUserInput
-        .filter(messageSelector().selectableUserMessagesFilter)
-        .forEach(message => {
-          void fileHistoryMakeSnapshot(
-            (updater: (prev: FileHistoryState) => FileHistoryState) => {
-              setAppState(prev => ({
-                ...prev,
-                fileHistory: updater(prev.fileHistory),
-              }))
-            },
-            message.uuid,
-          )
-        })
+      for (const message of checkpointMessages) {
+        await fileHistoryMakeSnapshot(updater => setAppState(prev => ({ ...prev, fileHistory: updater(prev.fileHistory) })), message.uuid)
+      }
+    }
+
+    let checkpointCompleted = false
+    const completeCheckpoint = async () => {
+      if (checkpointCompleted) return
+      checkpointCompleted = true
+      const checkpointMessage = checkpointMessages.at(-1)
+      if (persistSession && checkpointMessage) {
+        await fileHistoryCompleteSnapshot(updater => setAppState(prev => ({ ...prev, fileHistory: updater(prev.fileHistory) })), checkpointMessage.uuid).catch(logError)
+        await flushSessionStorage()
+      }
     }
 
     // Track current message usage (reset on each message_start)
     let currentMessageUsage: NonNullableUsage = EMPTY_USAGE
+    // Same scope as currentMessageUsage: an attempt that dies before message_stop must
+    // discard its timings too, otherwise a retried request bills prefill time twice.
+    let currentMessageTtftMs = 0
     let turnCount = 1
     let hasAcknowledgedInitialMessages = false
     // Track structured output from StructuredOutput tool calls
@@ -694,7 +712,7 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
-    for await (const message of query({
+    for await (const message of withFileHistoryCompletion(query({
       messages,
       systemPrompt,
       userContext,
@@ -705,7 +723,7 @@ export class QueryEngine {
       querySource: 'sdk',
       maxTurns,
       taskBudget,
-    })) {
+    }), completeCheckpoint)) {
       // Record assistant, user, and compact boundary messages
       if (
         message.type === 'assistant' ||
@@ -815,6 +833,7 @@ export class QueryEngine {
               currentMessageUsage,
               message.event.message.usage,
             )
+            currentMessageTtftMs = message.ttftMs ?? 0
           }
           if (message.event.type === 'message_delta') {
             currentMessageUsage = updateUsage(
@@ -834,6 +853,14 @@ export class QueryEngine {
             this.totalUsage = accumulateUsage(
               this.totalUsage,
               currentMessageUsage,
+            )
+            this.totalDecodeMs += message.decodeMs ?? 0
+            this.totalTtftMs += currentMessageTtftMs
+            // Session-scoped twin of the turn totals above: survives across turns so the
+            // usage snapshot can report generation speed for the whole conversation.
+            addToTotalGenerationDuration(
+              message.decodeMs ?? 0,
+              currentMessageTtftMs,
             )
           }
 
@@ -870,6 +897,7 @@ export class QueryEngine {
                 await flushSessionStorage()
               }
             }
+            await completeCheckpoint()
             yield {
               type: 'result',
               subtype: 'error_max_turns',
@@ -1019,6 +1047,7 @@ export class QueryEngine {
             await flushSessionStorage()
           }
         }
+        await completeCheckpoint()
         yield {
           type: 'result',
           subtype: 'error_max_budget_usd',
@@ -1062,6 +1091,7 @@ export class QueryEngine {
               await flushSessionStorage()
             }
           }
+          await completeCheckpoint()
           yield {
             type: 'result',
             subtype: 'error_max_structured_output_retries',
@@ -1108,6 +1138,9 @@ export class QueryEngine {
         ? (last(result.message.content)?.type ?? 'none')
         : 'n/a'
 
+    // Capture partial edits on stopped/error turns too, before their result.
+    await completeCheckpoint()
+
     // Flush buffered transcript writes before yielding result.
     // The desktop app kills the CLI process immediately after receiving the
     // result message, so any unflushed writes would be lost.
@@ -1121,6 +1154,7 @@ export class QueryEngine {
     }
 
     if (!isResultSuccessful(result, lastStopReason)) {
+      await completeCheckpoint()
       yield {
         type: 'result',
         subtype: 'error_during_execution',
@@ -1172,6 +1206,8 @@ export class QueryEngine {
       }
       isApiError = Boolean(result.isApiErrorMessage)
     }
+
+    await completeCheckpoint()
 
     yield {
       type: 'result',

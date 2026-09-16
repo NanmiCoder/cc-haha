@@ -1,3 +1,4 @@
+import { PublicAccessSettings } from './PublicAccessSettings'
 import { useState, useEffect, useMemo } from 'react'
 import QRCode from 'qrcode'
 import { Copy, Eye, EyeOff, PowerOff, QrCode, RotateCw } from 'lucide-react'
@@ -561,6 +562,8 @@ export function H5AccessSettings() {
           )}
         </Card>
       </section>
+
+      <PublicAccessSettings />
 
       <ConfirmDialog
         open={h5EnableConfirmOpen}

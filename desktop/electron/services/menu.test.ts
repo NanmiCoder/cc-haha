@@ -172,7 +172,7 @@ describe('Electron application menu service', () => {
     expect(hide).toHaveBeenCalledTimes(1)
   })
 
-  it('routes the Window close accelerator through the provided close action', () => {
+  it('keeps explicit window close separate from the tab accelerator', () => {
     const close = vi.fn()
     const template = buildApplicationMenuTemplate('Claude Code Haha', vi.fn(), 'darwin', { close })
     const closeItem = template
@@ -180,7 +180,7 @@ describe('Electron application menu service', () => {
       .find(item => item.label === 'Close Window')
 
     expect(closeItem).toBeDefined()
-    expect(closeItem?.accelerator).toBe('CmdOrCtrl+W')
+    expect(closeItem?.accelerator).toBeUndefined()
     closeItem?.click?.({} as never, {} as never, {} as never)
 
     expect(close).toHaveBeenCalledTimes(1)
@@ -340,4 +340,35 @@ describe('Electron application menu service', () => {
     expect(window.setSimpleFullScreen).toHaveBeenCalledWith(true)
     expect(window.setFullScreen).not.toHaveBeenCalled()
   })
+})
+
+
+it('routes the Close Tab accelerator to the workspace controller without closing the window', async () => {
+  const window = { close: vi.fn(), webContents: { send: vi.fn() } }
+  const mocks = getElectronMenuMocks()
+  mocks.buildFromTemplate.mockClear()
+  await installApplicationMenu({ name: 'Test App' } as never, () => window as never, 'darwin')
+  const template = mocks.buildFromTemplate.mock.calls[0]?.[0] as MenuItemConstructorOptions[]
+  const item = template.flatMap(item => (item.submenu as MenuItemConstructorOptions[] | undefined) ?? []).find(item => item.label === 'Close Tab')!
+  expect(item.accelerator).toBe('CmdOrCtrl+W')
+  item.click?.({} as never, {} as never, {} as never)
+  expect(window.webContents.send).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, { type: 'shortcut', tabId: '', action: 'close-tab' })
+  expect(window.close).not.toHaveBeenCalled()
+})
+
+it('lets renderer and terminal W keystrokes pass through without a competing menu accelerator', async () => {
+  const handlers = new Map<string, (event: unknown, input: unknown) => void>()
+  const window = {
+    webContents: {
+      on: (name: string, handler: (event: unknown, input: unknown) => void) => handlers.set(name, handler),
+      setIgnoreMenuShortcuts: vi.fn(),
+    },
+  }
+  await installRendererContextMenu(window as never)
+  const preventDefault = vi.fn()
+  handlers.get('before-input-event')!({ preventDefault }, { key: 'w', control: true, meta: false })
+  expect(window.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true)
+  expect(preventDefault).not.toHaveBeenCalled()
+  handlers.get('before-input-event')!({ preventDefault }, { key: 'c', control: true, meta: false })
+  expect(window.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false)
 })

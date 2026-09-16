@@ -51,6 +51,12 @@ export type MessageEntry = {
   timestamp: string
   model?: string
   usage?: MessageUsage
+  /**
+   * Identity of the API response this `usage` belongs to, when it has one. One assistant reply
+   * is persisted as several lines that each repeat the whole `usage` object, so anything that
+   * totals usage must count each key once. Absent means the line carries no id — count it.
+   */
+  usageKey?: string
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean

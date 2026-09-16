@@ -212,10 +212,9 @@ async function compileExecutable({
     minify: { whitespace: true, identifiers: true, syntax: true },
     sourcemap: 'none',
     target: 'bun',
-    // 可选 npm 包：开 telemetry / 用 sharp 图像 / 用 Bedrock/Vertex 等
-    // 替代 provider 时才需要，全部不在顶层 package.json 里。标 external
-    // 让 bun build 跳过解析；运行时 import 在没装时自然失败，由 try/catch
-    // 或 feature() gate 兜底。
+    // 运行时可选 npm 包保持 external，避免将原生模块嵌入 sidecar。
+    // sharp 由 desktop/package.json 声明并随 Electron 应用分发；其他
+    // provider/telemetry 模块在未安装时由 try/catch 或 feature() gate 兜底。
     external: [
       // OpenTelemetry exporters（开 OTEL_* env 时才加载）
       '@opentelemetry/exporter-trace-otlp-grpc',

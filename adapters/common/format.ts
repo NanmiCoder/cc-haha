@@ -28,6 +28,11 @@ type ImStatusSummary = {
 const IM_HELP_LINES = [
   '/new [项目] / 新会话 — 新建会话或切换项目',
   '/projects / 项目列表 — 查看最近项目',
+  '/sessions [项目] / 会话列表 — 查看当前项目的旧会话',
+  '/sessions projects — 选择其他项目的旧会话',
+  '/resume <编号> / 继续会话 <编号> — 恢复列表中的会话',
+  '/sessions next / /sessions prev — 翻页',
+  '/cancel / 取消选择 — 退出选择，保留当前会话',
   '/status / 状态 — 查看当前会话状态',
   '/clear / 清空 — 清空当前会话上下文',
   '/stop / 停止 — 停止当前生成',
@@ -62,6 +67,64 @@ export function splitMessage(text: string, limit: number): string[] {
   }
 
   return chunks
+}
+
+const utf8Encoder = new TextEncoder()
+
+/** UTF-8 byte length — WeCom and several other platforms cap on bytes, not characters. */
+export function utf8Length(text: string): number {
+  return utf8Encoder.encode(text).length
+}
+
+/**
+ * Split text into chunks that each fit within a UTF-8 **byte** limit.
+ *
+ * `splitMessage` counts characters, which silently overflows a byte cap the
+ * moment the text is Chinese (3 bytes per character). Splitting still prefers
+ * paragraph, then line, then word boundaries; a single oversized token is cut
+ * at a code-point boundary rather than mid-sequence.
+ */
+export function splitMessageByBytes(text: string, maxBytes: number): string[] {
+  if (maxBytes <= 0) return [text]
+  if (utf8Length(text) <= maxBytes) return [text]
+
+  const chunks: string[] = []
+  let remaining = text
+
+  while (remaining.length > 0) {
+    if (utf8Length(remaining) <= maxBytes) {
+      chunks.push(remaining)
+      break
+    }
+
+    // Walk back from an upper-bound character index until the slice fits.
+    let end = Math.min(remaining.length, maxBytes)
+    while (end > 0 && utf8Length(remaining.slice(0, end)) > maxBytes) {
+      end -= 1
+    }
+    if (end <= 0) end = 1
+
+    const window = remaining.slice(0, end)
+    let splitAt = window.lastIndexOf('\n\n')
+    if (splitAt <= 0) splitAt = window.lastIndexOf('\n')
+    if (splitAt <= 0) splitAt = window.lastIndexOf(' ')
+    if (splitAt <= 0) splitAt = end
+
+    // Never split inside a surrogate pair — that produces invalid UTF-8.
+    if (splitAt < remaining.length && isLowSurrogate(remaining.charCodeAt(splitAt))) {
+      splitAt -= 1
+    }
+    if (splitAt <= 0) splitAt = end
+
+    chunks.push(remaining.slice(0, splitAt).trimEnd())
+    remaining = remaining.slice(splitAt).trimStart()
+  }
+
+  return chunks.filter((chunk) => chunk.length > 0)
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff
 }
 
 type MarkdownTable = {
@@ -258,7 +321,7 @@ export function formatImHelp(): string {
 
 export function formatImStatus(summary: ImStatusSummary | null): string {
   if (!summary?.sessionId) {
-    return '当前没有活动会话。\n\n发送 /new 新建会话，或发送 /projects 选择项目。'
+    return '当前没有活动会话。\n\n发送 /sessions 选择旧会话，/new 新建会话，或 /projects 选择项目。'
   }
 
   const lines = ['当前会话状态：']

@@ -31,7 +31,63 @@ import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleWorkflowsApi } from './api/workflows.js'
 
-export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
+import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, projectRemoteProvider, projectRemoteSettings, replaceRemoteCompatibility, validateRemoteSettingsPatch, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { ProviderService } from './services/providerService.js'
+import type { SavedProvider } from './types/provider.js'
+import { remoteProviderNeedsCredentials } from './remoteProviderCredentials.js'
+
+export async function handleApiRequest(req: Request, url: URL, context: ApiRequestContext = {}): Promise<Response> {
+  if (!context.remoteBrowser) return routeApiRequest(req, url)
+  const parts = url.pathname.split('/').filter(Boolean)
+  const isProvider = parts[1] === 'providers'
+  const isSettings = parts[1] === 'settings'
+  if (!isProvider && !isSettings) return routeApiRequest(req, url)
+  if ((isProvider && !remoteProviderRouteAllowed(parts, req.method)) || (isSettings && !remoteSettingsRouteAllowed(parts, req.method))) {
+    return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
+  }
+  try {
+    const createsProvider = isProvider && parts.length === 2 && req.method === 'POST'
+    if (createsProvider || (req.method === 'PUT' && (isSettings || (isProvider && parts.length === 3 && parts[2] !== 'reorder')))) {
+      const body: unknown = await req.json()
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return Response.json({ error: 'Object required' }, { status: 400 })
+      const input = { ...body } as Record<string, unknown>
+      if (isSettings && !validateRemoteSettingsPatch(input)) return Response.json({ error: 'Unsupported General setting' }, { status: 400 })
+      if (isProvider) {
+        const saved = createsProvider ? undefined : await new ProviderService().getProvider(parts[2]!)
+        if (saved && remoteProviderNeedsCredentials(saved, input)) {
+          return Response.json({ error: 'Changing a credential destination requires an explicit API key', code: 'REMOTE_PROVIDER_CREDENTIAL_REQUIRED' }, { status: 400 })
+        }
+        // Empty fields mean retain the saved secret, never replace with the redacted placeholder.
+        if (!createsProvider && input.apiKey === '') delete input.apiKey
+        if (input.requestCompatibility === null || (input.requestCompatibility && typeof input.requestCompatibility === 'object' && !Array.isArray(input.requestCompatibility))) {
+          input.requestCompatibility = replaceRemoteCompatibility(saved?.requestCompatibility, input.requestCompatibility as Record<string, unknown> | null)
+          if (createsProvider && input.requestCompatibility === null) delete input.requestCompatibility
+        }
+        if (input.imageGeneration && typeof input.imageGeneration === 'object' && !Array.isArray(input.imageGeneration)) {
+          const image = { ...input.imageGeneration } as Record<string, unknown>
+          if (!createsProvider && (image.apiKey === '' || image.apiKey === undefined)) {
+            image.apiKey = saved?.imageGeneration?.apiKey
+          }
+          input.imageGeneration = image
+        }
+      }
+      req = new Request(req.url, { method: req.method, headers: req.headers, body: JSON.stringify(input) })
+    }
+    const response = await routeApiRequest(req, url)
+    if (!response.ok) return response
+    const body = await response.json() as Record<string, unknown>
+    if (isSettings && req.method === 'GET') return Response.json(projectRemoteSettings(body))
+    if (isProvider) {
+      if (Array.isArray(body.providers)) body.providers = (body.providers as SavedProvider[]).map(projectRemoteProvider)
+      if (body.provider && typeof body.provider === 'object') body.provider = projectRemoteProvider(body.provider as SavedProvider)
+    }
+    return Response.json(body, { status: response.status })
+  } catch {
+    return Response.json({ error: 'Remote settings request failed' }, { status: 400 })
+  }
+}
+
+async function routeApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
   const segments = path.split('/').filter(Boolean) // ['api', 'sessions', ...]
 
@@ -105,6 +161,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'mcp':
       return handleMcpApi(req, url, segments)
+
+    case 'connectors':
+      return (await import('./api/connectors.js')).handleConnectorsApi(req, url, segments)
 
     case 'plugins':
       return handlePluginsApi(req, url, segments)

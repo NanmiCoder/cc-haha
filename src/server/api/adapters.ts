@@ -22,8 +22,24 @@ import {
   startWhatsAppLoginWithQr,
 } from '../../../adapters/whatsapp/protocol.js'
 import { loadConfig } from '../../../adapters/common/config.js'
+import {
+  beginFeishuRegistration,
+  cancelFeishuRegistration,
+  pollFeishuRegistration,
+} from '../../../adapters/feishu/registration.js'
+import {
+  cancelWecomQrLogin,
+  pollWecomQrLogin,
+  startWecomQrLogin,
+} from '../../../adapters/wecom/qr-auth.js'
+import {
+  cancelQqQrLogin,
+  pollQqQrLogin,
+  startQqQrLogin,
+} from '../../../adapters/qq/qr-auth.js'
+import { buildSlackCreateAppUrl, buildSlackManifestJson } from '../../../adapters/slack/manifest.js'
 
-const ALLOWED_TOP_KEYS = new Set(['serverUrl', 'defaultProjectDir', 'allowedProjectRoots', 'telegram', 'feishu', 'wechat', 'dingtalk', 'whatsapp', 'pairing'])
+const ALLOWED_TOP_KEYS = new Set(['serverUrl', 'defaultProjectDir', 'allowedProjectRoots', 'telegram', 'feishu', 'wechat', 'dingtalk', 'whatsapp', 'wecom', 'qq', 'slack', 'pairing'])
 const MAX_TEXT_LENGTH = 16_384
 const MAX_PATH_LENGTH = 4_096
 const MAX_LIST_LENGTH = 1_000
@@ -242,12 +258,18 @@ function parseAdapterConfigPatch(value: unknown): Partial<AdapterFileConfig> {
     const source = requireRecord(body.feishu, 'feishu')
     assertKnownKeys(
       source,
-      ['appId', 'appSecret', 'encryptKey', 'verificationToken', 'allowedUsers', 'pairedUsers', 'defaultWorkDir', 'streamingCard', 'allowedProjectRoots'],
+      ['appId', 'appSecret', 'encryptKey', 'verificationToken', 'domain', 'allowedUsers', 'pairedUsers', 'defaultWorkDir', 'streamingCard', 'allowedProjectRoots'],
       'feishu',
     )
     const feishu: NonNullable<AdapterFileConfig['feishu']> = {}
     for (const key of ['appId', 'appSecret', 'encryptKey', 'verificationToken'] as const) {
       readOptionalStringField(source, feishu, key, `feishu.${key}`)
+    }
+    if ('domain' in source) {
+      if (source.domain !== 'feishu' && source.domain !== 'lark') {
+        throw ApiError.badRequest("feishu.domain must be 'feishu' or 'lark'")
+      }
+      feishu.domain = source.domain
     }
     readOptionalStringListField(source, feishu, 'allowedUsers', 'feishu.allowedUsers')
     if ('pairedUsers' in source) feishu.pairedUsers = readPairedUsers(source.pairedUsers, 'feishu.pairedUsers')
@@ -300,6 +322,60 @@ function parseAdapterConfigPatch(value: unknown): Partial<AdapterFileConfig> {
     patch.whatsapp = whatsapp
   }
 
+  if ('wecom' in body) {
+    const source = requireRecord(body.wecom, 'wecom')
+    assertKnownKeys(
+      source,
+      ['botId', 'secret', 'allowedUsers', 'pairedUsers', 'defaultWorkDir', 'allowedProjectRoots'],
+      'wecom',
+    )
+    const wecom: NonNullable<AdapterFileConfig['wecom']> = {}
+    for (const key of ['botId', 'secret'] as const) {
+      readOptionalStringField(source, wecom, key, `wecom.${key}`)
+    }
+    readOptionalStringListField(source, wecom, 'allowedUsers', 'wecom.allowedUsers')
+    if ('pairedUsers' in source) wecom.pairedUsers = readPairedUsers(source.pairedUsers, 'wecom.pairedUsers')
+    readOptionalStringField(source, wecom, 'defaultWorkDir', 'wecom.defaultWorkDir', MAX_PATH_LENGTH)
+    readOptionalStringListField(source, wecom, 'allowedProjectRoots', 'wecom.allowedProjectRoots')
+    patch.wecom = wecom
+  }
+
+  if ('qq' in body) {
+    const source = requireRecord(body.qq, 'qq')
+    assertKnownKeys(
+      source,
+      ['appId', 'appSecret', 'allowedUsers', 'pairedUsers', 'defaultWorkDir', 'allowedProjectRoots'],
+      'qq',
+    )
+    const qq: NonNullable<AdapterFileConfig['qq']> = {}
+    for (const key of ['appId', 'appSecret'] as const) {
+      readOptionalStringField(source, qq, key, `qq.${key}`)
+    }
+    readOptionalStringListField(source, qq, 'allowedUsers', 'qq.allowedUsers')
+    if ('pairedUsers' in source) qq.pairedUsers = readPairedUsers(source.pairedUsers, 'qq.pairedUsers')
+    readOptionalStringField(source, qq, 'defaultWorkDir', 'qq.defaultWorkDir', MAX_PATH_LENGTH)
+    readOptionalStringListField(source, qq, 'allowedProjectRoots', 'qq.allowedProjectRoots')
+    patch.qq = qq
+  }
+
+  if ('slack' in body) {
+    const source = requireRecord(body.slack, 'slack')
+    assertKnownKeys(
+      source,
+      ['botToken', 'appToken', 'allowedUsers', 'pairedUsers', 'defaultWorkDir', 'allowedProjectRoots'],
+      'slack',
+    )
+    const slack: NonNullable<AdapterFileConfig['slack']> = {}
+    for (const key of ['botToken', 'appToken'] as const) {
+      readOptionalStringField(source, slack, key, `slack.${key}`)
+    }
+    readOptionalStringListField(source, slack, 'allowedUsers', 'slack.allowedUsers')
+    if ('pairedUsers' in source) slack.pairedUsers = readPairedUsers(source.pairedUsers, 'slack.pairedUsers')
+    readOptionalStringField(source, slack, 'defaultWorkDir', 'slack.defaultWorkDir', MAX_PATH_LENGTH)
+    readOptionalStringListField(source, slack, 'allowedProjectRoots', 'slack.allowedProjectRoots')
+    patch.slack = slack
+  }
+
   return patch
 }
 
@@ -317,6 +393,10 @@ type RegistrationBeginPayload = {
   intervalSeconds: number
   qrDataUrl?: string
 }
+
+/** Pre-filled on Feishu's confirmation page; the user can still edit both. */
+const FEISHU_REGISTRATION_APP_NAME = 'Claude Code Haha'
+const FEISHU_REGISTRATION_APP_DESC = '把飞书私聊接到本机的 Claude Code 会话。'
 
 const DINGTALK_REGISTRATION_BASE_URL =
   process.env.DINGTALK_REGISTRATION_BASE_URL?.trim() || 'https://oapi.dingtalk.com'
@@ -434,6 +514,18 @@ export async function handleAdaptersApi(
     if (tail[0] === 'whatsapp') {
       return await handleWhatsAppAdaptersApi(req, tail.slice(1))
     }
+    if (tail[0] === 'feishu') {
+      return await handleFeishuAdaptersApi(req, tail.slice(1))
+    }
+    if (tail[0] === 'wecom') {
+      return await handleWecomAdaptersApi(req, tail.slice(1))
+    }
+    if (tail[0] === 'qq') {
+      return await handleQqAdaptersApi(req, tail.slice(1))
+    }
+    if (tail[0] === 'slack') {
+      return await handleSlackAdaptersApi(req, tail.slice(1))
+    }
     if (tail[0] === 'dingtalk' && req.method === 'POST' && tail[1] === 'unbind') {
       await adapterService.updateConfig({
         dingtalk: {
@@ -480,6 +572,220 @@ export async function handleAdaptersApi(
   } catch (error) {
     return errorResponse(error)
   }
+}
+
+/** Read the `sessionKey` a QR poll must carry, or reject the request. */
+async function readSessionKey(req: Request): Promise<string> {
+  const body = await req.json().catch(() => {
+    throw ApiError.badRequest('Request body must be valid JSON')
+  })
+  const sessionKey = isRecord(body) ? body.sessionKey : undefined
+  if (typeof sessionKey !== 'string' || !sessionKey || sessionKey.length > 256) {
+    throw ApiError.badRequest('Missing or invalid sessionKey')
+  }
+  return sessionKey
+}
+
+/**
+ * Feishu scan-to-create bot provisioning.
+ *
+ * Same begin/poll shape as the DingTalk registration above; on success the App
+ * ID and App Secret are written straight into the adapter config, so the user
+ * never handles a credential.
+ */
+async function handleFeishuAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'POST' && tail[0] === 'registration' && tail[1] === 'begin') {
+    const begun = await beginFeishuRegistration({
+      appName: FEISHU_REGISTRATION_APP_NAME,
+      appDescription: FEISHU_REGISTRATION_APP_DESC,
+    })
+    return Response.json({
+      ...begun,
+      qrDataUrl: await createQrDataUrl(begun.verificationUri),
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'registration' && tail[1] === 'poll') {
+    const sessionKey = await readSessionKey(req)
+    const result = await pollFeishuRegistration({ sessionKey })
+    if (result.status === 'success') {
+      await adapterService.updateConfig({
+        feishu: {
+          appId: result.appId,
+          appSecret: result.appSecret,
+          // An international tenant finishes the flow on Lark's domain, and a
+          // bot provisioned there cannot authenticate against open.feishu.cn.
+          domain: result.domain,
+          // A freshly created app has neither, and the long-connection client
+          // does not need them. Clearing stale values from a previous bot
+          // keeps the adapter from validating events against the wrong app.
+          encryptKey: '',
+          verificationToken: '',
+          // A Feishu open_id is scoped to the app, so every id recorded against
+          // the previous bot is dead on arrival — keeping either list would
+          // leave the settings page showing users who can never match.
+          pairedUsers: [],
+          allowedUsers: [],
+        },
+      })
+      return Response.json({ status: 'success', config: await adapterService.getConfig() })
+    }
+    return Response.json(result)
+  }
+
+  if (req.method === 'POST' && tail[0] === 'registration' && tail[1] === 'cancel') {
+    const sessionKey = await readSessionKey(req)
+    cancelFeishuRegistration(sessionKey)
+    return Response.json({ status: 'cancelled' })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'unbind') {
+    await adapterService.updateConfig({
+      feishu: {
+        appId: undefined,
+        appSecret: undefined,
+        encryptKey: undefined,
+        verificationToken: undefined,
+        domain: undefined,
+        allowedUsers: [],
+        pairedUsers: [],
+      },
+    })
+    return Response.json(await adapterService.getConfig())
+  }
+
+  throw new ApiError(404, 'Unknown Feishu adapter endpoint', 'NOT_FOUND')
+}
+
+/** Enterprise WeChat QR provisioning: scan once, credentials land in config. */
+async function handleWecomAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'start') {
+    const started = await startWecomQrLogin({ force: true })
+    return Response.json({
+      ...started,
+      qrDataUrl: await createQrDataUrl(started.verificationUrl),
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'poll') {
+    const sessionKey = await readSessionKey(req)
+    const result = await pollWecomQrLogin({ sessionKey })
+    if (result.connected) {
+      await adapterService.updateConfig({
+        wecom: {
+          botId: result.botId,
+          secret: result.secret,
+          // Paired ids were recorded against the old bot, so they go. Unlike
+          // Feishu and QQ, a WeCom userid is scoped to the corp rather than the
+          // bot, so a hand-written allowlist stays valid and is kept.
+          pairedUsers: [],
+        },
+      })
+      return Response.json(await adapterService.getConfig())
+    }
+    return Response.json(result)
+  }
+
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'cancel') {
+    const sessionKey = await readSessionKey(req)
+    cancelWecomQrLogin(sessionKey)
+    return Response.json({ status: 'cancelled' })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'unbind') {
+    await adapterService.updateConfig({
+      wecom: {
+        botId: undefined,
+        secret: undefined,
+        allowedUsers: [],
+        pairedUsers: [],
+      },
+    })
+    return Response.json(await adapterService.getConfig())
+  }
+
+  throw new ApiError(404, 'Unknown WeCom adapter endpoint', 'NOT_FOUND')
+}
+
+/** QQ Open Platform QR provisioning. */
+async function handleQqAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'start') {
+    const started = await startQqQrLogin({})
+    return Response.json({
+      ...started,
+      qrDataUrl: await createQrDataUrl(started.verificationUrl),
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'poll') {
+    const sessionKey = await readSessionKey(req)
+    const result = pollQqQrLogin({ sessionKey })
+    if (result.connected) {
+      await adapterService.updateConfig({
+        qq: {
+          appId: result.appId,
+          appSecret: result.appSecret,
+          // A QQ openid is scoped to the bot, so ids from the previous one can
+          // never match again.
+          pairedUsers: [],
+          allowedUsers: [],
+        },
+      })
+      return Response.json(await adapterService.getConfig())
+    }
+    return Response.json({
+      ...result,
+      // The connector rotates the code on expiry; redraw when it does.
+      qrDataUrl: result.verificationUrl ? await createQrDataUrl(result.verificationUrl) : undefined,
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'cancel') {
+    const sessionKey = await readSessionKey(req)
+    cancelQqQrLogin(sessionKey)
+    return Response.json({ status: 'cancelled' })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'unbind') {
+    await adapterService.updateConfig({
+      qq: {
+        appId: undefined,
+        appSecret: undefined,
+        allowedUsers: [],
+        pairedUsers: [],
+      },
+    })
+    return Response.json(await adapterService.getConfig())
+  }
+
+  throw new ApiError(404, 'Unknown QQ adapter endpoint', 'NOT_FOUND')
+}
+
+/**
+ * Slack has no scan flow; the equivalent shortcut is an app manifest, which the
+ * settings page turns into a one-click "create app" link plus copyable JSON.
+ */
+async function handleSlackAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'GET' && tail[0] === 'manifest') {
+    return Response.json({
+      manifest: buildSlackManifestJson(),
+      createAppUrl: buildSlackCreateAppUrl(),
+    })
+  }
+
+  if (req.method === 'POST' && tail[0] === 'unbind') {
+    await adapterService.updateConfig({
+      slack: {
+        botToken: undefined,
+        appToken: undefined,
+        allowedUsers: [],
+        pairedUsers: [],
+      },
+    })
+    return Response.json(await adapterService.getConfig())
+  }
+
+  throw new ApiError(404, 'Unknown Slack adapter endpoint', 'NOT_FOUND')
 }
 
 async function handleWechatAdaptersApi(req: Request, tail: string[]): Promise<Response> {

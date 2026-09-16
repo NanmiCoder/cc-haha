@@ -122,6 +122,15 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
 
   const handleSelect = (qIndex: number, label: string) => {
     if (submitted) return
+    // Computed from the render snapshot rather than inside the updater: React
+    // may run a state updater twice, and advancing the tab is a side effect.
+    // Clicking an already-selected option deselects it — that is not a step
+    // forward. Multi-select keeps the user on the question until they say so.
+    const shouldAdvance =
+      questions[qIndex]?.multiSelect !== true &&
+      !(selections[qIndex]?.includes(label) ?? false) &&
+      qIndex === safeActiveTab &&
+      qIndex < questions.length - 1
     setSelections((prev) => {
       const question = questions[qIndex]
       const selected = prev[qIndex] ?? []
@@ -150,6 +159,7 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
       delete next[qIndex]
       return next
     })
+    if (shouldAdvance) setActiveTab(qIndex + 1)
   }
 
   const handleFreeTextChange = (qIndex: number, value: string) => {
@@ -243,6 +253,11 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
   )
 
   if (!activeQuestion) return null
+
+  // Gates the Next button: ChatGPT's `canAdvance`, so a step forward cannot
+  // silently drop a question the user never answered.
+  const activeAnswered =
+    Boolean(freeTexts[safeActiveTab]?.trim()) || (selections[safeActiveTab]?.length ?? 0) > 0
 
   return (
     <div className={`rounded-[var(--radius-lg)] border overflow-hidden ${
@@ -407,8 +422,10 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
         ))}
       </div>
 
-      {/* Action bar. Wraps rather than overflows: two buttons plus a translated
-          label (kr/jp run long) can outgrow a narrow side-by-side pane. */}
+      {/* Action bar. Wraps rather than overflows: the buttons plus a translated
+          label (kr/jp run long) can outgrow a narrow side-by-side pane. Next is
+          pushed to the end of the row and wraps alone onto a second line when
+          it runs out of room. */}
       {!submitted && (
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
           <Button
@@ -434,6 +451,24 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
           >
             {t('question.chatAboutThis')}
           </Button>
+          {/* Only on multi-question input, and never on the last one. Pushed to
+              the end of the row so it stays out of the way of Submit, which is
+              the action that actually ends the exchange. */}
+          {questions.length > 1 && safeActiveTab < questions.length - 1 && (
+            <Button
+              variant="tonal"
+              size="sm"
+              className="ml-auto"
+              disabled={!activeAnswered}
+              onClick={() => setActiveTab(safeActiveTab + 1)}
+              icon={
+                <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+              }
+              iconPosition="end"
+            >
+              {t('question.next')}
+            </Button>
+          )}
         </div>
       )}
     </div>

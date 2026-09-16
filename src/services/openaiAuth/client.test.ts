@@ -75,7 +75,7 @@ describe('OpenAI Codex OAuth client', () => {
         'application/x-www-form-urlencoded',
       )
       expect(tokenRequestHeaders.get('User-Agent')).toBe(
-        OPENAI_CODEX_TOKEN_USER_AGENT,
+        'codex-cli/0.153.4',
       )
       expect(tokenRequestBody).toContain('grant_type=authorization_code')
       expect(tokenRequestBody).toContain('client_id=app_EMoamEEZ73f0CkXaXp7hrann')

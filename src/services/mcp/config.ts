@@ -14,6 +14,7 @@ import {
   saveGlobalConfig,
 } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
+import { getGlobalClaudeFile } from '../../utils/env.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getErrnoCode } from '../../utils/errors.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
@@ -1686,6 +1687,42 @@ export function isMcpServerDisabled(name: string): boolean {
   }
   const disabledServers = projectConfig.disabledMcpServers || []
   return disabledServers.includes(name)
+}
+
+/** Read the execution policy from disk: another process may have just disabled
+ * this server and the normal config cache refreshes only once per second.
+ * An unreadable or malformed policy must not authorize a new tool execution.
+ */
+export function isMcpServerDisabledForExecution(name: string, cwd = getCwd()): boolean {
+  let contents: string
+  try {
+    contents = getFsImplementation().readFileSync(getGlobalClaudeFile(), { encoding: 'utf8' })
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') return isDefaultDisabledBuiltin(name)
+    throw new Error(`Cannot read MCP enablement state for "${name}"`)
+  }
+  const config = safeParseJSONWithoutCache(contents.replace(/^\uFEFF/, ''))
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`Cannot read MCP enablement state for "${name}"`)
+  }
+  const projects = (config as { projects?: Record<string, unknown> }).projects
+  if (projects !== undefined && (!projects || typeof projects !== 'object' || Array.isArray(projects))) {
+    throw new Error(`Cannot read MCP enablement state for "${name}"`)
+  }
+  const project = projects?.[getProjectPathForConfig(cwd)] as {
+    enabledMcpServers?: unknown
+    disabledMcpServers?: unknown
+  } | undefined
+  if (project !== undefined && (!project || typeof project !== 'object' || Array.isArray(project))) {
+    throw new Error(`Cannot read MCP enablement state for "${name}"`)
+  }
+  const servers = isDefaultDisabledBuiltin(name) ? project?.enabledMcpServers : project?.disabledMcpServers
+  if (servers !== undefined && (!Array.isArray(servers) || !servers.every(value => typeof value === 'string'))) {
+    throw new Error(`Cannot read MCP enablement state for "${name}"`)
+  }
+  return isDefaultDisabledBuiltin(name)
+    ? !(servers as string[] | undefined)?.includes(name)
+    : (servers as string[] | undefined)?.includes(name) ?? false
 }
 
 function toggleMembership(

@@ -1,6 +1,25 @@
+import { formatDurationMs } from '../../lib/trace/formatters'
+import {
+  formatCacheHitRate,
+  formatCompactTokens,
+  formatTokensPerSecond,
+} from '../../lib/sessionUsageMetrics'
+
 type ContextCategory = {
   name: string
   tokens: number
+}
+
+/**
+ * Lifetime figures for the whole session, as opposed to `categories` which describe only what
+ * currently occupies the context window. Kept as raw numbers so the formatting rules (never
+ * rounding a cache hit up to 100%, withholding a speed with no decode span) stay in one place.
+ */
+export type ContextUsageSessionStats = {
+  totalTokens: number
+  cacheHitRate: number | null
+  tokensPerSecond: number | null
+  apiDurationMs: number
 }
 
 export type ContextUsageDetailsStatus = 'ready' | 'pending' | 'loading' | 'unavailable'
@@ -13,6 +32,7 @@ export type ContextUsageDetailsProps = {
   freeTokens: number
   maxTokens: number
   categories: ContextCategory[]
+  sessionStats?: ContextUsageSessionStats | null
   updatedAtLabel?: string
   estimate?: boolean
   status: ContextUsageDetailsStatus
@@ -25,11 +45,83 @@ export type ContextUsageDetailsProps = {
     pendingDetail: string
     loading: string
     unavailableDetail: string
+    sessionUsage: string
+    sessionTotalTokens: string
+    sessionCacheHit: string
+    sessionSpeed: string
+    sessionApiDuration: string
+    sessionSpeedUnit: string
+    sessionScopeNote: string
   }
 }
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value)
+}
+
+/**
+ * Lifetime session totals. Rendered below the window breakdown because the two answer different
+ * questions: the bars say what is in the context right now, this says what the session has spent.
+ */
+function SessionUsage({
+  stats,
+  labels,
+  density,
+}: {
+  stats: ContextUsageSessionStats
+  labels: ContextUsageDetailsProps['labels']
+  density: 'compact' | 'comfortable'
+}) {
+  const labelClass = density === 'compact'
+    ? 'text-[12.5px] text-[var(--color-text-tertiary)]'
+    : 'text-xs text-[var(--color-text-tertiary)]'
+  const valueClass = 'font-mono text-sm text-[var(--color-text-primary)]'
+
+  return (
+    <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+      <div className={labelClass}>{labels.sessionUsage}</div>
+
+      <div className="mt-2 flex items-baseline justify-between gap-3">
+        <span className="text-[13.5px] text-[var(--color-text-primary)]">{labels.sessionTotalTokens}</span>
+        <span
+          className="shrink-0 font-mono text-[15px] font-semibold text-[var(--color-text-primary)]"
+          title={formatNumber(stats.totalTokens)}
+          data-testid="session-total-tokens"
+        >
+          {formatCompactTokens(stats.totalTokens)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <div>
+          <div className={labelClass}>{labels.sessionCacheHit}</div>
+          <div className={`mt-[3px] ${valueClass}`} data-testid="session-cache-hit">
+            {stats.cacheHitRate === null ? '--' : formatCacheHitRate(stats.cacheHitRate)}
+          </div>
+        </div>
+        <div>
+          <div className={labelClass}>{labels.sessionSpeed}</div>
+          <div className={`mt-[3px] ${valueClass}`} data-testid="session-speed">
+            {formatTokensPerSecond(stats.tokensPerSecond ?? 0)}
+            {stats.tokensPerSecond !== null && (
+              <span className="ml-1 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionSpeedUnit}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-baseline justify-between gap-3">
+        <span className="text-[13.5px] text-[var(--color-text-primary)]">{labels.sessionApiDuration}</span>
+        <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">
+          {formatDurationMs(stats.apiDurationMs)}
+        </span>
+      </div>
+
+      {/* Subagent transcripts are separate files and are never folded in here; saying so beats
+          letting the number quietly disagree with the user's bill. */}
+      <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionScopeNote}</div>
+    </div>
+  )
 }
 
 function CategoryBars({
@@ -81,6 +173,7 @@ export function ContextUsageDetails({
   freeTokens,
   maxTokens,
   categories,
+  sessionStats,
   updatedAtLabel,
   estimate = false,
   status,
@@ -120,10 +213,15 @@ export function ContextUsageDetails({
               </div>
             </div>
             <CategoryBars categories={categories} maxTokens={maxTokens} density="comfortable" />
+            {/* Above the session block on purpose: this timestamp describes the window
+                breakdown, which refreshes on a much slower cadence than the live totals. */}
             {updatedAtLabel && (
               <div className="mt-4 text-[11px] text-[var(--color-text-tertiary)]">
                 {updatedAtLabel}
               </div>
+            )}
+            {sessionStats && (
+              <SessionUsage stats={sessionStats} labels={labels} density="comfortable" />
             )}
           </div>
         ) : (
@@ -177,6 +275,8 @@ export function ContextUsageDetails({
             </div>
           </div>
           <CategoryBars categories={categories} maxTokens={maxTokens} density="compact" />
+          {/* Above the session block on purpose: this timestamp describes the window
+              breakdown, which refreshes on a much slower cadence than the live totals. */}
           {updatedAtLabel && (
             <div className="mt-4 text-xs text-[var(--color-text-tertiary)]">
               {updatedAtLabel}
@@ -186,6 +286,9 @@ export function ContextUsageDetails({
                 </span>
               )}
             </div>
+          )}
+          {sessionStats && (
+            <SessionUsage stats={sessionStats} labels={labels} density="compact" />
           )}
         </>
       ) : status === 'pending' ? (

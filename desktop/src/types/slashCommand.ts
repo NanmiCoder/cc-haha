@@ -1,4 +1,4 @@
-export type SlashCommandKind = 'command' | 'skill' | 'agent'
+export type SlashCommandKind = 'command' | 'skill' | 'agent' | 'plugin'
 
 export type SlashCommandSource = 'user' | 'project' | 'plugin'
 

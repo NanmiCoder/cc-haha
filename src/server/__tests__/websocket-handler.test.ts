@@ -23,7 +23,10 @@ import {
 import { conversationService } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { sessionService } from '../services/sessionService.js'
+import * as titleService from '../services/titleService.js'
+import { SettingsService } from '../services/settingsService.js'
 import * as teleportApi from '../../utils/teleport/api.js'
+import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
 
 function makeClientSocket(sessionId: string, clientKind: 'full' | 'pet' = 'full') {
   const sent: string[] = []
@@ -122,6 +125,7 @@ describe('translateCliMessage usage mapping', () => {
 
 describe('WebSocket handler session title lifecycle', () => {
   afterEach(() => {
+    resetSettingsCache()
     __resetWebSocketHandlerStateForTests()
     mock.restore()
   })
@@ -156,6 +160,85 @@ describe('WebSocket handler session title lifecycle', () => {
     expect(ws.sent.map((payload) => JSON.parse(payload))).not.toContainEqual(
       expect.objectContaining({ type: 'session_title_updated' }),
     )
+  })
+
+  it('keeps private prompt titles in memory when settings change while title saving awaits', async () => {
+    const sessionId = `title-private-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
+    setSessionSettingsCache({ settings: { cleanupPeriodDays: 0 }, errors: [] })
+    let release!: (value: string | null) => void
+    const saving = new Promise<string | null>(resolve => { release = resolve })
+    spyOn(sessionService, 'getCustomTitle')
+      .mockResolvedValueOnce(null)
+      .mockImplementationOnce(() => saving)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: '/tmp/private-session.jsonl', projectDir: '/tmp', workDir: '/tmp',
+      transcriptMessageCount: 0, customTitle: null,
+    })
+    const append = spyOn(sessionService, 'appendAiTitle').mockResolvedValue(undefined)
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'PRIVATE delayed prompt' }))
+    await flushMicrotasks(30)
+    setSessionSettingsCache({ settings: { cleanupPeriodDays: 365 }, errors: [] })
+    release(null)
+    await flushMicrotasks(30)
+    expect(append).toHaveBeenCalledWith(sessionId, 'PRIVATE delayed prompt', false)
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({
+      type: 'session_title_updated', sessionId, title: 'PRIVATE delayed prompt',
+    })
+  })
+
+  it('does not persist delayed polished titles or later refreshes derived from private turns', async () => {
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    const sessionId = `title-private-complete-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const callbacks = new Set<(message: any) => void>()
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_id, callback) => { callbacks.add(callback) })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_id, callback) => { callbacks.delete(callback) })
+    spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: '/tmp/private-session.jsonl', projectDir: '/tmp', workDir: '/tmp',
+      transcriptMessageCount: 0, customTitle: null,
+    })
+    setSessionSettingsCache({ settings: { cleanupPeriodDays: 0 }, errors: [] })
+    const append = spyOn(sessionService, 'appendAiTitle').mockResolvedValue(undefined)
+    let release!: (value: string) => void
+    const generated = new Promise<string>(resolve => { release = resolve })
+    const generate = spyOn(titleService, 'generateTitle').mockImplementation(() => generated)
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'PRIVATE prompt' }))
+    await flushMicrotasks(30)
+    for (const callback of [...callbacks]) callback({ type: 'result', subtype: 'success', result: 'PRIVATE reply' })
+    // Language settings load is async; wait until the controlled model seam starts.
+    for (let i = 0; i < 100 && generate.mock.calls.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    expect(generate).toHaveBeenCalledTimes(1)
+    setSessionSettingsCache({ settings: { cleanupPeriodDays: 365 }, errors: [] })
+    release('PRIVATE polished title')
+    await flushMicrotasks(30)
+    expect(append).toHaveBeenCalledWith(sessionId, 'PRIVATE polished title', false)
+    generate.mockResolvedValue('PRIVATE third-turn summary')
+    for (const content of ['PUBLIC second prompt', 'PUBLIC third prompt']) {
+      handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content }))
+      await flushMicrotasks(30)
+      for (const callback of [...callbacks]) callback({ type: 'result', subtype: 'success', result: 'PUBLIC reply' })
+      await flushMicrotasks(30)
+    }
+    for (let i = 0; i < 100 && generate.mock.calls.length < 2; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    await flushMicrotasks(30)
+    expect(generate).toHaveBeenCalledTimes(2)
+    expect(append).toHaveBeenCalledWith(sessionId, 'PRIVATE third-turn summary', false)
   })
 
   it('ignores /compact for titles without disabling the next real first-message title', async () => {

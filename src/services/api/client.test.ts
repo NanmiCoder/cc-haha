@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { GROK_OAUTH_DUMMY_KEY } from '../grokAuth/fetch.js'
 
 mock.module('src/utils/http.js', () => ({
@@ -133,6 +134,74 @@ describe('shouldUseOpenAICodexTransport', () => {
 })
 
 describe('getAnthropicClient', () => {
+  test('uses one API version in direct message and token-count requests while preserving path prefixes', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anthropic-client-base-url-'))
+    const previousEnv = { ...process.env }
+    const testEnv = createSandboxedTestEnvironment(tempDir, {
+      ANTHROPIC_API_KEY: 'sk-test-provider',
+      CLAUDE_CODE_SIMPLE: '1',
+      OPENAI_CODEX_OAUTH_FILE: path.join(tempDir, 'missing-openai-oauth.json'),
+    })
+    for (const key of Object.keys(process.env)) delete process.env[key]
+    Object.assign(process.env, testEnv)
+
+    try {
+      const { getAnthropicClient } = await import('./client.js')
+      for (const [basePath, expectedPrefix] of [
+        ['', ''],
+        ['/', ''],
+        ['/v1', ''],
+        ['/v1/', ''],
+        ['/anthropic', '/anthropic'],
+        ['/anthropic/v1/', '/anthropic'],
+        ['/v1/tenant', '/v1/tenant'],
+        ['/proxy/providers/provider-1', '/proxy/providers/provider-1'],
+      ]) {
+        process.env.ANTHROPIC_BASE_URL = `https://provider.example${basePath}`
+        const receivedUrls: string[] = []
+        const client = await getAnthropicClient({
+          apiKey: 'sk-test-provider',
+          maxRetries: 0,
+          model: 'claude-sonnet-4-6',
+          fetchOverride: async input => {
+            const url = new URL(input instanceof Request ? input.url : String(input))
+            receivedUrls.push(url.href)
+            return url.pathname.endsWith('/count_tokens')
+              ? Response.json({ input_tokens: 3 })
+              : Response.json({
+                  id: 'msg-test-base-url',
+                  type: 'message',
+                  role: 'assistant',
+                  model: 'claude-sonnet-4-6',
+                  content: [{ type: 'text', text: 'ok' }],
+                  stop_reason: 'end_turn',
+                  stop_sequence: null,
+                  usage: { input_tokens: 3, output_tokens: 1 },
+                })
+          },
+        })
+        const messages = [{ role: 'user' as const, content: 'hello' }]
+        const response = await client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 16,
+          messages,
+        })
+        const count = await client.beta.messages.countTokens({ model: 'claude-sonnet-4-6', messages })
+
+        expect(response.id).toBe('msg-test-base-url')
+        expect(count.input_tokens).toBe(3)
+        expect(receivedUrls).toEqual([
+          `https://provider.example${expectedPrefix}/v1/messages`,
+          `https://provider.example${expectedPrefix}/v1/messages/count_tokens?beta=true`,
+        ])
+      }
+    } finally {
+      for (const key of Object.keys(process.env)) delete process.env[key]
+      Object.assign(process.env, previousEnv)
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('selects the isolated Grok transport with a dummy SDK key', async () => {
     const { getAnthropicClient } = await import('./client.js')
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'grok-client-test-'))

@@ -5,7 +5,9 @@
  *
  * Routes:
  *   GET    /api/sessions            — 列出会话
+ *   GET    /api/sessions/project-history — 按逻辑项目分批浏览历史会话
  *   GET    /api/sessions/:id        — 获取会话详情
+ *   GET    /api/sessions/:id/summary — 获取不含消息的会话元数据
  *   GET    /api/sessions/:id/messages — 获取会话消息
  *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — 获取 SubAgent 运行详情
  *   POST   /api/sessions/:id/subagents/by-tool/:toolUseId/messages — 继续与 SubAgent 对话
@@ -13,6 +15,9 @@
  *   GET    /api/sessions/:id/trace/calls/:callId — 获取单次调用的完整 trace 记录
  *   GET    /api/sessions/:id/turn-checkpoints — 获取按轮次保留的 checkpoint 预览
  *   GET    /api/sessions/:id/turn-checkpoints/diff — 获取绑定到指定 checkpoint 的 diff
+ *   GET    /api/sessions/:id/review — 按显式来源获取 Git 审查状态
+ *   GET    /api/sessions/:id/review/diff — 获取单个文件在该来源下的 diff
+ *   POST   /api/sessions/:id/review/stage|unstage|stage-hunk|unstage-hunk|revert — 真实 Git 写操作
  *   POST   /api/sessions            — 创建新会话
  *   POST   /api/sessions/batch-delete — 批量删除会话
  *   DELETE /api/sessions/:id        — 删除会话
@@ -30,6 +35,7 @@ import {
 } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService } from '../services/workspaceService.js'
+import { ReviewService, type ReviewSource } from '../services/reviewService.js'
 import {
   createRepositoryBranch,
   getRepositoryContext,
@@ -54,12 +60,20 @@ import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCap
 import { getSubagentRunByAgentId, getSubagentRunByTool } from '../services/subagentRunService.js'
 import { isValidPermissionMode } from '../services/settingsService.js'
 import { handleWorkspaceSearchRoute } from './workspaceSearch.js'
+import { handleWorkspaceWatchRoute } from './workspaceWatch.js'
 import { localIndexCoordinator } from '../services/localIndex/coordinator.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { isPetAccessAuthorized } from '../localAccessAuth.js'
 import { PET_SESSION_LIMIT } from '../petAccessPolicy.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
+
+/**
+ * Budget for the polling `get_session_usage` control. Shorter than the inspection's basic
+ * control timeout because the caller retries on its own cadence: a slow answer is worth less
+ * than a stale one that blocks the next poll.
+ */
+const USAGE_ONLY_CONTROL_TIMEOUT_MS = 2_500
 
 const workspaceService = new WorkspaceService(
   async (sessionId) => (
@@ -69,6 +83,19 @@ const workspaceService = new WorkspaceService(
   async (sessionId) => sessionService.getSessionMessages(sessionId),
   async (sessionId) => sessionService.getSessionFileHistorySnapshots(sessionId),
 )
+
+const reviewService = new ReviewService(async (sessionId) => (
+  conversationService.getSessionWorkDir(sessionId) ||
+  await sessionService.getSessionWorkDir(sessionId)
+))
+
+const REVIEW_WRITE_RESOURCES = new Set([
+  'stage',
+  'unstage',
+  'stage-hunk',
+  'unstage-hunk',
+  'revert',
+])
 
 export async function handleSessionsApi(
   req: Request,
@@ -113,6 +140,21 @@ export async function handleSessionsApi(
       return await getRecentProjects(url)
     }
 
+    if (sessionId === 'project-history') {
+      if (req.method !== 'GET') return Response.json(
+        { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` }, { status: 405 },
+      )
+      const limit = url.searchParams.get('limit')
+      if (limit !== null && !/^\d+$/.test(limit)) throw ApiError.badRequest('Invalid limit parameter')
+      return Response.json(await sessionService.listProjectHistory({
+        projectRoot: url.searchParams.get('projectRoot') ?? '',
+        ...(limit !== null ? { limit: Number(limit) } : {}),
+        ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
+        ...(url.searchParams.has('beforeModifiedAt') ? { beforeModifiedAt: url.searchParams.get('beforeModifiedAt')! } : {}),
+        ...(url.searchParams.has('beforeId') ? { beforeId: url.searchParams.get('beforeId')! } : {}),
+      }))
+    }
+
     // Special collection route: /api/sessions/repository-context
     if (sessionId === 'repository-context' && req.method === 'GET') {
       return await getSessionRepositoryContext(url)
@@ -132,6 +174,18 @@ export async function handleSessionsApi(
     // -----------------------------------------------------------------------
     // Sub-resource routes: /api/sessions/:id/messages
     // -----------------------------------------------------------------------
+    if (subResource === 'summary') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      const summary = await sessionService.getSessionSummary(sessionId)
+      if (!summary) throw ApiError.notFound(`Session not found: ${sessionId}`)
+      return Response.json(summary)
+    }
+
     if (subResource === 'messages') {
       if (req.method !== 'GET') {
         return Response.json(
@@ -223,7 +277,11 @@ export async function handleSessionsApi(
           { status: 405 }
         )
       }
-      return await handleSessionWorkspaceRoute(sessionId, url, segments[4])
+      return await handleSessionWorkspaceRoute(req, sessionId, url, segments[4])
+    }
+
+    if (subResource === 'review') {
+      return await handleSessionReviewRoute(req, sessionId, url, segments[4])
     }
 
     if (subResource === 'subagents') {
@@ -454,6 +512,7 @@ async function getSessionTraceCall(sessionId: string, callId: string | undefined
 }
 
 async function handleSessionWorkspaceRoute(
+  req: Request,
   sessionId: string,
   url: URL,
   workspaceResource?: string,
@@ -461,6 +520,8 @@ async function handleSessionWorkspaceRoute(
   const workDir = await requireSessionWorkspace(sessionId)
 
   switch (workspaceResource) {
+    case 'watch':
+      return handleWorkspaceWatchRoute(req, sessionId, url, workspaceService)
     case 'status':
       return Response.json(await workspaceService.getStatus(sessionId))
     case 'tree':
@@ -483,6 +544,197 @@ async function handleSessionWorkspaceRoute(
     default:
       throw ApiError.notFound(`Unknown workspace resource: ${workspaceResource || 'workspace'}`)
   }
+}
+
+/**
+ * Review sub-resource: `/api/sessions/:id/review[...]`.
+ *
+ * Separate from `workspace` on purpose. The workspace routes keep serving the
+ * chat "changed files" card, whose diff is always `HEAD`-based and blended with
+ * session history; review states its comparison explicitly and is the only
+ * surface that writes to the index or the working tree.
+ */
+async function handleSessionReviewRoute(
+  req: Request,
+  sessionId: string,
+  url: URL,
+  reviewResource?: string,
+): Promise<Response> {
+  await requireSessionWorkspace(sessionId)
+
+  if (!reviewResource) {
+    if (req.method !== 'GET') return reviewMethodNotAllowed(req)
+    return await runReviewRequest(() =>
+      reviewService.getStatus(sessionId, parseReviewSourceFromQuery(url)),
+    )
+  }
+
+  if (reviewResource === 'revision') {
+    if (req.method !== 'GET') return reviewMethodNotAllowed(req)
+    return await runReviewRequest(() => reviewService.getRevision(sessionId, parseReviewSourceFromQuery(url)))
+  }
+
+  if (reviewResource === 'diff') {
+    if (req.method !== 'GET') return reviewMethodNotAllowed(req)
+    const filePath = url.searchParams.get('path')
+    if (!filePath) {
+      throw ApiError.badRequest('path query parameter is required for review diff')
+    }
+    return await runReviewRequest(() =>
+      reviewService.getFileDiff(sessionId, {
+        source: parseReviewSourceFromQuery(url),
+        path: filePath,
+        oldPath: url.searchParams.get('oldPath') ?? undefined,
+      }),
+    )
+  }
+
+  if (!REVIEW_WRITE_RESOURCES.has(reviewResource)) {
+    throw ApiError.notFound(`Unknown review resource: ${reviewResource}`)
+  }
+  if (req.method !== 'POST') return reviewMethodNotAllowed(req)
+
+  let body: Record<string, unknown>
+  try {
+    body = (await req.json()) as Record<string, unknown>
+  } catch {
+    throw ApiError.badRequest('Invalid JSON body')
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw ApiError.badRequest('Request body must be an object')
+  }
+
+  const snapshot = body.snapshot
+  if (typeof snapshot !== 'string' || snapshot.length === 0) {
+    throw ApiError.badRequest('snapshot is required')
+  }
+  const source = body.source === undefined ? undefined : parseReviewWriteSource(body.source)
+
+  if (reviewResource === 'stage-hunk' || reviewResource === 'unstage-hunk') {
+    const patch = body.patch
+    if (typeof patch !== 'string' || patch.trim().length === 0) {
+      throw ApiError.badRequest('patch is required')
+    }
+    const request = { patch, snapshot, source }
+    return await runReviewRequest(() =>
+      reviewResource === 'stage-hunk'
+        ? reviewService.stageHunk(sessionId, request)
+        : reviewService.unstageHunk(sessionId, request),
+    )
+  }
+
+  const request = { paths: parseReviewPaths(body.paths), snapshot, source }
+  return await runReviewRequest(() => {
+    switch (reviewResource) {
+      case 'stage':
+        return reviewService.stage(sessionId, request)
+      case 'unstage':
+        return reviewService.unstage(sessionId, request)
+      default:
+        return reviewService.revert(sessionId, request)
+    }
+  })
+}
+
+function reviewMethodNotAllowed(req: Request): Response {
+  return Response.json(
+    { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+    { status: 405 },
+  )
+}
+
+function parseReviewPaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw ApiError.badRequest('paths must be a non-empty array')
+  }
+  return value.map((entry) => {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw ApiError.badRequest('paths must contain non-empty strings')
+    }
+    return entry
+  })
+}
+
+function parseReviewSourceFromQuery(url: URL): ReviewSource {
+  return parseReviewSourceValue({
+    kind: url.searchParams.get('source'),
+    baseRef: url.searchParams.get('baseRef') ?? undefined,
+    commit: url.searchParams.get('commit') ?? undefined,
+    turnKey: url.searchParams.get('turnKey') ?? undefined,
+  })
+}
+
+/**
+ * Source for a write route.
+ *
+ * `branch` and `commit` compare against history: their left-hand side is a
+ * commit and their right-hand side is the working tree, so "stage this" or
+ * "revert this" has no meaning there. Read-only was previously enforced only
+ * by the renderer not drawing the buttons, which left `POST /review/revert`
+ * with `{"kind":"commit"}` performing a real working-tree write.
+ */
+function parseReviewWriteSource(value: unknown): ReviewSource {
+  const source = parseReviewSourceValue(value)
+  if (source.kind === 'branch' || source.kind === 'commit') {
+    throw ApiError.badRequest(
+      `Review source "${source.kind}" is a read-only comparison and cannot be written to`,
+    )
+  }
+  return source
+}
+
+function parseReviewSourceValue(value: unknown): ReviewSource {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw ApiError.badRequest('source is required')
+  }
+  const { kind, baseRef, commit } = value as Record<string, unknown>
+
+  switch (kind) {
+    case 'unstaged':
+    case 'staged':
+    case 'uncommitted':
+      return { kind }
+    case 'branch':
+      if (typeof baseRef !== 'string' || baseRef.length === 0) {
+        throw ApiError.badRequest('baseRef is required for the branch source')
+      }
+      return { kind: 'branch', baseRef }
+    case 'commit':
+      if (typeof commit !== 'string' || commit.length === 0) {
+        throw ApiError.badRequest('commit is required for the commit source')
+      }
+      return { kind: 'commit', commit }
+    case 'turn':
+      // Turn history is a session-transcript question. Answering it from the
+      // current Git state would silently show the wrong changes, so it is
+      // refused here rather than approximated.
+      throw ApiError.badRequest(
+        'Review source "turn" is served by the session turn history, not the Git review service',
+      )
+    default:
+      throw ApiError.badRequest(`Unknown review source: ${String(kind ?? '')}`)
+  }
+}
+
+async function runReviewRequest<T>(operation: () => Promise<T>): Promise<Response> {
+  try {
+    return Response.json(await operation())
+  } catch (error) {
+    if (isOutsideWorkspaceError(error) || isReviewPathRejection(error)) {
+      throw new ApiError(403, error.message, 'FORBIDDEN')
+    }
+    if (isSessionNotFoundError(error)) {
+      throw ApiError.notFound(error.message)
+    }
+    if (error instanceof Error && error.message === 'path is required') {
+      throw ApiError.badRequest(error.message)
+    }
+    throw error
+  }
+}
+
+function isReviewPathRejection(error: unknown): error is Error {
+  return error instanceof Error && error.message.includes('version-control metadata')
 }
 
 async function createSession(req: Request): Promise<Response> {
@@ -742,6 +994,10 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
 async function getSessionInspection(req: Request, sessionId: string, url: URL): Promise<Response> {
   const includeContext = url.searchParams.get('includeContext') !== '0'
   const contextOnly = includeContext && url.searchParams.get('contextOnly') === '1'
+  // Lightweight polling mode for the context panel: one `get_session_usage` control and
+  // nothing else. The full inspection also scans the skills directory and re-reads the whole
+  // transcript to cross-check usage, which is far too much work to repeat every few seconds.
+  const usageOnly = !includeContext && url.searchParams.get('usageOnly') === '1'
   let transcriptSnapshot: Awaited<ReturnType<typeof sessionService.getInspectionTranscriptSnapshot>> | undefined
   const getTranscriptSnapshot = async () => {
     if (transcriptSnapshot !== undefined) return transcriptSnapshot
@@ -766,17 +1022,21 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
     [...conversationService.getRecentSdkMessages(sessionId)]
     .reverse()
     .find((message) => message?.type === 'system' && message.subtype === 'init')
-  const transcriptMetadata = !active || !initMessage
+  const transcriptMetadata = !usageOnly && (!active || !initMessage)
     ? (await getTranscriptSnapshot())?.metadata ?? null
     : null
   const cachedSlashCommands = getSlashCommands(sessionId)
   const hasCliSlashCommands = cachedSlashCommands.length > 0
-  const skillSlashCommands = await listSkillSlashCommands(workDir, {
-    includeCompiledIn: !hasCliSlashCommands,
-  })
-  const fallbackSlashCommands = hasCliSlashCommands
-    ? mergeSessionSlashCommands(cachedSlashCommands, skillSlashCommands)
-    : skillSlashCommands
+  // `listSkillSlashCommands` walks every skill directory on disk with no cache. The usage
+  // poll does not need a command count, so it must not pay for one.
+  const fallbackSlashCommands = usageOnly
+    ? []
+    : hasCliSlashCommands
+      ? mergeSessionSlashCommands(
+          cachedSlashCommands,
+          await listSkillSlashCommands(workDir, { includeCompiledIn: false }),
+        )
+      : await listSkillSlashCommands(workDir, { includeCompiledIn: true })
   const slashCommandCount = Array.isArray(initMessage?.slash_commands)
     ? initMessage.slash_commands.length
     : fallbackSlashCommands.length
@@ -818,6 +1078,28 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   }
 
   const errors: Record<string, string> = {}
+  if (usageOnly) {
+    // No `mcp_status`, no skills scan, and deliberately no transcript cross-check: the
+    // transcript re-read is what made this endpoint too expensive to poll. The CLI's own
+    // running totals are the authoritative numbers for a live session anyway.
+    try {
+      response.usage = {
+        ...(await conversationService.requestControl(
+          sessionId,
+          { subtype: 'get_session_usage' },
+          USAGE_ONLY_CONTROL_TIMEOUT_MS,
+          req.signal,
+        )),
+        source: 'current_process',
+      }
+    } catch (error) {
+      throwIfRequestAborted(req)
+      errors.usage = error instanceof Error ? error.message : String(error)
+    }
+    response.errors = errors
+    return Response.json(response)
+  }
+
   if (contextOnly) {
     try {
       response.context = await conversationService.requestControl(
@@ -1143,7 +1425,7 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
 }
 
 async function getTurnCheckpoints(req: Request, sessionId: string): Promise<Response> {
-  const checkpoints = await listSessionTurnCheckpoints(sessionId, req.signal)
+  const checkpoints = await listSessionTurnCheckpoints(sessionId, req.signal, new URL(req.url).searchParams.get('frozen') === 'true')
   // Make this turn's real changed files previewable even when they live outside
   // the session workdir (e.g. the user told the model to write to an absolute
   // path on another drive). Writing them was authorized, so previewing is too.
@@ -1180,6 +1462,7 @@ async function getTurnCheckpointDiff(sessionId: string, url: URL): Promise<Respo
       userMessageIndex,
     },
     path,
+    url.searchParams.get('frozen') === 'true',
   )
 
   return Response.json(result)

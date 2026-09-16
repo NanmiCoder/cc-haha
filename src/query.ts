@@ -1,4 +1,5 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
+import { OpenAICodexTurnState } from './services/openaiAuth/turnState.js'
 import type {
   ToolResultBlockParam,
   ToolUseBlock,
@@ -264,6 +265,9 @@ async function* queryLoop(
     skipCacheWrite,
   } = params
   const deps = params.deps ?? productionDeps()
+  // One object for the whole agentic turn, including tool continuations and
+  // retries. Never put server routing state on the reusable ToolUseContext.
+  using openAITurnState = new OpenAICodexTurnState(params.toolUseContext.abortController.signal)
 
   // Mutable cross-iteration state. The loop body destructures this at the top
   // of each iteration so reads stay bare-name (`messages`, `toolUseContext`).
@@ -699,6 +703,7 @@ async function* queryLoop(
                 c => c.type === 'pending',
               ),
               queryTracking,
+              openAITurnState,
               effortValue: appState.effortValue,
               effortValueOverridesEnv:
                 toolUseContext.options.effortValueOverridesEnv,

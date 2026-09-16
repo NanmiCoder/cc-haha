@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { readFile, mkdir, access, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,7 @@ const venvRoot = path.join(runtimeStateRoot, 'venv')
 const installStampPath = path.join(runtimeStateRoot, 'requirements.sha256')
 
 const isWindows = process.platform === 'win32'
+const windowsInputTag = randomBytes(4).readUInt32LE(0) || 0x43434841
 
 // Always read from ~/.claude/.runtime/ — works in both dev and bundled mode.
 const requirementsPath = path.join(runtimeStateRoot, 'requirements.txt')
@@ -37,12 +38,13 @@ const cursorBadgePath = path.join(runtimeStateRoot, cursorBadgeFileName)
 
 let bootstrapPromise: Promise<void> | undefined
 
-function getPythonCommandEnv(): NodeJS.ProcessEnv | undefined {
+export function getComputerUsePythonEnv(): NodeJS.ProcessEnv | undefined {
   if (!isWindows) return undefined
   return {
     ...process.env,
     PYTHONIOENCODING: 'utf-8',
     PYTHONUTF8: '1',
+    CC_HAHA_COMPUTER_USE_INPUT_TAG: String(windowsInputTag),
   }
 }
 
@@ -175,7 +177,7 @@ export async function callPythonHelper<T>(command: string, payload: Record<strin
   const { code, stdout, stderr } = await execFileNoThrow(
     pythonBinPath(),
     [helperPath, command, '--payload', JSON.stringify(payload)],
-    { useCwd: false, env: getPythonCommandEnv() },
+    { useCwd: false, env: getComputerUsePythonEnv() },
   )
 
   if (code !== 0 && !stdout.trim()) {
@@ -207,7 +209,7 @@ export function getRuntimePaths(): { projectRoot: string; runtimeStateRoot: stri
   return { projectRoot, runtimeStateRoot, venvRoot }
 }
 
-/** Interpreter + script path for the Windows agent-activity badge. */
+/** Interpreter + script path for the Windows virtual-cursor overlay. */
 export function getCursorBadgeCommand(): { python: string; script: string } {
   return { python: pythonBinPath(), script: cursorBadgePath }
 }

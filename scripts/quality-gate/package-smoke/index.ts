@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, join, relative, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { createSandboxedTestEnvironment } from '../../pr/test-environment'
 
 export type PackageSmokePlatform = 'macos' | 'windows' | 'linux'
 export type PackageSmokeArch = 'x64' | 'arm64'
@@ -22,6 +24,7 @@ type InspectOptions = {
   packageKind?: PackageKind
   commandRunner?: PackageSmokeCommandRunner
   hostPlatform?: string
+  hostArch?: string
 }
 
 export type PackageSmokeArgs = {
@@ -60,7 +63,14 @@ type PackageSmokeCommandResult = {
   stderr?: string
 }
 
-type PackageSmokeCommandRunner = (command: string, args: string[]) => PackageSmokeCommandResult
+type PackageSmokeCommandOptions = {
+  cwd: string
+  env: Record<string, string>
+  timeout: number
+  maxBuffer: number
+}
+
+type PackageSmokeCommandRunner = (command: string, args: string[], options?: PackageSmokeCommandOptions) => PackageSmokeCommandResult
 
 function usage() {
   return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper]'
@@ -542,15 +552,109 @@ function collectDiagnosticLines(output: string, limit = 3) {
     .slice(0, limit)
 }
 
-function defaultCommandRunner(command: string, args: string[]): PackageSmokeCommandResult {
+function defaultCommandRunner(command: string, args: string[], options?: PackageSmokeCommandOptions): PackageSmokeCommandResult {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
+    ...options,
   })
 
   return {
     status: result.status,
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr: result.error?.message ?? result.stderr ?? '',
+  }
+}
+
+function assertCursorResourcesContained(helperApp: string, directory: string) {
+  const app = realpathSync(helperApp)
+  const pending = [directory]
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const target = pending.pop()!
+    const canonical = realpathSync(target)
+    const withinApp = relative(app, canonical)
+    if (isAbsolute(withinApp) || withinApp === '..' || withinApp.startsWith('../')) {
+      throw new Error(`cursor resource escapes the helper app: ${target}`)
+    }
+    if (visited.has(canonical)) continue
+    visited.add(canonical)
+    const entry = statSync(target)
+    if (entry.isDirectory()) pending.push(...readdirSync(target).map(name => join(target, name)))
+    else if (!entry.isFile()) throw new Error(`cursor resource is not a regular file: ${target}`)
+  }
+}
+
+function addMacosCursorResourceCheck(
+  report: PackageSmokeReport,
+  rootDir: string,
+  helperApp: string,
+  options: InspectOptions,
+) {
+  const sequenceRelative = 'Contents/Resources/cu-helper_cc-haha-computer-use.bundle/LensSequence'
+  const sourceDirectory = join(helperApp, sequenceRelative)
+  const structureLabel = 'macOS cu-helper cursor resource directory'
+  const executionLabel = 'macOS relocated cu-helper cursor resource execution'
+  const record = { label: executionLabel, path: toRelative(rootDir, helperApp) }
+  let probeRoot: string | undefined
+  try {
+    if (!statSync(sourceDirectory).isDirectory()) throw new Error('LensSequence is not a directory')
+    assertCursorResourcesContained(helperApp, sourceDirectory)
+    report.passedChecks.push({ label: structureLabel, path: toRelative(rootDir, sourceDirectory) })
+  } catch (error) {
+    report.missingChecks.push({ label: structureLabel, path: toRelative(rootDir, sourceDirectory) })
+    report.notes.push(`${structureLabel} failed: ${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
+  if (report.hostPlatform !== 'macos') {
+    report.notes.push(`SKIPPED: ${executionLabel}; host platform is ${report.hostPlatform}.`)
+    return
+  }
+  const hostArch = options.hostArch ?? process.arch
+  const hostMachOArch = hostArch === 'x64' ? 'x86_64' : hostArch
+  const targetArch = report.arch === 'x64' ? 'x86_64' : report.arch
+  if (targetArch && targetArch !== hostMachOArch) {
+    report.notes.push(`SKIPPED: ${executionLabel}; target ${targetArch}, host ${hostMachOArch}. Only package structure was checked.`)
+    return
+  }
+  try {
+    const inner = 'Contents/MacOS/cc-haha-computer-use'
+    const architectures = parseMachOArchitectures(readFileSync(join(helperApp, inner)))
+    if (!architectures.includes(hostMachOArch as MachOArch)) {
+      if (architectures.length === 0) throw new Error('helper has no recognized Mach-O architecture')
+      report.notes.push(`SKIPPED: ${executionLabel}; binary ${architectures.join(',')}, host ${hostMachOArch}. Only package structure was checked.`)
+      return
+    }
+    probeRoot = mkdtempSync(join(tmpdir(), 'cc-haha-packaged-cursor-'))
+    const app = join(probeRoot, 'Relocated Helper.app')
+    cpSync(helperApp, app, { recursive: true, verbatimSymlinks: true })
+    assertCursorResourcesContained(app, join(app, sequenceRelative))
+    const expected = realpathSync(join(app, sequenceRelative))
+    const home = join(probeRoot, 'home')
+    mkdirSync(home)
+    const env = createSandboxedTestEnvironment(home, {
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin', CFFIXED_USER_HOME: home,
+    }, {})
+    const result = (options.commandRunner ?? defaultCommandRunner)(join(app, inner), ['--probe-cursor-resources'], {
+      cwd: probeRoot, env, timeout: 10_000, maxBuffer: 1024 * 1024,
+    })
+    if (result.status !== 0) throw new Error(`probe exited with status ${result.status}: ${result.stderr ?? ''}`)
+    const resources = JSON.parse(result.stdout ?? '') as Record<string, unknown>
+    if (!resources || typeof resources.resourceDirectory !== 'string'
+      || !isAbsolute(resources.resourceDirectory)
+      || realpathSync(resources.resourceDirectory) !== expected) {
+      throw new Error('probe did not load resources from the relocated final package')
+    }
+    if (!Number.isSafeInteger(resources.frameCount) || (resources.frameCount as number) < 0
+      || resources.proceduralFallback !== (resources.frameCount === 0)) {
+      throw new Error('probe returned invalid cursor frame/fallback diagnostics')
+    }
+    report.passedChecks.push(record)
+    report.notes.push(`${executionLabel}: executed ${hostMachOArch}, frames=${resources.frameCount}, proceduralFallback=${resources.proceduralFallback}. No GUI or input was requested.`)
+  } catch (error) {
+    report.missingChecks.push(record)
+    report.notes.push(`${executionLabel} failed: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (probeRoot) rmSync(probeRoot, { recursive: true, force: true })
   }
 }
 
@@ -841,6 +945,7 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
   addPresenceCheck(report, rootDir, 'macOS cu-helper app bundle', helperApp)
   addPresenceCheck(report, rootDir, 'macOS cu-helper Info.plist', helperInfoPlist)
   addPresenceCheck(report, rootDir, 'macOS cu-helper executable', helperExecutable)
+  addMacosCursorResourceCheck(report, rootDir, helperApp, options)
   if (existsSync(helperInfoPlist)) addHelperMinimumSystemCheck(report, rootDir, helperInfoPlist)
   addBundledRipgrepLicenseChecks(report, rootDir, sidecarDir, 'macOS')
   addMatchCheck(
@@ -907,7 +1012,7 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
     )
   }
 
-  report.notes.push('No GUI launch was attempted. This command only inspects packaged bundle structure and key unpacked resources.')
+  report.notes.push('No GUI launch was attempted. Matching macOS helper architectures also run an input-free resource probe from a disposable copy of the final package.')
   if (options.requireMacosGatekeeper) {
     if (report.arch) {
       const targetTriple = report.arch === 'arm64'

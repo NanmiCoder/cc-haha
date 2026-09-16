@@ -143,3 +143,27 @@ describe('deleteAdjacentMentionAtom', () => {
     expect(projectComposerDoc(state.doc)).toEqual({ text: 'tail', mentions: [] })
   })
 })
+
+describe('capability mentions', () => {
+  const skill: ComposerMention = { kind: 'skill', id: 'design:poster', label: 'Poster Design', path: '', isDirectory: false, tokenOrdinal: 0, description: 'Create a poster', icon: '/connectors/canvas-design.svg', modelText: 'Use the Skill tool with skill: "design:poster" for this request.' }
+  const plugin: ComposerMention = { kind: 'plugin', id: 'office-hyperframes@haha-connectors', label: 'HyperFrames', path: '', isDirectory: false, tokenOrdinal: 0, description: 'Create videos', icon: '/connectors/hyperframes.svg', modelText: 'Use enabled plugin "office-hyperframes@haha-connectors" for this request.' }
+  it('round-trips mixed legacy files, skills and plugins without treating capabilities as paths', () => {
+    const text = '@Poster Design with @HyperFrames and @main.ts'
+    const doc = buildComposerDoc(text, [skill, plugin, fileMention])
+    expect(projectComposerDoc(doc)).toEqual({ text, mentions: [skill, plugin, fileMention] })
+    expect(serializeComposerDoc(doc)).toBe(`${skill.modelText} with ${plugin.modelText} and @"/repo/src/main.ts"`)
+    expect(serializeComposerDoc(doc)).not.toContain('@""')
+  })
+  it('does not rewrite identical manually typed labels or discard metadata during edits', () => {
+    const doc = buildComposerDoc('@HyperFrames @HyperFrames', [{ ...plugin, tokenOrdinal: 1 }])
+    expect(serializeComposerDoc(doc)).toBe(`@HyperFrames ${plugin.modelText}`)
+    expect(projectComposerDoc(doc).mentions).toEqual([{ ...plugin, tokenOrdinal: 1 }])
+  })
+  it('keeps capability atoms single-delete and rejects remote icon URLs', () => {
+    const doc = buildComposerDoc('@HyperFrames tail', [{ ...plugin, icon: 'https://tracker.invalid/icon.svg' }])
+    expect(projectComposerDoc(doc).mentions[0]!.icon).toBeUndefined()
+    let state = EditorState.create({ schema: composerSchema, doc, selection: TextSelection.create(doc, textOffsetToPmPos(doc, '@HyperFrames '.length)) })
+    deleteAdjacentMentionAtom('backward')(state, transaction => { state = state.apply(transaction) })
+    expect(projectComposerDoc(state.doc)).toEqual({ text: 'tail', mentions: [] })
+  })
+})

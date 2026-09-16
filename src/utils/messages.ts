@@ -377,6 +377,7 @@ function baseCreateAssistantMessage({
   error,
   errorDetails,
   businessErrorCode,
+  sourceModel,
   isVirtual,
   usage = {
     input_tokens: 0,
@@ -400,6 +401,7 @@ function baseCreateAssistantMessage({
   error?: SDKAssistantMessageError
   errorDetails?: string
   businessErrorCode?: BusinessErrorCode
+  sourceModel?: string
   isVirtual?: true
   usage?: Usage
 }): AssistantMessage {
@@ -424,6 +426,7 @@ function baseCreateAssistantMessage({
     error,
     errorDetails,
     businessErrorCode,
+    sourceModel,
     isApiErrorMessage,
     isVirtual,
   }
@@ -459,12 +462,14 @@ export function createAssistantAPIErrorMessage({
   error,
   errorDetails,
   businessErrorCode,
+  sourceModel,
 }: {
   content: string
   apiError?: AssistantMessage['apiError']
   error?: SDKAssistantMessageError
   errorDetails?: string
   businessErrorCode?: BusinessErrorCode
+  sourceModel?: string
 }): AssistantMessage {
   return baseCreateAssistantMessage({
     content: [
@@ -478,6 +483,7 @@ export function createAssistantAPIErrorMessage({
     error,
     errorDetails,
     businessErrorCode,
+    sourceModel,
   })
 }
 
@@ -2016,6 +2022,7 @@ function relocateToolReferenceSiblings(
 export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
+  currentModel?: string,
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2045,6 +2052,19 @@ export function normalizeMessagesForAPI(
   for (let i = 0; i < reorderedMessages.length; i++) {
     const msg = reorderedMessages[i]!
     if (!isSyntheticApiErrorMessage(msg)) {
+      continue
+    }
+    // Error-anchored stripping is scoped to the model that produced the
+    // error. After the user switches to a different (e.g. vision-capable)
+    // model, the rejected media must replay normally instead of staying
+    // stripped forever. Anchors without a sourceModel (legacy transcripts)
+    // keep the historical strip behavior.
+    const anchorModel = (msg as { sourceModel?: unknown }).sourceModel
+    if (
+      currentModel &&
+      typeof anchorModel === 'string' &&
+      anchorModel !== currentModel
+    ) {
       continue
     }
     let blockTypesToStrip: Set<string> | undefined
@@ -2415,7 +2435,9 @@ export function normalizeMessagesForAPI(
   const smooshed = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
     'tengu_chair_sermon',
   )
-    ? smooshSystemReminderSiblings(mergeAdjacentUserMessages(withNonEmpty))
+    ? smooshSystemReminderSiblings(
+        mergeAdjacentUserMessages(withNonEmpty),
+      )
     : withNonEmpty
 
   // Unconditional — catches transcripts persisted before smooshIntoToolResult

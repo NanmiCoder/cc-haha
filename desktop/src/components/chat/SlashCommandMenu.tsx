@@ -1,7 +1,6 @@
 import { forwardRef, type MutableRefObject } from 'react'
 import {
   Bot,
-  Box,
   Bug,
   CircleDollarSign,
   CircleGauge,
@@ -25,7 +24,10 @@ import {
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import type { SlashCommandGroups } from './composerUtils'
-import type { SlashCommandSource } from '@/types/slashCommand'
+import type { ComposerReferenceCandidate } from '@/types/composerReference'
+import { safeMentionIcon } from '@/lib/composerMentions'
+import { publicAssetPath } from '@/lib/publicAsset'
+import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
 
 const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   agent: Bot,
@@ -59,17 +61,6 @@ function getSystemSlashCommandIcon(commandName: string): LucideIcon {
   return SYSTEM_SLASH_COMMAND_ICONS[rootCommand] ?? CommandIcon
 }
 
-function getSkillSourceLabelKey(source: SlashCommandSource) {
-  switch (source) {
-    case 'project':
-      return 'chat.slashSkillProject' as const
-    case 'plugin':
-      return 'chat.slashSkillPlugin' as const
-    case 'user':
-      return 'chat.slashSkillPersonal' as const
-  }
-}
-
 export function getSlashCommandOptionId(menuId: string, index: number): string {
   return `${menuId}-option-${index}`
 }
@@ -82,6 +73,7 @@ type SlashCommandMenuProps = {
   onSelect: (commandName: string) => void
   onHighlight: (index: number) => void
   showKeyboardHints: boolean
+  references?: ComposerReferenceCandidate[]
 }
 
 export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps>(
@@ -94,6 +86,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
       onSelect,
       onHighlight,
       showKeyboardHints,
+      references = [],
     },
     ref,
   ) {
@@ -119,7 +112,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         >
           <Icon
             aria-hidden="true"
-            className="h-4 w-4 shrink-0 text-[var(--color-text-secondary)]"
+            className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]"
             strokeWidth={1.8}
           />
           <span className="flex min-w-0 max-w-[52%] shrink-0 items-baseline gap-1.5">
@@ -132,7 +125,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
               </span>
             ) : null}
           </span>
-          <span className="min-w-0 flex-1 truncate text-right text-xs text-[var(--color-text-tertiary)]">
+          <span className="min-w-0 flex-1 truncate text-left text-xs text-[var(--color-text-tertiary)]">
             {command.description}
           </span>
         </div>
@@ -142,6 +135,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
     return (
       <div
         ref={ref}
+        onMouseDown={event => event.preventDefault()}
         className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)]"
       >
         <div
@@ -152,56 +146,32 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         >
           {groups.system.map(renderSystemCommand)}
 
-          {groups.skills.length > 0 ? (
-            <div
-              role="group"
-              aria-label={t('sidebar.skills')}
-              className={groups.system.length > 0
-                ? 'mt-1 border-t border-[var(--color-border-separator)] pt-1'
-                : ''}
-            >
-              <div className="px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-tertiary)]">
-                {t('sidebar.skills')}
-              </div>
-              {groups.skills.map((command, skillIndex) => {
-                const index = groups.system.length + skillIndex
-                return (
-                  <div
-                    id={getSlashCommandOptionId(id, index)}
-                    key={command.name}
-                    role="option"
-                    tabIndex={-1}
-                    aria-selected={index === selectedIndex}
-                    ref={(element) => { itemRefs.current[index] = element }}
-                    onClick={() => onSelect(command.name)}
-                    onMouseEnter={() => onHighlight(index)}
-                    className={`flex w-full cursor-default items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors ${
-                      index === selectedIndex
-                        ? 'bg-[var(--color-surface-hover)]'
-                        : 'hover:bg-[var(--color-surface-hover)]'
-                    }`}
-                  >
-                    <Box
-                      aria-hidden="true"
-                      className="h-4 w-4 shrink-0 text-[var(--color-text-secondary)]"
-                      strokeWidth={1.8}
-                    />
-                    <span className="min-w-0 shrink-0 truncate text-sm font-medium text-[var(--color-text-primary)]">
-                      {command.name}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-right text-xs text-[var(--color-text-tertiary)]">
-                      {command.description}
-                    </span>
-                    {command.source ? (
-                      <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-                        {t(getSkillSourceLabelKey(command.source))}
-                      </span>
-                    ) : null}
-                  </div>
-                )
+          {([
+            { kind: 'plugin' as const, items: groups.plugins ?? [], label: t('chat.referencePlugins'), offset: groups.system.length },
+            { kind: 'skill' as const, items: groups.skills, label: t('sidebar.skills'), offset: groups.system.length + (groups.plugins?.length ?? 0) },
+          ]).map(group => group.items.length > 0 ? (
+            <div key={group.kind} role="group" aria-label={group.label}>
+              <div className="px-3 pb-1 pt-2 text-xs font-medium text-[var(--color-text-tertiary)]">{group.label}</div>
+              {group.items.map((command, position) => {
+                const index = group.offset + position
+                const candidate = references.find(item => item.kind === group.kind && (item.name === command.name || item.id === command.name))
+                const icon = safeMentionIcon(candidate?.icon)
+                const Icon = referenceFallbackIcon(group.kind)
+                const sourceLabel = skillSourceLabelKey(command.source)
+                return <div
+                  id={getSlashCommandOptionId(id, index)} key={command.name} role="option" tabIndex={-1}
+                  aria-selected={index === selectedIndex} aria-labelledby={`${id}-label-${index}`} aria-describedby={`${id}-description-${index}`}
+                  ref={element => { itemRefs.current[index] = element }}
+                  onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
+                  className={`flex w-full cursor-default items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
+                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-5 w-5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" strokeWidth={1.8} />}
+                  <span id={`${id}-label-${index}`} className="min-w-0 max-w-[45%] shrink-0 truncate text-sm font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                  <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-tertiary)]">{command.description}</span>
+                  {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
+                </div>
               })}
             </div>
-          ) : null}
+          ) : null)}
         </div>
         {showKeyboardHints ? (
           <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">

@@ -10,6 +10,17 @@ export type SessionsResponse = {
   total: number
   index?: LocalIndexStatus
 }
+export type ProjectSessionHistoryParams = {
+  projectRoot: string
+  limit?: number
+  cursor?: string
+  beforeModifiedAt?: string
+  beforeId?: string
+}
+export type ProjectSessionHistoryResponse = {
+  sessions: SessionListItem[]
+  nextCursor: string | null
+}
 export type PetSessionRuntimeStatus = 'waiting' | 'failed' | 'review' | 'running' | 'idle'
 export type SessionChatStatusResponse = {
   state: 'idle' | 'thinking' | 'compacting' | 'tool_executing'
@@ -156,6 +167,14 @@ export type SessionUsageSnapshot = {
   costDisplay: string
   hasUnknownModelCost: boolean
   totalAPIDuration: number
+  /**
+   * Milliseconds the model spent emitting tokens, excluding prefill and tool execution.
+   * Absent or 0 means unknown (transcript source, aborted turn, non-streaming fallback) —
+   * never "instant", so a tokens/sec reading must be withheld rather than computed.
+   */
+  totalDecodeDuration?: number
+  /** Milliseconds spent waiting for the first token, summed over the session's requests. */
+  totalTtftDuration?: number
   totalDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -373,17 +392,30 @@ function buildWorkspacePath(
 }
 
 export const sessionsApi = {
-  list(params?: { project?: string; limit?: number; offset?: number }) {
+  list(params?: { project?: string; limit?: number; offset?: number }, options?: ApiRequestOptions) {
     const query = new URLSearchParams()
     if (params?.project) query.set('project', params.project)
     if (params?.limit) query.set('limit', String(params.limit))
     if (params?.offset) query.set('offset', String(params.offset))
     const qs = query.toString()
-    return api.get<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ''}`)
+    return api.get<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ''}`, options)
+  },
+
+  listProjectHistory(params: ProjectSessionHistoryParams, options?: ApiRequestOptions) {
+    const query = new URLSearchParams({ projectRoot: params.projectRoot })
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.cursor) query.set('cursor', params.cursor)
+    if (params.beforeModifiedAt) query.set('beforeModifiedAt', params.beforeModifiedAt)
+    if (params.beforeId) query.set('beforeId', params.beforeId)
+    return api.get<ProjectSessionHistoryResponse>(`/api/sessions/project-history?${query.toString()}`, options)
   },
 
   getMessages(sessionId: string) {
     return api.get<MessagesResponse>(`/api/sessions/${sessionId}/messages`)
+  },
+
+  getSummary(sessionId: string, options?: ApiRequestOptions) {
+    return api.get<SessionListItem>(`/api/sessions/${sessionId}/summary`, options)
   },
 
   getChatStatus(sessionId: string, signal?: AbortSignal) {
@@ -455,30 +487,41 @@ export const sessionsApi = {
     })
   },
 
-  getWorkspaceStatus(sessionId: string) {
-    return api.get<WorkspaceStatusResult>(buildWorkspacePath(sessionId, 'status'))
+  /**
+   * Running session totals only — one CLI control, no skills scan, no transcript re-read.
+   * Cheap enough to poll while the context panel is open.
+   */
+  getSessionUsage(sessionId: string, signal?: AbortSignal) {
+    return api.get<SessionInspectionResponse>(
+      `/api/sessions/${sessionId}/inspection?includeContext=0&usageOnly=1`,
+      { timeout: 6_000, signal },
+    )
   },
 
-  getWorkspaceTree(sessionId: string, workspacePath = '') {
-    return api.get<WorkspaceTreeResult>(buildWorkspacePath(sessionId, 'tree', workspacePath))
+  getWorkspaceStatus(sessionId: string, signal?: AbortSignal) {
+    return api.get<WorkspaceStatusResult>(buildWorkspacePath(sessionId, 'status'), { signal })
   },
 
-  searchWorkspace(sessionId: string, query: string) {
+  getWorkspaceTree(sessionId: string, workspacePath = '', signal?: AbortSignal) {
+    return api.get<WorkspaceTreeResult>(buildWorkspacePath(sessionId, 'tree', workspacePath), { signal })
+  },
+
+  searchWorkspace(sessionId: string, query: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ query })
-    return api.get<WorkspaceSearchResult>(`/api/sessions/${sessionId}/workspace/search?${params}`)
+    return api.get<WorkspaceSearchResult>(`/api/sessions/${sessionId}/workspace/search?${params}`, { signal })
   },
 
-  getWorkspaceFile(sessionId: string, workspacePath: string) {
-    return api.get<WorkspaceReadFileResult>(buildWorkspacePath(sessionId, 'file', workspacePath))
+  getWorkspaceFile(sessionId: string, workspacePath: string, signal?: AbortSignal) {
+    return api.get<WorkspaceReadFileResult>(buildWorkspacePath(sessionId, 'file', workspacePath), { signal })
   },
 
   getWorkspaceDiff(sessionId: string, workspacePath: string) {
     return api.get<WorkspaceDiffResult>(buildWorkspacePath(sessionId, 'diff', workspacePath))
   },
 
-  getTurnCheckpoints(sessionId: string, options?: ApiRequestOptions) {
+  getTurnCheckpoints(sessionId: string, options?: ApiRequestOptions, frozen = false) {
     return api.get<SessionTurnCheckpointsResponse>(
-      `/api/sessions/${sessionId}/turn-checkpoints`,
+      `/api/sessions/${sessionId}/turn-checkpoints${frozen ? '?frozen=true' : ''}`,
       options,
     )
   },
@@ -488,8 +531,10 @@ export const sessionsApi = {
     targetUserMessageId: string,
     workspacePath: string,
     userMessageIndex?: number,
+    frozen = false,
   ) {
     const query = new URLSearchParams()
+    if (frozen) query.set('frozen', 'true')
     query.set('targetUserMessageId', targetUserMessageId)
     if (Number.isInteger(userMessageIndex)) {
       query.set('userMessageIndex', String(userMessageIndex))

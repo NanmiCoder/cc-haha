@@ -627,9 +627,9 @@ describe('Content-only pages render without errors', () => {
 
     expect(sendMessage).not.toHaveBeenCalled()
     expect(screen.getByText('Slash commands')).toBeInTheDocument()
-    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getByText('/compact')).toBeInTheDocument()
     expect(screen.getByText('/cost')).toBeInTheDocument()
-    expect(screen.getByText('15 more commands available. Type / to search the full command list.')).toBeInTheDocument()
+    expect(screen.getByText('9 more commands available. Type / to search the full command list.')).toBeInTheDocument()
 
     resetPageStores()
   })

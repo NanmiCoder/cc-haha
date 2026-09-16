@@ -95,16 +95,15 @@ function overlayTargetPayload(
  *              cursor overlay; no cursor steal). There is no
  *              stateless CLI fallback: the helper rejects direct one-shot
  *              screenshot, mutation, clipboard and app commands.
- *   - Windows → the Python helper (`win_helper.py`); the native engine is
- *              macOS-only.
+ *   - Windows → the Python helper (`win_helper.py`) plus a persistent virtual
+ *              cursor overlay; the native engine is macOS-only.
  *
- * The two platforms do NOT offer the same guarantee, and callers should not
- * assume they do. macOS delivers input per-process and never touches the real
- * pointer. Windows has no such API: input goes through `SendInput`, so the
- * agent shares one cursor and one input stream with the user. The Windows
- * side therefore gets a badge that marks agent activity rather than a virtual
- * cursor that replaces it, and `win_helper.py` refuses actions it can already
- * tell will not land.
+ * The input guarantees still differ: macOS delivers per-process without
+ * touching the real pointer, while Windows must use the shared `SendInput`
+ * stream. The Windows overlay follows only injected pointer events, binds
+ * visibility to the destination window, and is co-located with the real
+ * pointer during agent movement so its visual behavior matches macOS without
+ * misreporting where a click will land.
  *
  * `deps` is injectable for unit tests only.
  */
@@ -118,7 +117,10 @@ export async function callHelper<T>(
     callPy?: HelperFn
     overlayShow?: (payload: Record<string, unknown>) => void
     isOverlayShown?: () => boolean
-    showCursorBadge?: () => void
+    showCursorBadge?: (
+      command: string,
+      payload: Record<string, unknown>,
+    ) => void | Promise<void>
     callFrontmost?: () => Promise<{ bundleId?: string } | null>
     shutdownDaemon?: () => void
   } = {},
@@ -129,7 +131,7 @@ export async function callHelper<T>(
   const viaPython = deps.callPy ?? (callPythonHelper as HelperFn)
   const showOverlay = deps.overlayShow ?? overlayShow
   const overlayIsShown = deps.isOverlayShown ?? isOverlayShown
-  const showBadge = deps.showCursorBadge ?? (() => showCursorBadge())
+  const showBadge = deps.showCursorBadge ?? showCursorBadge
   const restartDaemon = deps.shutdownDaemon ?? (() => void shutdownDaemon())
 
   if (platform === 'darwin') {
@@ -168,10 +170,10 @@ export async function callHelper<T>(
   }
 
   if (INJECTION_COMMANDS.has(command)) {
-    // Same trigger set as the macOS overlay, so both platforms mark activity
-    // at the same moments. Fire-and-forget: the badge is advisory and must
-    // never sit on the mutation hot path.
-    showBadge()
+    // Wait only for the child's bounded READY handshake. That makes the first
+    // injected mouse event observable instead of racing process startup; the
+    // overlay owns its own 1.5s fail-open timeout and never rejects an action.
+    await showBadge(command, payload)
   }
   return viaPython<T>(command, payload)
 }

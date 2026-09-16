@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import { safeParseJSON } from '../../json.js'
-import { filterInvalidPermissionRules } from '../validation.js'
+import {
+  filterInvalidPermissionRules,
+  validateSettingsFileContent,
+} from '../validation.js'
 
 const VALID_RULE = 'Bash(ls:*)'
 const INVALID_RULE = 'Bash(ls:*' // unbalanced paren fails rule validation
@@ -56,5 +59,28 @@ describe('filterInvalidPermissionRules', () => {
       permissions: { allow: unknown[] }
     }
     expect(second.permissions.allow).toEqual([VALID_RULE, INVALID_RULE])
+  })
+})
+
+describe('validateSettingsFileContent', () => {
+  it('accepts retired attribution keys so existing settings files stay valid', () => {
+    // validateInputForSettingsFileEdit() skips validation entirely when the
+    // before-content is already invalid, so an unknown key here would silently
+    // disable the settings edit guard for anyone who set attribution before it
+    // was retired.
+    const content = JSON.stringify({
+      attribution: { commit: '', pr: '' },
+      includeCoAuthoredBy: false,
+    })
+
+    expect(validateSettingsFileContent(content)).toEqual({ isValid: true })
+  })
+
+  it('still rejects genuinely unknown keys', () => {
+    const result = validateSettingsFileContent(
+      JSON.stringify({ notARealSetting: true }),
+    )
+
+    expect(result.isValid).toBe(false)
   })
 })

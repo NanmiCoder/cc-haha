@@ -599,7 +599,27 @@ export function McpSettings() {
   const handleToggle = async (server: McpServerRecord) => {
     setBusyServerKey(getMcpServerIdentityKey(server))
     try {
-      const updated = await toggleServer(server, resolveOperationCwd(server), activeSessionId ?? undefined)
+      const { server: updated, sessionSync } = await toggleServer(server, resolveOperationCwd(server), activeSessionId ?? undefined)
+      if (!sessionSync?.applied) {
+        const detail = sessionSync?.reason === 'failed'
+          ? t('settings.mcp.toast.syncFailed', { error: sessionSync.error || t('settings.mcp.toast.toggleFailed') })
+          : sessionSync?.reason === 'not_running'
+            ? t('settings.mcp.toast.syncNotRunning')
+            : sessionSync?.reason === 'different_project'
+              ? t('settings.mcp.toast.syncDifferentProject')
+              : sessionSync?.reason === 'no_session' || !activeSessionId
+                ? t('settings.mcp.toast.syncNoSession')
+                : t('settings.mcp.toast.syncUnconfirmed')
+        addToast({
+          type: 'warning',
+          message: `${t('settings.mcp.toast.saved', { name: server.name })}. ${detail}`,
+        })
+        return
+      }
+      if (updated.enabled && (updated.status === 'failed' || updated.status === 'needs-auth')) {
+        addToast({ type: 'warning', message: updated.statusDetail || updated.statusLabel })
+        return
+      }
       addToast({
         type: 'success',
         message: updated.enabled ? t('settings.mcp.toast.enabled', { name: server.name }) : t('settings.mcp.toast.disabled', { name: server.name }),

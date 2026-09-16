@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyH5Request,
+  isLocalCredentialOnlyPath,
   isLoopbackHost,
   requiresLocalAccessCredential,
   shouldBlockDisabledH5Access,
@@ -228,6 +229,39 @@ describe('h5AccessPolicy', () => {
     // and an unmanaged (tokenless) server must not lock itself out either.
     expect(requiresLocalAccessCredential('/api/h5-access/verify', unauthorizedContext)).toBe(false)
     expect(requiresLocalAccessCredential('/api/h5-access', { clientAddress: '127.0.0.1' })).toBe(false)
+  })
+
+  test('keeps bulk session deletion off the H5 token', () => {
+    const unauthorizedContext = {
+      clientAddress: '10.0.0.5',
+      localAccessTokenConfigured: true,
+      localAccessAuthorized: false,
+    }
+    const authorizedContext = {
+      ...unauthorizedContext,
+      localAccessAuthorized: true,
+    }
+
+    // One request with days=0 wipes every transcript, so a paired phone's
+    // bearer token is not a strong enough credential for it.
+    expect(isLocalCredentialOnlyPath('/api/settings/session-cleanup')).toBe(true)
+    expect(requiresLocalAccessCredential('/api/settings/session-cleanup', unauthorizedContext)).toBe(true)
+    expect(requiresLocalAccessCredential('/api/settings/session-cleanup', authorizedContext)).toBe(false)
+
+    // The router splits on '/' and filters empties, so these shapes all reach
+    // the same handler and must be gated identically.
+    for (const pathname of [
+      '/api/settings/session-cleanup/',
+      '/api/settings//session-cleanup',
+      '//api/settings/session-cleanup//',
+    ]) {
+      expect(isLocalCredentialOnlyPath(pathname)).toBe(true)
+      expect(requiresLocalAccessCredential(pathname, unauthorizedContext)).toBe(true)
+    }
+
+    // Neighbouring settings endpoints stay reachable from the phone.
+    expect(requiresLocalAccessCredential('/api/settings/user', unauthorizedContext)).toBe(false)
+    expect(isLocalCredentialOnlyPath('/api/settings/session-cleanup-extra')).toBe(false)
   })
 
   test('keeps ordinary loopback capabilities usable without the desktop process token', () => {

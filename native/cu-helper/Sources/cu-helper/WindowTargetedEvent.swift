@@ -17,9 +17,9 @@ import Foundation
 ///
 /// The fix is to stamp the window identity onto the event before posting:
 ///
-///   1. `+[NSEvent mouseEventWithType:…windowNumber:…]` — the ONLY way to set a
-///      window number, since CGEvent exposes no public API for it. Take the
-///      resulting event's `.cgEvent`.
+///   1. Mouse events use `+[NSEvent mouseEventWithType:…windowNumber:…]` and its
+///      `.cgEvent`. Scroll events use the official private CGEvent field 51
+///      (windowNumber), confirmed by its initializer at 0x100714188.
 ///   2. `kCGMouseEventSubtype = 3` (NX_SUBTYPE_MOUSE_TOUCH) plus fields 91/92
 ///      (`WindowUnderMousePointer` / `…ThatCanHandleThisEvent`) = the window ID.
 ///   3. `CGEventSetWindowLocation` with the point expressed in WINDOW-LOCAL
@@ -265,6 +265,28 @@ enum WindowTargetedEvent {
     static func post(_ event: CGEvent, to pid: pid_t) {
         event.timestamp = DispatchTime.now().uptimeNanoseconds
         event.postToPid(pid)
+    }
+
+    static func makeScrollEvent(
+        source: CGEventSource,
+        point: CGPoint,
+        deltaX: Int32,
+        deltaY: Int32,
+        window: WindowGeometry.Window
+    ) -> CGEvent? {
+        // Keep two usable axes. The inspected official version passes one and
+        // consequently loses horizontal deltas; reproducing that bug is not
+        // required for its pixel/page contract.
+        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
+                                  wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0) else { return nil }
+        event.location = point
+        event.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(window.id))
+        event.setIntegerValueField(windowUnderPointerField, value: Int64(window.id))
+        event.setIntegerValueField(windowThatCanHandleField, value: Int64(window.id))
+        if let stamp = setWindowLocation {
+            stamp(event, windowLocalPoint(globalPoint: point, windowBounds: window.bounds))
+        }
+        return event
     }
 
     // CGEventField has no public constants for these three.

@@ -4,6 +4,8 @@
  * Original work by Jason Young, MIT License
  */
 
+import { isDeepStrictEqual } from 'node:util'
+import { parseResponsesToolArguments, responsesTerminalStop } from '../transform/openaiResponsesTerminal.js'
 import { encodeOpenAIReasoningEnvelope } from '../transform/openaiReasoning.js'
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
 import { openaiUsageToAnthropic } from '../transform/usage.js'
@@ -14,9 +16,8 @@ import type {
 
 export type OpenAIResponsesStreamOptions = {
   /**
-   * Enables the stricter ChatGPT Codex OAuth contract without changing generic
-   * Responses-compatible providers: encrypted reasoning is preserved, HTTP 200
-   * stream errors are surfaced, and EOF without response.completed is rejected.
+   * Preserves encrypted reasoning for ChatGPT Codex OAuth. All providers share
+   * the same terminal/error and tool completeness contract.
    */
   openAICodexOAuth?: boolean
   /** Internal lifecycle hooks used by the OAuth fetch adapter. */
@@ -30,7 +31,13 @@ type StreamState = {
   indexByKey: Map<string, number>
   reasoningIndexByOutputIndex: Map<number, number>
   toolIndexByItemId: Map<string, number>
+  toolIndexByOutputIndex: Map<number, number>
+  tools: Map<number, { id: string; name: string; arguments: string }>
+  textByIndex: Map<number, string>
+  openIndices: Set<number>
+  reasoningDone: Set<number>
   model: string
+  messageId: string
   messageStarted: boolean
   messageStopped: boolean
   terminalSeen: boolean
@@ -62,7 +69,13 @@ export function openaiResponsesStreamToAnthropic(
     indexByKey: new Map(),
     reasoningIndexByOutputIndex: new Map(),
     toolIndexByItemId: new Map(),
+    toolIndexByOutputIndex: new Map(),
+    tools: new Map(),
+    textByIndex: new Map(),
+    openIndices: new Set(),
+    reasoningDone: new Set(),
     model,
+    messageId: `msg_${Date.now()}`,
     messageStarted: false,
     messageStopped: false,
     terminalSeen: false,
@@ -87,24 +100,17 @@ export function openaiResponsesStreamToAnthropic(
         resetEvent()
 
         if (dataText === '[DONE]') {
-          if (options.openAICodexOAuth) {
-            state.lastUpstreamEvent = '[DONE]'
-            return true
-          }
-          if (!options.openAICodexOAuth && !state.messageStopped) {
-            state.terminalSeen = true
-            closeAllReasoningBlocks(state, controller, encoder)
-            emitMessageStop(state, controller, encoder, model)
-            return true
-          }
-          return false
+          state.lastUpstreamEvent = '[DONE]'
+          return true
         }
 
         let data: Record<string, unknown>
         try {
-          data = JSON.parse(dataText) as Record<string, unknown>
+          const parsed = asRecord(JSON.parse(dataText))
+          if (!parsed) throw new Error('Expected an event object')
+          data = parsed
         } catch {
-          return false
+          throw new Error('Invalid OpenAI Responses SSE JSON')
         }
 
         const resolvedEvent = eventName || (typeof data.type === 'string' ? data.type : '')
@@ -162,7 +168,7 @@ export function openaiResponsesStreamToAnthropic(
             dispatchEvent()
           }
 
-          if (options.openAICodexOAuth && !state.terminalSeen) {
+          if (!state.terminalSeen) {
             const error = new Error(
               `OpenAI Responses stream closed before response.completed (last event: ${state.lastUpstreamEvent ?? 'none'})`,
             ) as Error & { code: string }
@@ -175,7 +181,7 @@ export function openaiResponsesStreamToAnthropic(
         } catch (error) {
           if (!cancelled) controller.error(error)
         } finally {
-          if (state.terminalSeen && !cancelled) {
+          if (!cancelled) {
             await reader.cancel('OpenAI Responses terminal event received').catch(() => {})
           }
           options.onSettled?.()
@@ -203,7 +209,7 @@ function emitMessageStart(
   controller.enqueue(encoder.encode(formatSse('message_start', {
     type: 'message_start',
     message: {
-      id: `msg_${Date.now()}`,
+      id: state.messageId,
       type: 'message',
       role: 'assistant',
       content: [],
@@ -239,6 +245,7 @@ function processEvent(
     case 'response.created': {
       const response = asRecord(data.response) ?? data
       state.model = (response.model as string) || state.model
+      if (typeof response.id === 'string') state.messageId = response.id
       emitMessageStart(state, controller, encoder, state.model)
       break
     }
@@ -249,21 +256,10 @@ function processEvent(
       if (!item) break
 
       if (item.type === 'function_call') {
-        const index = state.nextContentIndex++
-        const callId = (item.call_id as string) || (item.id as string) || ''
-        const name = (item.name as string) || ''
-        state.toolIndexByItemId.set((item.id as string) || callId, index)
-
-        controller.enqueue(encoder.encode(formatSse('content_block_start', {
-          type: 'content_block_start',
-          index,
-          content_block: {
-            type: 'tool_use',
-            id: callId,
-            name,
-            input: {},
-          },
-        })))
+        const index = ensureToolBlock(data, item, state, controller, encoder)
+        if (item.arguments !== undefined && item.arguments !== '') {
+          reconcileToolArguments(index, item.arguments, state, controller, encoder)
+        }
       } else if (item.type === 'reasoning' && !options.openAICodexOAuth) {
         ensureReasoningBlock(data, state, controller, encoder)
       }
@@ -272,47 +268,66 @@ function processEvent(
 
     case 'response.output_item.done': {
       const item = asRecord(data.item)
-      if (!item || item.type !== 'reasoning') break
-
-      if (!options.openAICodexOAuth) {
-        closeReasoningBlock(data, state, controller, encoder)
+      if (!item) break
+      if (item.type === 'function_call') {
+        const index = ensureToolBlock(data, item, state, controller, encoder)
+        if (item.arguments !== undefined && item.arguments !== '') {
+          reconcileToolArguments(index, item.arguments, state, controller, encoder)
+        }
         break
       }
-
+      if (item.type === 'message') {
+        const parts = Array.isArray(item.content) ? item.content : []
+        for (const [contentIndex, value] of parts.entries()) {
+          const part = asRecord(value)
+          if (!part || !['output_text', 'text', 'refusal'].includes(String(part.type))) continue
+          const partData = { ...data, content_index: contentIndex }
+          const index = ensureTextBlock(partData, state, controller, encoder)
+          const text = part.type === 'refusal' ? part.refusal : part.text
+          if (typeof text === 'string') reconcileText(index, text, state, controller, encoder)
+          closeBlock(index, state, controller, encoder)
+        }
+        break
+      }
+      if (item.type !== 'reasoning') break
+      const outputIndex = (data.output_index as number) ?? 0
+      if (state.reasoningDone.has(outputIndex)) break
+      if (!options.openAICodexOAuth) {
+        if (!state.reasoningIndexByOutputIndex.has(outputIndex)) {
+          const summary = Array.isArray(item.summary) ? item.summary : []
+          const text = summary.map(part => asRecord(part)?.text).filter(value => typeof value === 'string').join('')
+          if (text) {
+            const index = ensureReasoningBlock(data, state, controller, encoder)
+            controller.enqueue(encoder.encode(formatSse('content_block_delta', {
+              type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking: text },
+            })))
+          }
+        }
+        closeReasoningBlock(data, state, controller, encoder)
+        state.reasoningDone.add(outputIndex)
+        break
+      }
       const reasoning = item as OpenAIResponsesReasoningItem
       const reasoningData = encodeOpenAIReasoningEnvelope(reasoning)
-      if (!reasoningData) break
-
+      const summary = reasoning.summary?.map(part => part.text).join('') ?? ''
+      if (!reasoningData && !summary) break
       if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
       const index = state.nextContentIndex++
       controller.enqueue(encoder.encode(formatSse('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'redacted_thinking', data: reasoningData },
+        type: 'content_block_start', index,
+        content_block: reasoningData ? { type: 'redacted_thinking', data: reasoningData } : { type: 'thinking', thinking: summary },
       })))
-      controller.enqueue(encoder.encode(formatSse('content_block_stop', {
-        type: 'content_block_stop',
-        index,
-      })))
+      controller.enqueue(encoder.encode(formatSse('content_block_stop', { type: 'content_block_stop', index })))
+      state.reasoningDone.add(outputIndex)
       break
     }
 
     case 'response.content_part.added': {
-      if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
       const part = asRecord(data.part)
-      if (!part) break
-
-      const contentIndex = (data.content_index as number) ?? 0
-      const outputIndex = (data.output_index as number) ?? 0
-      const key = `${outputIndex}:${contentIndex}`
-      const index = state.nextContentIndex++
-      state.indexByKey.set(key, index)
-
-      controller.enqueue(encoder.encode(formatSse('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'text', text: '' },
-      })))
+      if (!part || !['output_text', 'text', 'refusal'].includes(String(part.type))) break
+      const index = ensureTextBlock(data, state, controller, encoder)
+      const initial = part.type === 'refusal' ? part.refusal : part.text
+      if (typeof initial === 'string') reconcileText(index, initial, state, controller, encoder)
       break
     }
 
@@ -338,44 +353,23 @@ function processEvent(
       break
     }
 
-    case 'response.output_text.delta': {
-      const contentIndex = (data.content_index as number) ?? 0
-      const outputIndex = (data.output_index as number) ?? 0
-      const key = `${outputIndex}:${contentIndex}`
-      const index = state.indexByKey.get(key)
-      if (index === undefined) break
-
-      const delta = (data.delta as string) || ''
-      controller.enqueue(encoder.encode(formatSse('content_block_delta', {
-        type: 'content_block_delta',
-        index,
-        delta: { type: 'text_delta', text: delta },
-      })))
-      break
-    }
-
+    case 'response.output_text.delta':
     case 'response.refusal.delta': {
-      const contentIndex = (data.content_index as number) ?? 0
-      const outputIndex = (data.output_index as number) ?? 0
-      const key = `${outputIndex}:${contentIndex}`
-      const index = state.indexByKey.get(key)
-      if (index === undefined) break
-
-      const delta = (data.delta as string) || ''
-      controller.enqueue(encoder.encode(formatSse('content_block_delta', {
-        type: 'content_block_delta',
-        index,
-        delta: { type: 'text_delta', text: delta },
-      })))
+      const index = ensureTextBlock(data, state, controller, encoder)
+      if (!state.openIndices.has(index)) throw new Error('OpenAI Responses text delta arrived after block completion')
+      const delta = typeof data.delta === 'string' ? data.delta : ''
+      reconcileText(index, (state.textByIndex.get(index) ?? '') + delta, state, controller, encoder)
       break
     }
 
     case 'response.function_call_arguments.delta': {
       const itemId = (data.item_id as string) || ''
       const index = state.toolIndexByItemId.get(itemId)
-      if (index === undefined) break
+      if (index === undefined) throw new Error('OpenAI Responses tool arguments have no matching tool')
 
       const delta = stringifyOpenAIToolArguments(data.delta)
+      const tool = state.tools.get(index)!
+      tool.arguments += delta
       controller.enqueue(encoder.encode(formatSse('content_block_delta', {
         type: 'content_block_delta',
         index,
@@ -386,81 +380,73 @@ function processEvent(
 
     case 'response.output_text.done':
     case 'response.refusal.done': {
-      const contentIndex = (data.content_index as number) ?? 0
-      const outputIndex = (data.output_index as number) ?? 0
-      const key = `${outputIndex}:${contentIndex}`
-      const index = state.indexByKey.get(key)
-      if (index === undefined) break
-
-      controller.enqueue(encoder.encode(formatSse('content_block_stop', {
-        type: 'content_block_stop',
-        index,
-      })))
+      const index = ensureTextBlock(data, state, controller, encoder)
+      const text = event === 'response.refusal.done' ? data.refusal : data.text
+      if (typeof text === 'string') reconcileText(index, text, state, controller, encoder)
+      closeBlock(index, state, controller, encoder)
       break
     }
 
     case 'response.function_call_arguments.done': {
       const itemId = (data.item_id as string) || ''
       const index = state.toolIndexByItemId.get(itemId)
-      if (index === undefined) break
-
-      controller.enqueue(encoder.encode(formatSse('content_block_stop', {
-        type: 'content_block_stop',
-        index,
-      })))
+        ?? state.toolIndexByOutputIndex.get(data.output_index as number)
+      if (index === undefined) throw new Error('OpenAI Responses tool arguments have no matching tool')
+      const argumentsValue = data.arguments ?? asRecord(data.item)?.arguments
+      if (argumentsValue !== undefined) reconcileToolArguments(index, argumentsValue, state, controller, encoder)
+      // Keep tools open until the terminal event validates the entire response.
+      // A final response snapshot can still supply missing argument suffixes.
       break
     }
 
     case 'response.incomplete':
-      if (!options.openAICodexOAuth) break
-      state.terminalSeen = true
-      if (readIncompleteReason(asRecord(data.response)) === 'max_output_tokens') {
-        const response = asRecord(data.response)
-        if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
-        controller.enqueue(encoder.encode(formatSse('message_delta', {
-          type: 'message_delta',
-          delta: { stop_reason: 'max_tokens', stop_sequence: null },
-          usage: openaiUsageToAnthropic(response?.usage as OpenAICompatibleUsage | undefined),
-        })))
-        emitMessageStop(state, controller, encoder, state.model)
-        return true
-      }
-      controller.enqueue(encoder.encode(formatSse('error', {
-        type: 'error',
-        error: readStreamError(event, data),
-      })))
-      return true
-
     case 'response.failed':
     case 'response.cancelled':
-    case 'error': {
-      if (!options.openAICodexOAuth) break
-      state.terminalSeen = true
-      const streamError = readStreamError(event, data)
-      controller.enqueue(encoder.encode(formatSse('error', {
-        type: 'error',
-        error: streamError,
-      })))
-      return true
-    }
-
+    case 'error':
     case 'response.completed': {
       state.terminalSeen = true
-      const response = asRecord(data.response)
-      const status = (response?.status as string) || 'completed'
-      const usage = response?.usage as OpenAICompatibleUsage | undefined
-      const hasToolUse = state.toolIndexByItemId.size > 0
-
-      const stopReason = status === 'completed'
-        ? (hasToolUse ? 'tool_use' : 'end_turn')
-        : status === 'incomplete' ? 'max_tokens' : 'end_turn'
-
+      const response = asRecord(data.response) ?? data
+      if (typeof response.model === 'string') state.model = response.model
+      if (typeof response.id === 'string') state.messageId = response.id
+      let terminal: 'completed' | 'max_tokens'
+      try {
+        terminal = responsesTerminalStop(response, event)
+      } catch (error) {
+        const failure = error as Error & { type?: string; code?: string }
+        controller.enqueue(encoder.encode(formatSse('error', {
+          type: 'error', error: {
+            type: failure.type ?? 'api_error', message: failure.message,
+            ...(failure.code ? { code: failure.code } : {}),
+          },
+        })))
+        return true
+      }
+      const output = response.output
+      if (terminal === 'completed' && output === undefined && state.nextContentIndex === 0) {
+        throw new Error('Invalid OpenAI Responses completed response: missing output')
+      }
+      if (output !== undefined && !Array.isArray(output)) throw new Error('Invalid OpenAI Responses output: expected an array')
+      if (Array.isArray(output)) {
+        for (const [outputIndex, item] of output.entries()) {
+          // Partial tool snapshots are not executable and need not be repaired.
+          if (terminal === 'max_tokens' && asRecord(item)?.type === 'function_call') continue
+          processEvent('response.output_item.done', { output_index: outputIndex, item }, state, controller, encoder, options)
+        }
+      }
+      if (terminal === 'completed') {
+        for (const tool of state.tools.values()) {
+          if (!tool.id || !tool.name) throw new Error('Invalid OpenAI Responses tool identity')
+          parseResponsesToolArguments(tool.arguments)
+        }
+      }
       if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
       closeAllReasoningBlocks(state, controller, encoder)
+      for (const index of [...state.openIndices].sort((a, b) => a - b)) closeBlock(index, state, controller, encoder)
+      const stopReason = terminal === 'max_tokens' ? 'max_tokens' : state.tools.size > 0 ? 'tool_use' : 'end_turn'
       controller.enqueue(encoder.encode(formatSse('message_delta', {
         type: 'message_delta',
         delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: openaiUsageToAnthropic(usage),
+        usage: openaiUsageToAnthropic(response.usage as OpenAICompatibleUsage | undefined),
       })))
       emitMessageStop(state, controller, encoder, state.model)
       return true
@@ -536,31 +522,81 @@ function closeAllReasoningBlocks(
   }
 }
 
-function readStreamError(
-  event: string,
-  data: Record<string, unknown>,
-): { type: 'api_error' | 'overloaded_error'; message: string } {
-  const response = asRecord(data.response)
-  const error = asRecord(response?.error) ?? asRecord(data.error) ?? data
-  const code = typeof error?.code === 'string' ? error.code : ''
-  const errorType = typeof error?.type === 'string' ? error.type : ''
-  const message = typeof error?.message === 'string' && error.message
-    ? error.message
-    : event === 'response.incomplete'
-      ? `OpenAI response was incomplete: ${readIncompleteReason(response)}`
-      : `OpenAI stream ended with ${event}`
-  const overloaded = [code, errorType].some((value) => (
-    value.includes('rate_limit') ||
-    value.includes('capacity') ||
-    value.includes('overload')
-  ))
-
-  return { type: overloaded ? 'overloaded_error' : 'api_error', message }
+function closeBlock(index: number, state: StreamState, controller: ReadableStreamDefaultController, encoder: TextEncoder): void {
+  if (!state.openIndices.delete(index)) return
+  controller.enqueue(encoder.encode(formatSse('content_block_stop', { type: 'content_block_stop', index })))
 }
 
-function readIncompleteReason(response: Record<string, unknown> | null): string {
-  const details = asRecord(response?.incomplete_details)
-  return typeof details?.reason === 'string' ? details.reason : 'unknown'
+function ensureTextBlock(data: Record<string, unknown>, state: StreamState, controller: ReadableStreamDefaultController, encoder: TextEncoder): number {
+  const key = `${data.output_index ?? 0}:${data.content_index ?? 0}`
+  const existing = state.indexByKey.get(key)
+  if (existing !== undefined) return existing
+  if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
+  const index = state.nextContentIndex++
+  state.indexByKey.set(key, index)
+  state.textByIndex.set(index, '')
+  state.openIndices.add(index)
+  controller.enqueue(encoder.encode(formatSse('content_block_start', {
+    type: 'content_block_start', index, content_block: { type: 'text', text: '' },
+  })))
+  return index
+}
+
+function reconcileText(index: number, text: string, state: StreamState, controller: ReadableStreamDefaultController, encoder: TextEncoder): void {
+  const previous = state.textByIndex.get(index) ?? ''
+  if (text === previous) return
+  if (!text.startsWith(previous) || !state.openIndices.has(index)) throw new Error('OpenAI Responses text snapshot conflicts with streamed content')
+  state.textByIndex.set(index, text)
+  controller.enqueue(encoder.encode(formatSse('content_block_delta', {
+    type: 'content_block_delta', index, delta: { type: 'text_delta', text: text.slice(previous.length) },
+  })))
+}
+
+function ensureToolBlock(data: Record<string, unknown>, item: Record<string, unknown>, state: StreamState, controller: ReadableStreamDefaultController, encoder: TextEncoder): number {
+  const id = typeof item.id === 'string' ? item.id : ''
+  const callId = typeof item.call_id === 'string' ? item.call_id : id
+  const name = typeof item.name === 'string' ? item.name : ''
+  const outputIndex = typeof data.output_index === 'number' ? data.output_index : undefined
+  const existing = state.toolIndexByItemId.get(id || callId)
+    ?? (outputIndex === undefined ? undefined : state.toolIndexByOutputIndex.get(outputIndex))
+  if (existing !== undefined) {
+    const tool = state.tools.get(existing)!
+    if ((callId && callId !== tool.id) || (name && name !== tool.name)) throw new Error('OpenAI Responses tool snapshot conflicts with tool identity')
+    if (id) state.toolIndexByItemId.set(id, existing)
+    return existing
+  }
+  if (!callId || !name) throw new Error('Invalid OpenAI Responses tool identity')
+  if (!state.messageStarted) emitMessageStart(state, controller, encoder, state.model)
+  const index = state.nextContentIndex++
+  state.toolIndexByItemId.set(id || callId, index)
+  if (outputIndex !== undefined) state.toolIndexByOutputIndex.set(outputIndex, index)
+  state.tools.set(index, { id: callId, name, arguments: '' })
+  state.openIndices.add(index)
+  controller.enqueue(encoder.encode(formatSse('content_block_start', {
+    type: 'content_block_start', index, content_block: { type: 'tool_use', id: callId, name, input: {} },
+  })))
+  return index
+}
+
+function reconcileToolArguments(index: number, value: unknown, state: StreamState, controller: ReadableStreamDefaultController, encoder: TextEncoder): void {
+  const text = stringifyOpenAIToolArguments(value)
+  const tool = state.tools.get(index)!
+  if (text === tool.arguments) return
+  if (!text.startsWith(tool.arguments)) {
+    // Compatible providers can serialize the same final object differently.
+    // Keep the emitted representation when the parsed inputs are identical.
+    try {
+      if (isDeepStrictEqual(parseResponsesToolArguments(text), parseResponsesToolArguments(tool.arguments))) return
+    } catch {
+      // Partial JSON cannot establish semantic equality.
+    }
+    throw new Error('OpenAI Responses tool arguments snapshot conflicts with streamed arguments')
+  }
+  const suffix = text.slice(tool.arguments.length)
+  tool.arguments = text
+  if (suffix) controller.enqueue(encoder.encode(formatSse('content_block_delta', {
+    type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: suffix },
+  })))
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

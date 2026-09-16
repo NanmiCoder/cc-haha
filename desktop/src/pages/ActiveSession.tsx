@@ -15,13 +15,13 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../stores/teamStore'
-import { useWorkspacePanelStore } from '../stores/workspacePanelStore'
 import {
-  TERMINAL_PANEL_DEFAULT_HEIGHT,
-  TERMINAL_PANEL_MAX_HEIGHT,
-  TERMINAL_PANEL_MIN_HEIGHT,
-  useTerminalPanelStore,
-} from '../stores/terminalPanelStore'
+  WORKSPACE_BOTTOM_DEFAULT_HEIGHT,
+  WORKSPACE_BOTTOM_MAX_HEIGHT,
+  WORKSPACE_BOTTOM_MIN_HEIGHT,
+  useWorkspaceStore,
+} from '../stores/workspaceStore'
+import { useWorkspaceContentStore } from '../stores/workspaceContentStore'
 import { useTranslation } from '../i18n'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -34,8 +34,10 @@ import {
   type SessionHeaderMetaItem,
 } from '@/components/chat/SessionChatSurface'
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
-import { ComputerUsePermissionModal } from '../components/chat/ComputerUsePermissionModal'
-import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
+import {
+  WorkspaceSurface,
+  useWorkspaceBrowserEventBridge,
+} from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
 import { snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
 import {
@@ -44,11 +46,13 @@ import {
 } from '../components/activity/SessionActivityPanel'
 import { buildMainSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
 import { runsForSession, useWorkflowStore } from '../stores/workflowStore'
-import { TerminalSettings } from './TerminalSettings'
 import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState, TokenUsage } from '../types/chat'
 import type { TeamMember } from '../types/team'
+import { useWorkspaceAdaptiveLayout } from '@/hooks/useWorkspaceAdaptiveLayout'
 import { useMobileViewport } from '../hooks/useMobileViewport'
+import { useWorkspaceShortcuts } from '../hooks/useWorkspaceShortcuts'
+import { useWorkspaceFocusReturn } from '../hooks/useWorkspaceFocusReturn'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { formatTokenCount } from '../lib/formatTokenCount'
 import {
@@ -164,8 +168,8 @@ function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallba
 
 function WorkspaceResizeHandle({ panelRef }: { panelRef: RefObject<HTMLElement> }) {
   const t = useTranslation()
-  const width = useWorkspacePanelStore((state) => state.width)
-  const setWidth = useWorkspacePanelStore((state) => state.setWidth)
+  const width = useWorkspaceStore((state) => state.sideWidth)
+  const setWidth = useWorkspaceStore((state) => state.setSideWidth)
   const [dragState, setDragState] = useState<{ startX: number; startWidth: number } | null>(null)
   const dragStateRef = useRef(dragState)
 
@@ -234,8 +238,8 @@ function WorkspaceResizeHandle({ panelRef }: { panelRef: RefObject<HTMLElement> 
 
 function TerminalResizeHandle() {
   const t = useTranslation()
-  const height = useTerminalPanelStore((state) => state.height)
-  const setHeight = useTerminalPanelStore((state) => state.setHeight)
+  const height = useWorkspaceStore((state) => state.bottomHeight)
+  const setHeight = useWorkspaceStore((state) => state.setBottomHeight)
   const [dragState, setDragState] = useState<{ startY: number; startHeight: number } | null>(null)
   const dragStateRef = useRef(dragState)
 
@@ -276,8 +280,8 @@ function TerminalResizeHandle() {
       role="separator"
       aria-label={t('terminal.resizePanel')}
       aria-orientation="horizontal"
-      aria-valuemin={TERMINAL_PANEL_MIN_HEIGHT}
-      aria-valuemax={TERMINAL_PANEL_MAX_HEIGHT}
+      aria-valuemin={WORKSPACE_BOTTOM_MIN_HEIGHT}
+      aria-valuemax={WORKSPACE_BOTTOM_MAX_HEIGHT}
       aria-valuenow={height}
       tabIndex={0}
       data-testid="terminal-resize-handle"
@@ -297,17 +301,17 @@ function TerminalResizeHandle() {
         }
         if (event.key === 'Home') {
           event.preventDefault()
-          setHeight(TERMINAL_PANEL_MIN_HEIGHT)
+          setHeight(WORKSPACE_BOTTOM_MIN_HEIGHT)
         }
         if (event.key === 'End') {
           event.preventDefault()
-          setHeight(TERMINAL_PANEL_MAX_HEIGHT)
+          setHeight(WORKSPACE_BOTTOM_MAX_HEIGHT)
         }
       }}
-      onDoubleClick={() => setHeight(TERMINAL_PANEL_DEFAULT_HEIGHT)}
-      className="group flex h-2.5 shrink-0 cursor-row-resize items-center bg-[var(--color-surface)] outline-none focus-visible:bg-[var(--color-surface-container)]"
+      onDoubleClick={() => setHeight(WORKSPACE_BOTTOM_DEFAULT_HEIGHT)}
+      className="group absolute inset-x-0 -top-1 z-[var(--z-raised)] flex h-2 cursor-row-resize items-center bg-transparent outline-none"
     >
-      <div className="mx-3 h-px flex-1 rounded-full bg-[var(--color-border)] transition-colors group-hover:bg-[var(--color-border-focus)] group-focus-visible:bg-[var(--color-border-focus)]" />
+      <div className="h-px flex-1 bg-transparent transition-colors group-hover:bg-[var(--color-border-focus)] group-focus-visible:bg-[var(--color-border-focus)]" />
     </div>
   )
 }
@@ -321,7 +325,6 @@ export function ActiveSession() {
   const connectToSession = useChatStore((s) => s.connectToSession)
   const stopBackgroundTask = useChatStore((s) => s.stopBackgroundTask)
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
-  const pendingComputerUsePermission = sessionState?.pendingComputerUsePermission ?? null
   const fetchSessionTasks = useCLITaskStore((s) => s.fetchSessionTasks)
   const trackedTaskSessionId = useCLITaskStore((s) => s.sessionId)
   const cliTasks = useCLITaskStore((s) => s.tasks)
@@ -364,26 +367,31 @@ export function ActiveSession() {
     sessionId: string
     info: SessionGitInfo
   } | null>(null)
-  const workspaceWorkbenchOpen = useWorkspacePanelStore((state) =>
-    activeTabId && isSessionTabState(activeTabId, activeTabType) && !isMobileLayout
-      ? state.isPanelOpen(activeTabId)
-      : false,
+  const workspaceEnabled = Boolean(activeTabId) &&
+    isSessionTabState(activeTabId, activeTabType) &&
+    !isMobileLayout
+  const workspaceLayout = useWorkspaceStore((state) =>
+    workspaceEnabled && activeTabId ? state.bySession[activeTabId]?.layout ?? 'hidden' : 'hidden',
   )
-  const showWorkbench = workspaceWorkbenchOpen
+  const showWorkbench = workspaceLayout !== 'hidden'
   const showRightPanel = showWorkbench
-  const workspacePanelWidth = useWorkspacePanelStore((state) => state.width)
-  const rightPanelWidth = workspacePanelWidth
-  const showTerminalPanel = useTerminalPanelStore((state) =>
-    activeTabId && isSessionTabState(activeTabId, activeTabType) && !isMobileLayout
-      ? state.isPanelOpen(activeTabId)
+  // `full` still renders the same panel; the chat column is what gives way, so
+  // no tab is recreated and no page or PTY restarts on the way in or out.
+  const compactWorkspace = useWorkspaceAdaptiveLayout(workbenchPanelRef, showWorkbench)
+  const isWorkspaceFull = workspaceLayout === 'full' || compactWorkspace
+  const rightPanelWidth = useWorkspaceStore((state) => state.sideWidth)
+  const showTerminalPanel = useWorkspaceStore((state) =>
+    workspaceEnabled && activeTabId ? state.bySession[activeTabId]?.bottomOpen ?? false : false,
+  )
+  const hasBottomTerminals = useWorkspaceStore((state) =>
+    workspaceEnabled && activeTabId
+      ? (state.bySession[activeTabId]?.tabs ?? []).some((tab) => tab.dock === 'bottom')
       : false,
   )
-  const terminalPanelRuntimeId = useTerminalPanelStore((state) =>
-    activeTabId && isSessionTabState(activeTabId, activeTabType) && !isMobileLayout
-      ? state.panelBySession[activeTabId]?.runtimeId
-      : undefined,
+  const terminalPanelHeight = useWorkspaceStore((state) => state.bottomHeight)
+  const workspaceIsGitRepo = useWorkspaceContentStore((state) =>
+    activeTabId ? state.statusBySession[activeTabId]?.isGitRepo : undefined,
   )
-  const terminalPanelHeight = useTerminalPanelStore((state) => state.height)
   const activityVisibilityBySessionRef = useRef<Record<string, { hadAutoOpenActivity: boolean }>>({})
 
   useEffect(() => {
@@ -392,6 +400,21 @@ export function ActiveSession() {
       void fetchTeamForSession(activeTabId)
     }
   }, [activeTabId, connectToSession, fetchTeamForSession])
+
+  useEffect(() => {
+    if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
+    void useWorkspaceContentStore.getState().loadStatus(activeTabId)
+  }, [activeTabId, activeTabType])
+
+  // Subscribed once for the app, not per task: the owner of each event is
+  // resolved from the page id, so a background task's pages keep reporting.
+  useWorkspaceBrowserEventBridge(!isMobileLayout)
+  useWorkspaceFocusReturn(workspaceEnabled ? activeTabId : null)
+  useWorkspaceShortcuts({
+    sessionId: activeTabId,
+    cwd: getSessionTerminalCwd(session) ?? '',
+    enabled: workspaceEnabled,
+  })
 
   useEffect(() => {
     if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
@@ -756,25 +779,28 @@ export function ActiveSession() {
           placement="rail"
         />
       ) : null}
+      chatColumnHidden={isWorkspaceFull}
       sidePanel={showWorkbench ? (
         <>
-          <WorkspaceResizeHandle panelRef={workbenchPanelRef} />
+          {isWorkspaceFull ? null : <WorkspaceResizeHandle panelRef={workbenchPanelRef} />}
           <aside
             ref={workbenchPanelRef}
             data-testid="workbench-panel"
-            className="flex h-full shrink-0 flex-col bg-[var(--color-surface)]"
-            style={{ width: rightPanelWidth, maxWidth: '62%', minWidth: 'min(420px, 54%)' }}
+            data-workspace-layout={isWorkspaceFull ? 'full' : workspaceLayout}
+            className="flex h-full min-w-0 flex-col bg-[var(--color-surface)]"
+            style={isWorkspaceFull
+              ? { flex: '1 1 auto' }
+              : { width: rightPanelWidth, flex: '0 0 auto', maxWidth: '70%', minWidth: 'min(420px, 54%)' }}
           >
-            <WorkbenchPanel sessionId={activeTabId} />
+            <WorkspaceSurface
+              sessionId={activeTabId}
+              dock="side"
+              cwd={getSessionTerminalCwd(session) ?? ''}
+              reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
+            />
           </aside>
         </>
       ) : null}
-      overlay={(
-        <ComputerUsePermissionModal
-          sessionId={activeTabId}
-          request={pendingComputerUsePermission?.request ?? null}
-        />
-      )}
     >
           {isEmpty ? (
             <div
@@ -787,7 +813,7 @@ export function ActiveSession() {
               <div className="flex max-w-[420px] flex-col items-center gap-[13px] text-center">
                 <BrandSeal size={compactEmptyHero ? 'lg' : 'xl'} />
                 <h1
-                  className={`${compactEmptyHero ? 'text-2xl' : 'text-[27px]'} font-bold tracking-tight text-[var(--color-text-primary)]`}
+                  className={`text-2xl font-semibold tracking-tight text-[var(--color-text-primary)]`}
                   style={{ fontFamily: 'var(--font-headline)' }}
                 >
                   {t('empty.title')}
@@ -875,29 +901,28 @@ export function ActiveSession() {
             compact={showRightPanel}
           />
 
-          {terminalPanelRuntimeId && activeTabId ? (
+          {hasBottomTerminals && activeTabId ? (
             <div
               data-testid="session-terminal-panel"
+              aria-label={t('workspace.bottomPanelLabel')}
               className={[
-                'flex min-h-0 shrink-0 flex-col border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]',
+                'relative flex min-h-0 shrink-0 flex-col border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]',
                 showTerminalPanel ? '' : 'hidden',
               ].join(' ')}
               style={{ height: showTerminalPanel ? terminalPanelHeight : 0 }}
             >
               {showTerminalPanel && <TerminalResizeHandle />}
-              <TerminalSettings
-                active={showTerminalPanel}
-                docked
-                cwd={getSessionTerminalCwd(session)}
-                runtimeId={terminalPanelRuntimeId}
-                preserveOnUnmount
-                testId={`session-terminal-host-${activeTabId}`}
-                onOpenInTab={() => {
-                  useTerminalPanelStore.getState().closePanel(activeTabId)
-                  useTabStore.getState().openTerminalTab(getSessionTerminalCwd(session), terminalPanelRuntimeId)
-                  useTerminalPanelStore.getState().detachRuntime(activeTabId)
-                }}
-                onClose={() => useTerminalPanelStore.getState().closePanel(activeTabId)}
+              {/*
+                Kept mounted while hidden. The PTY would survive an unmount
+                anyway, but xterm re-measures on every re-attach, and a hidden
+                host measures as zero — which is what made a reopened terminal
+                come back with a one-column viewport.
+              */}
+              <WorkspaceSurface
+                sessionId={activeTabId}
+                dock="bottom"
+                cwd={getSessionTerminalCwd(session) ?? ''}
+                visible={showTerminalPanel}
               />
             </div>
           ) : null}

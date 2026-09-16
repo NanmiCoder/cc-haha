@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { CornerDownLeft, FileCode2, MessageSquare, Plus } from 'lucide-react'
 import { Highlight, type PrismTheme } from 'prism-react-renderer'
+import { layoutWorkspaceDiff, type WorkspaceDiffMode } from './workspaceDiffLayout'
 import { Button } from '@/components/ui/Button'
 import { useTranslation } from '../../i18n'
 import {
@@ -186,6 +187,10 @@ export interface WorkspaceDiffSurfaceProps {
   className?: string
   lineLimit?: number
   hideSingleFileHeader?: boolean
+  mode?: WorkspaceDiffMode
+  wrapLines?: boolean
+  compactHunks?: boolean
+  hunkAction?: { label: string; disabled?: boolean; onApply: (hunkIndex: number) => void }
   onAddComment?: (selection: WorkspaceDiffCommentSelection, note: string) => void
 }
 
@@ -238,9 +243,10 @@ function codeTone(row: WorkspaceDiffRow) {
   return ''
 }
 
-function isStructuralMetadata(row: WorkspaceDiffRow) {
+function isStructuralMetadata(row: WorkspaceDiffRow, compact = false) {
   if (row.kind !== 'metadata') return false
   return row.text.startsWith('diff --') || row.text.startsWith('--- ') || row.text.startsWith('+++ ')
+    || (compact && /^(?:index |(?:old|new|deleted) (?:file )?mode |$)/.test(row.text))
 }
 
 export function WorkspaceDiffSurface({
@@ -249,10 +255,14 @@ export function WorkspaceDiffSurface({
   className = 'min-h-0 flex-1 overflow-auto bg-[var(--color-code-bg)]',
   lineLimit = WORKSPACE_PREVIEW_LINE_LIMIT,
   hideSingleFileHeader = false,
+  mode = 'unified',
+  wrapLines = false,
+  compactHunks = false,
+  hunkAction,
   onAddComment,
 }: WorkspaceDiffSurfaceProps) {
   const t = useTranslation()
-  const files = useMemo(() => parseWorkspaceDiff(value), [value])
+  const files = useMemo(() => layoutWorkspaceDiff(parseWorkspaceDiff(value), mode), [value, mode])
   const rows = useMemo(() => files.flatMap((file) => file.rows), [files])
   const lineNumberCharacters = useMemo(
     () => rows.reduce((maximum, row) => Math.max(
@@ -269,9 +279,9 @@ export function WorkspaceDiffSurface({
   const displayItemIds = useMemo(
     () => files.flatMap((file) => [
       ...(showFileHeaders ? [`${file.id}-header`] : []),
-      ...file.rows.filter((row) => !isStructuralMetadata(row)).map((row) => row.id),
+      ...file.rows.filter((row) => !isStructuralMetadata(row, compactHunks)).map((row) => row.id),
     ]),
-    [files, showFileHeaders],
+    [files, showFileHeaders, compactHunks],
   )
   const [review, setReview] = useState<ReviewState>(emptyReviewState)
   const [status, setStatus] = useState<ReviewStatus>(null)
@@ -284,8 +294,8 @@ export function WorkspaceDiffSurface({
   const selectableRows = useMemo(() => visibleRows.filter((row) => row.selectable), [visibleRows])
   const usePlainLargePreview = rows.length > WORKSPACE_PLAIN_TEXT_LINE_THRESHOLD
   const highlightCacheKey = useMemo(
-    () => createWorkspaceDiffHighlightCacheKey(path, value),
-    [path, value],
+    () => `${createWorkspaceDiffHighlightCacheKey(path, value)}:${mode}`,
+    [path, value, mode],
   )
   const [highlightState, setHighlightState] = useState<{
     cacheKey: string | null
@@ -304,6 +314,7 @@ export function WorkspaceDiffSurface({
   const pendingRovingFocus = useRef<string | null>(null)
   const previousPath = useRef(path)
   const previousValue = useRef(value)
+  const previousMode = useRef(mode)
   const selectedIds = new Set(review.selection?.rowIds ?? [])
   const sideLabel = (side: 'old' | 'new') => t(`workspace.diffReview.side.${side}`)
 
@@ -325,7 +336,8 @@ export function WorkspaceDiffSurface({
 
   useEffect(() => {
     const pathChanged = previousPath.current !== path
-    const valueChanged = previousValue.current !== value
+    const valueChanged = previousValue.current !== value || previousMode.current !== mode
+    previousMode.current = mode
     previousPath.current = path
     previousValue.current = value
 
@@ -347,7 +359,7 @@ export function WorkspaceDiffSurface({
       setStatus(review.draft ? 'diffChanged' : null)
       setRovingId(selectableRows[0]?.id ?? null)
     }
-  }, [path, review.draft, selectableRows, value])
+  }, [path, review.draft, selectableRows, value, mode])
 
   useEffect(() => {
     if (!rovingId || !selectableRows.some((row) => row.id === rovingId)) {
@@ -597,7 +609,7 @@ export function WorkspaceDiffSurface({
 
   return (
     <div data-testid="workspace-diff-scroll" className={className} style={{ containerType: 'inline-size' }}>
-      <div data-testid="workspace-diff-content" className="relative min-w-full w-max pb-3">
+      <div data-testid="workspace-diff-content" className={`relative ${wrapLines ? 'min-w-0 w-full' : 'min-w-full w-max'} ${compactHunks ? '' : 'pb-3'}`}>
         <div
           data-workspace-code=""
           data-testid="workspace-code"
@@ -609,7 +621,9 @@ export function WorkspaceDiffSurface({
         >
           {files.map((file) => {
             const headerVisible = showFileHeaders && visibleItemIds.has(`${file.id}-header`)
-            const fileRows = file.rows.filter((row) => visibleItemIds.has(row.id) && !isStructuralMetadata(row))
+            const editorRow = file.rows.find(row => row.id === review.selection?.endId)?.displayRow
+            const fileRows = file.rows.filter((row) => visibleItemIds.has(row.id) && !isStructuralMetadata(row, compactHunks))
+            const hunkIds = file.rows.filter(row => row.kind === 'hunk').map(row => row.hunkId)
             if (!headerVisible && fileRows.length === 0) return null
             const oldPath = file.oldPath ? `a/${file.oldPath}` : '/dev/null'
             const newPath = file.newPath ? `b/${file.newPath}` : '/dev/null'
@@ -639,7 +653,31 @@ export function WorkspaceDiffSurface({
                     <span className="sr-only">diff --git {oldPath} {newPath}</span>
                   </div>
                 )}
+                <div data-diff-mode={mode} style={mode === 'split' ? { display: 'grid', gridTemplateColumns: wrapLines ? 'repeat(2, minmax(0, 1fr))' : 'repeat(2, minmax(max-content, 1fr))' } : undefined}>
                 {fileRows.map((row) => {
+                  if (row.kind === 'hunk' && compactHunks) {
+                    const coordinates = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(row.text)
+                    const range = (start: string, count = '1') => Number(count) > 1 ? `${start}–${Number(start) + Number(count) - 1}` : start
+                    const hunkIndex = hunkIds.indexOf(row.hunkId)
+                    // A complete new file needs no artificial separator before line 1.
+                    if (coordinates?.[1] === '0' && coordinates[2] === '0' && hunkIndex === 0) return null
+                    return <div
+                      key={row.id}
+                      role="row"
+                      data-diff-hunk-separator={row.hunkId}
+                      className="group/hunk flex min-h-6 min-w-0 items-center gap-2 border-y border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 text-[11px] text-[var(--color-text-tertiary)]"
+                      style={mode === 'split' ? { gridColumn: '1 / -1', gridRow: row.displayRow! + (editorRow && row.displayRow! > editorRow ? 1 : 0) } : undefined}
+                    >
+                      <span className="min-w-0 truncate">{coordinates ? `${range(coordinates[1]!, coordinates[2])} → ${range(coordinates[3]!, coordinates[4])}${coordinates[5] ?? ''}` : row.text}</span>
+                      {hunkAction && <Button
+                        size="sm"
+                        variant="ghost"
+                        className="ml-auto shrink-0 opacity-0 group-hover/hunk:opacity-100 focus-visible:opacity-100"
+                        disabled={hunkAction.disabled}
+                        onClick={() => hunkAction.onApply(hunkIndex)}
+                      >{hunkAction.label}</Button>}
+                    </div>
+                  }
                   const line = row.side === 'old' ? row.oldLine : row.newLine
                   const selected = selectedIds.has(row.id)
                   const selectionFocus = selected && row.id === review.focusId
@@ -658,15 +696,19 @@ export function WorkspaceDiffSurface({
                         role="row"
                         aria-selected={selected}
                         data-diff-row-id={row.id}
+                        data-diff-side={mode === 'split' ? row.displayColumn : undefined}
                         data-range-edge={rangeEdge}
-                        className={`group relative grid min-w-full w-max items-stretch ${row.kind === 'hunk' ? 'min-h-8' : 'min-h-5'} ${
+                        className={`group relative grid ${wrapLines ? 'min-w-0 w-full' : 'min-w-full w-max'} items-stretch ${row.kind === 'hunk' ? 'min-h-8' : 'min-h-5'} ${
                           selected ? 'bg-[var(--color-info-container)]' : rowTone(row)
                         }`}
-                        style={{ gridTemplateColumns: 'var(--workspace-diff-gutter-width) minmax(max-content, 1fr)' }}
+                        style={{
+                          gridTemplateColumns: wrapLines ? 'var(--workspace-diff-gutter-width) minmax(0, 1fr)' : 'var(--workspace-diff-gutter-width) minmax(max-content, 1fr)',
+                          ...(mode === 'split' ? { gridColumn: row.displayColumn === 'both' ? '1 / -1' : row.displayColumn, gridRow: row.displayRow! + (editorRow && row.displayRow! > editorRow ? 1 : 0) } : {}),
+                        }}
                       >
                         <span
                           data-diff-number-gutter=""
-                          className={`sticky left-0 z-[1] flex min-h-full select-none items-center justify-end pl-[2ch] pr-[1ch] text-right text-[11px] text-[var(--color-text-tertiary)] ${gutterTone(row, selected)}`}
+                          className={`sticky left-0 z-[1] flex min-h-full select-none ${wrapLines ? 'items-start' : 'items-center'} justify-end pl-[2ch] pr-[1ch] text-right text-[11px] text-[var(--color-text-tertiary)] ${gutterTone(row, selected)}`}
                         >
                           {selected && (
                             <span
@@ -686,7 +728,7 @@ export function WorkspaceDiffSurface({
                           {row.selectable && row.side && line !== null && (
                             <span
                               data-diff-gutter-utility-slot=""
-                              className="absolute inset-y-0 right-0 flex items-center justify-end"
+                              className={`absolute inset-y-0 right-0 flex ${wrapLines ? 'items-start' : 'items-center'} justify-end`}
                             >
                               <button
                                 ref={(element) => {
@@ -717,7 +759,8 @@ export function WorkspaceDiffSurface({
                         <span
                           data-row-text={row.text}
                           data-selected={selected ? 'true' : undefined}
-                          className="whitespace-pre self-center pr-6"
+                          className={`min-w-0 ${wrapLines ? 'self-start' : 'self-center'} pr-6`}
+                          style={{ whiteSpace: wrapLines ? 'pre-wrap' : 'pre', overflowWrap: wrapLines ? 'anywhere' : undefined }}
                         >
                           <span className={`inline-block w-[2ch] select-none text-center ${prefixTone(row)}`}>{row.prefix || ' '}</span>
                           <span className={codeTone(row)}>
@@ -733,10 +776,11 @@ export function WorkspaceDiffSurface({
                           </span>
                         </span>
                       </div>
-                      {review.selection?.endId === row.id ? renderEditor() : null}
+                      {review.selection?.endId === row.id ? mode === 'split' ? <div style={{ gridColumn: '1 / -1', gridRow: row.displayRow! + 1 }}>{renderEditor()}</div> : renderEditor() : null}
                     </Fragment>
                   )
                 })}
+                </div>
               </div>
             )
           })}

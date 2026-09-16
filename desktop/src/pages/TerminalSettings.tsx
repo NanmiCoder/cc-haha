@@ -4,7 +4,7 @@ import { useTranslation, type TranslationKey } from '../i18n'
 import { terminalApi } from '../api/terminal'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
-import { readTerminalPalette } from '../lib/terminalTheme'
+import { readTerminalPalette, readTerminalFontFamily } from '../lib/terminalTheme'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -58,9 +58,17 @@ type TerminalSettingsProps = {
   testId?: string
   workspace?: boolean
   docked?: boolean
+  compactHeader?: boolean
   showPreferences?: boolean
   runtimeId?: string
   preserveOnUnmount?: boolean
+  /**
+   * Skip the implicit spawn on first mount, for a host that restores a terminal
+   * from disk. A restored shell must come back stopped and be started by the
+   * user — otherwise reopening the app silently spawns one process per terminal
+   * the user happened to have open when they quit.
+   */
+  autoStart?: boolean
 }
 
 export function TerminalSettings({
@@ -72,15 +80,21 @@ export function TerminalSettings({
   testId = 'settings-terminal-host',
   workspace = false,
   docked = false,
+  compactHeader = false,
   showPreferences = false,
   runtimeId,
   preserveOnUnmount = false,
+  autoStart = true,
 }: TerminalSettingsProps = {}) {
   const t = useTranslation()
   const theme = useUIStore((state) => state.theme)
   const desktopTerminal = useSettingsStore((state) => state.desktopTerminal)
   const setDesktopTerminal = useSettingsStore((state) => state.setDesktopTerminal)
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // Read through a ref so flipping `autoStart` later (the user pressing Start)
+  // does not re-run the lifecycle effect and spawn a second shell.
+  const autoStartRef = useRef(autoStart)
+  autoStartRef.current = autoStart
   const lifecycleVersionRef = useRef(0)
   const localRuntimeIdRef = useRef<string | null>(null)
   if (!localRuntimeIdRef.current) {
@@ -147,6 +161,12 @@ export function TerminalSettings({
   ], [t])
 
   const resizeSession = useCallback(() => {
+    // A hidden host measures as 0x0, and fitting against that pushes a 2x1
+    // SIGWINCH to the PTY, reflowing whatever TUI is running inside it. The
+    // bottom dock stays mounted while hidden precisely so the terminal keeps
+    // its geometry, so this guard is what makes that safe.
+    const host = hostRef.current
+    if (host && (host.clientWidth === 0 || host.clientHeight === 0)) return
     const terminal = runtime.terminal
     const fit = runtime.fit
     const sessionId = runtime.nativeSessionId
@@ -177,13 +197,15 @@ export function TerminalSettings({
     const host = hostRef.current
     if (!host) return Promise.resolve()
 
+    const requestId = crypto.randomUUID()
+    let exitedDuringStart = false
     const startToken = runtime.startToken + 1
     runtime.startToken = startToken
     const isCurrentStart = () => isTerminalRuntimeCurrent(runtime) && runtime.startToken === startToken
 
     const startPromise = Promise.resolve().then(async () => {
       if (!isCurrentStart()) return
-      updateTerminalRuntime(runtime, { error: null, status: 'starting', shellInfo: null })
+      updateTerminalRuntime(runtime, { error: null, status: 'starting', shellInfo: null, title: '' })
 
       const existing = runtime.nativeSessionId
       if (existing) {
@@ -202,11 +224,13 @@ export function TerminalSettings({
       host.innerHTML = ''
 
       let TerminalModule: typeof import('@xterm/xterm')
+      let WebLinksAddonModule: typeof import('@xterm/addon-web-links')
       let FitAddonModule: typeof import('@xterm/addon-fit')
       try {
-        [TerminalModule, FitAddonModule] = await Promise.all([
+        [TerminalModule, FitAddonModule, WebLinksAddonModule] = await Promise.all([
           import('@xterm/xterm'),
           import('@xterm/addon-fit'),
+          import('@xterm/addon-web-links'),
         ])
       } catch (err) {
         if (isCurrentStart()) {
@@ -228,9 +252,14 @@ export function TerminalSettings({
         terminal = new TerminalModule.Terminal({
           cursorBlink: true,
           convertEol: false,
-          fontFamily: "var(--font-mono), 'SFMono-Regular', Consolas, monospace",
-          fontSize: 12,
-          lineHeight: 1.25,
+          fontFamily: readTerminalFontFamily(),
+          fontSize: 13,
+          letterSpacing: 0,
+          lineHeight: 1.2,
+          cursorStyle: 'bar',
+          // xterm preserves scrollback position while writing; erasing the
+          // display must not override a user reading earlier output either.
+          scrollOnEraseInDisplay: false,
           scrollback: 4000,
           theme: readTerminalPalette(),
         })
@@ -238,6 +267,13 @@ export function TerminalSettings({
         const activeTerminal = terminal
         const activeFit = fit
         activeTerminal.loadAddon(activeFit)
+        activeTerminal.loadAddon(new WebLinksAddonModule.WebLinksAddon((_event, uri) => {
+          // Use the same external-open boundary as other desktop surfaces.
+          if (/^https?:\/\//i.test(uri)) void getDesktopHost().shell.open(uri).catch(() => {})
+        }))
+        activeTerminal.onTitleChange((title) => {
+          if (isCurrentStart()) updateTerminalRuntime(runtime, { title })
+        })
         activeTerminal.open(host)
         if (!isCurrentStart()) {
           activeTerminal.dispose()
@@ -247,12 +283,15 @@ export function TerminalSettings({
         activeFit.fit()
 
         outputUnlisten = await terminalApi.onOutput((payload) => {
-          if (payload.session_id === runtime.nativeSessionId) {
+          if (!isCurrentStart()) return
+          if (payload.requestId === requestId || payload.session_id === runtime.nativeSessionId) {
             activeTerminal.write(payload.data)
           }
         })
         exitUnlisten = await terminalApi.onExit((payload) => {
-          if (payload.session_id !== runtime.nativeSessionId) return
+          if (!isCurrentStart()) return
+          if (payload.requestId !== requestId && payload.session_id !== runtime.nativeSessionId) return
+          exitedDuringStart = true
           updateTerminalRuntime(runtime, { status: 'exited' })
           const signal = payload.signal ? `, ${payload.signal}` : ''
           activeTerminal.writeln(`\r\n[process exited: ${payload.code}${signal}]`)
@@ -279,6 +318,7 @@ export function TerminalSettings({
         })
 
         const result = await terminalApi.spawn({
+          requestId,
           cols: activeTerminal.cols,
           rows: activeTerminal.rows,
           ...(cwd ? { cwd } : {}),
@@ -291,9 +331,9 @@ export function TerminalSettings({
           return
         }
         updateTerminalRuntime(runtime, {
-          nativeSessionId: result.session_id,
+          nativeSessionId: exitedDuringStart ? null : result.session_id,
           shellInfo: { shell: result.shell, cwd: result.cwd },
-          status: 'running',
+          status: exitedDuringStart ? 'exited' : 'running',
         })
         resizeSession()
       } catch (err) {
@@ -320,6 +360,19 @@ export function TerminalSettings({
   }, [cwd, resizeSession, runtime])
 
   useEffect(() => {
+    const restart = () => {
+      void startTerminal().then(() => {
+        const host = hostRef.current
+        if (host && host.clientWidth > 0 && host.clientHeight > 0) runtime.terminal?.focus()
+      })
+    }
+    updateTerminalRuntime(runtime, { restart })
+    return () => {
+      if (runtime.restart === restart) updateTerminalRuntime(runtime, { restart: null })
+    }
+  }, [runtime, startTerminal])
+
+  useEffect(() => {
     lifecycleVersionRef.current += 1
     const lifecycleVersion = lifecycleVersionRef.current
     if (!terminalApi.isAvailable()) return
@@ -334,7 +387,7 @@ export function TerminalSettings({
         attachTerminalRuntime(runtime, hostRef.current)
         resizeSession()
       })
-    } else {
+    } else if (autoStartRef.current) {
       void startTerminal()
     }
 
@@ -368,7 +421,16 @@ export function TerminalSettings({
     const terminal = runtime.terminal
     if (!terminal) return
     terminal.options.theme = readTerminalPalette()
-  }, [runtime, theme])
+    terminal.options.fontFamily = readTerminalFontFamily()
+    resizeSession()
+  }, [runtime, theme, resizeSession])
+
+  useEffect(() => {
+    const fonts = document.fonts
+    if (!fonts) return
+    fonts.addEventListener('loadingdone', resizeSession)
+    return () => fonts.removeEventListener('loadingdone', resizeSession)
+  }, [resizeSession])
 
   const clearTerminal = () => {
     runtime.terminal?.clear()
@@ -449,7 +511,7 @@ export function TerminalSettings({
   return (
     <div className={`flex h-full flex-col overflow-hidden ${
       docked
-        ? 'min-h-0 bg-[var(--color-surface-container-lowest)] px-3 py-1.5'
+        ? 'min-h-0 bg-[var(--color-surface-container-lowest)]'
         : workspace
           ? 'min-h-0 bg-[var(--color-surface)] px-5 py-4'
           : 'min-h-[min(720px,calc(100vh-8rem))]'
@@ -539,19 +601,15 @@ export function TerminalSettings({
         </>
       )}
 
-      {/* One panel, header included. The handoff draws the terminal as a warm
-          ink window (§9); its title bar belongs on that ground, not floating
-          above it on the page ground as a second toolbar. Without a session
-          there is no window to draw, so the chrome falls back to page tokens
-          rather than framing an empty state in ink. */}
+      {/* The workspace already owns a tab strip; only standalone terminals need window chrome. */}
       <div
-        className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-xl)] border ${
-          hasTerminalPanel
-            ? 'border-[var(--color-terminal-border)] bg-[var(--color-terminal-bg)] shadow-[var(--shadow-card)]'
-            : 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
-        }`}
+        className={[
+          'flex min-h-0 flex-1 flex-col overflow-hidden',
+          docked ? '' : `rounded-[var(--radius-xl)] border ${hasTerminalPanel ? 'border-[var(--color-terminal-border)] shadow-[var(--shadow-card)]' : 'border-[var(--color-border)]'}`,
+          hasTerminalPanel ? 'bg-[var(--color-terminal-bg)]' : 'bg-[var(--color-surface-container-lowest)]',
+        ].join(' ')}
       >
-        <div
+        {!compactHeader && <div
           data-testid="settings-terminal-toolbar"
           className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3.5 ${
             docked ? 'min-h-9 py-1.5' : 'min-h-11 py-2'
@@ -562,17 +620,17 @@ export function TerminalSettings({
           }`}
         >
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+            {!docked && <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
               <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-danger)]" />
               <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-warning)]" />
               <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-accent)]" />
-            </span>
-            <h2
+            </span>}
+            {!docked && <h2
               className={`${docked ? 'text-[12.5px]' : 'text-[13px]'} shrink-0 font-semibold ${terminalHeaderTitleClass}`}
               style={{ fontFamily: 'var(--font-headline)' }}
             >
               {t('settings.terminal.title')}
-            </h2>
+            </h2>}
             {shellInfo && (
               <div className={`flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] ${terminalHeaderMetaClass}`}>
                 <span className="min-w-0 truncate">{shellInfo.cwd}</span>
@@ -643,7 +701,13 @@ export function TerminalSettings({
               />
             )}
           </div>
-        </div>
+        </div>}
+
+        {compactHeader && status === 'starting' && (
+          <div role="status" className="px-3 py-1 text-xs text-[var(--color-terminal-muted)]">
+            {t(STATUS_LABEL_KEYS[status])}
+          </div>
+        )}
 
         {status === 'unavailable' ? (
           <EmptyState

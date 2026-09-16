@@ -8,9 +8,11 @@ import { Button } from '@/components/ui/Button'
 import { DiffViewer } from './DiffViewer'
 import {
   PlanPreviewCard,
+  buildPlanApprovalPermissionUpdates,
   buildPromptPermissionUpdates,
   extractPlanPreview,
   isExitPlanModeTool,
+  type PlanApprovalMode,
 } from './PlanModePreview'
 
 type Props = {
@@ -320,6 +322,17 @@ function ExitPlanModePermissionDialog({
   const permissionUpdates = buildPromptPermissionUpdates(preview.allowedPrompts)
   const trimmedFeedback = feedback.trim()
 
+  // Without an explicit mode the CLI resumes with whatever the session had
+  // before planning, falling back to `default` when there was nothing to
+  // restore (a session launched in plan mode) — which is why implementation
+  // used to start by asking for every tool. Approving with a mode pins it.
+  const approveWithMode = (mode: PlanApprovalMode) => {
+    if (!sessionId) return
+    respondToPermission(sessionId, requestId, true, {
+      permissionUpdates: buildPlanApprovalPermissionUpdates(mode, preview.allowedPrompts),
+    })
+  }
+
   return (
     <div className={`mb-4 overflow-hidden rounded-[var(--radius-lg)] border ${
       isPending
@@ -380,7 +393,7 @@ function ExitPlanModePermissionDialog({
       </div>
 
       {isPending ? (
-        <div className="flex items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
           <Button
             variant="primary"
             size="sm"
@@ -388,6 +401,22 @@ function ExitPlanModePermissionDialog({
             icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">check</span>}
           >
             {t('permission.planApprove')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => approveWithMode('acceptEdits')}
+            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">bolt</span>}
+          >
+            {t('permission.planApproveAcceptEdits')}
+          </Button>
+          <Button
+            variant="danger-outline"
+            size="sm"
+            onClick={() => approveWithMode('bypassPermissions')}
+            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">gavel</span>}
+          >
+            {t('permission.planApproveBypass')}
           </Button>
           <div className="flex-1" />
           <Button

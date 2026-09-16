@@ -1,6 +1,6 @@
 # 桌面端组件规范
 
-编辑 `desktop/src/components/` 下任何文件前先读本文。它是可复用组件的权威索引、新组件的放置规则，以及样式 / i18n / 无障碍 / 测试的强制约定。
+本文提供可复用组件索引、放置规则及样式 / i18n / 无障碍 / 测试约定。按改动涉及的组件查阅对应小节，无需在每次编辑前重读全文。
 
 规则优先级：根 `AGENTS.md` < `desktop/AGENTS.md` < 本文件。冲突时以本文件为准。
 
@@ -138,7 +138,7 @@ style={{ zIndex: 'var(--z-dialog)' }}
 
 1. 先确认这不是"这处本就该定制"。列表项、树节点、标签页项、拖拽把手、OS 窗口按钮这些本来就不该塞进通用组件。
 2. 如果是通用需求（同样的形态在多处出现），**给组件加一个 variant/tone/size**，连同测试一起。
-3. 改不了或拿不准，**保持原样并记下来** —— 一个诚实的"跳过 + 原因"比一个视觉走样的替换有价值得多。
+3. 在当前任务范围内补齐需要的组件能力，并验证调用方、交互和主题效果。只有缺少必要的产品决定或超出授权范围时才请求确认；无法完成的部分说明具体 blocker。
 
 `IconButton` 的 `secondary` tone、`2xs`–`2xl` 六档尺寸、`bordered`、`solid`、`hoverTone="danger"`、`pressed`、`surface="sidebar"`、`surface="terminal"`（墨色终端标题栏，纸主题下 `--color-text-tertiary` 在其上不可见），`Button` 的 `base`(h-8)、`inverse` 与 `tonal-outline`（陶土描边 hover 反色）变体，`Card` 的 `shadow`/`lift`/`container` 档与 rest 透传，`Badge` 的 `wrap`/`title`/rest 透传，`SearchField` 的 `clearLabel` 与 `xl`(44px) 档 —— 全部来自这个流程。多轮独立的替换工作各自撞到同一批缺口，然后一次补齐。
 
@@ -233,13 +233,9 @@ cd desktop && bun run dev
 
 ---
 
-## 八、提交前
+## 八、验证与交付
 
-```bash
-cd desktop && bun run lint && bun run test -- --run
-```
-
-然后 `bun run check:impact`，桌面改动通常会选中 `bun run check:desktop`（lint + test + build 三步）。
+迭代时运行相关组件测试；最终按根规则运行 `bun run check:impact` 选中的检查。`bun run check:desktop` 已包含 lint、完整 test 和 build，不必先重复跑一遍 lint / test。需要 PR-ready 或完整验证时使用 `bun run verify`；没有后续改动或未解决风险时，已通过的检查无需重跑。
 
 自查清单：
 

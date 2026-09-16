@@ -78,7 +78,7 @@ The server can bind a LAN-reachable address for H5, but the desktop renderer alw
 ```text
 claude-sidecar server   --app-root <path> --host <host> --port <port>
 claude-sidecar cli      --app-root <path> [CLI arguments]
-claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp
+claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp|--wecom|--qq|--slack
 ```
 
 The sidecar sets `CLAUDE_APP_ROOT`, `CALLER_DIR`, and the launch arguments before importing any business module, because the top-level modules of the server, CLI, and adapters read those values at import time.

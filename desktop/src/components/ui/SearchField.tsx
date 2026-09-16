@@ -1,5 +1,5 @@
 import { Search, X } from 'lucide-react'
-import { useId, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
+import { forwardRef, useId, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
 
 import { cx } from '@/lib/cx'
 import { FIELD_SIZE_CLASSES, type FieldSize } from './Input'
@@ -55,7 +55,7 @@ const RADIUS: Record<FieldSize, string> = {
  * `role="searchbox"` comes from `type="search"`, and the clear button is a real
  * button rather than a click handler on an icon, so it is reachable by keyboard.
  */
-export function SearchField({
+export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(function SearchField({
   value,
   onChange,
   label,
@@ -74,7 +74,7 @@ export function SearchField({
   disabled,
   id,
   ...props
-}: SearchFieldProps) {
+}: SearchFieldProps, ref) {
   const generatedId = useId()
   const inputId = id ?? generatedId
 
@@ -104,6 +104,7 @@ export function SearchField({
           {icon ?? <Search size={ICON_PX[size]} strokeWidth={2} />}
         </span>
         <input
+          ref={ref}
           id={inputId}
           type="search"
           value={value}
@@ -149,4 +150,4 @@ export function SearchField({
       </div>
     </div>
   )
-}
+})

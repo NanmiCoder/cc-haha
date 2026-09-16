@@ -87,6 +87,27 @@ afterEach(() => {
 })
 
 describe('Electron terminal service', () => {
+  it('echoes the startup correlation on output and exit before the caller receives its session', async () => {
+    const dir = tempDir()
+    const pty = new FakePty()
+    const owner = new FakeWebContents()
+    vi.spyOn(pty, 'onData').mockImplementation(handler => { handler('early prompt') })
+    vi.spyOn(pty, 'onExit').mockImplementation(handler => { handler({ exitCode: 0 }) })
+    const service = new ElectronTerminalService({
+      env: { HOME: dir, CLAUDE_CONFIG_DIR: dir, SHELL: '/bin/sh', CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1' },
+      cwd: () => dir,
+      ptyFactory: { spawn: () => pty },
+    })
+    const result = await service.spawn({ requestId: 'start-fixture' }, owner)
+    expect(owner.send).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.terminalOutput, {
+      session_id: result.session_id, requestId: 'start-fixture', data: 'early prompt',
+    })
+    expect(owner.send).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.terminalExit, {
+      session_id: result.session_id, requestId: 'start-fixture', code: 0, signal: null,
+    })
+    expect(() => service.write(result.session_id, 'x', owner)).toThrow('not running')
+  })
+
   it('uses the custom terminal config path before the standard ~/.claude path', () => {
     const app = { getPath: vi.fn(() => '/Users/test') }
 

@@ -427,6 +427,14 @@ verify() {
 #    APP_PATH comment). Contents/Info.plist (CFBundleIdentifier == $BUNDLE_ID)
 #    makes the inner binary's TCC identity a proper app bundle.
 # ---------------------------------------------------------------------------
+copy_cursor_resources() {
+  local res_bundle="$1"
+  local destination_app="$2"
+  [ -d "$res_bundle/LensSequence" ] || die "Cursor resource bundle not found at $res_bundle (SwiftPM must produce the declared LensSequence directory)."
+  mkdir -p "$destination_app/Contents/Resources"
+  cp -R "$res_bundle" "$destination_app/Contents/Resources/"
+}
+
 wrap_app() {
   [ -s "$APP_ICON_PATH" ] || die "App icon not found at $APP_ICON_PATH (needed for the Privacy lists)."
   log ""
@@ -440,14 +448,13 @@ wrap_app() {
   cp "$PKG_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
   cp "$APP_ICON_PATH" "$APP_PATH/Contents/Resources/icon.icns"
 
-  # SwiftPM resource bundle (LensSequence overlay), loaded via Bundle.module.
-  # Standard .app location is Contents/Resources/ (Bundle.main.resourceURL). Do
+  # SwiftPM resource bundle (LensSequence overlay). Standard .app location is
+  # Contents/Resources/ (Bundle.main.resourceURL). Do
   # NOT also put it in MacOS/ — a nested .bundle there breaks codesign with an
-  # "In subcomponent" error. Overlay degrades to a procedural ring if unresolved.
+  # "In subcomponent" error. The optional sequence may contain only its README;
+  # missing PNGs are supported, a missing declared build resource is not.
   local res_bundle="${RESOURCE_BUNDLE_PATH:-$BUILD_DIR/$BUILD_CONFIG/cu-helper_cc-haha-computer-use.bundle}"
-  if [ -d "$res_bundle" ]; then
-    cp -R "$res_bundle" "$APP_PATH/Contents/Resources/"
-  fi
+  copy_cursor_resources "$res_bundle" "$APP_PATH"
 
   # Sign the WHOLE bundle with the SAME stable identity + hardened runtime.
   codesign \
@@ -473,6 +480,54 @@ wrap_app() {
   log "verified: .app bundle Identifier=$app_id (stable)"
 }
 
+# Run the production loader from an independent .app location. Checking only a
+# source-tree build can silently succeed through SwiftPM's absolute buildPath.
+# The probe performs no input, GUI startup, permission checks, or user-state IO.
+verify_relocated_cursor_resources() (
+  local host_arch
+  host_arch="$(uname -m)"
+  if [ "$ARCH" != "$host_arch" ]; then
+    log "skipped: cursor resource execution probe (target $ARCH, host $host_arch); package structure was verified before signing"
+    return 0
+  fi
+
+  # The subshell isolates this variable. Bash 3 unwinds function-local variables
+  # before an EXIT trap after die(), so it must remain available for cleanup.
+  probe_root="$(mktemp -d "${TMPDIR:-/tmp}/cc-haha-cursor-probe.XXXXXX")"
+  trap 'rm -rf "$probe_root"' EXIT
+  local probe_app="$probe_root/cc-haha-computer-use.app"
+  local report="$probe_root/resources.json"
+  cp -R "$APP_PATH" "$probe_app"
+  mkdir -p "$probe_root/home" "$probe_root/config" "$probe_root/tmp"
+  if ! env -i \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    HOME="$probe_root/home" \
+    CFFIXED_USER_HOME="$probe_root/home" \
+    CLAUDE_CONFIG_DIR="$probe_root/config" \
+    TMPDIR="$probe_root/tmp/" \
+    "$probe_app/Contents/MacOS/cc-haha-computer-use" --probe-cursor-resources >"$report"; then
+    die "Cursor resource probe failed for relocated helper $probe_app"
+  fi
+
+  local resource_directory
+  resource_directory="$(/usr/bin/plutil -extract resourceDirectory raw -o - "$report" 2>/dev/null)" \
+    || die "Cursor resource probe did not report a resourceDirectory"
+  resource_directory="$(cd "$resource_directory" 2>/dev/null && pwd -P)" \
+    || die "Cursor resource probe reported an unreadable resourceDirectory"
+  local expected_directory="$probe_app/Contents/Resources/cu-helper_cc-haha-computer-use.bundle/LensSequence"
+  [ -d "$expected_directory" ] || die "Cursor resource probe package is missing $expected_directory"
+  expected_directory="$(cd "$expected_directory" && pwd -P)"
+  local canonical_app
+  canonical_app="$(cd "$probe_app" && pwd -P)"
+  case "$expected_directory" in
+    "$canonical_app"/*) ;;
+    *) die "Cursor resource probe found resources outside relocated package: $expected_directory" ;;
+  esac
+  [ "$resource_directory" = "$expected_directory" ] \
+    || die "Cursor resource probe loaded '$resource_directory' instead of relocated package '$expected_directory'"
+  log "verified: relocated cursor resources ($resource_directory)"
+)
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -483,6 +538,7 @@ main() {
   sign
   verify
   wrap_app
+  verify_relocated_cursor_resources
 
   # The ONE machine-readable line on STDOUT — the .app BUNDLE path. The caller
   # (build-sidecars.ts) copies the whole .app; the runtime resolver

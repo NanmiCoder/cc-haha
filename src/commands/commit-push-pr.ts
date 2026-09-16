@@ -1,9 +1,5 @@
 import type { Command } from '../commands.js'
 import type { ToolUseContext } from '../Tool.js'
-import {
-  getAttributionTexts,
-  getEnhancedPRAttribution,
-} from '../utils/attribution.js'
 import { getDefaultBranch } from '../utils/git.js'
 import { executeShellCommandsInPrompt } from '../utils/promptShellExecution.js'
 import {
@@ -45,12 +41,7 @@ export function getCommitPushPrAllowedTools(
 export function getPromptContent(
   defaultBranch: string,
   shell: ShellToolType,
-  prAttribution?: string,
 ): string {
-  const { commit: commitAttribution, pr: defaultPrAttribution } =
-    getAttributionTexts()
-  // Use provided PR attribution or fall back to default
-  const effectivePrAttribution = prAttribution ?? defaultPrAttribution
   const safeUser = process.env.SAFEUSER || ''
   const username = process.env.USER || ''
 
@@ -74,12 +65,6 @@ export function getPromptContent(
     slackStep = ''
   }
 
-  const commitAttributionText = commitAttribution
-    ? `\n\n${commitAttribution}`
-    : ''
-  const prAttributionText = effectivePrAttribution
-    ? `\n\n${effectivePrAttribution}`
-    : ''
   const prViewCommand =
     shell === 'powershell'
       ? 'gh pr view --json number 2>$null; if ($LASTEXITCODE -ne 0) { exit 0 }'
@@ -87,11 +72,11 @@ export function getPromptContent(
   const commitExample =
     shell === 'powershell'
       ? `$commitMessage = @'
-Commit message here.${commitAttributionText}
+Commit message here.
 '@
 git commit -m $commitMessage`
       : `git commit -m "$(cat <<'EOF'
-Commit message here.${commitAttributionText}
+Commit message here.
 EOF
 )"`
   const prExample =
@@ -101,7 +86,7 @@ EOF
 <1-3 bullet points>
 
 ## Test plan
-[Bulleted markdown checklist of TODOs for testing the pull request...]${changelogSection}${prAttributionText}
+[Bulleted markdown checklist of TODOs for testing the pull request...]${changelogSection}
 '@
 gh pr create --title "Short, descriptive title" --body $prBody`
       : `gh pr create --title "Short, descriptive title" --body "$(cat <<'EOF'
@@ -109,7 +94,7 @@ gh pr create --title "Short, descriptive title" --body $prBody`
 <1-3 bullet points>
 
 ## Test plan
-[Bulleted markdown checklist of TODOs for testing the pull request...]${changelogSection}${prAttributionText}
+[Bulleted markdown checklist of TODOs for testing the pull request...]${changelogSection}
 EOF
 )"`
 
@@ -138,7 +123,7 @@ Analyze all changes that will be included in the pull request, making sure to lo
 
 Based on the above changes:
 1. Create a new branch if on ${defaultBranch} (use SAFEUSER from context above for the branch name prefix, falling back to whoami if SAFEUSER is empty, e.g., \`username/feature-name\`)
-2. Create a single commit with an appropriate message using ${shell === 'powershell' ? 'a PowerShell here-string' : 'heredoc syntax'}${commitAttribution ? `, ending with the attribution text shown in the example below` : ''}:
+2. Create a single commit with an appropriate message using ${shell === 'powershell' ? 'a PowerShell here-string' : 'heredoc syntax'}:
 \`\`\`
 ${commitExample}
 \`\`\`
@@ -161,7 +146,6 @@ export async function buildCommitPushPrPrompt(
     resolveShell?: typeof resolveDefaultShell
     execute?: typeof executeShellCommandsInPrompt
     getBranch?: typeof getDefaultBranch
-    getPrAttribution?: typeof getEnhancedPRAttribution
   } = {},
 ) {
   const shell = (dependencies.resolveShell ?? resolveDefaultShell)()
@@ -171,13 +155,8 @@ export async function buildCommitPushPrPrompt(
     )
   }
   const allowedTools = getCommitPushPrAllowedTools(shell)
-  const [defaultBranch, prAttribution] = await Promise.all([
-    (dependencies.getBranch ?? getDefaultBranch)(),
-    (dependencies.getPrAttribution ?? getEnhancedPRAttribution)(
-      context.getAppState,
-    ),
-  ])
-  let promptContent = getPromptContent(defaultBranch, shell, prAttribution)
+  const defaultBranch = await (dependencies.getBranch ?? getDefaultBranch)()
+  let promptContent = getPromptContent(defaultBranch, shell)
 
   const trimmedArgs = args?.trim()
   if (trimmedArgs) {

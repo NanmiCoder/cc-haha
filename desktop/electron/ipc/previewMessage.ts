@@ -2,12 +2,13 @@ export const MAX_PREVIEW_EVENT_BYTES = 8 * 1024 * 1024
 const MAX_PREVIEW_TEXT_LENGTH = 32_768
 
 export type PreviewAgentMessage =
-  | { v: 1, type: 'ready' }
-  | { v: 1, type: 'picker-exited', reason?: 'cancel-current' | 'host' | 'invalid-target' }
+  | { v: 1, type: 'ready', supportsPickerGeneration?: boolean }
+  | { v: 1, type: 'browser-zoom', action: 'out' | 'in' | 'reset' }
+  | { v: 1, type: 'picker-exited', generation?: number, reason?: 'cancel-current' | 'host' | 'invalid-target' }
   | { v: 1, type: 'navigated', url: string, title: string }
   | { v: 1, type: 'error', message: string }
   | { v: 1, type: 'screenshot', dataUrl: string, kind: 'full' | 'viewport' | 'element' }
-  | { v: 1, type: 'selection', payload: Record<string, unknown> }
+  | { v: 1, type: 'selection', generation?: number, payload: Record<string, unknown> }
 
 function byteLength(input: string): number {
   return new TextEncoder().encode(input).byteLength
@@ -49,9 +50,18 @@ export function parsePreviewAgentMessage(raw: string): PreviewAgentMessage | nul
     return null
   }
 
+  if ((parsed.type === 'selection' || parsed.type === 'picker-exited') && parsed.generation !== undefined &&
+      (!Number.isSafeInteger(parsed.generation) || Number(parsed.generation) < 1)) return null
+  const ownership = typeof parsed.generation === 'number' ? { generation: parsed.generation } : {}
+
   switch (parsed.type) {
+    case 'browser-zoom':
+      return parsed.action === 'out' || parsed.action === 'in' || parsed.action === 'reset'
+        ? { v: 1, type: 'browser-zoom', action: parsed.action }
+        : null
     case 'ready':
-      return { v: 1, type: 'ready' }
+      if (parsed.supportsPickerGeneration !== undefined && typeof parsed.supportsPickerGeneration !== 'boolean') return null
+      return { v: 1, type: 'ready', ...(typeof parsed.supportsPickerGeneration === 'boolean' ? { supportsPickerGeneration: parsed.supportsPickerGeneration } : {}) }
     case 'picker-exited':
       if (
         parsed.reason !== undefined &&
@@ -59,7 +69,7 @@ export function parsePreviewAgentMessage(raw: string): PreviewAgentMessage | nul
         parsed.reason !== 'host' &&
         parsed.reason !== 'invalid-target'
       ) return null
-      return { v: 1, type: 'picker-exited', ...(parsed.reason ? { reason: parsed.reason } : {}) }
+      return { v: 1, type: 'picker-exited', ...ownership, ...(parsed.reason ? { reason: parsed.reason } : {}) }
     case 'navigated':
       if (!isBoundedString(parsed.url) || !isBoundedString(parsed.title)) return null
       try {
@@ -82,8 +92,9 @@ export function parsePreviewAgentMessage(raw: string): PreviewAgentMessage | nul
         if (!isPlainRecord(screenshot)) return null
         if (screenshot.dataUrl !== undefined && !isPreviewDataUrl(screenshot.dataUrl)) return null
         if (screenshot.kind !== undefined && !isSelectionScreenshotKind(screenshot.kind)) return null
+        if (screenshot.captureId !== undefined && (!Number.isSafeInteger(screenshot.captureId) || Number(screenshot.captureId) < 1)) return null
       }
-      return { v: 1, type: 'selection', payload: parsed.payload }
+      return { v: 1, type: 'selection', ...ownership, payload: parsed.payload }
     default:
       return null
   }

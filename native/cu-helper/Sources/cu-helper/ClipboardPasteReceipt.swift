@@ -54,6 +54,8 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
     private let promisedData: [NSPasteboard.PasteboardType: Data]
     private let state = OSAllocatedUnfairLock(initialState: State())
 
+    var hasSuppliedData: Bool { state.withLock { $0.suppliedAt != nil } }
+
     init(text: String) {
         promisedData = ClipboardPasteFormat.text.promisedData(for: text)
         super.init()
@@ -89,14 +91,18 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
         format: ClipboardPasteFormat = .text,
         lease: ClipboardLease,
         timeout: Duration = .seconds(2),
+        targetPID: pid_t? = nil,
+        targetObservation: ClipboardPasteObservation? = nil,
         sendPaste: @MainActor (_ validateBeforePosting: @MainActor () throws -> Void) async throws -> Void
     ) async throws {
         lastDiagnostic = nil
         let started = ContinuousClock.now
         var receipt: ClipboardPasteReceipt?
+        var observation: ClipboardPasteObservation?
         var posted = false
         var status = "failed"
         defer {
+            observation?.close()
             let owned = lease.temporaryWriteIsCurrent()
             let observed = receipt?.state.withLock { $0 }
             let restored = lease.restoreIfUnchanged()
@@ -116,8 +122,11 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
         }
         do {
             try Task.checkCancellation()
+            let target = targetObservation ?? ClipboardPasteObservation.capture(pid: targetPID)
+            observation = target
             let written = try lease.writeTemporaryContentWithReceipt(text, format: format)
             receipt = written
+            target.arm(written)
             try await Task.sleep(for: .milliseconds(40))
             let validate: @MainActor () throws -> Void = {
                 guard lease.temporaryWriteIsCurrent() else {
@@ -128,10 +137,9 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
             try await sendPaste(validate)
             posted = true
             try await written.waitForRead(timeout: timeout, ownsClipboard: lease.temporaryWriteIsCurrent)
-            // CEF often exposes no AX text/selection evidence. As in the
-            // reference's no-AX branch, allow a short processing window after
-            // actual data delivery; this is not a claim of field acceptance.
-            await pause(for: .milliseconds(100))
+            try await written.waitForTarget(
+                target, timeout: timeout, ownsClipboard: lease.temporaryWriteIsCurrent
+            )
             guard lease.temporaryWriteIsCurrent() else {
                 throw CUError("clipboard_changed", "The clipboard changed after paste data was supplied")
             }
@@ -143,9 +151,10 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
         }
     }
 
-    /// Once Command-V was sent, cancellation must not restore the previous
-    /// clipboard while the target can still be reading this one. Finish the
-    /// bounded read/settle window, then surface cancellation to the caller.
+    /// A promised-data read ends the first stage, but does not identify the
+    /// reader. Target observation below guards early clipboard restoration.
+    /// After posting, cancellation is surfaced only after this bounded read and
+    /// target-consumption interval so that a pending paste keeps its bytes.
     @MainActor
     func waitForRead(timeout: Duration, ownsClipboard: @MainActor () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: timeout)
@@ -153,13 +162,35 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
             guard ownsClipboard() else {
                 throw CUError("clipboard_changed", "The clipboard changed while waiting for paste consumption")
             }
-            if state.withLock({ $0.suppliedAt != nil }) { return }
+            if hasSuppliedData { return }
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard remaining > .zero else {
                 try Task.checkCancellation()
                 throw CUError("clipboard_read_timeout", "No pasteboard data read was observed within the paste deadline; inspect the target before retrying")
             }
             await Self.pause(for: min(.milliseconds(10), remaining))
+        }
+    }
+
+    @MainActor
+    private func waitForTarget(
+        _ observation: ClipboardPasteObservation,
+        timeout: Duration,
+        ownsClipboard: @MainActor () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: observation.hasSignals ? timeout : .milliseconds(100))
+        while true {
+            guard ownsClipboard() else {
+                throw CUError("clipboard_changed", "The clipboard changed while waiting for the paste target")
+            }
+            if observation.hasSignals && observation.hasChanged() { return }
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else {
+                try Task.checkCancellation()
+                guard observation.hasSignals else { return }
+                throw CUError("clipboard_target_timeout", "Pasteboard bytes were read, but no change in the target field was observed; inspect the target before retrying")
+            }
+            await Self.pause(for: min(.milliseconds(25), remaining))
         }
     }
 
@@ -177,5 +208,146 @@ final class ClipboardPasteReceipt: NSObject, NSPasteboardItemDataProvider, @unch
     private static func milliseconds(_ duration: Duration) -> Double {
         let parts = duration.components
         return Double(parts.seconds) * 1_000 + Double(parts.attoseconds) / 1e15
+    }
+}
+
+/// The target's AX signals, captured before writing the temporary pasteboard.
+/// Tests can supply deterministic signals while keeping real named pasteboards.
+@MainActor
+struct ClipboardPasteObservation {
+    let hasSignals: Bool
+    var arm: (ClipboardPasteReceipt) -> Void = { _ in }
+    var hasChanged: () -> Bool = { false }
+    var close: () -> Void = {}
+
+    static func capture(pid: pid_t?) -> ClipboardPasteObservation {
+        guard let pid, pid > 0 else { return ClipboardPasteObservation(hasSignals: false) }
+        let target = NativeClipboardPasteObservation(pid: pid)
+        return ClipboardPasteObservation(
+            hasSignals: target.hasSignals,
+            arm: { target.notifications.arm($0) },
+            hasChanged: { target.hasChanged() },
+            close: { target.close() }
+        )
+    }
+
+    static func attributesChanged(baseline: [String: CFTypeRef], current: [String: CFTypeRef]) -> Bool {
+        guard !baseline.isEmpty, current.count == baseline.count,
+              baseline.keys.allSatisfy({ current[$0] != nil }) else { return false }
+        return baseline.contains { name, value in
+            guard let latest = current[name] else { return false }
+            return !CFEqual(value, latest)
+        }
+    }
+}
+
+/// AXObserver's callback only acknowledges this target after the pasteboard is
+/// armed and its promised bytes have been supplied. A clipboard observer alone
+/// cannot set this flag, and an earlier AX notification is not replayed later.
+final class ClipboardPasteNotifications: @unchecked Sendable {
+    private struct State {
+        var receipt: ClipboardPasteReceipt?
+        var changed = false
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func arm(_ receipt: ClipboardPasteReceipt) {
+        state.withLock { $0.receipt = receipt }
+    }
+
+    func recordTargetChange() {
+        state.withLock { value in
+            if value.receipt?.hasSuppliedData == true { value.changed = true }
+        }
+    }
+
+    var hasChanged: Bool { state.withLock { $0.changed } }
+
+    func close() {
+        state.withLock { $0.receipt = nil }
+    }
+}
+
+@MainActor
+private final class NativeClipboardPasteObservation {
+    let notifications = ClipboardPasteNotifications()
+    private let focused: AXUIElement?
+    private let baseline: [String: CFTypeRef]
+    private var observer: AXObserver?
+    private var registered: [CFString] = []
+
+    var hasSignals: Bool { !baseline.isEmpty || !registered.isEmpty }
+
+    init(pid: pid_t) {
+        let app = AXUIElementCreateApplication(pid)
+        var focusedValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+           let focusedValue, CFGetTypeID(focusedValue) == AXUIElementGetTypeID() {
+            let element = unsafeBitCast(focusedValue, to: AXUIElement.self)
+            var elementPID: pid_t = 0
+            focused = AXUIElementGetPid(element, &elementPID) == .success && elementPID == pid ? element : nil
+        } else {
+            focused = nil
+        }
+        guard let focused else {
+            baseline = [:]
+            return
+        }
+        var attributeNames: CFArray?
+        let names: [String]
+        if AXUIElementCopyAttributeNames(focused, &attributeNames) == .success {
+            names = attributeNames as? [String] ?? []
+        } else {
+            names = []
+        }
+        let attributes = [kAXSelectedTextRangeAttribute, kAXNumberOfCharactersAttribute].filter { names.contains($0) }
+        baseline = Self.read(focused, attributes: attributes)
+
+        var created: AXObserver?
+        guard AXObserverCreate(pid, { _, _, _, context in
+            guard let context else { return }
+            Unmanaged<ClipboardPasteNotifications>.fromOpaque(context).takeUnretainedValue().recordTargetChange()
+        }, &created) == .success, let created else { return }
+        let context = Unmanaged.passUnretained(notifications).toOpaque()
+        for name in [kAXSelectedTextChangedNotification, kAXValueChangedNotification] {
+            if AXObserverAddNotification(created, focused, name as CFString, context) == .success {
+                registered.append(name as CFString)
+            }
+        }
+        if !registered.isEmpty {
+            observer = created
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
+        }
+    }
+
+    func hasChanged() -> Bool {
+        if notifications.hasChanged { return true }
+        guard let focused, !baseline.isEmpty else { return false }
+        let current = Self.read(focused, attributes: Array(baseline.keys))
+        // Failed AX reads do not confirm consumption.
+        return ClipboardPasteObservation.attributesChanged(baseline: baseline, current: current)
+    }
+
+    func close() {
+        if let observer {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+            if let focused {
+                for name in registered { AXObserverRemoveNotification(observer, focused, name) }
+            }
+        }
+        observer = nil
+        registered = []
+        notifications.close()
+    }
+
+    private static func read(_ element: AXUIElement, attributes: [String]) -> [String: CFTypeRef] {
+        var result: [String: CFTypeRef] = [:]
+        for name in attributes {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success, let value {
+                result[name] = value
+            }
+        }
+        return result
     }
 }

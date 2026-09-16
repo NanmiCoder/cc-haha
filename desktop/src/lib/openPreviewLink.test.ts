@@ -17,20 +17,19 @@ vi.mock('./desktopRuntime', async (original) => ({
   getServerBaseUrl: () => 'http://127.0.0.1:4321',
 }))
 
-vi.mock('../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: { getState: () => ({ open: vi.fn() }) },
+vi.mock('./workspace/openTarget', () => ({
+  workspaceOpen: { file: vi.fn(), browser: vi.fn(), review: vi.fn(), terminal: vi.fn() },
+  openWorkspaceTarget: vi.fn(),
 }))
 
-vi.mock('../stores/workspacePanelStore', () => ({
-  useWorkspacePanelStore: {
-    getState: () => ({
-      statusBySession: { s1: { workDir: '/work' } },
-      openPreview: vi.fn(),
-    }),
+vi.mock('../stores/workspaceContentStore', () => ({
+  useWorkspaceContentStore: {
+    getState: () => ({ statusBySession: { s1: { workDir: '/work' } } }),
   },
 }))
 
 import { openPreviewLink } from './openPreviewLink'
+import { workspaceOpen } from './workspace/openTarget'
 
 afterEach(() => {
   openPath.mockReset().mockResolvedValue(undefined)
@@ -41,5 +40,12 @@ describe('openPreviewLink', () => {
     expect(openPreviewLink('outputs/brief.docx', 's1')).toBe(true)
 
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/work/outputs/brief.docx'))
+  })
+
+  it('opens a CJK-named markdown in the workspace instead of ignoring the click', () => {
+    // The output card for `README-拍摄大纲.md` rendered but its click returned
+    // false: the path parser was ASCII-only and the router answered `ignored`.
+    expect(openPreviewLink('README-拍摄大纲.md', 's1')).toBe(true)
+    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'README-拍摄大纲.md', {})
   })
 })

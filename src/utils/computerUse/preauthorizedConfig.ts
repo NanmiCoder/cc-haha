@@ -26,12 +26,14 @@ export type StoredComputerUseConfig = {
   [key: string]: unknown
 }
 
-export const DEFAULT_COMPUTER_USE_ENABLED = true
+// Computer Use starts off so the first enablement always crosses the explicit
+// risk-confirmation boundary in the desktop settings page.
+export const DEFAULT_COMPUTER_USE_ENABLED = false
 
 export const DEFAULT_DESKTOP_GRANT_FLAGS: CuGrantFlags = {
-  clipboardRead: false,
-  clipboardWrite: false,
-  systemKeyCombos: false,
+  clipboardRead: true,
+  clipboardWrite: true,
+  systemKeyCombos: true,
 }
 
 const FAIL_CLOSED_GRANT_FLAGS: CuGrantFlags = {

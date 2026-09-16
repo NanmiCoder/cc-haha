@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { feature } from 'bun:bundle'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -22,11 +22,11 @@ let classifierMode: 'allow' | 'block' | 'parse-failure' | 'unavailable' =
 let configDir = ''
 
 const actualSideQuery = await import('../sideQuery.js')
-mock.module('../sideQuery.js', () => ({
-  ...actualSideQuery,
-  sideQuery: async () => {
+
+beforeEach(() => {
+  spyOn(actualSideQuery, 'sideQuery').mockImplementation(async () => {
     if (classifierMode === 'unavailable') throw new Error('classifier offline')
-    const content =
+    const content: Awaited<ReturnType<typeof actualSideQuery.sideQuery>>['content'] =
       classifierMode === 'parse-failure'
         ? [{ type: 'text', text: 'not structured' }]
         : [
@@ -55,9 +55,9 @@ mock.module('../sideQuery.js', () => ({
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
       },
-    }
-  },
-}))
+    } as Awaited<ReturnType<typeof actualSideQuery.sideQuery>>
+  })
+})
 
 const { hasPermissionsToUseTool } = await import('./permissions.js')
 
@@ -67,6 +67,7 @@ beforeAll(async () => {
 })
 
 afterEach(() => {
+  mock.restore()
   classifierMode = 'allow'
   resetSettingsCache()
   resetAutoModeState()

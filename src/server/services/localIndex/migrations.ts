@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 
-export const LOCAL_INDEX_SCHEMA_VERSION = 4
+export const LOCAL_INDEX_SCHEMA_VERSION = 5
 export const LOCAL_INDEX_SCHEMA_UNSUPPORTED =
   'LOCAL_INDEX_SCHEMA_UNSUPPORTED' as const
 
@@ -182,11 +182,18 @@ const SCHEMA_V4 = `
 ALTER TABLE activity_sessions ADD COLUMN active_duration_ms INTEGER NOT NULL DEFAULT 0;
 `
 
+// Retain the additive v5 schema so caches written before the protocol-lock rollback still open.
+// The nullable column is inert: session reads and writes no longer use it to restrict models.
+const SCHEMA_V5 = `
+ALTER TABLE sessions ADD COLUMN session_api_format TEXT;
+`
+
 const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
   { version: 4, sql: SCHEMA_V4 },
+  { version: 5, sql: SCHEMA_V5 },
 ] as const
 
 export class UnsupportedLocalIndexSchemaError extends Error {

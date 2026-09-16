@@ -129,6 +129,11 @@ export function modelRequiresThinking(model: string): boolean {
   return getCanonicalName(model).includes('claude-fable-5')
 }
 
+/** Fable 5.1 binds replayed thinking to the preceding system, tools and history. */
+export function modelUsesBoundThinking(model: string): boolean {
+  return getCanonicalName(model) === 'claude-fable-5-1'
+}
+
 export function resolveModelThinkingEnabled(
   model: string,
   requestedEnabled: boolean,

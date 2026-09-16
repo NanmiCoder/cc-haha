@@ -368,3 +368,211 @@ describe('Adapters API', () => {
     expect(await fs.lstat(symlinksDir).then((s) => s.isSymbolicLink())).toBe(true)
   })
 })
+
+describe('Adapters API — WeCom / QQ / Slack', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  // Every credential the settings page reads back must be masked, or a
+  // screenshot or a support log leaks a working bot secret.
+  it.each([
+    ['wecom', { botId: 'bot-1', secret: 'wecom-secret-value' }, 'secret'],
+    ['qq', { appId: 'app-1', appSecret: 'qq-secret-value' }, 'appSecret'],
+    ['slack', { botToken: 'xoxb-secret-value', appToken: 'xapp-secret-value' }, 'botToken'],
+  ] as const)('masks the %s secret in GET responses', async (platform, config, field) => {
+    await writeRawConfig({ [platform]: config })
+
+    const get = makeRequest('GET', '/api/adapters')
+    const json = await (await handleAdaptersApi(get.req, get.url, get.segments)).json() as any
+
+    expect(json[platform][field]).toBe('****alue')
+  })
+
+  it('masks both Slack tokens independently', async () => {
+    await writeRawConfig({ slack: { botToken: 'xoxb-aaaa1111', appToken: 'xapp-bbbb2222' } })
+
+    const get = makeRequest('GET', '/api/adapters')
+    const json = await (await handleAdaptersApi(get.req, get.url, get.segments)).json() as any
+
+    expect(json.slack.botToken).toBe('****1111')
+    expect(json.slack.appToken).toBe('****2222')
+  })
+
+  // Round trip: saving the masked value the UI just rendered must not wipe the
+  // real credential.
+  it.each([
+    ['wecom', 'secret', { botId: 'bot-1', secret: 'wecom-secret-value' }],
+    ['qq', 'appSecret', { appId: 'app-1', appSecret: 'qq-secret-value' }],
+    ['slack', 'appToken', { botToken: 'xoxb-1', appToken: 'xapp-secret-value' }],
+  ] as const)('keeps the stored %s.%s when the UI sends back the mask', async (platform, field, config) => {
+    await writeRawConfig({ [platform]: config })
+
+    const get = makeRequest('GET', '/api/adapters')
+    const masked = await (await handleAdaptersApi(get.req, get.url, get.segments)).json() as any
+
+    const put = makeRequest('PUT', '/api/adapters', {
+      [platform]: { [field]: masked[platform][field], allowedUsers: ['someone'] },
+    })
+    expect((await handleAdaptersApi(put.req, put.url, put.segments)).status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(raw[platform][field]).toBe((config as Record<string, string>)[field])
+    expect(raw[platform].allowedUsers).toEqual(['someone'])
+  })
+
+  it.each(['wecom', 'qq', 'slack'] as const)('rejects an unknown %s config key', async (platform) => {
+    const put = makeRequest('PUT', '/api/adapters', { [platform]: { nope: 'x' } })
+    const res = await handleAdaptersApi(put.req, put.url, put.segments)
+
+    expect(res.status).toBe(400)
+  })
+
+  it.each([
+    ['wecom', { botId: 'bot-1', secret: 's' }],
+    ['qq', { appId: 'app-1', appSecret: 's' }],
+    ['slack', { botToken: 'xoxb-1', appToken: 'xapp-1' }],
+  ] as const)('clears %s credentials and pairings on unbind', async (platform, config) => {
+    await writeRawConfig({
+      [platform]: {
+        ...config,
+        allowedUsers: ['someone'],
+        pairedUsers: [{ userId: 'someone', displayName: 'Someone', pairedAt: 1 }],
+      },
+    })
+
+    const unbind = makeRequest('POST', `/api/adapters/${platform}/unbind`)
+    expect((await handleAdaptersApi(unbind.req, unbind.url, unbind.segments)).status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(raw[platform].allowedUsers).toEqual([])
+    expect(raw[platform].pairedUsers).toEqual([])
+    for (const key of Object.keys(config)) {
+      expect(raw[platform][key]).toBeUndefined()
+    }
+  })
+
+  it('serves a Slack manifest with Socket Mode and a create-app link', async () => {
+    const get = makeRequest('GET', '/api/adapters/slack/manifest')
+    const res = await handleAdaptersApi(get.req, get.url, get.segments)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    const manifest = JSON.parse(json.manifest)
+    expect(manifest.settings.socket_mode_enabled).toBe(true)
+    expect(new URL(json.createAppUrl).origin).toBe('https://api.slack.com')
+  })
+
+  it.each([
+    ['wecom', '/api/adapters/wecom/login/poll'],
+    ['qq', '/api/adapters/qq/login/poll'],
+  ] as const)('reports an unknown %s login session instead of failing', async (_platform, endpoint) => {
+    const poll = makeRequest('POST', endpoint, { sessionKey: 'no-such-session' })
+    const res = await handleAdaptersApi(poll.req, poll.url, poll.segments)
+
+    expect(res.status).toBe(200)
+    expect(await res.json() as any).toMatchObject({ connected: false, status: 'not_started' })
+  })
+
+  it.each([
+    '/api/adapters/wecom/login/poll',
+    '/api/adapters/qq/login/poll',
+    '/api/adapters/feishu/registration/poll',
+  ])('rejects %s without a session key', async (endpoint) => {
+    const poll = makeRequest('POST', endpoint, {})
+    const res = await handleAdaptersApi(poll.req, poll.url, poll.segments)
+
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects an unknown sub-route on a platform namespace', async () => {
+    const req = makeRequest('POST', '/api/adapters/slack/nonsense')
+    expect((await handleAdaptersApi(req.req, req.url, req.segments)).status).toBe(404)
+  })
+})
+
+describe('Adapters API — Feishu scan-to-create', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  it('reports an unknown registration session instead of failing', async () => {
+    const poll = makeRequest('POST', '/api/adapters/feishu/registration/poll', {
+      sessionKey: 'no-such-session',
+    })
+    const res = await handleAdaptersApi(poll.req, poll.url, poll.segments)
+
+    expect(res.status).toBe(200)
+    expect(await res.json() as any).toMatchObject({ status: 'not_started' })
+  })
+
+  it('accepts a cancel for a session it does not know', async () => {
+    const cancel = makeRequest('POST', '/api/adapters/feishu/registration/cancel', {
+      sessionKey: 'no-such-session',
+    })
+    const res = await handleAdaptersApi(cancel.req, cancel.url, cancel.segments)
+
+    expect(res.status).toBe(200)
+    expect(await res.json() as any).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('clears Feishu credentials and pairings on unbind', async () => {
+    await writeRawConfig({
+      feishu: {
+        appId: 'cli_1',
+        appSecret: 'secret',
+        encryptKey: 'ek',
+        verificationToken: 'vt',
+        allowedUsers: ['ou_1'],
+        pairedUsers: [{ userId: 'ou_1', displayName: 'Feishu User', pairedAt: 1 }],
+        streamingCard: true,
+      },
+    })
+
+    const unbind = makeRequest('POST', '/api/adapters/feishu/unbind')
+    expect((await handleAdaptersApi(unbind.req, unbind.url, unbind.segments)).status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(raw.feishu.appId).toBeUndefined()
+    expect(raw.feishu.appSecret).toBeUndefined()
+    expect(raw.feishu.allowedUsers).toEqual([])
+    expect(raw.feishu.pairedUsers).toEqual([])
+    // Unbinding a bot must not reset unrelated presentation preferences.
+    expect(raw.feishu.streamingCard).toBe(true)
+  })
+})
+
+describe('Adapters API — Feishu tenant domain', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  // A bot provisioned by an international (Lark) tenant authenticates against
+  // open.larksuite.com. Losing the brand here means the scan reports success
+  // and the adapter then fails to connect with an unrelated-looking error.
+  it('accepts and stores a lark domain', async () => {
+    const put = makeRequest('PUT', '/api/adapters', {
+      feishu: { appId: 'cli_1', appSecret: 's', domain: 'lark' },
+    })
+    expect((await handleAdaptersApi(put.req, put.url, put.segments)).status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(raw.feishu.domain).toBe('lark')
+  })
+
+  it('rejects a domain that is neither feishu nor lark', async () => {
+    const put = makeRequest('PUT', '/api/adapters', {
+      feishu: { domain: 'example.com' },
+    })
+    const res = await handleAdaptersApi(put.req, put.url, put.segments)
+
+    expect(res.status).toBe(400)
+  })
+
+  it('drops the domain along with the credentials on unbind', async () => {
+    await writeRawConfig({ feishu: { appId: 'cli_1', appSecret: 's', domain: 'lark' } })
+
+    const unbind = makeRequest('POST', '/api/adapters/feishu/unbind')
+    expect((await handleAdaptersApi(unbind.req, unbind.url, unbind.segments)).status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'adapters.json'), 'utf-8'))
+    expect(raw.feishu.domain).toBeUndefined()
+  })
+})

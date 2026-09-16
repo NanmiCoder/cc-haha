@@ -674,6 +674,20 @@ export function createServerPlan({
   }
 }
 
+/** IM adapters the sidecar can start; mirrors `ADAPTERS` in claude-sidecar.ts. */
+export const ADAPTER_FLAGS = [
+  '--feishu',
+  '--telegram',
+  '--wechat',
+  '--dingtalk',
+  '--whatsapp',
+  '--wecom',
+  '--qq',
+  '--slack',
+] as const
+
+export type AdapterFlag = (typeof ADAPTER_FLAGS)[number]
+
 export function createAdapterPlan({
   desktopRoot,
   appRoot,
@@ -685,7 +699,7 @@ export function createAdapterPlan({
   desktopRoot: string
   appRoot: string
   serverUrl: string
-  flag: '--feishu' | '--telegram' | '--wechat' | '--dingtalk' | '--whatsapp'
+  flag: AdapterFlag
   h5DistDir?: string
   env?: NodeJS.ProcessEnv
 }): SidecarPlan {

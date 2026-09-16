@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
-import { Settings } from '../pages/Settings'
+import { DesktopSettings as Settings } from '../pages/Settings'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { useUpdateStore } from '../stores/updateStore'
@@ -249,6 +249,7 @@ describe('Settings > General tab', () => {
       autoModeOptInAccepted: false,
       thinkingEnabled: true,
       workflowKeywordTriggerEnabled: true,
+      agentTeamsEnabled: true,
       autoDreamEnabled: false,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
@@ -262,6 +263,7 @@ describe('Settings > General tab', () => {
         aiRequestTimeoutMs: 120_000,
         proxy: { mode: 'direct', url: '' },
       },
+      cleanupPeriodDays: null,
       h5Access: {
         enabled: false,
         token: null,
@@ -332,6 +334,9 @@ describe('Settings > General tab', () => {
       }),
       setNetwork: vi.fn().mockImplementation(async (network) => {
         useSettingsStore.setState({ network })
+      }),
+      setCleanupPeriodDays: vi.fn().mockImplementation(async (days: number) => {
+        useSettingsStore.setState({ cleanupPeriodDays: days })
       }),
       appMode: {
         mode: 'default',
@@ -636,6 +641,24 @@ describe('Settings > General tab', () => {
     })
   })
 
+  it.each([14400, 43200, 2147483])('saves a long request timeout of %i seconds', async (seconds) => {
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+    const timeoutInput = screen.getByLabelText('AI request timeout')
+    fireEvent.change(timeoutInput, { target: { value: String(seconds) } })
+    fireEvent.blur(timeoutInput)
+    expect(timeoutInput).toHaveValue(seconds)
+    const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
+    expect(saveButton).not.toBeDisabled()
+
+    await act(async () => {
+      fireEvent.click(saveButton)
+    })
+    expect(useSettingsStore.getState().setNetwork).toHaveBeenCalledWith(expect.objectContaining({
+      aiRequestTimeoutMs: seconds * 1000,
+    }))
+  })
+
   it('validates typed provider network timeout and supports precise step controls', () => {
     render(<Settings />)
 
@@ -643,8 +666,8 @@ describe('Settings > General tab', () => {
     const timeoutInput = screen.getByLabelText('AI request timeout')
     const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
 
-    fireEvent.change(timeoutInput, { target: { value: '2000' } })
-    expect(screen.getByText('Enter a whole number from 30 to 1800 seconds.')).toBeInTheDocument()
+    fireEvent.change(timeoutInput, { target: { value: '2147484' } })
+    expect(screen.getByText('Enter a whole number from 30 to 2147483 seconds.')).toBeInTheDocument()
     expect(saveButton).toBeDisabled()
 
     fireEvent.change(timeoutInput, { target: { value: '90' } })
@@ -655,6 +678,280 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Decrease by 30 seconds' }))
     expect(timeoutInput).toHaveValue(60)
     expect(saveButton).not.toBeDisabled()
+  })
+
+  it('previews session cleanup and only deletes after confirmation', async () => {
+    const cleanupSessions = vi
+      .spyOn(settingsApi, 'cleanupSessions')
+      .mockImplementation(async (days, dryRun = false) => ({
+        ok: true,
+        days,
+        dryRun,
+        files: 7,
+        errors: 0,
+      }))
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      const input = screen.getByLabelText('Keep session history for')
+      expect(input).toHaveValue(365)
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      const saveButton = within(section).getByRole('button', { name: 'Save' })
+      expect(saveButton).toBeDisabled()
+
+      fireEvent.change(input, { target: { value: '90' } })
+      expect(saveButton).not.toBeDisabled()
+
+      await act(async () => {
+        fireEvent.click(saveButton)
+      })
+
+      expect(cleanupSessions).toHaveBeenCalledWith(90, true)
+      expect(useSettingsStore.getState().setCleanupPeriodDays).not.toHaveBeenCalled()
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      expect(within(dialog).getByText('7 files currently match this cutoff.')).toBeInTheDocument()
+      expect(
+        within(dialog).getByText(/Sessions older than 90 days will be permanently deleted/),
+      ).toBeInTheDocument()
+
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and save' }))
+      })
+
+      expect(useSettingsStore.getState().setCleanupPeriodDays).toHaveBeenCalledWith(90)
+      expect(cleanupSessions).toHaveBeenLastCalledWith(90)
+      expect(useSettingsStore.getState().cleanupPeriodDays).toBe(90)
+      expect(
+        screen.queryByRole('dialog', { name: 'Change session history retention?' }),
+      ).not.toBeInTheDocument()
+      expect(
+        useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1],
+      ).toMatchObject({
+        type: 'success',
+        message: 'Retention updated. 7 old session files removed.',
+      })
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('cancelling the retention confirmation keeps the stored value', async () => {
+    const cleanupSessions = vi.spyOn(settingsApi, 'cleanupSessions').mockResolvedValue({
+      ok: true,
+      days: 0,
+      dryRun: true,
+      files: 3,
+      errors: 0,
+    })
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      const input = screen.getByLabelText('Keep session history for')
+      fireEvent.change(input, { target: { value: '0' } })
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      await act(async () => {
+        fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
+      })
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      expect(
+        within(dialog).getByText(/stops recording new session content and permanently deletes/),
+      ).toBeInTheDocument()
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+      expect(useSettingsStore.getState().setCleanupPeriodDays).not.toHaveBeenCalled()
+      expect(cleanupSessions).toHaveBeenCalledTimes(1)
+      expect(input).toHaveValue(0)
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('surfaces a failed cleanup inside the dialog so the user can retry', async () => {
+    const cleanupSessions = vi
+      .spyOn(settingsApi, 'cleanupSessions')
+      .mockResolvedValueOnce({ ok: true, days: 90, dryRun: true, files: 4, errors: 0 })
+      .mockRejectedValueOnce(new Error('disk offline'))
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      fireEvent.change(screen.getByLabelText('Keep session history for'), {
+        target: { value: '90' },
+      })
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      await act(async () => {
+        fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
+      })
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and save' }))
+      })
+
+      // The error must be visible inside the modal (the card behind it is
+      // covered) and the dialog must stay open so confirming again retries.
+      expect(within(dialog).getByText('disk offline')).toBeInTheDocument()
+      expect(
+        screen.getByRole('dialog', { name: 'Change session history retention?' }),
+      ).toBeInTheDocument()
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('opens the confirmation only after the impact count is known', async () => {
+    let resolvePreview!: (value: Awaited<ReturnType<typeof settingsApi.cleanupSessions>>) => void
+    const previewPromise = new Promise<Awaited<ReturnType<typeof settingsApi.cleanupSessions>>>(
+      (resolve) => {
+        resolvePreview = resolve
+      },
+    )
+    const cleanupSessions = vi.spyOn(settingsApi, 'cleanupSessions').mockReturnValue(previewPromise)
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      fireEvent.change(screen.getByLabelText('Keep session history for'), {
+        target: { value: '90' },
+      })
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      const saveButton = within(section).getByRole('button', { name: 'Save' })
+      fireEvent.click(saveButton)
+
+      // While the dry-run is in flight there is nothing to confirm yet.
+      expect(saveButton).toBeDisabled()
+      expect(
+        screen.queryByRole('dialog', { name: 'Change session history retention?' }),
+      ).not.toBeInTheDocument()
+
+      await act(async () => {
+        resolvePreview({ ok: true, days: 90, dryRun: true, files: 5, errors: 0 })
+      })
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      expect(within(dialog).getByText('5 files currently match this cutoff.')).toBeInTheDocument()
+      expect(useSettingsStore.getState().setCleanupPeriodDays).not.toHaveBeenCalled()
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('reports files it could not remove instead of a clean success', async () => {
+    const cleanupSessions = vi
+      .spyOn(settingsApi, 'cleanupSessions')
+      .mockImplementation(async (days, dryRun = false) => ({
+        ok: true,
+        days,
+        dryRun,
+        files: 6,
+        errors: dryRun ? 0 : 2,
+      }))
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      fireEvent.change(screen.getByLabelText('Keep session history for'), {
+        target: { value: '90' },
+      })
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      await act(async () => {
+        fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
+      })
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and save' }))
+      })
+
+      expect(
+        useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1],
+      ).toMatchObject({
+        type: 'success',
+        message: 'Retention updated. 6 old session files removed, 2 could not be removed.',
+      })
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('confirms the value the dialog was opened with even if the store moves underneath', async () => {
+    // A failed save rolls the store back and the effect then resets the input
+    // behind the modal. The dialog must stay pinned to what the user saw, or
+    // the retry would silently apply the rolled-back value instead.
+    const cleanupSessions = vi
+      .spyOn(settingsApi, 'cleanupSessions')
+      .mockImplementation(async (days, dryRun = false) => ({
+        ok: true,
+        days,
+        dryRun,
+        files: 3,
+        errors: 0,
+      }))
+
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      fireEvent.change(screen.getByLabelText('Keep session history for'), {
+        target: { value: '90' },
+      })
+
+      const section = screen.getByRole('heading', { name: 'Session History' })
+        .parentElement as HTMLElement
+      await act(async () => {
+        fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
+      })
+
+      const dialog = screen.getByRole('dialog', { name: 'Change session history retention?' })
+      expect(
+        within(dialog).getByText(/Sessions older than 90 days will be permanently deleted/),
+      ).toBeInTheDocument()
+
+      await act(async () => {
+        useSettingsStore.setState({ cleanupPeriodDays: 365 })
+      })
+      // Precondition for the regression: the input behind the modal moved.
+      expect(screen.getByLabelText('Keep session history for')).toHaveValue(365)
+
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and save' }))
+      })
+
+      expect(useSettingsStore.getState().setCleanupPeriodDays).toHaveBeenLastCalledWith(90)
+      expect(cleanupSessions).toHaveBeenLastCalledWith(90)
+    } finally {
+      cleanupSessions.mockRestore()
+    }
+  })
+
+  it('hides the retention controls on a touch-H5 phone browser', () => {
+    document.documentElement.setAttribute('data-touch-h5', 'true')
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      expect(
+        screen.queryByRole('heading', { name: 'Session History' }),
+      ).not.toBeInTheDocument()
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
   })
 
   it('keeps data storage at the bottom of General settings', () => {
@@ -969,6 +1266,52 @@ describe('Settings > General tab', () => {
       })
       expect(toggle).toBeChecked()
       expect(updateUser).toHaveBeenLastCalledWith({ workflowKeywordTriggerEnabled: true })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('saves Agent Teams changes and explains when they take effect', async () => {
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const toggle = screen.getByRole('switch', { name: 'Enable Agent Teams' })
+      expect(toggle).toBeChecked()
+      expect(screen.getByText('Applies to new sessions. Restart the app to apply changes to existing sessions.')).toBeVisible()
+
+      await act(async () => { fireEvent.click(toggle) })
+      expect(toggle).not.toBeChecked()
+      expect(updateUser).toHaveBeenLastCalledWith({ agentTeamsEnabled: false })
+      await act(async () => { fireEvent.click(toggle) })
+      expect(toggle).toBeChecked()
+      expect(updateUser).toHaveBeenLastCalledWith({ agentTeamsEnabled: true })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('disables Agent Teams while saving and reports failure after rolling back', async () => {
+    let rejectSave!: (error: Error) => void
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockImplementation(() => new Promise((_, reject) => {
+      rejectSave = reject
+    }))
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const toggle = screen.getByRole('switch', { name: 'Enable Agent Teams' })
+      fireEvent.click(toggle)
+      expect(toggle).toBeDisabled()
+      expect(toggle).not.toBeChecked()
+      expect(updateUser).toHaveBeenCalledTimes(1)
+
+      await act(async () => { rejectSave(new Error('disk full')) })
+      expect(toggle).toBeEnabled()
+      expect(toggle).toBeChecked()
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: 'Failed to save Agent Teams settings. Please try again.',
+      })
     } finally {
       updateUser.mockRestore()
     }
@@ -1725,8 +2068,9 @@ describe('Settings > General tab', () => {
     fireEvent.change(screen.getByLabelText('Tavily API key'), {
       target: { value: 'tvly-test-key' },
     })
-    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
-    fireEvent.click(saveButtons[saveButtons.length - 1]!)
+    const webSearchSection = screen.getByRole('heading', { name: 'WebSearch' })
+      .parentElement as HTMLElement
+    fireEvent.click(within(webSearchSection).getByRole('button', { name: 'Save' }))
 
     expect(useSettingsStore.getState().setWebSearch).toHaveBeenCalledWith({
       mode: 'tavily',
@@ -1911,7 +2255,7 @@ describe('Settings > Providers tab', () => {
 
     expect(MOCK_DELETE_PROVIDER).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByText('Delete provider "MiniMax-M2.7-highspeed(openai)"? This cannot be undone.')).toBeInTheDocument()
+    expect(screen.getByText('Delete model configuration "MiniMax-M2.7-highspeed(openai)"? This cannot be undone.')).toBeInTheDocument()
 
     const dialog = screen.getByRole('dialog')
     await act(async () => {
@@ -1922,12 +2266,31 @@ describe('Settings > Providers tab', () => {
     expect(MOCK_DELETE_PROVIDER).toHaveBeenCalledWith('provider-1')
   })
 
+  it.each([
+    ['zh', '模型配置', '模型管理', '添加模型', '配置名称'],
+    ['zh-TW', '模型設定', '模型管理', '新增模型', '設定名稱'],
+    ['en', 'Model Settings', 'Model Management', 'Add Model', 'Configuration name'],
+    ['jp', 'モデル設定', 'モデル管理', 'モデルを追加', '設定名'],
+    ['kr', '모델 설정', '모델 관리', '모델 추가', '설정 이름'],
+  ] as const)('uses model terminology throughout settings in %s', (locale, menu, title, add, name) => {
+    useSettingsStore.setState({ locale })
+    render(<Settings />)
+
+    expect(screen.getByRole('button', { name: new RegExp(menu) })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: title })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(add) }))
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('heading', { name: add })).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(new RegExp(name))).toBeInTheDocument()
+  })
+
   it('keeps custom provider creation available when presets are unavailable', async () => {
     providerStoreState.presets = []
 
     render(<Settings />)
 
-    const addButton = screen.getByRole('button', { name: /Add Provider/i })
+    const addButton = screen.getByRole('button', { name: /Add Model/i })
     expect(addButton).toBeEnabled()
 
     fireEvent.click(addButton)
@@ -1953,7 +2316,7 @@ describe('Settings > Providers tab', () => {
       providerStoreState.presets = [ZHIPU_REGIONAL_PRESET]
 
       render(<Settings />)
-      fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+      fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
       const dialog = screen.getByRole('dialog')
       await waitFor(() => expect(settleSettings).toBeTypeOf('function'))
@@ -1987,7 +2350,7 @@ describe('Settings > Providers tab', () => {
     providerStoreState.presets = [ZHIPU_REGIONAL_PRESET]
 
     render(<Settings />)
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
     const dialog = screen.getByRole('dialog')
     await waitFor(() => expect(resolveSettings).toBeTypeOf('function'))
@@ -2038,7 +2401,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
@@ -2049,6 +2412,62 @@ describe('Settings > Providers tab', () => {
     // The panel is closed now; this finds the trigger, which reflects the pick.
     expect(within(dialog).getByRole('button', { name: /OpenAI Responses API \(proxy\)/i })).toBeInTheDocument()
     expect(within(dialog).getByText('Requests will be translated via the local proxy')).toBeInTheDocument()
+  })
+
+  it('uses the proxy in settings JSON and connection tests when nested tool media is unsupported', async () => {
+    providerStoreState.testConfig = vi.fn().mockResolvedValue({
+      connectivity: { success: true, latencyMs: 1 },
+      proxy: { success: true, latencyMs: 1 },
+    })
+    providerStoreState.presets = [{
+      id: 'custom',
+      name: 'Custom',
+      baseUrl: 'https://api.example.com/anthropic',
+      apiFormat: 'anthropic',
+      defaultModels: {
+        main: 'model-main',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+      needsApiKey: true,
+      websiteUrl: '',
+    }]
+
+    render(<Settings />)
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
+
+    const dialog = screen.getByRole('dialog')
+    const mediaSupport = within(dialog).getByLabelText('Preserve nested tool result media')
+    expect(mediaSupport).toBeChecked()
+    fireEvent.click(mediaSupport)
+
+    const settingsTextarea = await waitFor(() => {
+      const textarea = dialog.querySelector('textarea') as HTMLTextAreaElement
+      const settings = JSON.parse(textarea.value) as {
+        env?: {
+          ANTHROPIC_API_KEY?: string
+          ANTHROPIC_AUTH_TOKEN?: string
+          ANTHROPIC_BASE_URL?: string
+        }
+      }
+      expect(settings.env?.ANTHROPIC_BASE_URL).toMatch(/\/proxy$/)
+      expect(settings.env?.ANTHROPIC_API_KEY).toBe('proxy-managed')
+      expect(settings.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+      return textarea
+    })
+    expect(settingsTextarea.value).not.toContain('"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic"')
+
+    fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-test' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Test Connection/i }))
+
+    await waitFor(() => {
+      expect(providerStoreState.testConfig).toHaveBeenCalledWith(expect.objectContaining({
+        baseUrl: 'https://api.example.com/anthropic',
+        apiFormat: 'anthropic',
+        supportsNestedToolResultMedia: false,
+      }))
+    })
   })
 
   it('localizes the main model placeholder in the provider form', () => {
@@ -2072,7 +2491,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /添加模型/i }))
 
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByPlaceholderText('例如： deepseek-v4-flash')).toBeInTheDocument()
@@ -2114,7 +2533,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -2179,7 +2598,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     const settingsTextarea = await waitFor(() => {
       const textarea = dialog.querySelector('textarea')
@@ -2268,7 +2687,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -2350,7 +2769,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     const toolSearchCheckbox = within(dialog).getByRole('checkbox', { name: 'Enable Tool Search' })
 
@@ -2428,7 +2847,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     const disableBetasCheckbox = within(dialog).getByRole('checkbox', { name: 'Disable experimental beta headers' })
     expect(within(dialog).getByText(
@@ -2505,7 +2924,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -2567,7 +2986,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
     const dialog = screen.getByRole('dialog')
     const apiKeyInput = within(dialog).getByPlaceholderText('sk-...')
@@ -2605,7 +3024,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       expect(dialog.querySelector('textarea')?.value).toContain('"ANTHROPIC_MODEL"')
@@ -2642,7 +3061,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Provider|添加服务商/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
     const dialog = screen.getByRole('dialog')
     const fetchButton = within(dialog).getByRole('button', { name: /Fetch models|获取模型/i })
 

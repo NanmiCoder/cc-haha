@@ -1,0 +1,974 @@
+[
+  {
+    "id": "hyperframes",
+    "version": "0.4.0",
+    "repository": "heygen-com/hyperframes",
+    "commit": "60780774bb1896373947fb3e3197117501f53a22",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "LICENSE",
+        "target": "LICENSE",
+        "integrity": "sha256-4259155fb06f127687ee7b0a8a3682d45132db0f2da26cbc0b7a2d1e796436b8"
+      },
+      {
+        "source": "skills/gsap/SKILL.md",
+        "target": "skills/gsap/SKILL.md",
+        "integrity": "sha256-730476ba02cc56c8a59b3e4a897801923f463289cd386bccb56d01833be4441f"
+      },
+      {
+        "source": "skills/gsap/references/effects.md",
+        "target": "skills/gsap/references/effects.md",
+        "integrity": "sha256-e4a3e157c746963d341d7fb9a5a721ff5952b51a52a1d79843a749a8de8b6693"
+      },
+      {
+        "source": "skills/gsap/scripts/extract-audio-data.py",
+        "target": "skills/gsap/scripts/extract-audio-data.py",
+        "integrity": "sha256-7709b60d42730fc93a348c205ab565158d240b70051d109fcc844b215d56fa4f"
+      },
+      {
+        "source": "skills/hyperframes-cli/SKILL.md",
+        "target": "skills/hyperframes-cli/SKILL.md",
+        "integrity": "sha256-e4c9c24005ed5da37d0a58dad313c95ef07a0547c7c664825a4c7ea0f7416fab"
+      },
+      {
+        "source": "skills/hyperframes-registry/SKILL.md",
+        "target": "skills/hyperframes-registry/SKILL.md",
+        "integrity": "sha256-0248bfb9968d53ea8f9e4b5f7f5a8eb9e72f21108022580f7eba2fba7e26b234"
+      },
+      {
+        "source": "skills/hyperframes-registry/examples/add-block.md",
+        "target": "skills/hyperframes-registry/examples/add-block.md",
+        "integrity": "sha256-0e3353755c4ef55e53570d1266a4a43b2c5aef9bbe41276430e38cfa6580b83a"
+      },
+      {
+        "source": "skills/hyperframes-registry/examples/add-component.md",
+        "target": "skills/hyperframes-registry/examples/add-component.md",
+        "integrity": "sha256-d06992d31eec617a91f5c34630c9274c52dd07898bd24f10a869d0d1cab5af29"
+      },
+      {
+        "source": "skills/hyperframes-registry/references/demo-html-pattern.md",
+        "target": "skills/hyperframes-registry/references/demo-html-pattern.md",
+        "integrity": "sha256-dfc50cd33eff2c2be75437786fc3e851ab0085f7d453fb35b3380ecf9a6e9f04"
+      },
+      {
+        "source": "skills/hyperframes-registry/references/discovery.md",
+        "target": "skills/hyperframes-registry/references/discovery.md",
+        "integrity": "sha256-fdc924e4b9103d66880317e75bdc54e842713460ed64a7fd74d891b4b64097d5"
+      },
+      {
+        "source": "skills/hyperframes-registry/references/install-locations.md",
+        "target": "skills/hyperframes-registry/references/install-locations.md",
+        "integrity": "sha256-83793e7d6aeea9a751755e4bd23ea48182ff9af082287b98a1192343d2571dd1"
+      },
+      {
+        "source": "skills/hyperframes-registry/references/wiring-blocks.md",
+        "target": "skills/hyperframes-registry/references/wiring-blocks.md",
+        "integrity": "sha256-c2045d3f31772d211bb92668264402a5c21d208870fa64398481212a645c9eb9"
+      },
+      {
+        "source": "skills/hyperframes-registry/references/wiring-components.md",
+        "target": "skills/hyperframes-registry/references/wiring-components.md",
+        "integrity": "sha256-fbde46726debef9d61286ae54b3b2491e0df51e87416c1b059106bb076a346ce"
+      },
+      {
+        "source": "skills/hyperframes/SKILL.md",
+        "target": "skills/hyperframes/SKILL.md",
+        "integrity": "sha256-c6331e984e08b31269bd7725fdc86f1c267409391c1270ac32ee76c6986f10b1"
+      },
+      {
+        "source": "skills/hyperframes/data-in-motion.md",
+        "target": "skills/hyperframes/data-in-motion.md",
+        "integrity": "sha256-22084b4460a8f815d923b972a908f937c1e573bbbc7a865f6f2979ec2ae7ff15"
+      },
+      {
+        "source": "skills/hyperframes/house-style.md",
+        "target": "skills/hyperframes/house-style.md",
+        "integrity": "sha256-e0719895b369d7ee5203850250e605b3a1c15dbe43a367dd54e396f2b439f838"
+      },
+      {
+        "source": "skills/hyperframes/palettes/bold-energetic.md",
+        "target": "skills/hyperframes/palettes/bold-energetic.md",
+        "integrity": "sha256-17bc6b7889302151b4e5c84c0c6a33df676647078011d9decb2b68810e3baa7f"
+      },
+      {
+        "source": "skills/hyperframes/palettes/clean-corporate.md",
+        "target": "skills/hyperframes/palettes/clean-corporate.md",
+        "integrity": "sha256-d0c8c86838abb77985609629afe600d0ca365eccd835820f309959e8a85cba9d"
+      },
+      {
+        "source": "skills/hyperframes/palettes/dark-premium.md",
+        "target": "skills/hyperframes/palettes/dark-premium.md",
+        "integrity": "sha256-abfecbf7e8dca3b674376590a0467aac3e13b2135022ae4ec519c4b27c2303b1"
+      },
+      {
+        "source": "skills/hyperframes/palettes/jewel-rich.md",
+        "target": "skills/hyperframes/palettes/jewel-rich.md",
+        "integrity": "sha256-17c8f7506469f66bca4e27ef78c19f0bcbf250f88fe840e3043816b7041c4fc5"
+      },
+      {
+        "source": "skills/hyperframes/palettes/monochrome.md",
+        "target": "skills/hyperframes/palettes/monochrome.md",
+        "integrity": "sha256-fe8586f6d70707098859063bdef34d68084f02cf7d5aaa436d4c9915a7ae3748"
+      },
+      {
+        "source": "skills/hyperframes/palettes/nature-earth.md",
+        "target": "skills/hyperframes/palettes/nature-earth.md",
+        "integrity": "sha256-9710549b17487787fef3c7cb459cfd6e4ac28c1593bf471fcf55a3b4e546beed"
+      },
+      {
+        "source": "skills/hyperframes/palettes/neon-electric.md",
+        "target": "skills/hyperframes/palettes/neon-electric.md",
+        "integrity": "sha256-35225bf8d2cd37223e88e0bc59b0a96bc8adeda7225389b3df97b675cfd33dfb"
+      },
+      {
+        "source": "skills/hyperframes/palettes/pastel-soft.md",
+        "target": "skills/hyperframes/palettes/pastel-soft.md",
+        "integrity": "sha256-ed4e25bb5f4953c002e55a53320249621437e03b5a11d43e3c1bd32c869b6d95"
+      },
+      {
+        "source": "skills/hyperframes/palettes/warm-editorial.md",
+        "target": "skills/hyperframes/palettes/warm-editorial.md",
+        "integrity": "sha256-c467ee3cc0bbf4b2bedccc8106e18293b8a06dbac8f092b10300492da0e0559a"
+      },
+      {
+        "source": "skills/hyperframes/patterns.md",
+        "target": "skills/hyperframes/patterns.md",
+        "integrity": "sha256-9a31458068668a168ee3f4180e06fb2d5768afe1f84b8878f5c56c72e4ab7253"
+      },
+      {
+        "source": "skills/hyperframes/references/audio-reactive.md",
+        "target": "skills/hyperframes/references/audio-reactive.md",
+        "integrity": "sha256-f0d83c24fa40d42a74f972ccf3b5254d7706cb063d16b8b41f87dc668a418f49"
+      },
+      {
+        "source": "skills/hyperframes/references/captions.md",
+        "target": "skills/hyperframes/references/captions.md",
+        "integrity": "sha256-9e35e0d8618e392906a0c542571af9f070350a17007c8449c69ff31384f3b195"
+      },
+      {
+        "source": "skills/hyperframes/references/css-patterns.md",
+        "target": "skills/hyperframes/references/css-patterns.md",
+        "integrity": "sha256-39c4af128cdd3ed9d1be652a88c3e4d01cb0daf744dfde3db7197014cd1a38d8"
+      },
+      {
+        "source": "skills/hyperframes/references/dynamic-techniques.md",
+        "target": "skills/hyperframes/references/dynamic-techniques.md",
+        "integrity": "sha256-f48f666acb270daf2ac57fede5efc96ff3f168fa4f41db611de0310452e6d7e3"
+      },
+      {
+        "source": "skills/hyperframes/references/motion-principles.md",
+        "target": "skills/hyperframes/references/motion-principles.md",
+        "integrity": "sha256-68f4ba410addc4c07347025ed688029d69cf71c37cc2c5da4788600ccd5d756c"
+      },
+      {
+        "source": "skills/hyperframes/references/transcript-guide.md",
+        "target": "skills/hyperframes/references/transcript-guide.md",
+        "integrity": "sha256-e52bf99b88d5d75cb715376edc67dc86e824d54ede65815b1aa6f7582a1b166c"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions.md",
+        "target": "skills/hyperframes/references/transitions.md",
+        "integrity": "sha256-302fab350697e210a763ba7e3b2acbde9aadac37bd49cb9814a12e60983294ce"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/catalog.md",
+        "target": "skills/hyperframes/references/transitions/catalog.md",
+        "integrity": "sha256-557b5b30be7b68f95d8481209b1a2f0a0e1df23f65de9b08f86697d0e6159a54"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-3d.md",
+        "target": "skills/hyperframes/references/transitions/css-3d.md",
+        "integrity": "sha256-e1c3888dd0a2d4b36d25200c1e5ef9038649ae63953865e4b2c4c40fb028d7dd"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-blur.md",
+        "target": "skills/hyperframes/references/transitions/css-blur.md",
+        "integrity": "sha256-fd3eef889a517e1dd985ca816f36f1abfb43420a4b664d4fcc453554cdf561f9"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-cover.md",
+        "target": "skills/hyperframes/references/transitions/css-cover.md",
+        "integrity": "sha256-ba4e5926791c9e6a0a069e20afc91324acb018903f43b4b3f2866d9654f5b7eb"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-destruction.md",
+        "target": "skills/hyperframes/references/transitions/css-destruction.md",
+        "integrity": "sha256-7cce7bbd9ebc64176c9ff4fe40ec97273c9c171524d89f853c0651e713949361"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-dissolve.md",
+        "target": "skills/hyperframes/references/transitions/css-dissolve.md",
+        "integrity": "sha256-47c11ca0a715675c2788aa4a162a652b5dc5f1773b058ea93e9907af56a4eb7c"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-distortion.md",
+        "target": "skills/hyperframes/references/transitions/css-distortion.md",
+        "integrity": "sha256-7140650692926959bd5459ca5c478a9b4f137cc76fb92b9138e3b0d353677c06"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-grid.md",
+        "target": "skills/hyperframes/references/transitions/css-grid.md",
+        "integrity": "sha256-c62b17058aa7ba42d34df29436b6b4233e47ff2b72f2c7ce0963c75bdec45144"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-light.md",
+        "target": "skills/hyperframes/references/transitions/css-light.md",
+        "integrity": "sha256-53f0422d3f6dd2584a30501f84e4f09c9b515f605d51ed264a2061567dda15db"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-mechanical.md",
+        "target": "skills/hyperframes/references/transitions/css-mechanical.md",
+        "integrity": "sha256-4fed48fa659a4b215a996beeea619d244e6c893700178b1f969c17f2ee0a8612"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-other.md",
+        "target": "skills/hyperframes/references/transitions/css-other.md",
+        "integrity": "sha256-2156e4fcc3b42cba9e0d9e268944269057fb48ff15fc1983e3ff9386fa2a8cf8"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-push.md",
+        "target": "skills/hyperframes/references/transitions/css-push.md",
+        "integrity": "sha256-d526a9612483472de4d865ae27061c98842a5155973dd0cec37fac4998dc1b97"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-radial.md",
+        "target": "skills/hyperframes/references/transitions/css-radial.md",
+        "integrity": "sha256-5d8f20de439e3f2c8d45df11c8acbe31dc1b9342e2d54bbe66b451cf81ca0a1b"
+      },
+      {
+        "source": "skills/hyperframes/references/transitions/css-scale.md",
+        "target": "skills/hyperframes/references/transitions/css-scale.md",
+        "integrity": "sha256-3c0cb33d6c844a7265379225f3241d8964afcc908ee757a1ebfb1700a5320ea7"
+      },
+      {
+        "source": "skills/hyperframes/references/tts.md",
+        "target": "skills/hyperframes/references/tts.md",
+        "integrity": "sha256-bb593a862f5599eca6b36ac22b0b76f66fb1fff251e5c5b1865e341681cfcd8a"
+      },
+      {
+        "source": "skills/hyperframes/references/typography.md",
+        "target": "skills/hyperframes/references/typography.md",
+        "integrity": "sha256-d0ef1c5666a5b7a5f2af0c5701d17e63017eafc07499830c6616ccdcb21befc8"
+      },
+      {
+        "source": "skills/hyperframes/scripts/animation-map.mjs",
+        "target": "skills/hyperframes/scripts/animation-map.mjs",
+        "integrity": "sha256-6840bf5c08b8b1eab234dec3e19fe6988abdb53d2ad98560f8da05f4c6cca74f"
+      },
+      {
+        "source": "skills/hyperframes/scripts/contrast-report.mjs",
+        "target": "skills/hyperframes/scripts/contrast-report.mjs",
+        "integrity": "sha256-84c9cdec6242845c625af041d8fe94d48fdde89b77ea32ec241af99deda03ad1"
+      },
+      {
+        "source": "skills/hyperframes/visual-styles.md",
+        "target": "skills/hyperframes/visual-styles.md",
+        "integrity": "sha256-d173663b4342d830e46c5cc14a1ffafe6dbc6daca0702b0a451db3ce914693cc"
+      },
+      {
+        "source": "skills/website-to-hyperframes/SKILL.md",
+        "target": "skills/website-to-hyperframes/SKILL.md",
+        "integrity": "sha256-61ec0a7309f0459d789fb3bc3ec254a52c64e838357d321b594cbde5a8514a12"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-1-capture.md",
+        "target": "skills/website-to-hyperframes/references/step-1-capture.md",
+        "integrity": "sha256-c5581dd136656d6f0767525d505f9789a846b798506373b72bb3eb32678b051f"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-2-design.md",
+        "target": "skills/website-to-hyperframes/references/step-2-design.md",
+        "integrity": "sha256-94a6a207ddf99583d357f01559ac7337a7199d05bf63aa7373aaaea3f6170ab1"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-3-script.md",
+        "target": "skills/website-to-hyperframes/references/step-3-script.md",
+        "integrity": "sha256-55cb26d748c68d7136de98d4ca1db74205908a134200f5f061f87afbde6c4496"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-4-storyboard.md",
+        "target": "skills/website-to-hyperframes/references/step-4-storyboard.md",
+        "integrity": "sha256-415a9552cc17bdae408e9862ab226d49b71cb4402ab90abc5f71c8526d60061d"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-5-vo.md",
+        "target": "skills/website-to-hyperframes/references/step-5-vo.md",
+        "integrity": "sha256-a04d32c4368d6d83e0fa7422bd365bfb15a874980772dde98c0e2ef838e48efb"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-6-build.md",
+        "target": "skills/website-to-hyperframes/references/step-6-build.md",
+        "integrity": "sha256-8bc833c3f002e1b74aaed8bd161e108fa0c68653b5ef51ad0748735d75e9a4a4"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/step-7-validate.md",
+        "target": "skills/website-to-hyperframes/references/step-7-validate.md",
+        "integrity": "sha256-2e4c7c83a01c6094a968153976be09e825289520954106a987e170253b2580de"
+      },
+      {
+        "source": "skills/website-to-hyperframes/references/techniques.md",
+        "target": "skills/website-to-hyperframes/references/techniques.md",
+        "integrity": "sha256-7bd2ace20c485e4a8108bc534c517df5cb9aad3dfc536fa850fdf7613548a7f2"
+      }
+    ]
+  },
+  {
+    "id": "obsidian",
+    "version": "1.0.1",
+    "repository": "kepano/obsidian-skills",
+    "commit": "8ccef29ae8624eccc734e77ced4a6e54baf5d83a",
+    "license": "MIT",
+    "files": [
+      {
+        "source": "LICENSE",
+        "target": "LICENSE",
+        "integrity": "sha256-64c64d48361edfe8610016441bf593256ea9b67f133b00f47c55aa29ee878567"
+      },
+      {
+        "source": "skills/defuddle/SKILL.md",
+        "target": "skills/defuddle/SKILL.md",
+        "integrity": "sha256-10673a4dc70a0a057612d443243ab7a5aa4abdd4a0fadc3f6eec5fd71ad5a971"
+      },
+      {
+        "source": "skills/json-canvas/SKILL.md",
+        "target": "skills/json-canvas/SKILL.md",
+        "integrity": "sha256-97d1ae0728955c4203922753d5656890e5e4dd371b8306ea11884f9b510f1b85"
+      },
+      {
+        "source": "skills/json-canvas/references/EXAMPLES.md",
+        "target": "skills/json-canvas/references/EXAMPLES.md",
+        "integrity": "sha256-f5ce15a4b74643122396265e8c37c828874a4005794de2aee7030662968768eb"
+      },
+      {
+        "source": "skills/knap/SKILL.md",
+        "target": "skills/knap/SKILL.md",
+        "integrity": "sha256-ef5666573358cd7d18e04195f3e7c473b88d3e3140c41ab59bbee01c81e9989f"
+      },
+      {
+        "source": "skills/obsidian-bases/SKILL.md",
+        "target": "skills/obsidian-bases/SKILL.md",
+        "integrity": "sha256-c0037f20926c7d8591cdd040365e4c0e4c0c4146386a506f28f241faee9a27d9"
+      },
+      {
+        "source": "skills/obsidian-bases/references/FUNCTIONS_REFERENCE.md",
+        "target": "skills/obsidian-bases/references/FUNCTIONS_REFERENCE.md",
+        "integrity": "sha256-208fd63aead9bca1975626fea52605e6ab9434dc0529d923feb36b18b8877d3b"
+      },
+      {
+        "source": "skills/obsidian-cli/SKILL.md",
+        "target": "skills/obsidian-cli/SKILL.md",
+        "integrity": "sha256-b54257cdc0e5d04488b35b0c797bfe427b24359f0848d3c73924dcacf8da6358"
+      },
+      {
+        "source": "skills/obsidian-markdown/SKILL.md",
+        "target": "skills/obsidian-markdown/SKILL.md",
+        "integrity": "sha256-7ad72e1f0a9081ed325e76b6402ad5de50a00e63e2341fd403a92f147234a007"
+      },
+      {
+        "source": "skills/obsidian-markdown/references/CALLOUTS.md",
+        "target": "skills/obsidian-markdown/references/CALLOUTS.md",
+        "integrity": "sha256-9912ec2e3f8711f65b8ceb82cc19cbffc5e6f8ccf2ab627e18926c522c383d8b"
+      },
+      {
+        "source": "skills/obsidian-markdown/references/EMBEDS.md",
+        "target": "skills/obsidian-markdown/references/EMBEDS.md",
+        "integrity": "sha256-63b6205507e28fb58cf200bc348a2b139e50ae739743e2e6316732148973cb7a"
+      },
+      {
+        "source": "skills/obsidian-markdown/references/PROPERTIES.md",
+        "target": "skills/obsidian-markdown/references/PROPERTIES.md",
+        "integrity": "sha256-392953b5838c3ab3df135b5a914f100ae7b95e4501b6a2e5c8dc63da3ac7558b"
+      }
+    ]
+  },
+  {
+    "id": "drawio",
+    "version": "1.1.0",
+    "repository": "jgraph/drawio-mcp",
+    "commit": "14b318b19cc37b159f841227b9d11fbd18ce18ea",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "LICENSE",
+        "target": "LICENSE",
+        "integrity": "sha256-006e61a1b8c97620d75ceacc283de7a363d78da7da9a5b92203324c40feb7232"
+      },
+      {
+        "source": "plugins/claude-code/skills/drawio/SKILL.md",
+        "target": "skills/drawio/SKILL.md",
+        "integrity": "sha256-4db0d9428e855b602b5afd161929dc6e35cb28678d830cfafd939f0a71bba5f5"
+      }
+    ]
+  },
+  {
+    "id": "frontend-design",
+    "version": "1.0.0",
+    "repository": "anthropics/skills",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "skills/frontend-design/LICENSE.txt",
+        "target": "skills/frontend-design/LICENSE.txt",
+        "integrity": "sha256-0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+      },
+      {
+        "source": "skills/frontend-design/SKILL.md",
+        "target": "skills/frontend-design/SKILL.md",
+        "integrity": "sha256-d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+      }
+    ]
+  },
+  {
+    "id": "canvas-design",
+    "version": "1.0.0",
+    "repository": "anthropics/skills",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "skills/canvas-design/LICENSE.txt",
+        "target": "skills/canvas-design/LICENSE.txt",
+        "integrity": "sha256-bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+      },
+      {
+        "source": "skills/canvas-design/SKILL.md",
+        "target": "skills/canvas-design/SKILL.md",
+        "integrity": "sha256-a1f288079624402f30682753c1d43920b6664785698d21d3e7aa197450a6448b"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/ArsenalSC-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/ArsenalSC-OFL.txt",
+        "integrity": "sha256-8ddd61b18ba2c0d0dbe4a691cf5f1a0673f473d02fa0546e67ee88c006aeff6e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/ArsenalSC-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/ArsenalSC-Regular.ttf",
+        "integrity": "sha256-65e6f89df58f68fd905b3add34a79dd6106aa3b3044df0dad9676fff53d504b9"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BigShoulders-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/BigShoulders-Bold.ttf",
+        "integrity": "sha256-b43bcd198b9fdf717dd42aa61a34dba32e01aceaeae659d689afd0ca52c37ea2"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BigShoulders-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/BigShoulders-OFL.txt",
+        "integrity": "sha256-fbc746aabf0eb1847dfd92e2efc4596d79fa897d60b8e64062a22f585508fb3f"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BigShoulders-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/BigShoulders-Regular.ttf",
+        "integrity": "sha256-18a879fc71978a4447150705caf880a9da3860083c259fd29e6dc03057b6842a"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Boldonse-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Boldonse-OFL.txt",
+        "integrity": "sha256-45cc82ab4032273c0924025ffcf8f0665a68e1a5955e3f7247e5daf1deeb1326"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Boldonse-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Boldonse-Regular.ttf",
+        "integrity": "sha256-cc2e540604565c0f90a7d8d46194a2f42fc9c45512cd2e39bf03b50eb68c35a4"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BricolageGrotesque-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/BricolageGrotesque-Bold.ttf",
+        "integrity": "sha256-a737b146fe0d77ffe8a86e3cd16700dd431d3b1e420d4fd80e142cd68a1cb50d"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BricolageGrotesque-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/BricolageGrotesque-OFL.txt",
+        "integrity": "sha256-0e4f4eb8534bc66a76aca13dd19c1f9731b2008866b29ccff182b764649df9b4"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/BricolageGrotesque-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/BricolageGrotesque-Regular.ttf",
+        "integrity": "sha256-972a6d098c9867ae131d0ea99e221e63976b11a19d4b931c2c7ace525674e4f6"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/CrimsonPro-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/CrimsonPro-Bold.ttf",
+        "integrity": "sha256-48f191e38355c8db100eb3ce157c20f9302a3b9a37b44a660f77ecfce3986609"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/CrimsonPro-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/CrimsonPro-Italic.ttf",
+        "integrity": "sha256-52318db3526b644e6efa60be0b3ca5a50e40fbe8bd026c261e0aa206f0772267"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/CrimsonPro-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/CrimsonPro-OFL.txt",
+        "integrity": "sha256-35680d14547b6748b6f362a052a46d22764ce5eccf96e18b74f567bb2ee58114"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/CrimsonPro-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/CrimsonPro-Regular.ttf",
+        "integrity": "sha256-48fad08cb1917a7b2f2c6fe5135d6c07743a6663cf7631ec4481108aaf081422"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/DMMono-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/DMMono-OFL.txt",
+        "integrity": "sha256-bfe7842fcb88323e2981e24710c25202677385a8c75fb6a87217b275a0247ae3"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/DMMono-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/DMMono-Regular.ttf",
+        "integrity": "sha256-f98ada968dc3b6b2c08d3f5caaf266977df0bfe0929372b93df5a06cf2ace450"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/EricaOne-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/EricaOne-OFL.txt",
+        "integrity": "sha256-e0de629968b52255548d5fafcf30b24ff9edae0eda362380755a75816404d0fa"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/EricaOne-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/EricaOne-Regular.ttf",
+        "integrity": "sha256-db1d89e80e33a8a01beaaac7a85df582857d24a43f1e181461aa7ff5d701476a"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/GeistMono-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/GeistMono-Bold.ttf",
+        "integrity": "sha256-75c0828d5c1ee44b9ef9f4df577bf41595ec362e2ea3f1e558590c9e92c7949d"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/GeistMono-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/GeistMono-OFL.txt",
+        "integrity": "sha256-6a873c900f584109b13ae0aaf81d6e3cf0a68751a216b03f7b6c68d547057bb4"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/GeistMono-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/GeistMono-Regular.ttf",
+        "integrity": "sha256-a55c1b51cda4afeab9e471e7947b85a20f7c8831d7e6b1470c1b7fbdc0f0f15e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Gloock-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Gloock-OFL.txt",
+        "integrity": "sha256-c0a3f3125ac491ef3d1f09f401be4834c646562f647e44f2bcbc49f0466c656d"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Gloock-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Gloock-Regular.ttf",
+        "integrity": "sha256-e86b4ce66dbd3f1f83eee8db99ec96e0da1128c3f53df0e9b3b7472025dfe960"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexMono-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexMono-Bold.ttf",
+        "integrity": "sha256-dbd2a2fb024579438d6400a84e57579bfd2dbe67c306c8fd9fde92a61e4f2eea"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexMono-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexMono-OFL.txt",
+        "integrity": "sha256-5294ce778857e1eb02e830b6ab06435537d38f43055327e73d03a2d4d57d5123"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexMono-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexMono-Regular.ttf",
+        "integrity": "sha256-ab08018ccd276b79fb2c636bb95b9c543598f9d50505fe92506fcb4dae7810cd"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Bold.ttf",
+        "integrity": "sha256-b8d294e9b5c5a0940f167c3ced0f7ef2e3f57082ca3ff096ef30e86e26c1c159"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexSerif-BoldItalic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexSerif-BoldItalic.ttf",
+        "integrity": "sha256-da64b75f4284f53e7b5c71fa190a35b8bf3494fe19f1804c81c3a53340bca570"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Italic.ttf",
+        "integrity": "sha256-b11f1048745e715a55c9d837b3f10226ca3d78867b7db7251ddad8f98dcf0f38"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/IBMPlexSerif-Regular.ttf",
+        "integrity": "sha256-77cd233a2af8dc6b1022faea3bb3b01f3c75af68bcf530cb6aeb15982ff3dbb7"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSans-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSans-Bold.ttf",
+        "integrity": "sha256-444f85bf1c4b0e1ce1ca624f6be54bcd832207714ccaf4ea99ee531341683bdf"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSans-BoldItalic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSans-BoldItalic.ttf",
+        "integrity": "sha256-3762f6cef95d6039489ad5ba5787d4c30f17a1ad01e9ac3c816ed69692722a68"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSans-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSans-Italic.ttf",
+        "integrity": "sha256-78e85858e371b2cb4e18f617c10f0f937c0e12a0887ffee98555b24ed305b3a7"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSans-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSans-OFL.txt",
+        "integrity": "sha256-bf4dc6d13a8cccd4807133c77a1ee9619a16b92cb23322258725ab6731c2f6e5"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSans-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSans-Regular.ttf",
+        "integrity": "sha256-a22cb26e48fd79bcb01bf2fc92d36785474dce36d9c544ab0a8868c2657c4a87"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSerif-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSerif-Italic.ttf",
+        "integrity": "sha256-9c86e4d5a47b50224a2463a9eca8535835257c8e85c470c2c6b454b1af6f046e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/InstrumentSerif-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/InstrumentSerif-Regular.ttf",
+        "integrity": "sha256-56ac3be03ac3ba283196b3e77850ab2ffcf56cfb6fd3212c5620109a972f8c99"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Italiana-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Italiana-OFL.txt",
+        "integrity": "sha256-8373b11312ace78c4cec2e8f9f6aa9f2330601107dac7bcf899c6f2dbd40c5a5"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Italiana-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Italiana-Regular.ttf",
+        "integrity": "sha256-15c4dd6ab8cf4a29ba8826f65edcbe2f6c266c557d34d081f25072dfd5605fd2"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/JetBrainsMono-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/JetBrainsMono-Bold.ttf",
+        "integrity": "sha256-a2349098b9e45419e7bf0e2958d6c4937a049dded37387b08be725be4c7615f3"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/JetBrainsMono-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/JetBrainsMono-OFL.txt",
+        "integrity": "sha256-a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/JetBrainsMono-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/JetBrainsMono-Regular.ttf",
+        "integrity": "sha256-b6b1ff4ddefe36d7f2a6174e1d001cab374e594519ee9049af028d577b64c5f5"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Jura-Light.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Jura-Light.ttf",
+        "integrity": "sha256-c891a381df056b2c4dfe85841e911bf45da0890fa21a7b2692cbe5ea1f505e1e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Jura-Medium.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Jura-Medium.ttf",
+        "integrity": "sha256-c72965cb732a92872643819fd1734128238583cc36b116313859137a51d3368a"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Jura-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Jura-OFL.txt",
+        "integrity": "sha256-eaf9bdb675f6d87e5feb88199ab3ea581d3bd2082f426e384fa9c394576d7260"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/LibreBaskerville-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/LibreBaskerville-OFL.txt",
+        "integrity": "sha256-55959eef5b0c3b2e3c1c7631b8ff0f9447d75de20f29cfa7db5bcfb026763343"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/LibreBaskerville-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/LibreBaskerville-Regular.ttf",
+        "integrity": "sha256-2101302538d9e88adb679031c04623e4578b5745e89566284fd2c508d79acae0"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Lora-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Lora-Bold.ttf",
+        "integrity": "sha256-7d74015e950c2fb66519c7295b8155621d22200ae2ca2a4c6b43ce3c490cac87"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Lora-BoldItalic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Lora-BoldItalic.ttf",
+        "integrity": "sha256-152f87e71f5ddb60d5c57ecd9132807c947e65c42977193c9164e7c5a6690081"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Lora-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Lora-Italic.ttf",
+        "integrity": "sha256-be627e595184e8afe521f08da0607eee613f1997d423bc8dadc5798995581377"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Lora-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Lora-OFL.txt",
+        "integrity": "sha256-62e37a82d3f1ef2a70712885fa8b3144b65fd144d8e748d6196b690a354d792c"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Lora-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Lora-Regular.ttf",
+        "integrity": "sha256-7ed00e7c9cdf16ab7e2fd2361fe45d4f0b61263cd60aae398b27b7ee08108827"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/NationalPark-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/NationalPark-Bold.ttf",
+        "integrity": "sha256-69ac4c301c4a7233c6e602d12a92c54d7967b575f4449951c45ce773f7acff53"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/NationalPark-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/NationalPark-OFL.txt",
+        "integrity": "sha256-81c6c71d83b5b45d7344f96df12bb4a2477a5b092a9144757ee1d0f50f855175"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/NationalPark-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/NationalPark-Regular.ttf",
+        "integrity": "sha256-a477338b7e18308d476650dfe31235ef86a883572665e56ffb5fb80f82009b58"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/NothingYouCouldDo-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/NothingYouCouldDo-OFL.txt",
+        "integrity": "sha256-7c2a6970584ddad04919816163746f83b378078015899b18468b40f05e9ce128"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/NothingYouCouldDo-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/NothingYouCouldDo-Regular.ttf",
+        "integrity": "sha256-d866f985896d3280f4fce72db7e17302c24a0c1fdb0699b6b5ed3af14f944d57"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Outfit-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Outfit-Bold.ttf",
+        "integrity": "sha256-6654b93d21301ec61887d3cedd6c11d9df1b1dfb63f9cf45ac7995f6e2235ab1"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Outfit-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Outfit-OFL.txt",
+        "integrity": "sha256-1945b62cd76da9a3051a1660dde72afaa64ffc2666d30e7a78356d651653ba2f"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Outfit-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Outfit-Regular.ttf",
+        "integrity": "sha256-f24945365147c9e783e91d8649959b59be6b00c9ee4ecd2f6b33afbb2dd871fe"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/PixelifySans-Medium.ttf",
+        "target": "skills/canvas-design/canvas-fonts/PixelifySans-Medium.ttf",
+        "integrity": "sha256-38397504f71c122b03d234ea6f55118e3d5bdbddffd82bedddbd7755d3b3be82"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/PixelifySans-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/PixelifySans-OFL.txt",
+        "integrity": "sha256-7f54d1d9f1ae1ba9f2722f978145f90324fea34ca3c2304b3a29cfa96ac6037e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/PoiretOne-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/PoiretOne-OFL.txt",
+        "integrity": "sha256-2eaf541f7eb8b512e4c757a5212060abf5b6edfef230e9d7640bf736b315c33a"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/PoiretOne-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/PoiretOne-Regular.ttf",
+        "integrity": "sha256-9cf265b139648b36b6c0afdfeb0bf27f7e66db9a16094bc40f644d8da05bc318"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/RedHatMono-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/RedHatMono-Bold.ttf",
+        "integrity": "sha256-7ef48353f4be5ddb90f000f6fad48f2b62b3e8c27d9818d8d45ff46c201065e0"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/RedHatMono-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/RedHatMono-OFL.txt",
+        "integrity": "sha256-435fbfb7e66988b2a06686a4cb966faec733f35d8fe100a1601573c27f3e0bb8"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/RedHatMono-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/RedHatMono-Regular.ttf",
+        "integrity": "sha256-452fe826871b37539f5212b20c87cf30f82f58dd2741f1c96edd1dcbdc0db6b4"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Silkscreen-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Silkscreen-OFL.txt",
+        "integrity": "sha256-6b849745119bbe85ec01fd080c9cd50234da9f52ac6e48b55d1a424a0c4d7ca9"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Silkscreen-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Silkscreen-Regular.ttf",
+        "integrity": "sha256-49567408600809e25147e9225ac4f37f410e2df45a750696c45027531fb65f1b"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/SmoochSans-Medium.ttf",
+        "target": "skills/canvas-design/canvas-fonts/SmoochSans-Medium.ttf",
+        "integrity": "sha256-dd76e6e77cce82f827a8654cd906e9ce58f3aaf78adda63c4a7f655b8ecb41f0"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/SmoochSans-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/SmoochSans-OFL.txt",
+        "integrity": "sha256-74c9c4eb88e891483e1b7bc54780b452cbf4f4df66d4e71881d7569aa2130749"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Tektur-Medium.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Tektur-Medium.ttf",
+        "integrity": "sha256-52bbe8c9b057b3d2da4eeace31a524b1ea26a1375ae34319cf6900ccc57a4c82"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Tektur-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/Tektur-OFL.txt",
+        "integrity": "sha256-3f1466cb5438f31782eeb6e895f3a655bc4d090e24263e331f555357d1cb734e"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/Tektur-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/Tektur-Regular.ttf",
+        "integrity": "sha256-162e1b36c4718c5b051b36c971ad7e50d341944f35618f480422ebbe72988f98"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/WorkSans-Bold.ttf",
+        "target": "skills/canvas-design/canvas-fonts/WorkSans-Bold.ttf",
+        "integrity": "sha256-240d125fc9f8561363dc1ea3f513501253bd70942f41468f48f0b0cafb0c82e2"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/WorkSans-BoldItalic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/WorkSans-BoldItalic.ttf",
+        "integrity": "sha256-a5b2cad813df0aaa7d16621f2e93b5117c25e9bc788bc9a3ad218e9d6348ce34"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/WorkSans-Italic.ttf",
+        "target": "skills/canvas-design/canvas-fonts/WorkSans-Italic.ttf",
+        "integrity": "sha256-6b7f7002e0b0c8b261fe878658ef5551e3e59d9f6b609b04efb90dde1e2c1ada"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/WorkSans-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/WorkSans-OFL.txt",
+        "integrity": "sha256-ace8c22a3326318b54e67c3691857929634205533f454a70ef5a3473ddb2e2ba"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/WorkSans-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/WorkSans-Regular.ttf",
+        "integrity": "sha256-e67985a843df0d3cdee51a3d0f329eb1774a344ad9ff0c9ab923751f1577e2a4"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/YoungSerif-OFL.txt",
+        "target": "skills/canvas-design/canvas-fonts/YoungSerif-OFL.txt",
+        "integrity": "sha256-cdcb8039606b40a027a6d24586ec62d5fe29c701343d82a048c829cb28a3dd28"
+      },
+      {
+        "source": "skills/canvas-design/canvas-fonts/YoungSerif-Regular.ttf",
+        "target": "skills/canvas-design/canvas-fonts/YoungSerif-Regular.ttf",
+        "integrity": "sha256-f8dc08f77abad753a00670af70756a8ace938e5c3f0b770f4f4c2071c4bd8fc6"
+      }
+    ]
+  },
+  {
+    "id": "algorithmic-art",
+    "version": "1.0.0",
+    "repository": "anthropics/skills",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "skills/algorithmic-art/LICENSE.txt",
+        "target": "skills/algorithmic-art/LICENSE.txt",
+        "integrity": "sha256-bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+      },
+      {
+        "source": "skills/algorithmic-art/SKILL.md",
+        "target": "skills/algorithmic-art/SKILL.md",
+        "integrity": "sha256-3bc4092c09804853186524c826bc0621b940bb6122c05b84496dff95388e6eef"
+      },
+      {
+        "source": "skills/algorithmic-art/templates/generator_template.js",
+        "target": "skills/algorithmic-art/templates/generator_template.js",
+        "integrity": "sha256-9ee0f1da52ef8f7bbfde1917123654880890d43f2d388642d71eab6dd78f94c4"
+      },
+      {
+        "source": "skills/algorithmic-art/templates/viewer.html",
+        "target": "skills/algorithmic-art/templates/viewer.html",
+        "integrity": "sha256-86c79d7ce97d2599ebe4bd9b97fdeb7295c9d3ed61ceeb513cbe1b2bb5d1ce29"
+      }
+    ]
+  },
+  {
+    "id": "webapp-testing",
+    "version": "1.0.0",
+    "repository": "anthropics/skills",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "skills/webapp-testing/LICENSE.txt",
+        "target": "skills/webapp-testing/LICENSE.txt",
+        "integrity": "sha256-bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+      },
+      {
+        "source": "skills/webapp-testing/SKILL.md",
+        "target": "skills/webapp-testing/SKILL.md",
+        "integrity": "sha256-51b7349e77ec63b7744a6f63647e7566a0b4d2e301121cc10e8c2113af6556a2"
+      },
+      {
+        "source": "skills/webapp-testing/examples/console_logging.py",
+        "target": "skills/webapp-testing/examples/console_logging.py",
+        "integrity": "sha256-ea46877289acb82da7e7ce59d0bc37c8977cd57e2a006d0c88d7a1c625bf95da"
+      },
+      {
+        "source": "skills/webapp-testing/examples/element_discovery.py",
+        "target": "skills/webapp-testing/examples/element_discovery.py",
+        "integrity": "sha256-d63c89604a22f8845d724e95dda45db49b1bf57c25ce0a83afbb7b8da3d402f0"
+      },
+      {
+        "source": "skills/webapp-testing/examples/static_html_automation.py",
+        "target": "skills/webapp-testing/examples/static_html_automation.py",
+        "integrity": "sha256-9d533aafb875ee3ab8b8ebf8f5b9003ac8d999da3d09b285cce252e623140064"
+      },
+      {
+        "source": "skills/webapp-testing/scripts/with_server.py",
+        "target": "skills/webapp-testing/scripts/with_server.py",
+        "integrity": "sha256-b0dcf4918935b795f4eda9821579b9902119235ff4447f687a30286e7d0925fd"
+      }
+    ]
+  },
+  {
+    "id": "mcp-builder",
+    "version": "1.0.0",
+    "repository": "anthropics/skills",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "source": "skills/mcp-builder/LICENSE.txt",
+        "target": "skills/mcp-builder/LICENSE.txt",
+        "integrity": "sha256-bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362"
+      },
+      {
+        "source": "skills/mcp-builder/SKILL.md",
+        "target": "skills/mcp-builder/SKILL.md",
+        "integrity": "sha256-0f4592dcb53cf2b5d6b7febee6b4152018b565551a1c29e3c612f57b218ab295"
+      },
+      {
+        "source": "skills/mcp-builder/reference/evaluation.md",
+        "target": "skills/mcp-builder/reference/evaluation.md",
+        "integrity": "sha256-8c99479f8a2d22a636c38e274537aac3610879e26f34e0709825077c4576f427"
+      },
+      {
+        "source": "skills/mcp-builder/reference/mcp_best_practices.md",
+        "target": "skills/mcp-builder/reference/mcp_best_practices.md",
+        "integrity": "sha256-80fb4369a349447cf18ecdd7494fe7938b6065377e9f08c077cec411093a3007"
+      },
+      {
+        "source": "skills/mcp-builder/reference/node_mcp_server.md",
+        "target": "skills/mcp-builder/reference/node_mcp_server.md",
+        "integrity": "sha256-c3ba35a4f599dd53be9c6555ae72c19a7bf412cd5426576c2c08d42755482c66"
+      },
+      {
+        "source": "skills/mcp-builder/reference/python_mcp_server.md",
+        "target": "skills/mcp-builder/reference/python_mcp_server.md",
+        "integrity": "sha256-2da52f77e675191014ca2e146a4b95aa04d0ca7dd7e2b100322df15ade685e80"
+      },
+      {
+        "source": "skills/mcp-builder/scripts/connections.py",
+        "target": "skills/mcp-builder/scripts/connections.py",
+        "integrity": "sha256-9403668a2041568772082a8b334122c1f88daf0541fb393af4522d0094a47a6e"
+      },
+      {
+        "source": "skills/mcp-builder/scripts/evaluation.py",
+        "target": "skills/mcp-builder/scripts/evaluation.py",
+        "integrity": "sha256-49ed1d17cdce5da101b210197740713f49b935c29d4f339542a14b132658e6f7"
+      },
+      {
+        "source": "skills/mcp-builder/scripts/example_evaluation.xml",
+        "target": "skills/mcp-builder/scripts/example_evaluation.xml",
+        "integrity": "sha256-9272b348ddcc4b06ba562367ccd0770e018158c0068ac5116d5e34aaeff8777a"
+      },
+      {
+        "source": "skills/mcp-builder/scripts/requirements.txt",
+        "target": "skills/mcp-builder/scripts/requirements.txt",
+        "integrity": "sha256-d5d7558b2368ecea9dfeed7d1fbc71ee9e0750bebd1282faa527d528a344c3c7"
+      }
+    ]
+  }
+]

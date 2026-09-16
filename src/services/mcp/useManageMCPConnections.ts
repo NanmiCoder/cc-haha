@@ -10,10 +10,13 @@ import {
   fetchResourcesForClient,
   fetchToolsForClient,
   getMcpToolsCommandsAndResources,
+  getMcpClientCacheKey,
   reconnectMcpServerImpl,
+  setMcpConnectionClosedHandler,
 } from './client.js'
 import type {
   MCPServerConnection,
+  ConnectedMCPServer,
   ScopedMcpServerConfig,
   ServerResource,
 } from './types.js'
@@ -51,7 +54,6 @@ import {
 } from 'src/services/mcp/config.js'
 import type { AppState } from 'src/state/AppState.js'
 import type { PluginError } from 'src/types/plugin.js'
-import { logForDebugging } from 'src/utils/debug.js'
 import { getAllowedChannels } from '../../bootstrap/state.js'
 import { useNotifications } from '../../context/notifications.js'
 import {
@@ -88,6 +90,26 @@ import { commandBelongsToServer, excludeStalePluginClients } from './utils.js'
 const MAX_RECONNECT_ATTEMPTS = 5
 const INITIAL_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 30000
+
+type DisabledConnectionUpdate = Extract<MCPServerConnection, { type: 'disabled' }>
+
+export function discardConnectionAttemptIfDisabled(
+  client: MCPServerConnection,
+  isDisabled: boolean,
+  updateServer: (update: DisabledConnectionUpdate) => void,
+): boolean {
+  if (!isDisabled) return false
+
+  if (client.type === 'connected') {
+    void client.cleanup()
+  }
+  updateServer({
+    name: client.name,
+    type: 'disabled',
+    config: client.config,
+  })
+  return true
+}
 
 /**
  * Create a unique key for a plugin error to enable deduplication
@@ -223,6 +245,12 @@ export function useManageMCPConnections(
       let mcp = prevState.mcp
 
       for (const update of updates) {
+        // Drop stale disabled updates: if the server was re-enabled while the
+        // update was queued, the config no longer reflects a disabled state.
+        if (update.type === 'disabled' && !isMcpServerDisabled(update.name)) {
+          continue
+        }
+
         const {
           tools: rawTools,
           commands: rawCmds,
@@ -319,6 +347,20 @@ export function useManageMCPConnections(
       commands: Command[]
       resources?: ServerResource[]
     }) => {
+      // A connect that completes after the server was disabled (e.g. disable
+      // during a reconnect request) must not resurrect the server: close any
+      // fresh connection (its caches are cleared by the close handler) and
+      // mark it disabled instead.
+      if (
+        discardConnectionAttemptIfDisabled(
+          client,
+          isMcpServerDisabled(client.name),
+          updateServer,
+        )
+      ) {
+        return
+      }
+
       updateServer({ ...client, tools, commands, resources })
 
       // Handle side effects based on client state
@@ -329,143 +371,6 @@ export function useManageMCPConnections(
           // here (once per connect) instead of in a [mcpClients] effect avoids
           // re-running for every already-connected server on each state change.
           registerElicitationHandler(client.client, client.name, setAppState)
-
-          client.client.onclose = () => {
-            const configType = client.config.type ?? 'stdio'
-
-            clearServerCache(client.name, client.config).catch(() => {
-              logForDebugging(
-                `Failed to invalidate the server cache: ${client.name}`,
-              )
-            })
-
-            // TODO: This really isn't great: ideally we'd check appstate as the source of truth
-            // as to whether it was disconnected due to a disable, but appstate is stale at this
-            // point. Getting a live reference to appstate feels a little hacky, so we'll just
-            // check the disk state. We may want to refactor some of this.
-            if (isMcpServerDisabled(client.name)) {
-              logMCPDebug(
-                client.name,
-                `Server is disabled, skipping automatic reconnection`,
-              )
-              return
-            }
-
-            // Handle automatic reconnection for remote transports
-            // Skip stdio (local process) and sdk (internal) - they don't support reconnection
-            if (configType !== 'stdio' && configType !== 'sdk') {
-              const transportType = getTransportDisplayName(configType)
-              logMCPDebug(
-                client.name,
-                `${transportType} transport closed/disconnected, attempting automatic reconnection`,
-              )
-
-              // Cancel any existing reconnection attempt for this server
-              const existingTimer = reconnectTimersRef.current.get(client.name)
-              if (existingTimer) {
-                clearTimeout(existingTimer)
-                reconnectTimersRef.current.delete(client.name)
-              }
-
-              // Attempt reconnection with exponential backoff
-              const reconnectWithBackoff = async () => {
-                for (
-                  let attempt = 1;
-                  attempt <= MAX_RECONNECT_ATTEMPTS;
-                  attempt++
-                ) {
-                  // Check if server was disabled while we were waiting
-                  if (isMcpServerDisabled(client.name)) {
-                    logMCPDebug(
-                      client.name,
-                      `Server disabled during reconnection, stopping retry`,
-                    )
-                    reconnectTimersRef.current.delete(client.name)
-                    return
-                  }
-
-                  updateServer({
-                    ...client,
-                    type: 'pending',
-                    reconnectAttempt: attempt,
-                    maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
-                  })
-
-                  const reconnectStartTime = Date.now()
-                  try {
-                    const result = await reconnectMcpServerImpl(
-                      client.name,
-                      client.config,
-                    )
-                    const elapsed = Date.now() - reconnectStartTime
-
-                    if (result.client.type === 'connected') {
-                      logMCPDebug(
-                        client.name,
-                        `${transportType} reconnection successful after ${elapsed}ms (attempt ${attempt})`,
-                      )
-                      reconnectTimersRef.current.delete(client.name)
-                      onConnectionAttempt(result)
-                      return
-                    }
-
-                    logMCPDebug(
-                      client.name,
-                      `${transportType} reconnection attempt ${attempt} completed with status: ${result.client.type}`,
-                    )
-
-                    // On final attempt, update state with the result
-                    if (attempt === MAX_RECONNECT_ATTEMPTS) {
-                      logMCPDebug(
-                        client.name,
-                        `Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
-                      )
-                      reconnectTimersRef.current.delete(client.name)
-                      onConnectionAttempt(result)
-                      return
-                    }
-                  } catch (error) {
-                    const elapsed = Date.now() - reconnectStartTime
-                    logMCPError(
-                      client.name,
-                      `${transportType} reconnection attempt ${attempt} failed after ${elapsed}ms: ${error}`,
-                    )
-
-                    // On final attempt, mark as failed
-                    if (attempt === MAX_RECONNECT_ATTEMPTS) {
-                      logMCPDebug(
-                        client.name,
-                        `Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
-                      )
-                      reconnectTimersRef.current.delete(client.name)
-                      updateServer({ ...client, type: 'failed' })
-                      return
-                    }
-                  }
-
-                  // Schedule next retry with exponential backoff
-                  const backoffMs = Math.min(
-                    INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1),
-                    MAX_BACKOFF_MS,
-                  )
-                  logMCPDebug(
-                    client.name,
-                    `Scheduling reconnection attempt ${attempt + 1} in ${backoffMs}ms`,
-                  )
-
-                  await new Promise<void>(resolve => {
-                    // eslint-disable-next-line no-restricted-syntax -- timer stored in ref for cancellation; sleep() doesn't expose the handle
-                    const timer = setTimeout(resolve, backoffMs)
-                    reconnectTimersRef.current.set(client.name, timer)
-                  })
-                }
-              }
-
-              void reconnectWithBackoff()
-            } else {
-              updateServer({ ...client, type: 'failed' })
-            }
-          }
 
           // Channel push: notifications/claude/channel → enqueue().
           // Gate decides whether to register the handler; connection stays
@@ -626,9 +531,9 @@ export function useManageMCPConnections(
                 try {
                   // Grab cached promise before invalidating to log previous count
                   const previousToolsPromise = fetchToolsForClient.cache.get(
-                    client.name,
+                    getMcpClientCacheKey(client),
                   )
-                  fetchToolsForClient.cache.delete(client.name)
+                  fetchToolsForClient.cache.delete(getMcpClientCacheKey(client))
                   const newTools = await fetchToolsForClient(client)
                   const newCount = newTools.length
                   if (previousToolsPromise) {
@@ -678,7 +583,7 @@ export function useManageMCPConnections(
                 try {
                   // Skills come from resources, not prompts — don't invalidate their
                   // cache here. fetchMcpSkillsForClient returns the cached result.
-                  fetchCommandsForClient.cache.delete(client.name)
+                  fetchCommandsForClient.cache.delete(getMcpClientCacheKey(client))
                   const [mcpPrompts, mcpSkills] = await Promise.all([
                     fetchCommandsForClient(client),
                     feature('MCP_SKILLS')
@@ -714,14 +619,14 @@ export function useManageMCPConnections(
                   type: 'resources' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
                 })
                 try {
-                  fetchResourcesForClient.cache.delete(client.name)
+                  fetchResourcesForClient.cache.delete(getMcpClientCacheKey(client))
                   if (feature('MCP_SKILLS')) {
                     // Skills are discovered from resources, so refresh them too.
                     // Invalidate prompts cache as well: we write commands here,
                     // and a concurrent prompts/list_changed could otherwise have
                     // us stomp its fresh result with our cached stale one.
                     fetchMcpSkillsForClient!.cache.delete(client.name)
-                    fetchCommandsForClient.cache.delete(client.name)
+                    fetchCommandsForClient.cache.delete(getMcpClientCacheKey(client))
                     const [newResources, mcpPrompts, mcpSkills] =
                       await Promise.all([
                         fetchResourcesForClient(client),
@@ -1070,6 +975,151 @@ export function useManageMCPConnections(
     [store, onConnectionAttempt],
   )
 
+  // Automatic reconnection for remote transports after an unexpected close.
+  // Skipped for stdio/sdk servers, which don't support reconnection.
+  const reconnectWithBackoff = useCallback(
+    async (name: string) => {
+      const client = store.getState().mcp.clients.find(c => c.name === name)
+      if (!client || client.type !== 'connected') return
+
+      const configType = client.config.type ?? 'stdio'
+      if (configType === 'stdio' || configType === 'sdk') {
+        updateServer({ ...client, type: 'failed' })
+        return
+      }
+
+      const transportType = getTransportDisplayName(configType)
+      logMCPDebug(
+        name,
+        `${transportType} transport closed/disconnected, attempting automatic reconnection`,
+      )
+
+      // Cancel any existing reconnection attempt for this server
+      const existingTimer = reconnectTimersRef.current.get(name)
+      if (existingTimer) {
+        clearTimeout(existingTimer)
+        reconnectTimersRef.current.delete(name)
+      }
+
+      for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+        // Stop retrying if the server was disabled while we were waiting
+        if (isMcpServerDisabled(name)) {
+          logMCPDebug(
+            name,
+            `Server disabled during reconnection, stopping retry`,
+          )
+          reconnectTimersRef.current.delete(name)
+          return
+        }
+
+        updateServer({
+          ...client,
+          type: 'pending',
+          reconnectAttempt: attempt,
+          maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
+        })
+
+        const reconnectStartTime = Date.now()
+        try {
+          const result = await reconnectMcpServerImpl(name, client.config)
+          const elapsed = Date.now() - reconnectStartTime
+
+          if (result.client.type === 'connected') {
+            logMCPDebug(
+              name,
+              `${transportType} reconnection successful after ${elapsed}ms (attempt ${attempt})`,
+            )
+            reconnectTimersRef.current.delete(name)
+            onConnectionAttempt(result)
+            return
+          }
+
+          logMCPDebug(
+            name,
+            `${transportType} reconnection attempt ${attempt} completed with status: ${result.client.type}`,
+          )
+
+          // On final attempt, update state with the result
+          if (attempt === MAX_RECONNECT_ATTEMPTS) {
+            logMCPDebug(
+              name,
+              `Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
+            )
+            reconnectTimersRef.current.delete(name)
+            onConnectionAttempt(result)
+            return
+          }
+        } catch (error) {
+          const elapsed = Date.now() - reconnectStartTime
+          logMCPError(
+            name,
+            `${transportType} reconnection attempt ${attempt} failed after ${elapsed}ms: ${error}`,
+          )
+
+          // On final attempt, mark as failed
+          if (attempt === MAX_RECONNECT_ATTEMPTS) {
+            logMCPDebug(
+              name,
+              `Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
+            )
+            reconnectTimersRef.current.delete(name)
+            if (isMcpServerDisabled(name)) {
+              updateServer({ name, type: 'disabled', config: client.config })
+            } else {
+              updateServer({ ...client, type: 'failed' })
+            }
+            return
+          }
+        }
+
+        // Schedule next retry with exponential backoff
+        const backoffMs = Math.min(
+          INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1),
+          MAX_BACKOFF_MS,
+        )
+        logMCPDebug(
+          name,
+          `Scheduling reconnection attempt ${attempt + 1} in ${backoffMs}ms`,
+        )
+
+        await new Promise<void>(resolve => {
+          // eslint-disable-next-line no-restricted-syntax -- timer stored in ref for cancellation; sleep() doesn't expose the handle
+          const timer = setTimeout(resolve, backoffMs)
+          reconnectTimersRef.current.set(name, timer)
+        })
+      }
+    },
+    [store, updateServer, onConnectionAttempt],
+  )
+
+  // Handle connection closes: update AppState to disabled when the config no
+  // longer allows the server, otherwise attempt reconnection.
+  const handleConnectionClosed = useCallback(
+    (name: string, closedClient: ConnectedMCPServer['client']) => {
+      const client = store.getState().mcp.clients.find(c => c.name === name)
+      if (
+        !client ||
+        client.type !== 'connected' ||
+        client.client !== closedClient
+      ) return
+
+      if (isMcpServerDisabled(name)) {
+        updateServer({ name, type: 'disabled', config: client.config })
+        return
+      }
+
+      void reconnectWithBackoff(name)
+    },
+    [store, updateServer, reconnectWithBackoff],
+  )
+
+  // Register the close handler while this session manages connections;
+  // unregister on unmount so shutdown closes don't reconnect.
+  useEffect(() => {
+    setMcpConnectionClosedHandler(handleConnectionClosed)
+    return () => setMcpConnectionClosedHandler(undefined)
+  }, [handleConnectionClosed])
+
   // Expose function to toggle server enabled/disabled state
   const toggleMcpServer = useCallback(
     async (serverName: string): Promise<void> => {
@@ -1090,8 +1140,8 @@ export function useManageMCPConnections(
           reconnectTimersRef.current.delete(serverName)
         }
 
-        // Persist disabled state to disk FIRST before clearing cache
-        // This is important because the onclose handler checks disk state
+        // Persist disabled state to disk FIRST; the close handler reads the
+        // disk state to decide whether to reconnect
         setMcpServerEnabled(serverName, false)
 
         // Disabling: disconnect and clean up if currently connected

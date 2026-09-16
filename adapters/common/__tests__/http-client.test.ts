@@ -219,6 +219,33 @@ describe('AdapterHttpClient', () => {
     )
   })
 
+  it('sessionExists accepts the server detail shape for an existing desktop worktree session', async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
+    const workDir = path.join(rootDir, '.claude', 'worktrees', 'existing-task')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      client = new AdapterHttpClient('ws://127.0.0.1:3456', { allowedProjectRoots: [rootDir] })
+      globalThis.fetch = mock(() => Promise.resolve(Response.json({
+        id: 'desktop-session',
+        title: 'Existing desktop task',
+        projectRoot: rootDir,
+        workDir,
+        workDirExists: true,
+        permissionMode: 'default',
+        messages: [{ role: 'user', content: 'Previous task context' }],
+      }))) as any
+
+      await expect(client.sessionExists('desktop-session')).resolves.toBe(true)
+
+      // A removed worktree must not be resumed in a different directory merely
+      // because its logical project still exists or a cached flag says it does.
+      fs.rmSync(workDir, { recursive: true, force: true })
+      await expect(client.sessionExists('desktop-session')).resolves.toBe(false)
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
   it('sessionExists rejects sessions outside the root or using bypassPermissions', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'))
@@ -227,10 +254,8 @@ describe('AdapterHttpClient', () => {
       globalThis.fetch = mock((url: string) => {
         const unsafe = url.endsWith('/outside')
         return Promise.resolve(Response.json({
-          status: {
-            workDir: unsafe ? outsideDir : rootDir,
-            permissionMode: unsafe ? 'default' : 'bypassPermissions',
-          },
+          workDir: unsafe ? outsideDir : rootDir,
+          permissionMode: unsafe ? 'default' : 'bypassPermissions',
         }))
       }) as any
 
@@ -322,10 +347,28 @@ describe('AdapterHttpClient', () => {
       const result = await client.listSessions({ project: rootDir, limit: 10, offset: 5 })
 
       expect(result.sessions.map((session) => session.id)).toEqual(['session-1'])
-      expect(result.total).toBe(1)
+      expect(result.total).toBe(2)
       expect((globalThis.fetch as any).mock.calls[0][0]).toBe(
         `http://127.0.0.1:3456/api/sessions?project=${encodeURIComponent(rootDir)}&limit=10&offset=5`,
       )
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves server pagination when an entire page is filtered out', async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
+    try {
+      client = new AdapterHttpClient('ws://127.0.0.1:3456', { allowedProjectRoots: [rootDir] })
+      globalThis.fetch = mock(() => Promise.resolve(Response.json({
+        sessions: [{ id: 'unsafe-session', workDir: rootDir, permissionMode: 'bypassPermissions' }],
+        total: 6,
+      }))) as any
+
+      await expect(client.listSessions({ limit: 1, offset: 0 })).resolves.toEqual({
+        sessions: [],
+        total: 6,
+      })
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true })
     }

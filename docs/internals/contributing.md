@@ -71,7 +71,7 @@ bun run check:desktop-ui-smoke # 真实桌面 UI + 真实权限对话框 + mock 
 
 所有会启动真实 server 的 quality-gate lane 都跑在沙箱配置目录里（`scripts/quality-gate/sandbox.ts`），并在结束时校验没有写过开发者真实的 `~/.claude`；写了就判定 lane 失败。
 
-开发时运行 impact report 选中的窄命令即可。准备声明 PR-ready、改动风险较高，或需要完整复现托管 CI 时，再运行统一入口：
+开发时运行 impact report 选中的窄命令即可。需要声明 PR-ready 或完整验证时，直接使用统一入口，无需先单独执行其全部 lane：
 
 ```bash
 bun run verify
@@ -96,24 +96,33 @@ PR 描述里请贴出你实际运行的命令和 summary。`quality:pr` / `quali
 
 ## AI Coding Agent 修复循环
 
-给 AI 写代码时，可以直接把这段作为验收指令：
+任务的完成标准是实现目标行为、运行当前 diff 必需的验证，并修复由本次改动造成的失败。任务范围内的本地编辑、隔离 fixture 检查和相关失败修复无需逐步请求批准；提交、推送、发布、仓库设置及真实模型额度仍遵循根 `AGENTS.md` 的授权边界。
 
-```text
-Run `bun run check:impact`, then run the selected focused checks. If the task
-requires PR-ready/full validation, run `bun run verify`. If it fails, read the latest
-`artifacts/quality-runs/<timestamp>/report.md` and the relevant lane log,
-fix the missing tests, coverage failures, type/lint/build errors, or docs/native
-failures, then rerun `bun run verify` until it passes. Do not lower coverage
-baselines or thresholds unless a maintainer explicitly requested it.
-```
+`bun run check:impact` 用于确定检查范围；普通任务运行选中的检查，需要 PR-ready/full validation 时直接使用 `bun run verify`，不必先单独重复执行其全部 lane。修复期间先重跑受影响的窄检查，交付时补齐最终 diff 的所需证据。没有后续改动或未解决风险时，不要反复运行已经通过的检查。无关的现有失败或环境阻塞应准确报告，而不是为了让结果变绿擅自扩大修改范围。
 
-Agent 应按这个顺序处理失败：
+需要诊断失败时，按失败类型查阅相应证据：
 
-1. 先看 `artifacts/quality-runs/<timestamp>/report.md` 的 Summary 和 Result Matrix，定位失败 lane。
-2. 如果是 `Path-aware PR checks` 失败，优先看是否缺同区域测试、是否动了 CLI core、是否动了 coverage policy；不要用 override 绕过普通功能 PR。
-3. 如果是 `Coverage gate` 失败，打开 `artifacts/coverage/<timestamp>/coverage-report.md` 或 `coverage-report.json`，优先修 `changedLines.failures` 和 `failures`；`targetGaps` 是技术债提示，新改动应让触达区域变好。
-4. 如果是 desktop/server/adapters/native/docs 失败，读对应 `artifacts/quality-runs/<timestamp>/logs/<lane>.log`，补测试或修构建，再跑相关窄命令。
-5. 窄命令通过后，如果要声明 PR-ready/full validation，再跑一次 `bun run verify`。只有最终 Summary 是 `failed=0`，才可以这样声明。
+| 失败类型 | 证据与处理 |
+| --- | --- |
+| Lane 失败 | `artifacts/quality-runs/<timestamp>/report.md` 的 Summary / Result Matrix，以及 `logs/<lane>.log` |
+| Path-aware PR checks | 核对同区域测试、CLI core 和 coverage policy；维护者 override 需要明确决定 |
+| Coverage gate | `artifacts/coverage/<timestamp>/coverage-report.md` 或 `.json`；修复 `changedLines.failures` / `failures`，`targetGaps` 是技术债提示 |
+| 构建、类型、lint、文档或 native | 修复对应日志指出的本次变更问题，重跑受影响检查 |
+
+只有最终 diff 的 `bun run verify` 报告通过，才能声明 PR-ready/full validation。不要通过降低 coverage baseline/threshold 或改写测试预期掩盖失败。
+
+## 回归测试设计
+
+同区域测试文件是门禁的最低信号，测试还需要证明实际行为：
+
+- **驱动状态迁移。** 需要验证迁移时，通过 `handleServerMessage`、真实 store action 或用户事件产生状态，避免直接 `setState` 写出本应由迁移生成的结果。初始化 fixture 仍可直接设置状态。
+- **断言行为不变量。** 断言用户应看到哪个会话或模型的数据，而不是抄下当前屏幕的字符串；测试输入和预期应由预期行为契约支撑，不为掩盖失败而修改。
+- **覆盖丢弃与保留两个方向。** 验证去重、合并和过滤规则应丢弃及应保留的情况。消息去重尤其要拦住 replay、保留真实重复；透传上游 `uuid` / `toolUseId` 等身份，避免用文本猜测身份。
+- **跨边界测试连接点。** server、store、component 分别通过并不能证明消息真正驱动了 UI；通过真实入口验证有风险的连接，避免 mock 被测模块本身。
+
+覆盖率报告也有边界：`desktop/vitest.config.ts` 只采集 `src/**`，不包含 Electron main process。仓库现有 Bun coverage baseline 中分支总数为 0，`coverage.ts` 把 `0/0` 显示为 100%；这不代表测到了全部分支。查看当前配置和报告，不把历史覆盖率数字当作新改动的证明。
+
+### 覆盖率参考
 
 外部参考口径：
 
@@ -121,14 +130,20 @@ Agent 应按这个顺序处理失败：
 - [Microsoft Visual Studio / Azure DevOps 文档](https://learn.microsoft.com/en-us/visualstudio/test/using-code-coverage-to-determine-how-much-code-is-being-tested)：团队通常以约 80% 为目标，典型项目要求可为 75%，生成代码可以放宽。
 - [ChromiumOS EC](https://chromium.googlesource.com/chromiumos/platform/ec/+/main/docs/code_coverage.md)：新增或变更行要求至少 80% 覆盖。
 
+## 维护 Agent 指导
+
+根 `AGENTS.md` 保留项目约束与入口，专项规则留在对应目录，解释和示例按需放到文档。共享指导应适用于贡献者使用的不同模型；能力升级后重新核对重复流程和宽泛停止条件，不能据此跳过现行安全或 CI 契约。这次整理参考了 Eric Provencher 的 [Rethinking skills and prompts for GPT-6 Astra](https://x.com/pvncher/status/2095991462416490862)（2026-09-04）。
+
+仓库技能的描述只写适用任务和必要的区分信息，操作细节放正文或引用文件。多工作流技能用短入口路由；避免为了覆盖更多关键词而扩大触发范围。模型默认值、工具格式和压缩行为属于产品实现，更新相关文档前应先核对源码。
+
 ## Feature Quality Contract
 
 所有新功能、bugfix 和行为变化都必须带着可验证证据交付。这条规则同时约束人和 AI Coding Agent：
 
 - 先声明变更面：`desktop`、`server`、`adapter`、`native`、`docs`、`provider/runtime`、`agent-loop` 或 `release`。
-- `desktop/src`、`src/server`、`src/tools`、`src/utils`、`adapters` 下的生产代码变更必须同 PR 带同区域测试；除非维护者显式加 `allow-missing-tests`。
+- 可执行 JS/TS 生产代码变更必须同 PR 带同区域测试；`scripts/pr/change-policy.ts` 分别检查 `desktop/src/`、`src/server/`、其余 `src/` 和 `adapters/` 四个区域，除非维护者显式加 `allow-missing-tests`。文案或 CSS 等非可执行文件不因这一规则单独要求新增测试，仍需完成 impact 选中的检查。
 - 纯逻辑写单元测试；server/API/provider/runtime 写 API 或 request-shape 测试；桌面 UI/store/API 写 Vitest/Testing Library；跨 UI、WebSocket、provider proxy、native sidecar、发布打包的用户流程要补 E2E 或桌面 UI smoke。
-- agent loop、工具调用、provider 路由、模型选择、文件编辑、权限、会话恢复、桌面聊天改动，PR 内必须有 mock/fixture 测试；有 provider 条件时还要给 live smoke 或 baseline 证据。
+- agent loop、工具调用、provider 路由、模型选择、文件编辑、权限、会话恢复、桌面聊天改动，PR 内必须有 mock/fixture 测试；live smoke 或 baseline 仅在确定性检查通过且维护者明确授权额度后运行。发现本机 provider 不代表获得授权，未运行时如实说明。
 - 覆盖率是功能的一部分。本项目按 Google/Microsoft 风格执行：生成物/构建产物不计入产品覆盖率，维护中的产品区域要逐步达到 75-80%+，新增或变更的可执行生产代码行必须满足 `coverage-thresholds.json` 里的 changed-line coverage 门槛。
 - 不要为了过门禁随便降低 `coverage-baseline.json` 或 `coverage-thresholds.json`；确实要改时必须有 `allow-coverage-baseline-change` 和原因。历史低覆盖区域是技术债，新 PR 至少要让触达区域更好。
 - PR 描述必须写清楚：改了哪些文件、补了哪些测试、coverage 报告路径、E2E/live 报告路径或 blocker、剩余风险。
@@ -187,7 +202,7 @@ bun run check:coverage    # root、desktop、adapters 覆盖率报告和 ratchet
 
 如果只改了很窄的文件，先跑对应的定向测试即可；只有在声明 PR-ready/full validation 时才需要本地再跑 `bun run verify`，托管 CI 仍会执行所有被选中的必需 lane。
 
-生产代码改动必须带对应测试文件：`desktop/src/**`、`src/server/**`、`src/tools/**`、`src/utils/**`、`adapters/**` 变更如果没有同区域测试，会触发阻断。只有维护者确认不适合自动化测试时，才能使用 `allow-missing-tests`。覆盖率 baseline/threshold 变更同样需要维护者确认并加 `allow-coverage-baseline-change`。
+可执行 JS/TS 生产代码改动必须带对应测试文件；同区域划分见上文 Feature Quality Contract 和 `scripts/pr/change-policy.ts`，缺失时会触发阻断。只有维护者确认不适合自动化测试时，才能使用 `allow-missing-tests`。覆盖率 baseline/threshold 变更同样需要维护者确认并加 `allow-coverage-baseline-change`。
 
 ## 真实模型 Baseline
 
@@ -269,7 +284,7 @@ bun run quality:gate --mode baseline --allow-live
 bun run quality:gate --mode release --allow-live --provider-model <selector>:main
 ```
 
-release 模式会组合 PR checks、baseline catalog、live baseline、native checks，并用当前平台 canonical release artifact 跑 `package-smoke --package-kind release`。发版报告同样写入 `artifacts/quality-runs/<timestamp>/`。线上 release workflow 在打包矩阵前会先跑 `bun run verify` 作为非 live 预检；真实 live release gate 仍需要维护者用可用 provider 显式运行。
+release 模式会组合 PR checks、baseline catalog、live baseline、native checks，并用当前平台 canonical release artifact 跑 `package-smoke --package-kind release`。发版报告同样写入 `artifacts/quality-runs/<timestamp>/`。`release-desktop.yml` 只负责构建与发布，不运行 `bun run verify`；发版前质量证据来自 PR 门禁及维护者显式运行的全量检查和 release gate。
 
 release 模式下 live lane 不允许静默跳过。缺少 provider、真实模型额度或外部账号时，门禁会失败，并要求在发版记录里明确 blocker。
 

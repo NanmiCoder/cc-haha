@@ -4,6 +4,7 @@ import {
   DESKTOP_PERSISTENCE_VERSION_KEY,
   runDesktopPersistenceMigrations,
 } from './persistenceMigrations'
+import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
@@ -25,6 +26,27 @@ describe('desktop persistence migrations', () => {
       activeTabId: 'session-1',
     })
     expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+  })
+
+  test.each([undefined, 'session', 'connectors'])('preserves connector identities from legacy startup fixtures with type %s', (type) => {
+    window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: 'session-1', title: 'Task' },
+        { sessionId: '__connectors__', title: 'Connectors', ...(type ? { type } : {}) },
+      ],
+      activeTabId: '__connectors__',
+    }))
+    runDesktopPersistenceMigrations()
+    const expected = {
+      openTabs: [
+        { sessionId: 'session-1', title: 'Task', type: 'session' },
+        { sessionId: '__market__', title: 'Connectors', type: 'market' },
+      ],
+      activeTabId: '__market__',
+    }
+    expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs')!)).toEqual(expected)
+    runDesktopPersistenceMigrations()
+    expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs')!)).toEqual(expected)
   })
 
   test('preserves persisted market tabs during startup migration', () => {
@@ -253,4 +275,133 @@ describe('desktop persistence migrations', () => {
       DESKTOP_PERSISTENCE_VERSION_KEY,
     ]))
   })
+  test('keeps a schema-1 install usable: no workspace key means nothing to migrate', () => {
+    window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [{ sessionId: 'session-1', title: 'Chat', type: 'session' }],
+      activeTabId: 'session-1',
+    }))
+    window.localStorage.setItem('cc-haha-theme', 'ink-blue')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).not.toContain('cc-haha.workspace')
+    expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
+    // The schema-1 keys a v0.6.2 install carries must survive untouched.
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs')!).openTabs).toHaveLength(1)
+    expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+  })
+
+  test('leaves a workspace entry written by a newer schema untouched', () => {
+    const future = JSON.stringify({
+      version: WORKSPACE_STORAGE_VERSION + 1,
+      sessions: { s1: { tabs: [{ kind: 'file', id: 'f1', path: 'a.ts' }] } },
+    })
+    window.localStorage.setItem('cc-haha.workspace', future)
+
+    const report = runDesktopPersistenceMigrations()
+
+    // The hydrator already refuses an unknown version. Deleting it here would
+    // mean a single downgrade launch permanently discards the workspace the
+    // newer build is still using.
+    expect(report.migratedKeys).not.toContain('cc-haha.workspace')
+    expect(window.localStorage.getItem('cc-haha.workspace')).toBe(future)
+  })
+
+  test('upgrades workspace v1 without losing the Files launcher, turns, or unknown metadata', () => {
+    window.localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '2')
+    window.localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: 1,
+      futureMetadata: { keep: true },
+      sessions: {
+        s1: {
+          layout: 'full',
+          activeSideTabId: 'files',
+          futureSetting: 42,
+          tabs: [
+            { kind: 'file', id: 'files', path: '', preview: true },
+            { kind: 'review', id: 'review', source: { kind: 'turn', turnKey: 'message-1' }, selectedPath: 'a.ts' },
+          ],
+        },
+      },
+    }))
+
+    runDesktopPersistenceMigrations()
+    const stored = JSON.parse(window.localStorage.getItem('cc-haha.workspace')!)
+    expect(stored).toMatchObject({
+      version: WORKSPACE_STORAGE_VERSION,
+      futureMetadata: { keep: true },
+      sessions: {
+        s1: {
+          layout: 'full',
+          activeSideTabId: 'files',
+          futureSetting: 42,
+          tabs: [
+            { id: 'files', path: '', preview: true },
+            { id: 'review', source: { kind: 'turn', turnKey: 'message-1' }, viewedPaths: [] },
+          ],
+        },
+      },
+    })
+    expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY))
+      .toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    const once = window.localStorage.getItem('cc-haha.workspace')
+    runDesktopPersistenceMigrations()
+    expect(window.localStorage.getItem('cc-haha.workspace')).toBe(once)
+  })
+
+  test('strips tab entries that name a host resource the previous run owned', () => {
+    window.localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: 1,
+      sideWidth: 860,
+      bottomHeight: 420,
+      sessions: {
+        s1: {
+          layout: 'split',
+          bottomOpen: false,
+          activeSideTabId: 'f1',
+          activeBottomTabId: null,
+          nextTerminalOrdinal: 2,
+          tabs: [
+            { kind: 'file', id: 'f1', preview: false, path: 'a.ts' },
+            { kind: 'terminal', id: 't1', dock: 'side', cwd: '/repo', ordinal: 1, runtimeId: 'stale-pty' },
+            { kind: 'browser', id: 'b1', preview: false, storageId: 'p1', restoreUrl: null, title: null, browserTabId: 'stale-view' },
+          ],
+        },
+      },
+    }))
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).toContain('cc-haha.workspace')
+    const stored = JSON.parse(window.localStorage.getItem('cc-haha.workspace')!)
+    expect(stored.sessions.s1.tabs.map((tab: { id: string }) => tab.id)).toEqual(['f1'])
+  })
+
+  test('removes a corrupt workspace entry rather than throwing at startup', () => {
+    window.localStorage.setItem('cc-haha.workspace', '{not json')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).toContain('cc-haha.workspace')
+    expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+})
+
+test('merges legacy connector and skill market tabs while preserving the active market and unrelated user state', () => {
+  localStorage.clear()
+  localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '3')
+  localStorage.setItem('custom-user-state', JSON.stringify({ selectedSkill: 'my-skill' }))
+  localStorage.setItem('cc-haha-open-tabs', JSON.stringify({ openTabs: [
+    { sessionId: 'session-1', title: 'Work', type: 'session' },
+    { sessionId: '__market__', title: 'Skills', type: 'market' },
+    { sessionId: '__connectors__', title: 'Connectors', type: 'connectors' },
+  ], activeTabId: '__connectors__' }))
+  runDesktopPersistenceMigrations()
+  expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!)).toEqual({ openTabs: [
+    { sessionId: 'session-1', title: 'Work', type: 'session' },
+    { sessionId: '__market__', title: 'Skills', type: 'market' },
+  ], activeTabId: '__market__' })
+  expect(JSON.parse(localStorage.getItem('custom-user-state')!)).toEqual({ selectedSkill: 'my-skill' })
 })

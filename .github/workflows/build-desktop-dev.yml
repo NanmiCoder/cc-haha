@@ -89,7 +89,8 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: bun install
+        # The x64 Windows runner also packages ARM64; retain both native addons.
+        run: bun install --cpu="*"
 
       - name: Install adapter dependencies
         working-directory: adapters

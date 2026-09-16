@@ -7,6 +7,7 @@
  */
 
 import { ProviderService } from './providerService.js'
+import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { getPresetAuthStrategy } from './providerRuntimeEnv.js'
 import {
   getNetworkProxyFetchOptions,
@@ -195,7 +196,7 @@ export async function generateTitle(
     if (!resolvedProvider?.baseUrl || !resolvedProvider?.apiKey) return null
 
     const model = resolvedProvider.models.haiku || resolvedProvider.models.main
-    const url = `${resolvedProvider.baseUrl.replace(/\/+$/, '')}/v1/messages`
+    const url = `${normalizeAnthropicBaseUrl(resolvedProvider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
     const authStrategy = resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
     const requestHeaders = buildAnthropicTitleRequestHeaders(resolvedProvider.apiKey, authStrategy)
     const requestBody = {
@@ -491,10 +492,15 @@ function looksLikeStructuredTitleFragment(text: string): boolean {
  * Returns false when a user custom title exists, because custom titles are
  * intentional and must not be replaced by automatic title refreshes.
  */
-export async function saveAiTitle(sessionId: string, title: string): Promise<boolean> {
+export async function saveAiTitle(
+  sessionId: string,
+  title: string,
+  persist = sessionService.shouldPersistSession(),
+): Promise<boolean> {
   if (await sessionService.getCustomTitle(sessionId)) {
     return false
   }
-  await sessionService.appendAiTitle(sessionId, title)
+  if (persist) await sessionService.appendAiTitle(sessionId, title)
+  else await sessionService.appendAiTitle(sessionId, title, false)
   return true
 }

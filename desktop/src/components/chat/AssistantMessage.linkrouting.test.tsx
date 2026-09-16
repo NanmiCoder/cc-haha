@@ -3,8 +3,16 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openBrowser } = vi.hoisted(() => ({ openBrowser: vi.fn() }))
-vi.mock('../../stores/browserPanelStore', () => ({
-  useBrowserPanelStore: { getState: () => ({ open: openBrowser }) },
+// The unified open entry point replaced the per-store `open` / `openPreview`
+// pair: every caller now names a target and the controller decides the tab.
+vi.mock('../../lib/workspace/openTarget', () => ({
+  workspaceOpen: {
+    file: (...args: unknown[]) => openPreviewFn(...args),
+    browser: (...args: unknown[]) => openBrowser(...args),
+    review: (...args: unknown[]) => openPreviewFn(...args),
+    terminal: vi.fn(),
+  },
+  openWorkspaceTarget: vi.fn(),
 }))
 vi.mock('../../lib/desktopRuntime', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -23,14 +31,6 @@ vi.mock('../../stores/openTargetStore', () => ({
 // Mock workspacePanelStore — usable both as a hook selector and via getState().
 // workDir is undefined (no active workspace) so relative paths resolve as-is.
 const openPreviewFn = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
-vi.mock('../../stores/workspacePanelStore', () => {
-  const state = { statusBySession: {} as Record<string, { workDir?: string } | undefined>, openPreview: openPreviewFn }
-  const useWorkspacePanelStore = Object.assign(
-    (selector: (s: typeof state) => unknown) => selector(state),
-    { getState: () => state },
-  )
-  return { useWorkspacePanelStore }
-})
 
 // Mock tauri shell (used by openSystem inside the card's open-with)
 const shellOpen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))

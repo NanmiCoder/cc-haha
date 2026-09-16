@@ -515,6 +515,65 @@ describe('cron scheduler launcher resolution', () => {
     }
   })
 
+  unixOnly('executeTask reloads the General team preference for each new scheduled process', async () => {
+    const appRoot = path.join(tmpDir, 'app-root')
+    const sidecarPath = path.join(tmpDir, 'claude-sidecar')
+    const teamEnvPath = path.join(tmpDir, 'team.env')
+    const settingsPath = path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json')
+    const envKeys = [
+      'CC_HAHA_AGENT_TEAMS_DEFAULT',
+      'CC_HAHA_AGENT_TEAMS_ENABLED',
+      'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
+    ] as const
+    const savedEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
+    await fs.mkdir(appRoot, { recursive: true })
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+    await fs.writeFile(sidecarPath, [
+      '#!/bin/sh',
+      `printf '%s\\n' "$CC_HAHA_AGENT_TEAMS_DEFAULT" "\${CC_HAHA_AGENT_TEAMS_ENABLED-unset}" "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" > "${teamEnvPath}"`,
+      '/bin/cat >/dev/null',
+      'printf \'%s\\n\' \'{"type":"result","result":"team env ok"}\'',
+      '',
+    ].join('\n'))
+    await fs.chmod(sidecarPath, 0o755)
+    process.env.CLAUDE_CLI_PATH = sidecarPath
+    process.env.CLAUDE_APP_ROOT = appRoot
+    process.env.HOME = tmpDir
+    process.env.CC_HAHA_AGENT_TEAMS_DEFAULT = '0'
+    process.env.CC_HAHA_AGENT_TEAMS_ENABLED = '1'
+    process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '0'
+
+    try {
+      const cronService = new CronService()
+      const scheduler = new CronScheduler(cronService)
+      const task = await cronService.createTask({
+        cron: '* * * * *',
+        prompt: 'cron team environment test',
+        recurring: true,
+        folderPath: tmpDir,
+      })
+      for (const enabled of [undefined, true, false, undefined]) {
+        await fs.writeFile(settingsPath, JSON.stringify(
+          enabled === undefined ? {} : { agentTeamsEnabled: enabled },
+        ))
+        const run = await scheduler.executeTask(task)
+        expect(run.status).toBe('completed')
+        expect(run.output).toBe('team env ok')
+        expect((await fs.readFile(teamEnvPath, 'utf-8')).trim().split('\n')).toEqual([
+          '0',
+          enabled === true ? '1' : '0',
+          '0',
+        ])
+      }
+    } finally {
+      for (const key of envKeys) {
+        const value = savedEnv[key]
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
   unixOnly('executeTask launches scheduled tasks with full permissions', async () => {
     const appRoot = path.join(tmpDir, 'app-root')
     const sidecarPath = path.join(tmpDir, 'claude-sidecar')

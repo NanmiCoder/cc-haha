@@ -1,3 +1,4 @@
+import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -5,6 +6,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { SearchField } from './SearchField'
 
 describe('SearchField', () => {
+  it('forwards a ref to focus the actual search field from quick open', () => {
+    const ref = createRef<HTMLInputElement>()
+    render(<SearchField ref={ref} label="Files" clearLabel="Clear" value="" onChange={() => {}} />)
+    ref.current?.focus()
+    expect(screen.getByRole('searchbox')).toHaveFocus()
+  })
   it('names itself from label even with no visible label', () => {
     render(<SearchField label="Search sessions" clearLabel="Clear search" value="" onChange={() => {}} />)
     expect(screen.getByRole('searchbox', { name: 'Search sessions' })).toBeInTheDocument()

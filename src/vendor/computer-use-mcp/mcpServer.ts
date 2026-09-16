@@ -26,17 +26,25 @@ import {
 
 import type { ScreenshotResult } from "./executor.js";
 import type { CuCallToolResult } from "./toolCalls.js";
+import { NATIVE_ERROR } from './nativeError.js'
 import {
+  APP_INVENTORY,
+  NATIVE_CALL_NOT_DISPATCHED,
   defersLockAcquire,
   handleToolCall,
   resetMouseButtonHeld,
+  RESOLVED_APP_PATH,
   staticRequestError,
 } from "./toolCalls.js";
 import { buildComputerUseTools } from "./tools.js";
 import {
   defersLockAcquire as legacyDefersLockAcquire,
   handleToolCall as legacyHandleToolCall,
+  hasHeldMouseForSession,
+  releaseHeldMouseForSession,
   resetMouseButtonHeld as legacyResetMouseButtonHeld,
+  WINDOWS_MOUSE_OWNER,
+  type WindowsMouseOwner,
 } from "./windowsLegacyToolCalls.js";
 import { buildComputerUseTools as buildLegacyComputerUseTools } from "./windowsLegacyTools.js";
 import type {
@@ -49,6 +57,7 @@ import type {
   CuPermissionResponse,
 } from "./types.js";
 import { DEFAULT_GRANT_FLAGS } from "./types.js";
+import { REPL_MAX_CODE_BYTES, type ComputerUseReplRuntime } from './replProtocol.js'
 
 const DEFAULT_LOCK_HELD_MESSAGE =
   "Another Claude session is currently using the computer. Wait for that " +
@@ -103,7 +112,8 @@ export function buildPlatformComputerUseTools(
 ): Tool[] {
   return caps.platform === "win32"
     ? buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
-    : buildComputerUseTools(caps, coordinateMode, installedAppNames);
+    : buildComputerUseTools(caps, coordinateMode, installedAppNames)
+      .filter(tool => tool.name === 'js' || tool.name === 'js_reset');
 }
 
 /**
@@ -120,12 +130,15 @@ export function bindSessionContext(
   adapter: ComputerUseHostAdapter,
   coordinateMode: CoordinateMode,
   ctx: ComputerUseSessionContext,
-): (name: string, args: unknown) => Promise<CuCallToolResult> {
+): (name: string, args: unknown, signal?: AbortSignal) => Promise<CuCallToolResult> {
   const { logger, serverName } = adapter;
 
   // Screenshot blob persists here across calls — NOT on `ctx`. Hosts hold
   // onto the returned dispatcher; that's the identity that matters.
   let lastScreenshot: ScreenshotResult | undefined;
+  let repl: ComputerUseReplRuntime | undefined
+  let replEpoch = 0
+  const replError = (text: string): CuCallToolResult => ({ isError: true, content: [{ type: 'text', text }] })
 
   const wrapPermission = ctx.onPermissionRequest
     ? async (
@@ -184,8 +197,44 @@ export function bindSessionContext(
   const clearStaleMouseState = legacyPixelFace
     ? legacyResetMouseButtonHeld
     : resetMouseButtonHeld;
+  const mouseOwner: WindowsMouseOwner = {
+    canRelease: async () => !ctx.checkCuLock || (await ctx.checkCuLock()).isSelf,
+  }
 
-  return async (name, args) => {
+  const cancellationResult = async (
+    message: string,
+    beforeDispatch: boolean,
+    checkedLock?: { holder: string | undefined; isSelf: boolean },
+  ): Promise<CuCallToolResult> => {
+    let cleanupMessage = ''
+    if (legacyPixelFace && hasHeldMouseForSession(mouseOwner)) {
+      try {
+        const released = checkedLock && !checkedLock.isSelf
+          ? false
+          : await releaseHeldMouseForSession(adapter, mouseOwner)
+        if (!released && hasHeldMouseForSession(mouseOwner)) {
+          cleanupMessage = ' Held mouse cleanup was skipped because this session no longer owns the Computer Use lock.'
+        }
+      } catch (error) {
+        cleanupMessage = ` Could not release this session's held mouse: ${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    return {
+      isError: true,
+      content: [{ type: 'text', text: message + cleanupMessage }],
+      ...(beforeDispatch ? { [NATIVE_CALL_NOT_DISPATCHED]: true } : {}),
+    }
+  }
+
+  const dispatch = async (
+    name: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<CuCallToolResult> => {
+    const isAborted = () => signal?.aborted === true || ctx.isAborted?.() === true;
+    if (isAborted()) {
+      return cancellationResult('Computer Use cancelled before dispatch.', true)
+    }
     // ─── Static request validation (semantic face only) ───────────────────
     // Runs before the lock so a malformed call costs nothing: no cross-process
     // lock acquisition, no TCC probe, no approval dialog. The legacy face
@@ -207,6 +256,9 @@ export function bindSessionContext(
     // instead of pre-computing + feeding a fake sync result.
     if (ctx.checkCuLock) {
       const lock = await ctx.checkCuLock();
+      if (isAborted()) {
+        return cancellationResult('Computer Use cancelled before lock acquisition.', true, lock)
+      }
       if (lock.holder !== undefined && !lock.isSelf) {
         const text =
           ctx.formatLockHeldMessage?.(lock.holder) ?? DEFAULT_LOCK_HELD_MESSAGE;
@@ -214,6 +266,7 @@ export function bindSessionContext(
           content: [{ type: "text", text }],
           isError: true,
           telemetry: { error_kind: "cu_lock_held" },
+          [NATIVE_CALL_NOT_DISPATCHED]: true,
         };
       }
       if (lock.holder === undefined && !toolDefersLockAcquire(name)) {
@@ -226,6 +279,9 @@ export function bindSessionContext(
         // acquire instead; this re-check is a belt-and-suspenders for that
         // path too.
         const recheck = await ctx.checkCuLock();
+        if (isAborted()) {
+          return cancellationResult('Computer Use cancelled before dispatch.', true, recheck)
+        }
         if (recheck.holder !== undefined && !recheck.isSelf) {
           const text =
             ctx.formatLockHeldMessage?.(recheck.holder) ??
@@ -234,6 +290,7 @@ export function bindSessionContext(
             content: [{ type: "text", text }],
             isError: true,
             telemetry: { error_kind: "cu_lock_held" },
+            [NATIVE_CALL_NOT_DISPATCHED]: true,
           };
         }
         // Fresh holder → any prior session's mouseButtonHeld is stale.
@@ -287,7 +344,8 @@ export function bindSessionContext(
       // above already ran.
       checkCuLock: undefined,
       acquireCuLock: undefined,
-      isAborted: ctx.isAborted,
+      isAborted,
+      ...(legacyPixelFace ? { [WINDOWS_MOUSE_OWNER]: mouseOwner } : {}),
     };
 
     logger.debug(
@@ -305,10 +363,70 @@ export function bindSessionContext(
         ctx.onScreenshotCaptured?.(dims);
       }
 
+      if (legacyPixelFace && isAborted()) {
+        // An in-flight mouse-down may have completed after cancellation. Its
+        // press belongs to this binder, but the action did already dispatch.
+        const cancelled = await cancellationResult('Computer Use cancelled after dispatch. Inspect the current state before continuing.', false)
+        return { ...result, ...cancelled, content: [...result.content, ...cancelled.content] }
+      }
+
       return result;
     } finally {
       dialogAbort.abort();
     }
+  };
+  // A daemon serializes single commands, not whole sequences. Keep every
+  // semantic call behind one session queue so ordinary tools cannot interleave.
+  let tail: Promise<unknown> = Promise.resolve();
+  return (name, args, signal) => {
+    if (legacyPixelFace) {
+      return dispatch(name, args, signal);
+    }
+    if (name === 'js_reset') {
+      if (args === null || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length > 0) {
+        return Promise.resolve(replError('js_reset takes an empty object.'))
+      }
+      ++replEpoch
+      return (async () => {
+        await repl?.reset()
+        return { content: [{ type: 'text' as const, text: 'Computer Use JavaScript reset. Select an app again to continue.' }] }
+      })()
+    }
+    const epoch = replEpoch
+    const pending = tail.then(async () => {
+      if (name !== 'js') return dispatch(name, args, signal)
+      if (epoch !== replEpoch) return replError('Computer Use JavaScript was reset before this queued cell started.')
+      if (adapter.isDisabled() || signal?.aborted || ctx.isAborted?.()) {
+        await repl?.reset()
+        return replError('Computer Use JavaScript is disabled or cancelled.')
+      }
+      if (args === null || typeof args !== 'object' || Array.isArray(args)) return replError('js requires an object with code.')
+      const input = args as Record<string, unknown>
+      const timeoutMs = input.timeout_ms ?? 30000
+      if (typeof input.code !== 'string' || Buffer.byteLength(input.code) > REPL_MAX_CODE_BYTES ||
+        Object.keys(input).some(key => !['code', 'title', 'timeout_ms'].includes(key)) ||
+        (input.title !== undefined && typeof input.title !== 'string') ||
+        typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
+        return replError('js requires code (up to 256 KiB), an optional title, and timeout_ms between 1 and 60000.')
+      }
+      if (!adapter.createReplRuntime) return replError('This Computer Use host does not provide an isolated JavaScript kernel.')
+      repl ??= adapter.createReplRuntime()
+      return repl.run({ code: input.code, timeoutMs, signal, isAborted: () => adapter.isDisabled() || ctx.isAborted?.() === true },
+        async (method, parameters, innerSignal) => {
+          // Inner operations use the existing guarded dispatcher directly;
+          // re-entering the outer session queue would deadlock the cell.
+          const result = await dispatch(method, parameters, innerSignal)
+          return {
+            ...result,
+            ...(result[RESOLVED_APP_PATH] === undefined ? {} : { app: result[RESOLVED_APP_PATH] }),
+            ...(result[APP_INVENTORY] === undefined ? {} : { apps: result[APP_INVENTORY] }),
+            ...(result[NATIVE_ERROR] === undefined ? {} : { nativeError: result[NATIVE_ERROR] }),
+            ...(result[NATIVE_CALL_NOT_DISPATCHED] === true ? { nativeCallNotDispatched: true } : {}),
+          }
+        })
+    });
+    tail = pending.catch(() => {});
+    return pending;
   };
 }
 
@@ -343,10 +461,11 @@ export function createComputerUseMcpServer(
     const dispatch = bindSessionContext(adapter, coordinateMode, context);
     server.setRequestHandler(
       CallToolRequestSchema,
-      async (request): Promise<CallToolResult> => {
+      async (request, extra): Promise<CallToolResult> => {
         const { screenshot: _s, telemetry: _t, ...result } = await dispatch(
           request.params.name,
           request.params.arguments ?? {},
+          extra.signal,
         );
         return result;
       },

@@ -26,6 +26,8 @@ import {
   type PermissionDecision,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
+import { syncImPermissionState } from '../common/permission-sync.js'
+import { SessionSelectionController } from '../common/session-selection.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
@@ -81,6 +83,21 @@ const pendingProjectSelection = new Map<string, boolean>()
 const runtimeStates = new Map<string, ChatRuntimeState>()
 const pendingPermissions = new Map<string, Set<string>>()
 const imageWatchers = new Map<string, ImageBlockWatcher>()
+
+const sessionSelectionController = new SessionSelectionController({
+  httpClient,
+  bridge,
+  sessionStore,
+  sendNotice: async (chatId, text) => { await sendWhatsAppText(chatId, text) },
+  onServerMessage: handleServerMessage,
+  clearTransientState: clearTransientChatState,
+  clearProjectSelection: (chatId) => { pendingProjectSelection.delete(chatId) },
+  isBusy: (chatId) => {
+    const runtime = getRuntimeState(chatId)
+    return runtime.state !== 'idle' || runtime.pendingPermissionCount > 0
+      || (pendingPermissions.get(chatId)?.size ?? 0) > 0
+  },
+})
 
 type ChatRuntimeState = {
   state: 'idle' | 'thinking' | 'streaming' | 'tool_executing' | 'permission_pending'
@@ -202,6 +219,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
 }
 
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
+  sessionSelectionController.clear(chatId)
   try {
     bridge.resetSession(chatId)
     const sessionId = await httpClient.createSession(workDir)
@@ -221,6 +239,7 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
+  sessionSelectionController.clear(chatId)
   try {
     const projects = await httpClient.listRecentProjects()
     if (projects.length === 0) {
@@ -270,10 +289,12 @@ async function flushAccumulatedText(chatId: string): Promise<void> {
 
 async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<void> {
   const runtime = getRuntimeState(chatId)
+  if (syncImPermissionState(chatId, msg, runtime, pendingPermissions)) return
 
   switch (msg.type) {
     case 'connected':
       break
+
 
     case 'status':
       runtime.state = msg.state
@@ -364,6 +385,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
 }
 
 async function startNewSession(chatId: string, query?: string): Promise<void> {
+  sessionSelectionController.clear(chatId)
   bridge.resetSession(chatId)
   sessionStore.delete(chatId)
   accumulatedText.delete(chatId)
@@ -460,6 +482,7 @@ async function routeUserMessage(
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
+      if (sent) getRuntimeState(chatId).state = 'thinking'
       await sendWhatsAppText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
       return
     }
@@ -472,7 +495,9 @@ async function routeUserMessage(
       return
     }
 
-    if (pendingProjectSelection.has(chatId)) {
+    if (attachments.length === 0 && await sessionSelectionController.handleInput(chatId, command)) return
+
+    if (attachments.length === 0 && pendingProjectSelection.has(chatId)) {
       if (text.trim()) await startNewSession(chatId, text.trim())
       return
     }
@@ -482,6 +507,7 @@ async function routeUserMessage(
     const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
     if (!effective && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
+    if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
       await sendWhatsAppText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
     }
@@ -567,13 +593,17 @@ async function handleIncomingMessage(message: proto.IWebMessageInfo): Promise<vo
   )
 }
 
+export function useWhatsAppSocket(socket: WhatsAppSocket): void {
+  sock = socket
+  media = new WhatsAppMediaService(sock, attachmentStore)
+}
+
 async function startSocket(): Promise<void> {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
-  sock = await createWhatsAppSocket({ authDir })
-  media = new WhatsAppMediaService(sock, attachmentStore)
+  useWhatsAppSocket(await createWhatsAppSocket({ authDir }))
 
   sock.ev.on('messages.upsert', ({ type, messages }) => {
     if (type !== 'notify') return
@@ -617,9 +647,9 @@ console.log(`[WhatsApp] Server: ${config.serverUrl}`)
 console.log(`[WhatsApp] Auth dir: ${authDir}`)
 console.log(`[WhatsApp] Allowed users: ${config.whatsapp.allowedUsers.length === 0 ? 'paired users only' : config.whatsapp.allowedUsers.join(', ')}`)
 
-await startSocket()
+if (import.meta.main || process.argv.includes('--whatsapp')) await startSocket()
 
-process.on('SIGINT', () => {
+if (import.meta.main || process.argv.includes('--whatsapp')) process.on('SIGINT', () => {
   console.log('[WhatsApp] Shutting down...')
   shuttingDown = true
   if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -628,3 +658,5 @@ process.on('SIGINT', () => {
   dedup.destroy()
   process.exit(0)
 })
+
+export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, startNewSession }

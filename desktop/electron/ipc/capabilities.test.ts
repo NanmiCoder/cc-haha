@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
 import { ELECTRON_IPC_CHANNELS } from './channels'
 import {
   ELECTRON_IPC_VALIDATORS,
@@ -8,10 +9,60 @@ import {
 } from './capabilities'
 
 describe('Electron IPC capabilities', () => {
+  it('restricts public access credentials and consent to validated desktop IPC', () => {
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, 'fake-token')).toBe(true)
+    for (const value of ['', 'a b', 'x'.repeat(4097), {}, null]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, value)).toBe(false)
+    }
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)).toBe(true)
+    for (const value of [0, PUBLIC_ACCESS_CONSENT_VERSION - 1, PUBLIC_ACCESS_CONSENT_VERSION + 1, '2', null]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.publicAccessStart, value)).toBe(false)
+    }
+    for (const channel of Object.values(ELECTRON_IPC_CHANNELS).filter(value => value.startsWith('desktop:public-access:'))) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+  })
+
+  it('accepts only the typed browser-menu fields and keeps the channel unavailable to pets', () => {
+    const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserShowMenu
+    const labels = Object.fromEntries(['find', 'print', 'zoom', 'zoomIn', 'zoomOut', 'zoomReset', 'capture', 'pickElement', 'downloads', 'history', 'openExternal'].map(key => [key, key]))
+    const payload = { tabId: 'wb-1', x: 20, y: 44, labels, zoomFactor: 1, hasPage: true, canOpenExternal: true }
+    expect(validateElectronIpcPayload(channel, payload)).toBe(true)
+    expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    for (const patch of [
+      { tabId: '' }, { tabId: '../bad' }, { x: NaN }, { y: Infinity }, { x: '20' },
+      { zoomFactor: 0 }, { zoomFactor: NaN }, { canOpenExternal: 'true' }, { hasPage: undefined }, { hasPage: 'true' },
+      { action: 'quit' }, { labels: { ...labels, role: 'quit' } },
+      { labels: { ...labels, find: undefined } }, { labels: { ...labels, find: '' } },
+      { labels: { ...labels, find: 'x'.repeat(201) } }, { labels: { ...labels, find: 'bad\nlabel' } },
+    ]) expect(validateElectronIpcPayload(channel, { ...payload, ...patch })).toBe(false)
+  })
+
+  it('accepts optional initial browser visibility without widening the create payload', () => {
+    const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserCreate
+    const identity = { tabId: 'wb-1', storageId: 'store-1' }
+    expect(validateElectronIpcPayload(channel, identity)).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, visible: false })).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, visible: true })).toBe(true)
+    for (const visible of ['false', 0, null, {}]) {
+      expect(validateElectronIpcPayload(channel, { ...identity, visible })).toBe(false)
+    }
+    expect(validateElectronIpcPayload(channel, { ...identity, visible: false, unknown: true })).toBe(false)
+  })
+
   it('has a validator for every exposed invoke channel', () => {
     expect(Object.keys(ELECTRON_IPC_VALIDATORS).sort()).toEqual(
       Object.values(ELECTRON_IPC_CHANNELS).sort(),
     )
+  })
+
+  it('limits presentation snapshots to a single browser page id', () => {
+    const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot
+    expect(validateElectronIpcPayload(channel, { tabId: 'wb-1' })).toBe(true)
+    for (const payload of [{}, { tabId: '' }, { tabId: 'wb-1', kind: 'full' }, { tabId: 'wb-1', url: 'https://example.com' }]) {
+      expect(validateElectronIpcPayload(channel, payload)).toBe(false)
+    }
+    expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
   })
 
   it('rejects channels outside the desktop host contract', () => {
@@ -37,6 +88,9 @@ describe('Electron IPC capabilities', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalWrite, { sessionId: 1, data: 'pwd\n' })).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalWrite, { sessionId: '1', data: 'pwd\n' })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { cols: 80, rows: 24, cwd: '/tmp' })).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { cols: 80, rows: 24, requestId: 'start' })).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { requestId: '' })).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { requestId: 'x'.repeat(129) })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { cols: '80', rows: 24 })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { cols: 80, rows: 24, shell: '/bin/sh' })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.terminalSpawn, { cols: Number.NaN, rows: 24 })).toBe(false)

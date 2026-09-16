@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 
 import { buildPipInstallAttempts } from './pipInstall.js'
-import { installRuntimeDependencies, runPipInstallWithFallback } from './pythonBridge.js'
+import {
+  getComputerUsePythonEnv,
+  getCursorBadgeCommand,
+  installRuntimeDependencies,
+  runPipInstallWithFallback,
+} from './pythonBridge.js'
 
 describe('buildPipInstallAttempts', () => {
   test('tries the configured mirror before falling back to the default index', () => {
@@ -63,6 +68,24 @@ describe('pythonBridge runPipInstallWithFallback', () => {
         stderr: args.includes('-i') ? 'mirror unavailable' : 'official unavailable',
       }),
     )).rejects.toThrow('python dependency install failed with code 1: mirror unavailable')
+  })
+})
+
+describe('Windows virtual cursor Python process identity', () => {
+  test('shares one non-zero input tag with helper subprocesses on Windows', () => {
+    const environment = getComputerUsePythonEnv()
+    const command = getCursorBadgeCommand()
+
+    if (process.platform === 'win32') {
+      expect(environment?.PYTHONIOENCODING).toBe('utf-8')
+      expect(environment?.PYTHONUTF8).toBe('1')
+      expect(Number(environment?.CC_HAHA_COMPUTER_USE_INPUT_TAG)).toBeGreaterThan(0)
+      expect(command.python.endsWith('Scripts\\python.exe')).toBe(true)
+    } else {
+      expect(environment).toBeUndefined()
+      expect(command.python.endsWith('bin/python3')).toBe(true)
+    }
+    expect(command.script.endsWith('win_cursor_badge.py')).toBe(true)
   })
 })
 

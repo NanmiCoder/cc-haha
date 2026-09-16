@@ -10,9 +10,8 @@ import { getDesktopHost } from './desktopHost'
 import { copyTextToClipboard } from './clipboard'
 import { sessionsApi } from '../api/sessions'
 import type { OpenTarget } from '../stores/openTargetStore'
-import { useBrowserPanelStore } from '../stores/browserPanelStore'
+import { workspaceOpen } from './workspace/openTarget'
 import { useOpenTargetStore } from '../stores/openTargetStore'
-import { useWorkspacePanelStore } from '../stores/workspacePanelStore'
 import { reportOpenFailure } from './systemFileOpen'
 
 type Translate = (key: string, vars?: Record<string, string>) => string
@@ -45,12 +44,12 @@ export function openWithMenuDeps(
   { sessionId, t, omitCopyPath }: OpenWithMenuOptions,
 ): OpenWithDeps {
   return {
-    openInAppBrowser: (url) => useBrowserPanelStore.getState().open(sessionId, url),
+    openInAppBrowser: (url) => { workspaceOpen.browser(sessionId, url) },
     openSystem: (target) => {
       void getDesktopHost().shell.openPath(target).catch(() => window.open(target, '_blank'))
     },
     openWorkspacePreview: (relPath) => {
-      void useWorkspacePanelStore.getState().openPreview(sessionId, relPath, 'file')
+      workspaceOpen.file(sessionId, relPath)
     },
     openTarget: (id, absolutePath) => {
       void useOpenTargetStore.getState().openTarget(id, absolutePath)

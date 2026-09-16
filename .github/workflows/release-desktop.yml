@@ -15,6 +15,11 @@ on:
         required: false
         default: true
         type: boolean
+      skip_windows_signing:
+        description: 'Build unsigned Windows artifacts while SignPath onboarding is pending'
+        required: false
+        default: false
+        type: boolean
       publish_draft_release:
         description: 'Publish manual draft artifacts to GitHub Releases'
         required: false
@@ -52,6 +57,7 @@ jobs:
           SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG }}
           SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}
+          SKIP_WINDOWS_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_windows_signing == true }}
         run: |
           # macOS signing + notarization is preferred: Squirrel.Mac auto-update and
           # first-launch Gatekeeper approval and Computer Use client attestation
@@ -70,8 +76,15 @@ jobs:
           else
             echo "macos_signed=true" >> "$GITHUB_OUTPUT"
           fi
+          # A maintainer can explicitly release unsigned Windows builds while
+          # SignPath approval is pending, even when its configuration is present.
+          if [ "$SKIP_WINDOWS_SIGNING" = "true" ]; then
+            echo "::warning::Windows signing explicitly skipped for this manual release; Windows artifacts will be unsigned."
+            echo "windows_signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Drafts may remain unsigned while SignPath onboarding is being tested. Tags and
-          # non-draft releases must have the full GitHub connector configuration available.
+          # non-draft releases otherwise require the full GitHub connector configuration.
           win_missing=()
           [ -n "$SIGNPATH_API_TOKEN" ] || win_missing+=("SIGNPATH_API_TOKEN secret")
           [ -n "$SIGNPATH_ORGANIZATION_ID" ] || win_missing+=("SIGNPATH_ORGANIZATION_ID variable")
@@ -187,7 +200,8 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: bun install
+        # The x64 Windows runner also packages ARM64; retain both native addons.
+        run: bun install --cpu="*"
 
       - name: Install adapter dependencies
         working-directory: adapters
@@ -273,17 +287,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEBUG: 'electron-builder,electron-osx-sign,electron-notarize*'
-          # Signed macOS releases require all of these secrets. Keep this step
-          # separate from the unsigned fallback so empty secrets are never passed
-          # to electron-builder as CSC_LINK / APPLE_* env vars.
-          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          # Reuse the keychain prepared for native runtimes. Passing CSC_LINK
+          # would make electron-builder import the same certificate again.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MACOS_NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize_macos }}
         run: |
           set -euo pipefail
+          export CSC_KEYCHAIN="${CC_HAHA_CI_KEYCHAIN:?macOS signing keychain was not prepared}"
           echo "::group::macOS signing diagnostics"
           echo "UTC start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           sw_vers

@@ -27,6 +27,7 @@ export type AdapterFileConfig = {
     appSecret?: string
     encryptKey?: string
     verificationToken?: string
+    domain?: 'feishu' | 'lark'
     allowedUsers?: string[]
     pairedUsers?: PairedUser[]
     defaultWorkDir?: string
@@ -56,6 +57,30 @@ export type AdapterFileConfig = {
   whatsapp?: {
     accountJid?: string
     authDir?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  wecom?: {
+    botId?: string
+    secret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  qq?: {
+    appId?: string
+    appSecret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    allowedProjectRoots?: string[]
+  }
+  slack?: {
+    botToken?: string
+    appToken?: string
     allowedUsers?: string[]
     pairedUsers?: PairedUser[]
     defaultWorkDir?: string

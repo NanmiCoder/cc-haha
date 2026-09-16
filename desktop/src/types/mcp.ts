@@ -44,3 +44,14 @@ export type McpUpsertPayload = {
   scope: McpWritableScope
   config: McpEditableConfig
 }
+
+export type McpSessionSync = {
+  applied: boolean
+  reason?: 'not_running' | 'different_project' | 'failed' | 'no_session'
+  error?: string
+}
+
+export type McpToggleResult = {
+  server: McpServerRecord
+  sessionSync?: McpSessionSync
+}

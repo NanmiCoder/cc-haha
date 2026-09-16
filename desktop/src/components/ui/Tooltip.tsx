@@ -16,6 +16,7 @@ export type TooltipProps = {
   delay?: number
   disabled?: boolean
   className?: string
+  appearance?: 'inverse' | 'surface'
 }
 
 /**
@@ -40,6 +41,7 @@ export function Tooltip({
   delay = 300,
   disabled = false,
   className,
+  appearance = 'inverse',
 }: TooltipProps) {
   const [open, setOpen] = useState(false)
   const anchorRef = useRef<HTMLElement | null>(null)
@@ -110,8 +112,9 @@ export function Tooltip({
           style={{ ...style, zIndex: 'var(--z-tooltip)' }}
           className={cx(
             'pointer-events-none max-w-xs rounded-[var(--radius-md)] px-2 py-1',
-            'bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)]',
-            'text-xs leading-5 shadow-[var(--shadow-dropdown)]',
+            appearance === 'surface'
+              ? 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] text-[13px] leading-5'
+              : 'bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] text-xs leading-5 shadow-[var(--shadow-dropdown)]',
             'animate-overlay-in',
             className,
           )}

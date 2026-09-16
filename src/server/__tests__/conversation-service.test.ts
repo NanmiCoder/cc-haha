@@ -10,6 +10,7 @@ import {
 import { ProviderService } from '../services/providerService.js'
 import { updateTraceCaptureSettings } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
+import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 
 describe('ConversationService', () => {
   let tmpDir: string
@@ -184,11 +185,13 @@ describe('ConversationService', () => {
     sessionId: string,
     sent: string[],
     networkDerivedFirstTokenTimeout = true,
+    networkDerivedStreamMaxDuration = true,
   ) {
     const session = {
       outputCallbacks: [],
       networkRoutingFingerprint: '',
       networkDerivedFirstTokenTimeout,
+      networkDerivedStreamMaxDuration,
       sdkSocket: {
         send(line: string) {
           sent.push(line)
@@ -255,7 +258,7 @@ describe('ConversationService', () => {
       // trickles content deltas (a large tool_use input_json_delta) just under
       // 240s apart keeps it alive forever. The overall-duration cap is NOT reset
       // by chunks and is what actually frees that case (#766).
-      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('600000')
+      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('1800000')
       // Tool JSON gets a shorter inactivity budget. Progress resets it, while
       // the overall response cap still bounds a stream that trickles forever.
       expect(env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS).toBe('120000')
@@ -394,6 +397,81 @@ describe('ConversationService', () => {
     expect(env.ANTHROPIC_MODEL).toBeUndefined()
   })
 
+  for (const entrypoint of ['sdk-cli', 'claude-desktop']) {
+    for (const { settingsFile, setting, preference } of [
+      { settingsFile: 'settings.json', setting: undefined, preference: undefined },
+      { settingsFile: 'settings.json', setting: '0', preference: undefined },
+      { settingsFile: 'cc-haha/settings.json', setting: 'false', preference: undefined },
+      { settingsFile: 'cc-haha/settings.json', setting: 'false', preference: true },
+      { settingsFile: 'settings.json', setting: '1', preference: false },
+    ]) {
+      test(`desktop team tools survive child startup (${entrypoint}, ${settingsFile}=${setting ?? 'unset'}, preference=${preference ?? 'unset'})`, async () => {
+        if (setting !== undefined) {
+          const legacyPath = path.join(tmpDir, settingsFile)
+          await fs.mkdir(path.dirname(legacyPath), { recursive: true })
+          await fs.writeFile(legacyPath, JSON.stringify({
+            env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: setting },
+          }))
+        }
+        if (preference !== undefined) {
+          await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({
+            agentTeamsEnabled: preference,
+            env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: setting },
+          }))
+        }
+        const service = new ConversationService() as any
+        service.shouldMarkManagedOAuth = () => entrypoint === 'claude-desktop'
+        service.buildOfficialOAuthEnv = async () => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' })
+        const childEnv = await service.buildChildEnv(tmpDir, 'ws://127.0.0.1:3456/sdk/test')
+        const probeHome = path.join(tmpDir, 'team-probe')
+        const probeEnv = createSandboxedTestEnvironment(probeHome, {
+          CLAUDE_CODE_ENTRYPOINT: childEnv.CLAUDE_CODE_ENTRYPOINT ?? 'sdk-cli',
+          ANTHROPIC_API_KEY: 'fake-team-probe-key',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1',
+        })
+        // Pass the host's real team defaults across a fresh process boundary,
+        // without inheriting provider credentials or any user configuration.
+        for (const key of ['CC_HAHA_AGENT_TEAMS_DEFAULT', 'CC_HAHA_AGENT_TEAMS_ENABLED', 'CLAUDE_CODE_ENABLE_TASKS']) {
+          if (childEnv[key] !== undefined) probeEnv[key] = childEnv[key]
+        }
+        if (setting !== undefined) {
+          const settingsPath = path.join(probeEnv.CLAUDE_CONFIG_DIR!, settingsFile)
+          await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+          await fs.writeFile(settingsPath, JSON.stringify({
+            env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: setting },
+          }))
+        }
+        const repoRoot = path.resolve(import.meta.dir, '../../..')
+        const probe = Bun.spawn([process.execPath, '--no-env-file', '--preload', path.join(repoRoot, 'preload.ts'), '-e', `
+          const { applySafeConfigEnvironmentVariables, applyConfigEnvironmentVariables } = await import(${JSON.stringify(path.join(repoRoot, 'src/utils/managedEnv.ts'))})
+          applySafeConfigEnvironmentVariables()
+          applyConfigEnvironmentVariables()
+          const { getAllBaseTools } = await import(${JSON.stringify(path.join(repoRoot, 'src/tools.ts'))})
+          const { default: teamCommand } = await import(${JSON.stringify(path.join(repoRoot, 'src/commands/team.ts'))})
+          const names = getAllBaseTools().filter(tool => tool.isEnabled()).map(tool => tool.name)
+          console.log('TEAM_PROBE:' + JSON.stringify({
+            tools: names.filter(name => ['TeamCreate', 'TeamDelete', 'SendMessage', 'TaskCreate'].includes(name)),
+            command: teamCommand.isEnabled(),
+          }))
+        `], { cwd: probeHome, env: probeEnv, stdout: 'pipe', stderr: 'pipe' })
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
+        ])
+        expect({ code, stderr }).toEqual({ code: 0, stderr: '' })
+        const report = JSON.parse(stdout.split('\n').find(line => line.startsWith('TEAM_PROBE:'))!.slice('TEAM_PROBE:'.length))
+        expect(report.tools).toContain('TaskCreate')
+        const expected = preference ?? (setting === undefined)
+        expect(report.command).toBe(expected)
+        for (const name of ['TeamCreate', 'TeamDelete', 'SendMessage']) {
+          expect(report.tools.includes(name)).toBe(expected)
+        }
+      })
+    }
+  }
+
   test('buildChildEnv injects General network timeout and manual proxy for CLI requests', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'settings.json'),
@@ -470,6 +548,53 @@ describe('ConversationService', () => {
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
       else process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS = prev
+    }
+  })
+
+  test.each([1_800_000, 14_400_000, 21_600_000])('buildChildEnv raises all request budgets for a long local-model response (%i ms, #1307)', async timeoutMs => {
+    const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ network: { aiRequestTimeoutMs: timeoutMs } }),
+      'utf-8',
+    )
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+
+      // The overall cap is NOT reset by incoming chunks, so a local model that
+      // keeps streaming thinking_delta events past it is killed mid-response.
+      // Raising "请求超时" must therefore extend the cap too — otherwise the
+      // user's timeout setting is silently capped at 600s (#1307).
+      expect(env.API_TIMEOUT_MS).toBe(String(timeoutMs))
+      expect(env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe(String(timeoutMs))
+      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe(String(timeoutMs))
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+      else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
+    }
+  })
+
+  test('buildChildEnv keeps the overall stream cap floor for a short request timeout (#766)', async () => {
+    const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ network: { aiRequestTimeoutMs: 30_000 } }),
+      'utf-8',
+    )
+    try {
+      const service = new ConversationService() as any
+      const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
+
+      // Shrinking the cap for a short first-byte budget would re-open #766:
+      // a stream that trickles content deltas just under the idle window must
+      // still be freed after a fixed overall duration.
+      expect(env.CLAUDE_STREAM_MAX_DURATION_MS).toBe('600000')
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+      else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
     }
   })
 
@@ -727,8 +852,8 @@ describe('ConversationService', () => {
         https_proxy: 'http://127.0.0.1:17890',
         ALL_PROXY: 'http://127.0.0.1:17890',
         all_proxy: 'http://127.0.0.1:17890',
-        API_TIMEOUT_MS: '600000',
-        CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS: '600000',
+        API_TIMEOUT_MS: '1800000',
+        CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS: '1800000',
       })
       expect(update.variables.NO_PROXY).toContain('127.0.0.1')
       expect(update.variables.no_proxy).toContain('localhost')
@@ -777,7 +902,50 @@ describe('ConversationService', () => {
       all_proxy: 'http://127.0.0.1:17892',
       API_TIMEOUT_MS: '180000',
       CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS: '180000',
+      // The floor still holds on the hot-update path: lowering the request
+      // timeout must not shrink the overall cap below its 600s default.
+      CLAUDE_STREAM_MAX_DURATION_MS: '600000',
     })
+    expect(JSON.parse(sent[1]!).type).toBe('user')
+  })
+
+  test.each([1_800_000, 14_400_000, 21_600_000])('sendMessage hot-applies all raised request budgets in the same conversation (%i ms, #1307)', async timeoutMs => {
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        network: {
+          aiRequestTimeoutMs: 600_000,
+          proxy: { mode: 'direct', url: '' },
+        },
+      }),
+      'utf-8',
+    )
+    const service = new ConversationService() as any
+    const sent: string[] = []
+    const session = installNetworkTestSession(service, 'raised-timeout', sent)
+    await service.refreshNetworkEnvironmentBeforeTurn('raised-timeout', session)
+
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        network: {
+          aiRequestTimeoutMs: timeoutMs,
+          proxy: { mode: 'direct', url: '' },
+        },
+      }),
+      'utf-8',
+    )
+
+    expect(await service.sendMessage('raised-timeout', 'retry the long prompt')).toBe(true)
+    expect(sent).toHaveLength(2)
+    const update = JSON.parse(sent[0]!)
+    expect(update.type).toBe('update_environment_variables')
+    // The reported path is: user hits the 600s error, raises the timeout, and
+    // retries in the SAME conversation. The live CLI re-reads this per request,
+    // so it has to be pushed down — otherwise the retry dies at 600s again.
+    expect(update.variables.API_TIMEOUT_MS).toBe(String(timeoutMs))
+    expect(update.variables.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe(String(timeoutMs))
+    expect(update.variables.CLAUDE_STREAM_MAX_DURATION_MS).toBe(String(timeoutMs))
     expect(JSON.parse(sent[1]!).type).toBe('user')
   })
 

@@ -79,6 +79,8 @@ export type ProjectConfig = {
   mcpServers?: Record<string, McpServerConfig>
   lastAPIDuration?: number
   lastAPIDurationWithoutRetries?: number
+  lastDecodeDuration?: number
+  lastTtftDuration?: number
   lastToolDuration?: number
   lastCost?: number
   lastDuration?: number

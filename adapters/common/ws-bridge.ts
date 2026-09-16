@@ -202,8 +202,7 @@ export class WsBridge {
       }
       if (msg.type === 'pong') return
       if (this.sessions.get(chatId) !== session) return
-      const handler = this.handlers.get(chatId)
-      if (!handler) return
+      if (!this.handlers.has(chatId)) return
 
       // Serialize per-chat handler calls: chain each message onto the previous
       // one so a slow handler (e.g. one awaiting im.message.create) fully
@@ -213,7 +212,14 @@ export class WsBridge {
       const prev = this.handlerChains.get(chatId) ?? Promise.resolve()
       const next = prev
         .catch(() => {}) // upstream errors must not poison the chain
-        .then(() => Promise.resolve().then(() => handler(msg)))
+        .then(() => {
+          // Resetting a chat cannot cancel promises already queued for its old
+          // socket. Recheck ownership when delivery actually starts, then use
+          // the current handler so restoration's temporary buffer cannot trap
+          // initial status/permission frames after the live handler replaces it.
+          if (this.sessions.get(chatId) !== session) return
+          return this.handlers.get(chatId)?.(msg)
+        })
         .catch((err) => {
           console.error(`[WsBridge] Handler error on ${chatId}:`, err)
         })

@@ -4,6 +4,9 @@ import type {
 } from '../../types/settings'
 import type { Locale } from '../../i18n/locale'
 
+// Version 2 adds remote provider management and selected General settings.
+export const PUBLIC_ACCESS_CONSENT_VERSION = 2
+
 export type DesktopHostKind = 'browser' | 'electron'
 
 export type DesktopHostCapability =
@@ -12,6 +15,7 @@ export type DesktopHostCapability =
   | 'dialogs'
   | 'notifications'
   | 'previewWebview'
+  | 'workspaceBrowser'
   | 'shell'
   | 'terminal'
   | 'updates'
@@ -107,6 +111,8 @@ export type DesktopUpdateCheckOptions = {
 }
 
 export type TerminalSpawnOptions = {
+  /** Correlates events that can arrive before the spawn IPC reply. */
+  requestId?: string
   cwd?: string
   cols: number
   rows: number
@@ -119,11 +125,15 @@ export type TerminalSession = {
 }
 
 export type TerminalOutputEvent = {
+  /** Correlates events that can arrive before the spawn IPC reply. */
+  requestId?: string
   session_id: number
   data: string
 }
 
 export type TerminalExitEvent = {
+  /** Correlates events that can arrive before the spawn IPC reply. */
+  requestId?: string
   session_id: number
   code: number
   signal?: string | null
@@ -152,6 +162,7 @@ export type PreviewPickerMessage = {
 } & (
   | {
       type: 'enter-picker'
+      persistent?: boolean
       mode?: 'single' | 'batch'
       label?: number
       copy?: {
@@ -168,7 +179,100 @@ export type PreviewPickerMessage = {
   | { type: 'commit-selection-draft' }
 )
 
-export type PreviewHostMessage = PreviewCaptureMessage | PreviewPickerMessage
+export type PreviewBrowserControlsMessage = {
+  v: 1
+  type: 'browser-controls'
+  zoomFactor: number
+  appZoom: number
+  copy: { zoom: string; zoomOut: string; zoomIn: string; zoomReset: string }
+  colors: { background: string; foreground: string; muted: string; border: string; hover: string; focus: string; shadow: string }
+}
+
+export type PreviewHostMessage = PreviewCaptureMessage | PreviewPickerMessage | PreviewBrowserControlsMessage
+
+/**
+ * Multi-page browser host. Every method names its page, so a second page never
+ * navigates the first and unmounting a React surface never destroys a page.
+ */
+export type WorkspaceBrowserBounds = PreviewBounds
+
+export type WorkspaceBrowserCaptureKind = 'full' | 'viewport'
+
+export type WorkspaceBrowserMenuAction =
+  | 'find' | 'print' | 'zoomIn' | 'zoomOut' | 'zoomReset'
+  | 'capture' | 'pickElement' | 'downloads' | 'history' | 'openExternal'
+
+export type WorkspaceBrowserMenuOptions = {
+  /** Anchor in renderer CSS pixels; the main process converts it using host zoom. */
+  x: number
+  y: number
+  labels: Record<WorkspaceBrowserMenuAction | 'zoom', string>
+  zoomFactor: number
+  hasPage: boolean
+  canOpenExternal: boolean
+}
+
+export type WorkspaceBrowserFindOptions = {
+  forward?: boolean
+  findNext?: boolean
+  matchCase?: boolean
+}
+
+export type WorkspaceBrowserDownload = {
+  id: string
+  filename: string
+  savePath: string | null
+  receivedBytes: number
+  totalBytes: number
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
+}
+
+export type WorkspaceBrowserHistoryEntry = {
+  url: string
+  title: string
+  visitedAt: number
+}
+
+/**
+ * Everything the host reports back, always carrying `tabId`.
+ *
+ * A late event for a page that has already been closed is dropped by the
+ * controller rather than applied to whatever took its slot — the id is what
+ * makes that check possible.
+ */
+export type WorkspaceBrowserEvent =
+  | { type: 'shortcut'; tabId: string; action: import('../workspace/shortcuts').WorkspaceShortcutAction }
+  | {
+      type: 'state'
+      tabId: string
+      url: string
+      title: string
+      canGoBack: boolean
+      canGoForward: boolean
+      loading: boolean
+      navigationId?: number
+      navigationOutcome?: 'idle' | 'pending' | 'succeeded' | 'failed'
+      zoomFactor?: number
+      annotationActive?: boolean
+    }
+  | {
+      type: 'failed'
+      tabId: string
+      url: string
+      errorCode: number
+      errorDescription: string
+      navigationId?: number
+    }
+  /** `window.open`, `target=_blank` and popups all land here as a new tab. */
+  | { type: 'new-window'; tabId: string; url: string }
+  | { type: 'found'; tabId: string; activeMatchOrdinal: number; matches: number }
+  | { type: 'screenshot'; tabId: string; dataUrl: string; kind: WorkspaceBrowserCaptureKind }
+  | { type: 'download'; tabId: string; download: WorkspaceBrowserDownload }
+  | { type: 'history'; tabId: string; entries: WorkspaceBrowserHistoryEntry[] }
+  /** The in-page selection agent speaking; payload shape is the legacy one. */
+  | { type: 'agent'; tabId: string; message: unknown }
+  /** The page died (crash, host teardown). The tab shows a retry entry point. */
+  | { type: 'destroyed'; tabId: string; reason: 'crashed' | 'closed' }
 
 type DesktopPetBase = {
   id: string
@@ -266,7 +370,24 @@ export type AppModeSetInput = {
   portableDir: string | null
 }
 
+export type DesktopPublicAccessStatus = {
+  state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
+  hasCredential: boolean
+  publicUrl: string | null
+  error: 'auth' | 'quota' | 'network' | 'configuration' | null
+  autoStart: boolean
+  consentVersion: number
+}
+
 export type DesktopHost = {
+  publicAccess: {
+    getStatus(): Promise<DesktopPublicAccessStatus>
+    saveCredential(token: string): Promise<DesktopPublicAccessStatus>
+    deleteCredential(): Promise<DesktopPublicAccessStatus>
+    start(consentVersion: number): Promise<DesktopPublicAccessStatus>
+    stop(): Promise<DesktopPublicAccessStatus>
+    setAutoStart(enabled: boolean): Promise<DesktopPublicAccessStatus>
+  }
   kind: DesktopHostKind
   isDesktop: boolean
   capabilities: DesktopHostCapabilities
@@ -358,6 +479,8 @@ export type DesktopHost = {
     onNativeMenuNavigate(handler: (destination: string) => void): Promise<DesktopHostUnlisten>
   }
   terminal: {
+    /** Absent in older preloads whose IPC validator rejects requestId. */
+    supportsStartupCorrelation?: boolean
     spawn(options: TerminalSpawnOptions): Promise<TerminalSession>
     write(sessionId: number, data: string): Promise<void>
     resize(sessionId: number, cols: number, rows: number): Promise<void>
@@ -376,6 +499,30 @@ export type DesktopHost = {
     close(): Promise<void>
     message(payload: PreviewHostMessage): Promise<void>
     onEvent(handler: (event: unknown) => void): Promise<DesktopHostUnlisten>
+  }
+  browser: {
+    showMenu(tabId: string, options: WorkspaceBrowserMenuOptions): Promise<WorkspaceBrowserMenuAction | null>
+    create(
+      tabId: string,
+      options: { storageId: string; url?: string; bounds?: WorkspaceBrowserBounds; visible?: boolean },
+    ): Promise<void>
+    navigate(tabId: string, url: string): Promise<void>
+    goBack(tabId: string): Promise<void>
+    goForward(tabId: string): Promise<void>
+    reload(tabId: string, options?: { ignoreCache?: boolean }): Promise<void>
+    stop(tabId: string): Promise<void>
+    setBounds(tabId: string, bounds: WorkspaceBrowserBounds): Promise<void>
+    setVisible(tabId: string, visible: boolean): Promise<void>
+    setZoom(tabId: string, factor: number): Promise<void>
+    find(tabId: string, text: string, options?: WorkspaceBrowserFindOptions): Promise<void>
+    stopFind(tabId: string): Promise<void>
+    capture(tabId: string, kind: WorkspaceBrowserCaptureKind): Promise<void>
+    /** Read-only presentation backdrop, with no screenshot or composer event. */
+    snapshot(tabId: string): Promise<string | null>
+    message(tabId: string, payload: PreviewHostMessage): Promise<void>
+    printToPdf(tabId: string): Promise<void>
+    close(tabId: string): Promise<void>
+    onEvent(handler: (event: WorkspaceBrowserEvent) => void): Promise<DesktopHostUnlisten>
   }
   appMode: {
     get(): Promise<AppModeConfig>

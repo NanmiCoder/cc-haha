@@ -267,6 +267,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
   // Special cases for Claude 4+ models to differentiate versions
   // Order matters: check more specific versions first (4-5 before 4)
+  if (name.includes('claude-fable-5-1')) {
+    return 'claude-fable-5-1'
+  }
   if (name.includes('claude-fable-5')) {
     return 'claude-fable-5'
   }
@@ -416,6 +419,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     return openAIModelName
   }
   switch (model) {
+    case getModelStrings().fable51:
+      return 'Fable 5.1'
+    case getModelStrings().fable51 + '[1m]':
+      return 'Fable 5.1 (1M context)'
     case getModelStrings().fable5:
       return 'Fable 5'
     case getModelStrings().fable5 + '[1m]':
@@ -662,6 +669,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-fable-5-1')) {
+    return has1m ? 'Fable 5.1 (with 1M context)' : 'Fable 5.1'
+  }
   if (canonical.includes('claude-fable-5')) {
     return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'
   }

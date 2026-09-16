@@ -2,18 +2,10 @@
 
 Follow the root `AGENTS.md` and the nearest nested `AGENTS.md` for the files you edit.
 
-For every feature, bugfix, refactor, or workflow change:
+Use the root completion and authorization boundaries; consult `docs/internals/contributing.md` for task-specific testing and failure diagnosis. Continue scoped local implementation, deterministic checks, and fixes without asking at each step.
 
-- Treat tool access as capability, not authorization. Do not commit, push, open/merge a PR, release, run live providers, or change repository settings unless explicitly requested.
-- Inspect `git status --short`, identify the changed surface, define the intended behavior and failure signal, and inspect the nearest implementation and tests before editing.
-- Identify the changed surface before coding: `desktop`, `server/runtime`, `adapter`, `native`, `docs`, `provider/runtime`, `agent-loop`, `persistence`, `policy/ci`, or `release`.
-- Add same-area tests with the production change. Do not leave production behavior untested unless the PR explicitly carries the maintainer override `allow-missing-tests`.
-- Preserve or improve the coverage ratchet. New or changed executable production lines must pass the changed-line coverage threshold in `scripts/quality-gate/coverage-thresholds.json`; do not edit coverage baselines or thresholds without maintainer approval via `allow-coverage-baseline-change`.
-- Use unit tests for pure logic, API/request-shape tests for server/provider/runtime behavior, Testing Library/Vitest for desktop UI and stores, and E2E or desktop UI smoke for user-visible cross-boundary flows.
-- Ad-hoc browser automation (manual verification, screenshots, exploratory UI checks) goes through the `ego-browser` skill. The `agent-browser` binary is reserved for the committed `check:desktop-ui-smoke` lane and `desktop/scripts/e2e-*-agent-browser.sh`; do not reach for it as a general browser tool.
-- Provider/auth/runtime-env/model-window/proxy changes require offline `bun run check:provider-contract`; desktop chat/WebSocket/session-runtime changes require `bun run check:chat-contract`.
-- Required PR evidence must be deterministic: use fake credentials, temporary config/home paths, mocked or loopback transports, explicit cleanup, and restored environment state. Never call a real provider or use saved machine credentials in required tests.
-- For agent loop, tool execution, provider routing, model selection, file editing, permissions, session resume, and desktop chat changes, include mock/fixture/contract tests. Live smoke is trusted-maintainer evidence only and requires explicit authorization; finding local credentials is not authorization.
-- Run the focused regression first, then `bun run check:impact` and every selected surface/contract check. Run `bun run verify` only before claiming PR-ready/push-ready or when full validation was requested.
-- Do not present skipped, blocked, not-run, mock, build-only, or stale evidence as passed live/runtime verification.
-- In the final handoff or PR description, include changed files, tests added, commands actually run with pass/fail counts, checks not run, coverage report path when generated, deterministic E2E evidence, live report path or explicit maintainer-only deferral, and known residual risk.
+- Add same-area tests with the production change as defined by `scripts/pr/change-policy.ts`. Preserve or improve the coverage ratchet and meet the changed-line coverage threshold; maintainer overrides remain explicit decisions.
+- Use E2E or desktop UI smoke when unit tests cannot prove a user-visible cross-boundary flow. Ad-hoc browser automation uses `ego-browser`; committed smoke scripts retain their own runner.
+- Provider/auth/runtime-env/model-window/proxy changes require offline `bun run check:provider-contract` when selected by `check:impact`; desktop chat/WebSocket/session changes likewise use `check:chat-contract`.
+- Live smoke is trusted-maintainer evidence only and requires explicit authorization. Required tests use isolated fixtures and no saved credentials.
+- Follow the root verification policy once for the final diff. In the handoff, include changed files, tests added, commands actually run with pass/fail counts when available, checks not run, evidence paths when generated, and remaining risk.

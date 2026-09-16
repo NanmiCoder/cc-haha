@@ -10,6 +10,7 @@ import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesTo
 import { stripLeadingBillingHeader } from '../proxy/transform/billingHeader.js'
 import { openaiUsageToAnthropic } from '../proxy/transform/usage.js'
 import { resolvePromptCacheKey } from '../proxy/promptCacheKey.js'
+import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
 import type { AnthropicRequest, OpenAIChatResponse, OpenAIResponsesResponse } from '../proxy/transform/types.js'
 
 const BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.220.693; cc_entrypoint=cli; cch=00000;'
@@ -25,7 +26,7 @@ describe('anthropicToOpenaiChat', () => {
     }
     const result = anthropicToOpenaiChat(req)
     expect(result.model).toBe('gpt-4')
-    expect(result.max_tokens).toBeUndefined()
+    expect(result.max_tokens).toBe(1024)
     expect(result.messages).toEqual([{ role: 'user', content: 'Hello' }])
   })
 
@@ -129,6 +130,7 @@ describe('anthropicToOpenaiChat', () => {
       model: 'gpt-4',
       max_tokens: 100,
       messages: [{ role: 'user', content: 'Hi' }],
+      tools: [{ name: 'get_weather', input_schema: { type: 'object' } }],
       tool_choice: { type: 'any' },
     }
     const result = anthropicToOpenaiChat(req)
@@ -140,6 +142,7 @@ describe('anthropicToOpenaiChat', () => {
       model: 'gpt-4',
       max_tokens: 100,
       messages: [{ role: 'user', content: 'Hi' }],
+      tools: [{ name: 'get_weather', input_schema: { type: 'object' } }],
       tool_choice: { type: 'tool', name: 'get_weather' },
     }
     const result = anthropicToOpenaiChat(req)
@@ -297,40 +300,18 @@ describe('anthropicToOpenaiChat', () => {
     expect(result.messages[0].content).toBe('Sunny, 72°F')
   })
 
-  test('preserves text-only tool_result arrays as strings', () => {
+  test('lifts tool_result images into a user message after the tool message', () => {
     const req: AnthropicRequest = {
-      model: 'gpt-4o',
+      model: 'gpt-4',
       max_tokens: 100,
       messages: [{
         role: 'user',
         content: [{
           type: 'tool_result',
-          tool_use_id: 'computer_0',
-          content: [
-            { type: 'text', text: 'first' },
-            { type: 'text', text: 'second' },
-          ],
-        }],
-      }],
-    }
-
-    const result = anthropicToOpenaiChat(req)
-
-    expect(result.messages[0].content).toBe('first\nsecond')
-  })
-
-  test('preserves image-only tool_result content', () => {
-    const req: AnthropicRequest = {
-      model: 'gpt-4o',
-      max_tokens: 100,
-      messages: [{
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: 'computer_1',
+          tool_use_id: 'tc_image',
           content: [{
             type: 'image',
-            source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/AA==' },
+            source: { type: 'base64', media_type: 'image/png', data: 'abc123' },
           }],
         }],
       }],
@@ -338,32 +319,360 @@ describe('anthropicToOpenaiChat', () => {
 
     const result = anthropicToOpenaiChat(req)
 
-    expect(result.messages[0]).toEqual({
-      role: 'tool',
-      tool_call_id: 'computer_1',
-      content: [{
-        type: 'image_url',
-        image_url: { url: 'data:image/jpeg;base64,/9j/AA==' },
-      }],
-    })
+    expect(result.messages).toEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'tc_image',
+        content: 'Media result attached after this tool result.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[Media content for tool call tc_image]' },
+          {
+            type: 'image_url',
+            image_url: { url: 'data:image/png;base64,abc123' },
+          },
+        ],
+      },
+    ])
   })
 
-  test('preserves mixed tool_result content in order', () => {
+  test('keeps tool messages text-only and groups lifted media per tool call', () => {
     const req: AnthropicRequest = {
-      model: 'gpt-4o',
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tc_1', content: [
+            { type: 'text', text: 'first' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } },
+            { type: 'text', text: 'last' },
+          ] },
+          { type: 'tool_result', tool_use_id: 'tc_2', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'def' } },
+          ] },
+        ],
+      }],
+    }
+
+    const result = anthropicToOpenaiChat(req)
+
+    expect(result.messages).toEqual([
+      // Adjacent text blocks are joined without a separator — the wire shape
+      // carries no newline between them.
+      { role: 'tool', tool_call_id: 'tc_1', content: 'firstlast' },
+      { role: 'tool', tool_call_id: 'tc_2', content: 'Media result attached after this tool result.' },
+      { role: 'user', content: [
+        { type: 'text', text: '[Media content for tool call tc_1]' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+        { type: 'text', text: '[Media content for tool call tc_2]' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,def' } },
+      ] },
+    ])
+  })
+
+  test('collapses pure-text user messages to a plain string content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{ type: 'text', text: 'hello' }],
+      }],
+    }
+
+    // OpenAI-compatible endpoints that only implement string `content` keep
+    // working; the multipart array form is reserved for media messages.
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'user', content: 'hello' },
+    ])
+  })
+
+  test('collapses multiple text-only blocks to a plain string', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'hello ' },
+          { type: 'text', text: 'world' },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'user', content: 'hello world' },
+    ])
+  })
+
+  test('keeps ordinary mixed user content in one message', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } },
+          { type: 'text', text: 'after' },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'before' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+        { type: 'text', text: 'after' },
+      ],
+    }])
+  })
+
+  test('keeps tool-result media ahead of trailing user text', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tc_1',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } }],
+          },
+          { type: 'text', text: 'Please look at the top-left corner of the image' },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_1', content: 'Media result attached after this tool result.' },
+      { role: 'user', content: [
+        { type: 'text', text: '[Media content for tool call tc_1]' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+      ] },
+      { role: 'user', content: 'Please look at the top-left corner of the image' },
+    ])
+  })
+
+  test('keeps image URL sources in lifted tool-result media', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
       max_tokens: 100,
       messages: [{
         role: 'user',
         content: [{
           type: 'tool_result',
-          tool_use_id: 'computer_2',
+          tool_use_id: 'tc_url',
+          content: [{
+            type: 'image',
+            source: { type: 'url', url: 'https://example.test/shot.png' },
+          }],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_url', content: 'Media result attached after this tool result.' },
+      { role: 'user', content: [
+        { type: 'text', text: '[Media content for tool call tc_url]' },
+        { type: 'image_url', image_url: { url: 'https://example.test/shot.png' } },
+      ] },
+    ])
+  })
+
+  test('keeps tool-result documents visible as text references in the tool message', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_doc',
           content: [
-            { type: 'text', text: 'before' },
+            { type: 'document', title: 'report.pdf', source: { type: 'url', url: 'https://example.test/report.pdf' } },
+            { type: 'document', title: 'notes.txt', source: { type: 'base64', media_type: 'text/plain', data: 'aGVsbG8=' } },
+            { type: 'document', title: 'readme', source: { type: 'text', media_type: 'text/plain', data: 'hello world' } },
+            { type: 'document', title: 'secret.pdf', source: { type: 'file', file_id: 'file_123' } },
+          ],
+        }],
+      }],
+    }
+
+    // Textual document representations stay inside the tool message (external
+    // tool output belongs behind the tool role); only real media lifts.
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'tc_doc',
+        content: '[Document: report.pdf](https://example.test/report.pdf)\n[Document: notes.txt]\nhello\n[Document: readme]\nhello world\n[Document: secret.pdf omitted — file-based source]',
+      },
+    ])
+  })
+
+  test('keeps tool-result search results as text', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_search',
+          content: [
             {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/AA==' },
+              type: 'search_result',
+              title: 'Result title',
+              content: [{ type: 'text', text: 'Snippet body' }],
+              source: 'https://example.test/result',
             },
-            { type: 'text', text: 'after' },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_search', content: 'Result title — Snippet body — https://example.test/result' },
+    ])
+  })
+
+  test('degrades file-based image sources to a visible text notice', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_file',
+          content: [
+            { type: 'image', source: { type: 'file', file_id: 'file-123' } },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_file', content: '\n[Image omitted: file-based image source is not supported by this endpoint.]\n' },
+    ])
+  })
+
+  test('keeps top-level user search results as text', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'search_result',
+            title: 'Top result',
+            content: [{ type: 'text', text: 'Top snippet' }],
+            source: 'https://example.test/top',
+          },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'user', content: 'Top result — Top snippet — https://example.test/top' },
+    ])
+  })
+
+  test('flattens custom-content documents as text', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_cdoc',
+          content: [
+            {
+              type: 'document',
+              title: 'cited doc',
+              source: {
+                type: 'content',
+                content: [{ type: 'text', text: 'quoted passage' }],
+              },
+            },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_cdoc', content: '[Document: cited doc]\nquoted passage' },
+    ])
+  })
+
+  test('keeps inline images of custom-content documents in tool-result documents', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_cdoc',
+          content: [{
+            type: 'document',
+            title: 'cited',
+            source: {
+              type: 'content',
+              content: [
+                { type: 'text', text: 'before' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } },
+                { type: 'text', text: 'after' },
+              ],
+            },
+          }],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      // The document's text blocks keep their boundaries without a separator;
+      // the synthetic title prefix carries its own newline.
+      { role: 'tool', tool_call_id: 'tc_cdoc', content: '[Document: cited]\nbeforeafter' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[Media content for tool call tc_cdoc]' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+        ],
+      },
+    ])
+  })
+
+  test('keeps model-visible title and context when degrading documents', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_prov',
+          content: [
+            {
+              type: 'document',
+              title: 'Auth specification',
+              context: 'The examples use production credentials',
+              source: { type: 'text', media_type: 'text/plain', data: 'Bearer abc123' },
+            },
+            {
+              type: 'document',
+              title: 'Policy',
+              context: 'Applies to tenant A',
+              source: { type: 'content', content: [{ type: 'text', text: 'quoted' }] },
+            },
           ],
         }],
       }],
@@ -371,43 +680,160 @@ describe('anthropicToOpenaiChat', () => {
 
     const result = anthropicToOpenaiChat(req)
 
-    expect(result.messages[0].content).toEqual([
-      { type: 'text', text: 'before' },
-      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/AA==' } },
-      { type: 'text', text: 'after' },
+    expect(result.messages).toEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'tc_prov',
+        content: '[Document: Auth specification]\n[Document context: The examples use production credentials]\nBearer abc123\n[Document: Policy]\n[Document context: Applies to tenant A]\nquoted',
+      },
     ])
   })
 
-  test('replaces nested tool_result images in text-only mode without leaking base64', () => {
+  test('keeps model-visible title and context for top-level user documents', () => {
     const req: AnthropicRequest = {
-      model: 'deepseek-v4-pro',
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            title: 'Auth specification',
+            context: 'The examples use production credentials',
+            source: { type: 'text', media_type: 'text/plain', data: 'Bearer abc123' },
+          },
+          {
+            type: 'document',
+            title: 'Contract',
+            context: 'Applies to tenant A',
+            source: { type: 'url', url: 'https://example.test/contract.pdf' },
+          },
+        ],
+      }],
+    }
+
+    const result = anthropicToOpenaiChat(req)
+
+    expect(result.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[Document: Auth specification]\n[Document context: The examples use production credentials]\nBearer abc123' },
+          // The URL reference already carries the title as its label, so only
+          // the context gets a synthetic prefix.
+          { type: 'text', text: '[Document context: Applies to tenant A]\n[Document: Contract](https://example.test/contract.pdf)' },
+        ],
+      },
+    ])
+  })
+
+  test('keeps inline images of custom-content documents in top-level user content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
       max_tokens: 100,
       messages: [{
         role: 'user',
         content: [{
-          type: 'tool_result',
-          tool_use_id: 'computer_3',
-          content: [
-            { type: 'text', text: 'before' },
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: 'private-screenshot-data' },
-            },
-            { type: 'text', text: 'after' },
-          ],
+          type: 'document',
+          title: 'cited',
+          source: {
+            type: 'content',
+            content: [
+              { type: 'text', text: 'before' },
+              { type: 'image', source: { type: 'url', url: 'https://example.test/img.png' } },
+            ],
+          },
         }],
       }],
     }
 
-    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
-
-    expect(result.messages[0].content).toBe(
-      'before\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\nafter',
-    )
-    expect(JSON.stringify(result)).not.toContain('private-screenshot-data')
-    expect(JSON.stringify(result)).not.toContain('image_url')
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[Document: cited]\n' },
+          { type: 'text', text: 'before' },
+          { type: 'image_url', image_url: { url: 'https://example.test/img.png' } },
+        ],
+      },
+    ])
   })
 
+  test('keeps the interleaved text/image order of custom-content documents', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'document',
+          title: 'cited',
+          source: {
+            type: 'content',
+            content: [
+              { type: 'text', text: 'before' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'a' } },
+              { type: 'text', text: 'after' },
+            ],
+          },
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[Document: cited]\n' },
+          { type: 'text', text: 'before' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,a' } },
+          { type: 'text', text: 'after' },
+        ],
+      },
+    ])
+  })
+
+  test('degrades top-level file-based user images to a visible text notice', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at this' },
+          { type: 'image', source: { type: 'file', file_id: 'file-9' } },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'user', content: [
+        { type: 'text', text: 'look at this' },
+        { type: 'text', text: '\n[Image omitted: file-based image source is not supported by this endpoint.]\n' },
+      ] },
+    ])
+  })
+
+  test('keeps user text after tool results after tool messages', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before' },
+          { type: 'tool_result', tool_use_id: 'tc_1', content: 'result' },
+          { type: 'text', text: 'after' },
+        ],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'user', content: 'before' },
+      { role: 'tool', tool_call_id: 'tc_1', content: 'result' },
+      { role: 'user', content: 'after' },
+    ])
+  })
   test('image content conversion', () => {
     const req: AnthropicRequest = {
       model: 'gpt-4',
@@ -439,10 +865,235 @@ describe('anthropicToOpenaiChat', () => {
     }
     const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
     expect(result.messages[0].content).toBe(
-      'What is in this screenshot?\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]',
+      'What is in this screenshot?\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\n',
     )
     expect(JSON.stringify(result)).not.toContain('image_url')
     expect(JSON.stringify(result)).not.toContain('abc123')
+  })
+
+  test('text-only mode emits one omission notice per image-only tool result', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_img',
+          content: [{
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'abc123' },
+          }],
+        }],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    expect(result.messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_img', content: '\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\n' },
+    ])
+    expect(JSON.stringify(result)).not.toContain('image_url')
+    expect(JSON.stringify(result)).not.toContain('abc123')
+  })
+
+  test('text-only mode keeps plain-text documents instead of omitting them', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_doc',
+          content: [
+            { type: 'document', title: 'notes.txt', source: { type: 'text', media_type: 'text/plain', data: 'actual tool result' } },
+            {
+              type: 'document',
+              title: 'cited',
+              source: { type: 'content', content: [{ type: 'text', text: 'quoted passage' }] },
+            },
+          ],
+        }],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    expect(result.messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_doc', content: '[Document: notes.txt]\nactual tool result\n[Document: cited]\nquoted passage' },
+    ])
+    expect(JSON.stringify(result)).not.toContain('image_url')
+  })
+
+  test('text-only mode degrades inline document images to a text notice', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'document',
+          title: 'cited',
+          source: {
+            type: 'content',
+            content: [
+              { type: 'text', text: 'before' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc123' } },
+              { type: 'text', text: 'after' },
+            ],
+          },
+        }],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    expect(result.messages).toEqual([
+      {
+        role: 'user',
+        content: '[Document: cited]\nbefore\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\nafter',
+      },
+    ])
+    expect(JSON.stringify(result)).not.toContain('image_url')
+    expect(JSON.stringify(result)).not.toContain('abc123')
+  })
+
+  test('text-only mode keeps explicit boundaries around top-level documents', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before' },
+          { type: 'document', title: 'spec', source: { type: 'text', media_type: 'text/plain', data: 'DOC' } },
+          { type: 'text', text: 'after' },
+        ],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    // Raw text blocks keep their exact bytes, but a document is a discrete
+    // block: its degraded text must not glue itself to the surrounding text.
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'before\n[Document: spec]\nDOC\nafter' },
+    ])
+  })
+
+  test('text-only mode keeps explicit boundaries around top-level search results', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before' },
+          {
+            type: 'search_result',
+            title: 'Result title',
+            content: [{ type: 'text', text: 'Snippet body' }],
+            source: 'https://example.test/result',
+          },
+          { type: 'text', text: 'after' },
+        ],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'before\nResult title — Snippet body — https://example.test/result\nafter' },
+    ])
+  })
+
+  test('keeps tool-result search results separate from adjacent text', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_search',
+          content: [
+            { type: 'text', text: 'before' },
+            {
+              type: 'search_result',
+              title: 'Result title',
+              content: [{ type: 'text', text: 'Snippet body' }],
+              source: 'https://example.test/result',
+            },
+            { type: 'text', text: 'after' },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_search', content: 'before\nResult title — Snippet body — https://example.test/result\nafter' },
+    ])
+  })
+
+  test('text-only mode does not duplicate line boundaries the text already provides', () => {
+    const req: AnthropicRequest = {
+      model: 'deepseek-v4-pro',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before\n' },
+          { type: 'document', title: 'spec', source: { type: 'text', media_type: 'text/plain', data: 'DOC' } },
+          { type: 'text', text: '\nafter' },
+        ],
+      }],
+    }
+    const result = anthropicToOpenaiChat(req, { imageContentMode: 'text_only' })
+    // The serializer must not rewrite bytes the prompt already carries: a
+    // single boundary newline, no extra blank line.
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'before\n[Document: spec]\nDOC\nafter' },
+    ])
+  })
+
+  test('does not duplicate line boundaries after tool-result documents', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_doc',
+          content: [
+            { type: 'document', title: 'spec', source: { type: 'text', media_type: 'text/plain', data: 'DOC' } },
+            { type: 'text', text: '\nafter' },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_doc', content: '[Document: spec]\nDOC\nafter' },
+    ])
+  })
+
+  test('does not duplicate line boundaries after tool-result search results', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tc_search',
+          content: [
+            {
+              type: 'search_result',
+              title: 'Result title',
+              content: [{ type: 'text', text: 'Snippet body' }],
+              source: 'https://example.test/result',
+            },
+            { type: 'text', text: '\nafter' },
+          ],
+        }],
+      }],
+    }
+
+    expect(anthropicToOpenaiChat(req).messages).toEqual([
+      { role: 'tool', tool_call_id: 'tc_search', content: 'Result title — Snippet body — https://example.test/result\nafter' },
+    ])
   })
 })
 
@@ -545,18 +1196,16 @@ describe('openaiChatToAnthropic', () => {
 
     expect(openaiChatToAnthropic(make('stop'), 'gpt-4').stop_reason).toBe('end_turn')
     expect(openaiChatToAnthropic(make('length'), 'gpt-4').stop_reason).toBe('max_tokens')
-    expect(openaiChatToAnthropic(make('tool_calls'), 'gpt-4').stop_reason).toBe('tool_use')
+    expect(() => openaiChatToAnthropic(make('tool_calls'), 'gpt-4')).toThrow('no tool calls')
     expect(openaiChatToAnthropic(make('content_filter'), 'gpt-4').stop_reason).toBe('end_turn')
   })
 
-  test('empty choices', () => {
+  test('empty choices cannot become a successful response', () => {
     const res: OpenAIChatResponse = {
       id: 'x', object: 'chat.completion', created: 0, model: 'gpt-4',
       choices: [],
     }
-    const result = openaiChatToAnthropic(res, 'gpt-4')
-    expect(result.content).toEqual([{ type: 'text', text: '' }])
-    expect(result.stop_reason).toBe('end_turn')
+    expect(() => openaiChatToAnthropic(res, 'gpt-4')).toThrow('no message choice')
   })
 
   test('cached tokens mapping', () => {
@@ -578,6 +1227,36 @@ describe('openaiChatToAnthropic', () => {
 // ─── anthropicToOpenaiResponses ─────────────────────────────────
 
 describe('anthropicToOpenaiResponses', () => {
+  test('keeps Computer Use optional fields optional on the Responses wire', () => {
+    const tools = buildComputerUseTools().map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+    }))
+    const original = structuredClone(tools)
+    const wire = JSON.parse(JSON.stringify(anthropicToOpenaiResponses({
+      model: 'gpt-6-astra',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'Read the Blender window' }],
+      tools,
+    })))
+
+    // Omitting strict lets Responses normalize every property to required.
+    // That made both non-nullable diff aliases mandatory while the executor
+    // correctly rejected their simultaneous presence (Blender regression).
+    for (const tool of wire.tools) {
+      expect(tool.strict).toBe(false)
+      expect(tool.parameters).toEqual(original.find(t => t.name === tool.name)!.input_schema)
+    }
+    const state = wire.tools.find((tool: { name: string }) => tool.name === 'get_app_state')
+    expect(state.parameters.required).toEqual(['app'])
+    expect(state.parameters.properties.disableDiff.type).toBe('boolean')
+    expect(state.parameters.properties.disable_diff.type).toBe('boolean')
+    const click = wire.tools.find((tool: { name: string }) => tool.name === 'click')
+    expect(click.parameters.required).toEqual(['app'])
+    expect(tools).toEqual(original)
+  })
+
   test('basic message', () => {
     const req: AnthropicRequest = {
       model: 'gpt-4o',
@@ -590,7 +1269,7 @@ describe('anthropicToOpenaiResponses', () => {
     expect(result.instructions).toBe('Be helpful')
     expect(result.store).toBe(false)
     expect(result.tools).toBeUndefined()
-    expect(result.max_output_tokens).toBeUndefined()
+    expect(result.max_output_tokens).toBe(1024)
     expect(result.input).toEqual([{ type: 'message', role: 'user', content: 'Hello' }])
   })
 
@@ -640,6 +1319,7 @@ describe('anthropicToOpenaiResponses', () => {
       name: 'get_weather',
       description: 'Get weather',
       parameters: { type: 'object', properties: { city: { type: 'string' } } },
+      strict: false,
     })
   })
 
@@ -683,6 +1363,25 @@ describe('anthropicToOpenaiResponses', () => {
     }])
   })
 
+  test('normalizes empty tool_result arrays to an empty string', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tc_empty', content: [] }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'tc_empty',
+      output: '',
+    }])
+  })
+
   test('preserves text-only tool_result arrays as strings', () => {
     const req: AnthropicRequest = {
       model: 'gpt-4o',
@@ -705,7 +1404,9 @@ describe('anthropicToOpenaiResponses', () => {
     expect(result.input).toEqual([{
       type: 'function_call_output',
       call_id: 'tc_2',
-      output: 'first\nsecond',
+      // Adjacent text blocks are joined without a separator — the wire shape
+      // carries no newline between them.
+      output: 'firstsecond',
     }])
   })
 
@@ -769,6 +1470,223 @@ describe('anthropicToOpenaiResponses', () => {
         { type: 'input_image', image_url: 'data:image/jpeg;base64,/9j/AA==' },
         { type: 'input_text', text: 'after' },
       ],
+    }])
+  })
+
+  test('preserves image URL sources in tool_result content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_url',
+          content: [{
+            type: 'image',
+            source: { type: 'url', url: 'https://example.test/shot.png' },
+          }],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_url',
+      output: [{
+        type: 'input_image',
+        image_url: 'https://example.test/shot.png',
+      }],
+    }])
+  })
+
+  test('maps document blocks to input_file in tool_result content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_doc',
+          content: [
+            {
+              type: 'document',
+              title: 'report.pdf',
+              source: { type: 'base64', media_type: 'application/pdf', data: 'pdf-data' },
+            },
+            {
+              type: 'document',
+              source: { type: 'url', url: 'https://example.test/report.pdf' },
+            },
+          ],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_doc',
+      output: [
+        // The titled base64 document keeps its model-visible title as a
+        // synthetic prefix ahead of the input_file part.
+        { type: 'input_text', text: '[Document: report.pdf]\n' },
+        { type: 'input_file', file_data: 'data:application/pdf;base64,pdf-data', filename: 'report.pdf' },
+        { type: 'input_file', file_url: 'https://example.test/report.pdf' },
+      ],
+    }])
+  })
+
+  test('maps search_result blocks to input_text in tool_result content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_search',
+          content: [
+            {
+              type: 'search_result',
+              title: 'Result title',
+              content: [{ type: 'text', text: 'Snippet body' }],
+              source: 'https://example.test/result',
+            },
+          ],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_search',
+      // A search_result is not a text block: the output keeps its array shape
+      // instead of flattening into a joined string.
+      output: [{ type: 'input_text', text: 'Result title — Snippet body — https://example.test/result' }],
+    }])
+  })
+
+  test('keeps text documents as input_text instead of base64 in tool_result content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_textdoc',
+          content: [
+            { type: 'document', title: 'notes.txt', source: { type: 'text', media_type: 'text/plain', data: 'hello world' } },
+          ],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_textdoc',
+      // A document is not a text block: the output keeps its array shape
+      // instead of flattening into a joined string. The model-visible title
+      // stays as a synthetic prefix.
+      output: [{ type: 'input_text', text: '[Document: notes.txt]\nhello world' }],
+    }])
+  })
+
+  test('keeps inline images of custom-content documents in tool_result content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_cdoc',
+          content: [{
+            type: 'document',
+            title: 'cited',
+            source: {
+              type: 'content',
+              content: [
+                { type: 'text', text: 'before' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } },
+                { type: 'text', text: 'after' },
+              ],
+            },
+          }],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_cdoc',
+      output: [
+        { type: 'input_text', text: '[Document: cited]\n' },
+        { type: 'input_text', text: 'before' },
+        { type: 'input_image', image_url: 'data:image/png;base64,abc' },
+        { type: 'input_text', text: 'after' },
+      ],
+    }])
+  })
+
+  test('degrades file-based image sources to a visible text notice', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read_file',
+          content: [
+            { type: 'image', source: { type: 'file', file_id: 'file-123' } },
+          ],
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'function_call_output',
+      call_id: 'read_file',
+      output: [{ type: 'input_text', text: '[Image omitted: file-based image source is not supported by this endpoint.]' }],
+    }])
+  })
+
+  test('preserves image URL sources in ordinary message content', () => {
+    const req: AnthropicRequest = {
+      model: 'gpt-4o',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'image',
+          source: { type: 'url', url: 'https://example.test/photo.png' },
+        }],
+      }],
+    }
+
+    const result = anthropicToOpenaiResponses(req)
+
+    expect(result.input).toEqual([{
+      type: 'message',
+      role: 'user',
+      content: [{
+        type: 'input_image',
+        image_url: 'https://example.test/photo.png',
+      }],
     }])
   })
 
@@ -1113,6 +2031,7 @@ describe('openaiResponsesToAnthropic', () => {
 
   test('status incomplete → max_tokens', () => {
     const res: OpenAIResponsesResponse = {
+      incomplete_details: { reason: 'max_output_tokens' },
       id: 'resp_4',
       object: 'response',
       created_at: 0,

@@ -246,6 +246,51 @@ class TestMutatingCommandsAreGuarded(unittest.TestCase):
         self.assertNotIn("key", coords)
         self.assertNotIn("type", coords)
 
+    def test_pointer_motion_uses_the_animation_gate(self):
+        """Coordinate actions must not jump while mouse animation is enabled."""
+        source = _win_source()
+        self.assertIn("def _move_cursor_to", source)
+        self.assertIn("def _spring_cursor_path", source)
+        self.assertNotIn("1 - (1 - progress) ** 3", source)
+        dispatcher = source.index("def main()")
+        for command in ("click", "drag", "move_mouse", "scroll"):
+            marker = f'if command == "{command}":'
+            start = source.index(marker, dispatcher)
+            body = source[start:start + 1400]
+            self.assertIn(
+                'payload.get("animate", True)',
+                body,
+                f"{command} must honor the mouse-animation gate",
+            )
+
+    @unittest.skipUnless(IS_WINDOWS, "requires the Windows helper module")
+    def test_spring_cursor_path_starts_smoothly_and_lands_exactly(self):
+        spec = importlib.util.spec_from_file_location("win_helper_motion", WIN_HELPER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        points = module._spring_cursor_path(0, 0, 1000, 500)
+        self.assertGreater(len(points), 12)
+        self.assertEqual(points[-1], (1000, 500))
+        first_distance = (points[0][0] ** 2 + points[0][1] ** 2) ** 0.5
+        total_distance = (1000 ** 2 + 500 ** 2) ** 0.5
+        self.assertLess(first_distance / total_distance, 0.10)
+        self.assertTrue(all(a != b for a, b in zip(points, points[1:])))
+
+    def test_drag_reuses_the_shared_cursor_motion(self):
+        source = _win_source()
+        dispatcher = source.index('if command == "drag":')
+        body = source[dispatcher:source.index('if command == "move_mouse":', dispatcher)]
+        self.assertGreaterEqual(body.count("_move_cursor_to("), 2)
+        self.assertNotIn("for step in range", body)
+
+    def test_helper_uses_per_monitor_dpi_coordinates(self):
+        source = _win_source()
+        self.assertIn("DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2", source)
+        self.assertIn("SetProcessDpiAwarenessContext", source)
+        self.assertIn("GetDpiForMonitor", source)
+
     def test_every_mutating_branch_finalizes_the_lease(self):
         """No mutating branch may answer with a bare json_output.
 
@@ -438,7 +483,7 @@ class TestDeliveryGuards(unittest.TestCase):
 
 
 class TestCursorBadge(unittest.TestCase):
-    """The Windows badge annotates the real cursor; it does not replace it."""
+    """Windows renders the same virtual-cursor language as macOS."""
 
     def test_badge_script_exists(self):
         self.assertTrue(CURSOR_BADGE.exists())
@@ -453,16 +498,17 @@ class TestCursorBadge(unittest.TestCase):
         source = CURSOR_BADGE.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
-        create = next(
+        methods = [
             node for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "create"
-        )
+            if isinstance(node, ast.FunctionDef)
+            and node.name in {"create", "_tick"}
+        ]
         # Read the names actually combined into the window's ex-style, not
         # merely the ones defined somewhere in the file. A constant can be
         # defined and then left out of CreateWindowExW — which is exactly how
         # a click-through window quietly becomes a click-eating one.
         used = {
-            n.id for n in ast.walk(create)
+            n.id for method in methods for n in ast.walk(method)
             if isinstance(n, ast.Name)
         }
         for style in ("WS_EX_LAYERED", "WS_EX_TRANSPARENT",
@@ -473,30 +519,99 @@ class TestCursorBadge(unittest.TestCase):
             )
         self.assertIn("SW_SHOWNOACTIVATE", used)
 
-    def test_badge_does_not_draw_a_second_pointer(self):
-        """Windows has one real cursor and SendInput moves it.
-
-        Drawing a fake pointer alongside it would show the user two cursors,
-        one of which is a lie about where the click will land. The macOS design
-        does not transfer, and the source says so explicitly.
-        """
+    def test_overlay_draws_a_pointer_instead_of_a_text_banner(self):
+        """The old 168x30 label was the black bar reported by Windows users."""
         source = CURSOR_BADGE.read_text(encoding="utf-8")
-        self.assertIn("annotation", source.lower())
+        self.assertNotIn("DrawTextW", source)
+        self.assertIn("ARROW_POINTS", source)
+        self.assertIn("#0075f2", source.lower())
+        self.assertIn("GaussianBlur", source)
+        self.assertIn("UpdateLayeredWindow", source)
 
-    def test_badge_fits_the_default_label(self):
-        tree = ast.parse(CURSOR_BADGE.read_text(encoding="utf-8"))
-        width_assignment = next(
-            node for node in tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "BADGE_W"
-                    for target in node.targets)
+    def test_overlay_uses_the_agent_hotspot_not_a_cursor_offset(self):
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        self.assertIn("HOTSPOT", source)
+        self.assertNotIn("CURSOR_OFFSET_X", source)
+        self.assertNotIn("CURSOR_OFFSET_Y", source)
+
+    def test_overlay_is_per_monitor_dpi_aware(self):
+        """GetCursorPos and window placement must share physical coordinates."""
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        self.assertIn("DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2", source)
+        self.assertIn("SetProcessDpiAwarenessContext", source)
+        self.assertIn("GetDpiForMonitor", source)
+        self.assertIn("GetDpiForWindow", source)
+
+    @unittest.skipUnless(IS_WINDOWS, "requires Pillow and the Windows module")
+    def test_overlay_renders_a_transparent_pointer_frame(self):
+        spec = importlib.util.spec_from_file_location("win_cursor_badge", CURSOR_BADGE)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        frame = module._render_cursor(1.0, 0.0, None)
+        self.assertEqual(frame.size, (module.CANVAS_SIZE, module.CANVAS_SIZE))
+        self.assertEqual(frame.getpixel((0, 0))[3], 0)
+        hotspot_x, hotspot_y = (round(value) for value in module.HOTSPOT)
+        hotspot_alpha = max(
+            frame.getpixel((hotspot_x + dx, hotspot_y + dy))[3]
+            for dx in range(-1, 2)
+            for dy in range(-1, 2)
         )
-        self.assertIsInstance(width_assignment.value, ast.Constant)
-        self.assertGreaterEqual(
-            width_assignment.value.value,
-            160,
-            'the default "Claude is controlling" label must not be clipped',
+        self.assertGreater(hotspot_alpha, 200)
+        self.assertLess(
+            sum(pixel[3] > 8 for pixel in frame.getdata()),
+            module.CANVAS_SIZE * module.CANVAS_SIZE // 2,
         )
+
+    @unittest.skipUnless(IS_WINDOWS, "requires Pillow and the Windows module")
+    def test_overlay_converts_frames_to_premultiplied_bgra(self):
+        spec = importlib.util.spec_from_file_location("win_cursor_badge", CURSOR_BADGE)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        image = module.Image.new("RGBA", (1, 1), (100, 150, 200, 128))
+        self.assertEqual(
+            module._premultiplied_bgra(image),
+            bytes((100, 75, 50, 128)),
+        )
+
+    def test_overlay_tracks_agent_input_and_not_the_users_pointer(self):
+        """A virtual cursor stays at the agent's last point when the user moves."""
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        self.assertIn("WH_MOUSE_LL", source)
+        self.assertIn("LLMHF_INJECTED", source)
+        self.assertIn("_agent_position", source)
+        self.assertNotIn("def _follow_cursor", source)
+
+    def test_overlay_and_helper_share_a_session_input_tag(self):
+        overlay = CURSOR_BADGE.read_text(encoding="utf-8")
+        helper = _win_source()
+        env_name = "CC_HAHA_COMPUTER_USE_INPUT_TAG"
+        self.assertIn(env_name, overlay)
+        self.assertIn(env_name, helper)
+        self.assertIn("dwExtraInfo", overlay)
+
+    def test_overlay_visibility_is_bound_to_the_controlled_window(self):
+        """Never strand the AI pointer over an unrelated covering app."""
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        self.assertIn("targetPid", source)
+        self.assertIn("WindowFromPoint", source)
+        self.assertIn("GetForegroundWindow", source)
+
+    def test_overlay_activity_does_not_hide_before_animated_motion(self):
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        start = source.index("    def _on_activity")
+        end = source.index("    def _read_parent", start)
+        body = source[start:end]
+        self.assertNotIn("ShowWindow", body)
+        self.assertIn("GetCursorPos", body)
+        self.assertIn("self._requested_visible = self._target_pid is not None", body)
+
+    def test_overlay_readiness_precedes_the_first_action(self):
+        source = CURSOR_BADGE.read_text(encoding="utf-8")
+        self.assertIn('print("READY", flush=True)', source)
 
     def test_badge_exits_with_its_parent(self):
         """An orphaned badge is worse than none.
@@ -519,8 +634,7 @@ class TestCursorBadge(unittest.TestCase):
         self.assertIs(module.user32.CreateWindowExW.argtypes[3], module.wintypes.DWORD)
         self.assertIs(module.user32.DefWindowProcW.restype, module.LRESULT)
         for function in (
-            module.user32.DrawTextW,
-            module.user32.SetLayeredWindowAttributes,
+            module.user32.UpdateLayeredWindow,
             module.user32.SetWindowPos,
         ):
             self.assertIsNotNone(function.argtypes)
@@ -547,6 +661,8 @@ class TestCursorBadge(unittest.TestCase):
             if process.poll() is not None:
                 assert process.stderr is not None
                 self.fail(f"badge exited during startup: {process.stderr.read()}")
+            assert process.stdout is not None
+            self.assertEqual(process.stdout.readline().strip(), "READY")
             assert process.stdin is not None
             process.stdin.close()
             returncode = process.wait(timeout=5)
@@ -556,6 +672,10 @@ class TestCursorBadge(unittest.TestCase):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
         self.assertEqual(returncode, 0, stderr)
         self.assertNotIn("Exception ignored on calling ctypes callback", stderr)

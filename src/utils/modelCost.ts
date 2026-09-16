@@ -8,6 +8,7 @@ import {
   CLAUDE_3_5_V2_SONNET_CONFIG,
   CLAUDE_3_7_SONNET_CONFIG,
   CLAUDE_FABLE_5_CONFIG,
+  CLAUDE_FABLE_5_1_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
   CLAUDE_OPUS_4_5_CONFIG,
@@ -71,6 +72,12 @@ export const COST_TIER_10_50 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Fable 5.1 keeps Fable 5 input/output pricing but reduces cache reads by 75%.
+export const COST_FABLE_51 = {
+  ...COST_TIER_10_50,
+  promptCacheReadTokens: 0.25,
+} as const satisfies ModelCosts
+
 // Fast mode pricing for Opus 4.7: $30 input / $150 output per Mtok
 export const COST_TIER_30_150 = {
   inputTokens: 30,
@@ -114,6 +121,8 @@ export function getOpus46CostTier(fastMode: boolean): ModelCosts {
 // Costs from https://platform.claude.com/docs/en/about-claude/pricing
 // Web search cost: $10 per 1000 requests = $0.01 per request
 export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
+  [firstPartyNameToCanonical(CLAUDE_FABLE_5_1_CONFIG.firstParty)]:
+    COST_FABLE_51,
   [firstPartyNameToCanonical(CLAUDE_FABLE_5_CONFIG.firstParty)]:
     COST_TIER_10_50,
   [firstPartyNameToCanonical(CLAUDE_3_5_HAIKU_CONFIG.firstParty)]:

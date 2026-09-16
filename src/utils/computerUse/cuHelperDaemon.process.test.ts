@@ -34,6 +34,11 @@ const originalSessionId = getSessionId()
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
+    // A Linux container's init may defer reaping an exited orphan. A zombie
+    // cannot hold the socket open and is no longer a running daemon.
+    if (process.platform === 'linux') {
+      return !/^\d+ \(.*\) Z /.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'))
+    }
     return true
   } catch {
     return false
@@ -75,7 +80,14 @@ async function launchDetachedDaemon(socketPath: string): Promise<number> {
     encoding: 'utf8',
   })
   expect(parent.status).toBe(0)
-  expect(Number.parseInt(parent.stdout.trim(), 10)).toBe(1)
+  const parentPid = Number.parseInt(parent.stdout.trim(), 10)
+  if (process.platform === 'darwin') {
+    expect(parentPid).toBe(1)
+  } else {
+    // Linux can reparent to a container subreaper rather than PID 1.
+    expect(parentPid).toBeGreaterThan(0)
+    expect(parentPid).not.toBe(result.pid)
+  }
   return pid
 }
 
@@ -143,8 +155,10 @@ afterEach(async () => {
   runtimeRoot = undefined
 })
 
-describe.skipIf(process.platform !== 'darwin')(
-  'cu-helper launchd-owned daemon lifecycle',
+// The fixture models launchd ownership with a detached POSIX process; it does
+// not invoke launchctl or native Computer Use, so Linux exercises it too.
+describe.skipIf(process.platform === 'win32')(
+  'cu-helper detached daemon lifecycle',
   () => {
     test('startup enumeration cannot poison the first resumed turn across shutdown and restart', async () => {
       runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-haha-cu-process-'))

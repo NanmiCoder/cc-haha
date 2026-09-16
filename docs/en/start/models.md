@@ -61,12 +61,12 @@ To spend nothing and stay offline, run a model server on your machine and point 
 
 **Ollama**: run `ollama serve`, choose the `Ollama` preset, and use base URL `http://localhost:11434`.
 
-Two hard requirements:
+Check two things when connecting:
 
 1. **Do not append `/v1` to the base URL.** Both of these expose an Anthropic-compatible protocol and the app uses that path. Adding `/v1` gives you a straight 404.
-2. **Raise the context window — at least 200K.** Claude Code's system prompt, tool definitions, and Skills consume a substantial amount of context before your first message. A default 4K or 8K window can't even hold the opening. Change this in LM Studio or Ollama's own model settings, not in this app.
+2. **Configure the context window to match what the model actually supports.** 200K is not a universal minimum. The window needs to hold the system prompt, tool definitions, loaded Skills, and current task. A smaller window may not fit that content, and longer tasks trigger compaction more often. Set the server's actual window in LM Studio or Ollama's model settings; do not declare a value beyond what it supports.
 
-Whether a local model can actually sustain an agent workflow comes down to its tool-calling ability. Small models often talk endlessly without ever calling a tool — that's the model, not your configuration.
+Whether a local model can complete an agent workflow depends on its tool-calling ability, API compatibility, configuration, and task. If it outputs text without calling tools, inspect the requests, responses, and tool configuration rather than inferring the cause from model size alone.
 
 ## The Add Provider dialog, field by field
 

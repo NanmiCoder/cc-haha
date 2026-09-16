@@ -10,11 +10,17 @@ final class MutationForegroundPolicyTests: XCTestCase {
             "perform_secondary_action",
             "scroll",
             "type_text",
+            "paste",
             "press_key",
             "drag",
         ]
 
-        XCTAssertTrue(mutations.allSatisfy(CommandForegroundPolicy.requiresLease))
+        for command in mutations {
+            XCTAssertTrue(
+                CommandForegroundPolicy.requiresLease(command),
+                "\(command) must reach its guarded input path instead of being rejected as bad_command"
+            )
+        }
     }
 
     func testEveryLegacyMutationRequiresForegroundLease() {

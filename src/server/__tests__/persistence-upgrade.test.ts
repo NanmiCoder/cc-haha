@@ -3,6 +3,7 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import { ProviderService } from '../services/providerService.js'
+import { SettingsService } from '../services/settingsService.js'
 import {
   CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
   ensurePersistentStorageUpgraded,
@@ -30,6 +31,29 @@ describe('persistent storage upgrade migrations', () => {
     resetPersistentStorageMigrationsForTests()
     delete process.env.CLAUDE_CONFIG_DIR
     await fs.rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('upgrades legacy team preferences on read and preserves the original settings on save', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const managedDir = path.join(tempDir, 'cc-haha')
+    await fs.mkdir(managedDir, { recursive: true })
+    const legacy = {
+      env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1', LEGACY_OTHER_ENV: 'preserved' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    await fs.writeFile(path.join(managedDir, 'settings.json'), JSON.stringify({
+      env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '0' },
+    }))
+    const service = new SettingsService()
+    expect(await service.getAgentTeamsEnabled()).toBe(false)
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    await service.updateUserSettings({ agentTeamsEnabled: true })
+    expect(await new SettingsService().getAgentTeamsEnabled()).toBe(true)
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, agentTeamsEnabled: true })
+    await service.updateUserSettings({ agentTeamsEnabled: false })
+    expect(await new SettingsService().getAgentTeamsEnabled()).toBe(false)
   })
 
   test('migrates legacy providers index and writes a backup before changing it', async () => {
@@ -400,5 +424,46 @@ describe('persistent storage upgrade migrations', () => {
 
     const backups = (await listFiles(ccHahaDir)).filter((file) => file.startsWith('settings.json.bak-before-migration-'))
     expect(backups.length).toBe(1)
+  })
+  test('upgrades v4 providers to automatic defaults with a backup and preserves unknown fields', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const fixture = {
+      presetId: 'custom', name: 'Fixture provider', apiKey: 'fake-test-token',
+      baseUrl: 'https://provider.example.test/v1', apiFormat: 'openai_chat',
+      models: { main: 'fixture-model', haiku: '', sonnet: '', opus: '' },
+    }
+    const compatibility = { maxOutputTokens: 96_000, outputTokenLimit: 128_000 }
+    const legacy = {
+      schemaVersion: 4,
+      activeId: 'old',
+      futureRoot: { keep: true },
+      providers: [
+        { ...fixture, id: 'old', toolSearchEnabled: true, futureProvider: 'keep' },
+        { ...fixture, id: 'future', requestCompatibility: { ...compatibility, futureParameter: 'keep' } },
+      ],
+    }
+    await fs.writeFile(file, JSON.stringify(legacy))
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(migrated.schemaVersion).toBeGreaterThan(4)
+    expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    expect(migrated.providers[0].requestCompatibility).toBeUndefined()
+    expect(migrated.providers[0].toolSearchEnabled).toBe(true)
+    expect(migrated.providers[0].futureProvider).toBe('keep')
+    expect(migrated.futureRoot).toEqual({ keep: true })
+    expect(migrated.providers[1].requestCompatibility.futureParameter).toBe('keep')
+    const backups = (await fs.readdir(dir)).filter(name => name.startsWith('providers.json.bak-before-migration-'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(dir, backups[0]!), 'utf8'))).toEqual(legacy)
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+    const service = new ProviderService()
+    await service.updateProvider('old', { name: 'Renamed fixture' })
+    const rewritten = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(rewritten.providers[1].requestCompatibility.futureParameter).toBe('keep')
+    expect(rewritten.providers[0].futureProvider).toBe('keep')
   })
 })

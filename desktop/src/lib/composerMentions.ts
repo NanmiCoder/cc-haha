@@ -11,6 +11,13 @@
  */
 
 export type ComposerMention = {
+  /** Missing kind is a legacy file reference. Drafts remain backwards compatible. */
+  kind?: 'skill' | 'plugin'
+  id?: string
+  description?: string
+  icon?: string
+  /** Server-authored invocation text; never serialize extensions as file paths. */
+  modelText?: string
   /** Display label inside the token, e.g. `MediaCrawlerPro-Python/` for a directory. */
   label: string
   /** Absolute filesystem path sent to the model. */
@@ -46,7 +53,10 @@ export function mentionsEqual(a: ComposerMention[], b: ComposerMention[]): boole
     return mention.label === other.label &&
       mention.path === other.path &&
       mention.isDirectory === other.isDirectory &&
-      mention.tokenOrdinal === other.tokenOrdinal
+      mention.tokenOrdinal === other.tokenOrdinal &&
+      mention.kind === other.kind && mention.id === other.id &&
+      mention.description === other.description && mention.icon === other.icon &&
+      mention.modelText === other.modelText
   })
 }
 
@@ -122,5 +132,18 @@ export function insertMentionIntoText(
       ...mentions.slice(insertIndex),
     ],
     cursorPos: before.length + insertion.length,
+  }
+}
+
+/** Only packaged icons are accepted in inline editor nodes and clipboard HTML. */
+export function safeMentionIcon(icon?: string): string | undefined {
+  return icon && /^\/connectors\/[a-z0-9-]+\.svg$/.test(icon) ? icon : undefined
+}
+
+export function composerReferenceToMention(reference: import('../types/composerReference').ComposerReferenceCandidate): NewComposerMention {
+  return {
+    kind: reference.kind, id: reference.id, label: reference.displayName || reference.name,
+    description: reference.description, icon: safeMentionIcon(reference.icon),
+    modelText: reference.modelText, path: '', isDirectory: false,
   }
 }

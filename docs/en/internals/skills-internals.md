@@ -349,12 +349,13 @@ export const MAX_LISTING_DESC_CHARS = 250          // Max characters per descrip
 
 ```
 formatCommandsWithinBudget(commands, contextWindowTokens)
+    ├─ Cap description + whenToUse at 250 characters for every entry, including Bundled
     ├─ Calculate total budget = contextWindowTokens × 4 × 1%
-    ├─ Try full descriptions
+    ├─ Try retaining these already capped descriptions
     │  └─ Total chars ≤ budget → output all
     │
-    ├─ Partition: Bundled (never truncated) + rest
-    │  ├─ Bundled Skills always retain full descriptions
+    ├─ Partition: Bundled (no further truncation for the total budget) + rest
+    │  ├─ Bundled Skills retain their descriptions after the 250-character cap
     │  └─ Remaining Skills split the leftover budget evenly
     │
     ├─ Truncate descriptions → maxDescLen characters
@@ -362,6 +363,8 @@ formatCommandsWithinBudget(commands, contextWindowTokens)
     │
     └─ Output format: "- skill-name: description..."
 ```
+
+The listing supports discovery; the body loads when the skill is invoked. Start descriptions with specific trigger conditions and purpose. Put steps, examples, and references in the body, and read them as the task requires. Avoid putting the entire workflow in the description or requiring every reference to be read on every invocation.
 
 ### SkillTool Prompt
 

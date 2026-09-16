@@ -92,6 +92,34 @@ describe('OpenAI Codex model catalog', () => {
     ])
   })
 
+  test('uses explicitly supplied credentials instead of CLI storage', async () => {
+    const models = await getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'desktop-token', accountId: 'desktop-account' },
+      forceRefresh: true,
+      fetchOverride: async (_input, init) => {
+        const headers = new Headers(init?.headers)
+        expect(headers.get('Authorization')).toBe('Bearer desktop-token')
+        expect(headers.get('ChatGPT-Account-Id')).toBe('desktop-account')
+        return Response.json({ models: [{ slug: 'gpt-6-astra', visibility: 'list' }] })
+      },
+    })
+    expect(models.map(model => model.value)).toEqual(['gpt-6-astra'])
+  })
+
+  test('explicit logout never requests a catalog with CLI credentials', async () => {
+    let requests = 0
+    const models = await getOpenAICodexModelCatalog({
+      tokens: null,
+      forceRefresh: true,
+      fetchOverride: async () => {
+        requests += 1
+        return Response.json({ models: [{ slug: 'cli-only', visibility: 'list' }] })
+      },
+    })
+    expect(requests).toBe(0)
+    expect(models).toEqual(OPENAI_CODEX_MODEL_CATALOG)
+  })
+
   test('falls back to the bundled GPT-5.6 catalog when the endpoint fails', async () => {
     const models = await getOpenAICodexModelCatalog({
       forceRefresh: true,

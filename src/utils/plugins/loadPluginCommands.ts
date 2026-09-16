@@ -1,3 +1,4 @@
+import type { LoadedPlugin } from '../../types/plugin.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, join } from 'path'
 import { getInlinePlugins, getSessionId } from '../../bootstrap/state.js'
@@ -437,6 +438,10 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
     )
   }
 
+  return loadPluginCommandsFromEnabledPlugins(enabled)
+})
+
+export async function loadPluginCommandsFromEnabledPlugins(enabled: LoadedPlugin[]): Promise<Command[]> {
   // Process plugins in parallel; each plugin has its own loadedPaths scope
   const perPluginCommands = await Promise.all(
     enabled.map(async (plugin): Promise<Command[]> => {
@@ -683,7 +688,7 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
   const allCommands = perPluginCommands.flat()
   logForDebugging(`Total plugin commands loaded: ${allCommands.length}`)
   return allCommands
-})
+}
 
 export function clearPluginCommandCache(): void {
   getPluginCommands.cache?.clear?.()
@@ -865,6 +870,10 @@ export const getPluginSkills = memoize(async (): Promise<Command[]> => {
     `getPluginSkills: Processing ${enabled.length} enabled plugins`,
   )
 
+  return loadPluginSkillsFromEnabledPlugins(enabled)
+})
+
+export async function loadPluginSkillsFromEnabledPlugins(enabled: LoadedPlugin[]): Promise<Command[]> {
   // Process plugins in parallel; each plugin has its own loadedPaths scope
   const perPluginSkills = await Promise.all(
     enabled.map(async (plugin): Promise<Command[]> => {
@@ -948,7 +957,7 @@ export const getPluginSkills = memoize(async (): Promise<Command[]> => {
   const allSkills = perPluginSkills.flat()
   logForDebugging(`Total plugin skills loaded: ${allSkills.length}`)
   return allSkills
-})
+}
 
 export function clearPluginSkillsCache(): void {
   getPluginSkills.cache?.clear?.()

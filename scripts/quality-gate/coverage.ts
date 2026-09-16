@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep, win32 } from 'node:path'
 import { rootBunTestFilter } from '../pr/bun-test-filter'
@@ -452,30 +452,37 @@ export function resolveCoverageCommand(command: string[], bunExecutable = proces
   return command[0] === 'bun' ? [bunExecutable, ...command.slice(1)] : command
 }
 
-async function runCommand(command: string[], cwd: string, logPath: string) {
+export async function runCommand(command: string[], cwd: string, logPath: string) {
   const started = Date.now()
   const sandboxHome = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-test-'))
+  const resolvedCommand = resolveCoverageCommand(command)
+  const header = `$ ${resolvedCommand.join(' ')}\n`
+  const capturePath = join(sandboxHome, 'coverage-output.log')
+  let logFd: number | undefined
   try {
-    const resolvedCommand = resolveCoverageCommand(command)
+    // Reporters such as Vitest delete their output directory on startup. Keep
+    // the live capture outside that directory until the process has finished.
+    logFd = openSync(capturePath, 'w')
+    // Use a regular file descriptor to avoid exhausting reporter pipe buffers.
     const proc = Bun.spawn(resolvedCommand, {
       cwd,
       env: createSandboxedTestEnvironment(sandboxHome),
-      stdout: 'pipe',
-      stderr: 'pipe',
+      stdout: logFd,
+      stderr: logFd,
     })
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    const exitCode = await proc.exited
+    closeSync(logFd)
+    logFd = undefined
+    const output = readFileSync(capturePath, 'utf8')
     mkdirSync(dirname(logPath), { recursive: true })
-    writeFileSync(logPath, `$ ${resolvedCommand.join(' ')}\n${stdout}${stderr}`)
+    writeFileSync(logPath, `${header}${output}`)
     return {
       exitCode,
       durationMs: Date.now() - started,
-      output: `${stdout}${stderr}`,
+      output,
     }
   } finally {
+    if (logFd !== undefined) closeSync(logFd)
     rmSync(sandboxHome, { recursive: true, force: true })
   }
 }

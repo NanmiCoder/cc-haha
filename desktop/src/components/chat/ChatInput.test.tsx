@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   getGitInfo: vi.fn(),
   getSlashCommands: vi.fn(),
   listAgents: vi.fn(),
+  listReferences: vi.fn(),
   getRepositoryContext: vi.fn(),
   createRepositoryBranch: vi.fn(),
   getRecentProjects: vi.fn(),
@@ -42,6 +43,10 @@ vi.mock('../../api/sessions', () => ({
     createRepositoryBranch: mocks.createRepositoryBranch,
     getRecentProjects: mocks.getRecentProjects,
   },
+}))
+
+vi.mock('../../api/composerReferences', () => ({
+  composerReferencesApi: { list: mocks.listReferences },
 }))
 
 vi.mock('../../api/agents', () => ({
@@ -288,6 +293,9 @@ describe('ChatInput file mentions', () => {
     mocks.getMessages.mockResolvedValue({ messages: [] })
     mocks.getSlashCommands.mockResolvedValue({ commands: [] })
     mocks.listAgents.mockResolvedValue({ activeAgents: [], allAgents: [] })
+    mocks.listReferences.mockResolvedValue({ skills: [], plugins: [] })
+    mocks.browse.mockResolvedValue({ currentPath: '/repo', parentPath: null, entries: [] })
+    mocks.search.mockResolvedValue({ currentPath: '/repo', parentPath: null, entries: [] })
   })
 
   afterEach(() => {
@@ -1651,6 +1659,70 @@ describe('ChatInput file mentions', () => {
     expect(document.querySelector('.composer-mention')).toHaveAttribute('data-mention-path', '/repo/backend')
   })
 
+  it.each(['unknown', 'mixed'] as const)(
+    'sends from an existing session despite retained %s protocol metadata', async (sessionApiFormat) => {
+      // A rollback must keep sessions usable even when old lock fields remain.
+      useSessionStore.setState({
+        sessions: useSessionStore.getState().sessions.map((session) => ({ ...session, sessionApiFormat })),
+      })
+      const legacyChat = { ...useChatStore.getState().getSession(sessionId), sessionApiFormat }
+      useChatStore.setState({ sessions: { [sessionId]: legacyChat } })
+      render(<ChatInput compact />)
+
+      setComposerText('Continue this session')
+      expect(getComposerElement()).toHaveAttribute('contenteditable', 'true')
+      expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+      await waitFor(() => {
+        expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+          type: 'user_message', content: 'Continue this session', attachments: [],
+        })
+      })
+      expect(getComposerText()).toBe('')
+    },
+  )
+
+  it.each(['@', '/'])('selects an installed plugin with %s as a clickable chip before sending its explicit identity', async (trigger) => {
+    const modelText = 'Use plugin "hyperframes@curated" and its available skills for this request.'
+    mocks.listReferences.mockResolvedValue({ skills: [], plugins: [{
+      kind: 'plugin', id: 'hyperframes@curated', name: 'hyperframes', displayName: 'HyperFrames',
+      description: 'Create HTML videos', source: 'curated', icon: '/connectors/hyperframes.svg', modelText,
+    }] })
+    render(<ChatInput compact />)
+    setComposerText(`${trigger}hyper`, 6)
+    fireEvent.click(await screen.findByRole('option', { name: /hyperframes/i }))
+    await waitFor(() => expect(document.querySelector('[data-mention-kind="plugin"]')).toBeInTheDocument())
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    const chip = document.querySelector('[data-mention-kind="plugin"]') as HTMLElement
+    expect(chip.querySelector('img')).toHaveAttribute('src', '/connectors/hyperframes.svg')
+    fireEvent.keyDown(chip, { key: 'Enter' })
+    expect(await screen.findByRole('dialog', { name: 'HyperFrames' })).toHaveTextContent('Create HTML videos')
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message', content: modelText, attachments: [],
+    })
+  })
+
+  it('selects an exact slash skill on Enter without executing and preserves its canonical identity', async () => {
+    mocks.listReferences.mockResolvedValue({ plugins: [], skills: [{
+      kind: 'skill', id: 'skill:team:review', name: 'team:review', displayName: 'Review',
+      description: 'Review a change', source: 'plugin', modelText: 'Use the Skill tool with skill: "team:review" for this request.',
+    }] })
+    render(<ChatInput compact />)
+    setComposerText('/team:review', 12)
+    await screen.findByRole('option', { name: /Review/i })
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    await waitFor(() => expect(document.querySelector('[data-mention-kind="skill"]')).toBeInTheDocument())
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message', content: 'Use the Skill tool with skill: "team:review" for this request.', attachments: [],
+    })
+  })
+
   it('inserts a selected @ file as an inline mention pill and sends its absolute path', async () => {
     mocks.search.mockResolvedValueOnce({
       currentPath: '/repo/backend/src',
@@ -1666,7 +1738,7 @@ describe('ChatInput file mentions', () => {
     const mention = '@backend/src/conditions.py'
     setComposerText(`${mention} 记一下这个文件讲了什么东西。`, mention.length)
 
-    fireEvent.click(await screen.findByText('backend/src/conditions.py'))
+    fireEvent.click(await screen.findByRole('option', { name: 'conditions.py' }))
 
     // The trigger text becomes an inline pill — no attachment chip is added.
     await waitFor(() => {
@@ -2099,6 +2171,19 @@ describe('ChatInput file mentions', () => {
     expect(panel).not.toHaveClass('overflow-hidden')
   })
 
+  it.each([320, 400, 529, 530, 640])('lets the model yield space without compressing toolbar actions in a %ipx desktop column', (width) => {
+    stubComposerColumnWidth(width)
+    render(<ChatInput compact />)
+    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0')
+    if (width >= 530) {
+      expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('max-w-[55%]')
+      expect(screen.getByTestId('chat-input-toolbar-location')).toHaveClass('min-w-0', 'flex-1')
+    }
+    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end')
+    expect(screen.getByTestId('model-selector-shell')).toHaveClass('min-w-0', 'flex-1')
+    expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('shrink-0')
+  })
+
   it('uses larger icon-only mobile action buttons for browser H5 access', async () => {
     viewportMocks.isMobile = true
     mocks.search.mockResolvedValueOnce({
@@ -2137,7 +2222,7 @@ describe('ChatInput file mentions', () => {
     setComposerText('@cond', 5)
 
     expect(await screen.findByText('conditions.py')).toBeInTheDocument()
-    const fileSearchMenu = document.getElementById('file-search-menu')
+    const fileSearchMenu = screen.getByRole('listbox', { name: 'References' })
     expect(fileSearchMenu).toHaveClass('min-w-0')
     expect(fileSearchMenu).not.toHaveClass('min-w-[480px]')
     expect(fileSearchMenu).not.toHaveTextContent('Navigate')

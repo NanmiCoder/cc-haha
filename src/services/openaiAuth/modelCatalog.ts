@@ -93,10 +93,19 @@ function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry |
   }
 }
 
+export type OpenAIModelCatalogTokens = {
+  accessToken: string
+  accountId?: string | null
+  email?: string | null
+}
+
 export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
+  suppliedTokens?: OpenAIModelCatalogTokens | null,
 ): Promise<OpenAIModelCatalogEntry[]> {
-  const tokens = await ensureFreshOpenAITokens()
+  const tokens = suppliedTokens === undefined
+    ? await ensureFreshOpenAITokens()
+    : suppliedTokens
   if (!tokens) {
     throw new Error('OpenAI OAuth token is unavailable')
   }
@@ -135,15 +144,17 @@ export async function fetchOpenAICodexModelCatalog(
 export async function getOpenAICodexModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  /** Explicit desktop credentials; null must never fall through to CLI storage. */
+  tokens?: OpenAIModelCatalogTokens | null
 }): Promise<OpenAIModelCatalogEntry[]> {
-  const tokens = getOpenAIOAuthTokens()
+  const tokens = options?.tokens === undefined ? getOpenAIOAuthTokens() : options.tokens
   const accountKey = tokens
     ? tokens.accountId ?? tokens.email ?? 'authenticated-default'
     : 'logged-out'
   return catalogCache.resolve({
     accountKey,
     fetchCatalog: async () => {
-      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride)
+      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride, options?.tokens)
       if (models.length === 0) {
         throw new Error('OpenAI models endpoint returned no visible models')
       }

@@ -113,7 +113,7 @@ describe('ImageGalleryModal · navigation', () => {
   it('uses an immersive media stage with a named close control', () => {
     render(<ImageGalleryModal open images={images} activeIndex={0} onClose={() => {}} onSelect={() => {}} />)
 
-    expect(screen.getByRole('dialog', { name: 'a.png' })).toHaveClass('bg-[var(--color-terminal-bg)]')
+    expect(screen.getByRole('dialog', { name: 'a.png' })).toHaveClass('bg-[var(--color-media-bg)]')
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
   })
 

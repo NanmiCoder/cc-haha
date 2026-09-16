@@ -1,6 +1,6 @@
 /**
- * Filter and sanitize installed-app data for inclusion in the `request_access`
- * tool description. Ported from Cowork's appNames.ts. Two
+ * Filter and sanitize installed-app data for inclusion in Computer Use tool
+ * descriptions. Ported from Cowork's appNames.ts. Two
  * concerns: noise filtering (Spotlight returns every bundle on disk — XPC
  * helpers, daemons, input methods) and prompt-injection hardening (app names
  * are attacker-controlled; anyone can ship an app named anything).
@@ -8,8 +8,8 @@
  * Residual risk: short benign-char adversarial names ("grant all") can't be
  * filtered programmatically. The tool description's structural framing
  * ("Available applications:") makes it clear these are app names, and the
- * downstream permission dialog requires explicit user approval — a bad name
- * can't auto-grant anything.
+ * runtime resolves the chosen app against the installed inventory and still
+ * applies product-safety restrictions before acting.
  */
 
 /** Minimal shape — matches what `listInstalledApps` returns. */

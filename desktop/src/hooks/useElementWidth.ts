@@ -16,9 +16,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  */
 export function useElementWidth<T extends HTMLElement>(): [(node: T | null) => void, number | null] {
   const [width, setWidth] = useState<number | null>(null)
+  const nodeRef = useRef<T | null>(null)
   const observerRef = useRef<ResizeObserver | null>(null)
 
-  const measuredRef = useCallback((node: T | null) => {
+  const observeNode = useCallback((node: T | null) => {
     observerRef.current?.disconnect()
     observerRef.current = null
     if (!node) return
@@ -35,10 +36,20 @@ export function useElementWidth<T extends HTMLElement>(): [(node: T | null) => v
     observerRef.current = observer
   }, [])
 
-  useEffect(() => () => {
-    observerRef.current?.disconnect()
-    observerRef.current = null
-  }, [])
+  const measuredRef = useCallback((node: T | null) => {
+    nodeRef.current = node
+    observeNode(node)
+  }, [observeNode])
+
+  useEffect(() => {
+    // StrictMode replays effect setup after cleanup without reattaching the
+    // callback ref. Reconnect to the retained node so future resizes arrive.
+    if (!observerRef.current) observeNode(nodeRef.current)
+    return () => {
+      observerRef.current?.disconnect()
+      observerRef.current = null
+    }
+  }, [observeNode])
 
   return [measuredRef, width]
 }

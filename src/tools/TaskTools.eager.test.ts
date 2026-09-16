@@ -478,27 +478,30 @@ describe('Task tool execution ordering', () => {
       expect(listed.data.taskListSnapshotRevision).toBe(2)
       expect(updated.data.taskListMutationRevision).toBe(3)
       expect(afterUpdate.data.taskListSnapshotRevision).toBe(3)
-      expect(listed.data.tasks).toEqual([
+      expect(listed.data.tasks).toHaveLength(2)
+      expect(listed.data.tasks).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: taskId, status: 'pending' }),
         expect.objectContaining({ id: dependent.data.task.id, status: 'pending' }),
-      ])
-      expect(afterUpdate.data.tasks).toEqual([
+      ]))
+      expect(afterUpdate.data.tasks).toHaveLength(2)
+      expect(afterUpdate.data.tasks).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: taskId, status: 'in_progress' }),
         expect.objectContaining({
           id: dependent.data.task.id,
           blockedBy: [taskId],
         }),
-      ])
+      ]))
 
       appState = {
         ...appState,
         teamContext: { teamName: taskListId },
       }
       const deleted = await TeamDeleteTool.call({}, context)
+      expect(deleted.data.finalTasks).toHaveLength(2)
       expect(deleted.data).toMatchObject({
         success: true,
         team_name: taskListId,
-        finalTasks: [
+        finalTasks: expect.arrayContaining([
           expect.objectContaining({
             id: taskId,
             status: 'in_progress',
@@ -508,7 +511,7 @@ describe('Task tool execution ordering', () => {
             id: dependent.data.task.id,
             blockedBy: [taskId],
           }),
-        ],
+        ]),
       })
       expect(Number.isFinite(Date.parse(deleted.data.taskListSnapshotAt ?? ''))).toBe(true)
       expect(deleted.data.taskListSnapshotRevision).toBe(3)

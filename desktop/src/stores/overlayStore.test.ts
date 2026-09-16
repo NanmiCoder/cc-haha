@@ -12,6 +12,17 @@ describe('overlayStore', () => {
     expect(useOverlayStore.getState().count).toBe(0)
   })
 
+  it('tracks snapshot overlays separately so ordinary modals keep immediate hiding', () => {
+    const { push, pop } = useOverlayStore.getState()
+    push(true)
+    push()
+    expect(useOverlayStore.getState()).toMatchObject({ count: 2, snapshotCount: 1 })
+    pop()
+    expect(useOverlayStore.getState()).toMatchObject({ count: 1, snapshotCount: 1 })
+    pop(true)
+    expect(useOverlayStore.getState()).toMatchObject({ count: 0, snapshotCount: 0 })
+  })
+
   it('push increments by 1', () => {
     useOverlayStore.getState().push()
     expect(useOverlayStore.getState().count).toBe(1)

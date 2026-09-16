@@ -342,9 +342,9 @@ export function getServerKey(
 
 /**
  * True when we have probed this server before (OAuth discovery state is
- * stored) but hold no credentials to try. A connection attempt in this
- * state is guaranteed to 401 — the only way out is the user running
- * /mcp to authenticate.
+ * stored) but hold no credentials to try. Keep automatic batches from
+ * repeating unfinished OAuth discovery. An explicit successful connection
+ * clears this evidence when the server accepts another authentication method.
  */
 export function hasMcpDiscoveryButNoToken(
   serverName: string,
@@ -359,7 +359,31 @@ export function hasMcpDiscoveryButNoToken(
   }
   const serverKey = getServerKey(serverName, serverConfig)
   const entry = getSecureStorage().read()?.mcpOAuth?.[serverKey]
-  return entry !== undefined && !entry.accessToken && !entry.refreshToken
+  return entry?.discoveryState !== undefined && !entry.accessToken && !entry.refreshToken
+}
+
+/**
+ * A successful connection without OAuth tokens supersedes failed discovery.
+ * Remove only that regenerable evidence, preserving client registration,
+ * secrets, unknown fields, and credentials for every other configuration.
+ */
+export function clearMcpDiscoveryWithoutTokens(
+  serverName: string,
+  serverConfig: McpSSEServerConfig | McpHTTPServerConfig,
+): void {
+  const storage = getSecureStorage()
+  const data = storage.read()
+  const serverKey = getServerKey(serverName, serverConfig)
+  const entry = data?.mcpOAuth?.[serverKey]
+  if (!entry?.discoveryState || entry.accessToken || entry.refreshToken) return
+
+  storage.update({
+    ...data,
+    mcpOAuth: {
+      ...data.mcpOAuth,
+      [serverKey]: { ...entry, discoveryState: undefined },
+    },
+  })
 }
 
 /**
