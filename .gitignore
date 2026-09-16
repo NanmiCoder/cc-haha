@@ -85,3 +85,13 @@ native/cu-helper/.build/
 
 # CodeBuddy local memory
 .codebuddy/
+
+# Local dev artifacts
+desktop/.bun-cache/
+desktop/dev-*.log
+run.bat
+
+# Internal planning docs (Chinese)
+交接文档-*.md
+实现计划-*.md
+需求文档-*.md
