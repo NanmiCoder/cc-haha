@@ -10,6 +10,7 @@ export default defineConfig({
     },
   },
   test: {
+    maxWorkers: process.platform === 'win32' ? 4 : undefined,
     environment: 'jsdom',
     globals: true,
     css: true,

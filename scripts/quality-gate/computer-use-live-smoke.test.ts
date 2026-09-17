@@ -145,7 +145,7 @@ describe('computer-use live smoke CLI safety', () => {
 })
 
 describe('computer-use live smoke path confinement', () => {
-  test('derives the fixture and this process daemon artifacts deterministically', () => {
+  test.skipIf(process.platform === 'win32')('derives the fixture and this process daemon artifacts deterministically', () => {
     expect(
       deriveLiveSmokePaths(
         '/tmp/cc-haha-cu-live-smoke-ABC123',
@@ -165,7 +165,7 @@ describe('computer-use live smoke path confinement', () => {
     })
   })
 
-  test('accepts only one generated child directory directly beneath /tmp', () => {
+  test.skipIf(process.platform === 'win32')('accepts only one generated child directory directly beneath /tmp', () => {
     expect(() =>
       assertSafeRunDirectory('/tmp/cc-haha-cu-live-smoke-ABC123'),
     ).not.toThrow()

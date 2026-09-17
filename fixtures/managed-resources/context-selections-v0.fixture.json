@@ -1,0 +1,16 @@
+{
+  "70000000-0000-4000-8000-000000000001": {
+    "hostRefs": [
+      { "id": "10000000-0000-4000-8000-000000000001", "revision": 1 }
+    ],
+    "conceptRootRefs": [
+      { "id": "20000000-0000-4000-8000-000000000001", "revision": 1 }
+    ],
+    "dependencyRefs": [],
+    "credentialRefs": [],
+    "sourceTags": [],
+    "includePasswords": false,
+    "futureSelectionField": { "keep": "FAKE_ONLY_V0_UNKNOWN" }
+  },
+  "futureWrapperField": "FAKE_ONLY_V0_UNKNOWN"
+}

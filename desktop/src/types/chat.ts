@@ -1,5 +1,6 @@
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
+import type { ManagedContextSubmission } from '../features/managed-resources/integration/chatSubmission'
 
 // Source: src/server/ws/events.ts
 
@@ -8,7 +9,14 @@ import type { RuntimeSelection } from './runtime'
 export type ClientMessage =
   | { type: 'prewarm_session' }
   | { type: 'sync_state' }
-  | { type: 'user_message'; content: string; attachments?: AttachmentRef[] }
+  | {
+      type: 'user_message'
+      content: string
+      attachments?: AttachmentRef[]
+      /** M7-B: request identity, present only when a context selection exists. */
+      requestId?: string
+      contextTicket?: { ticketId: string; sidecarInstanceId: string }
+    }
   | {
       type: 'permission_response'
       requestId: string
@@ -82,7 +90,7 @@ export type UIAttachment = {
 // ─── Server → Client ──────────────────────────────────────────────
 
 export type ServerMessage =
-  | { type: 'connected'; sessionId: string }
+  | { type: 'connected'; sessionId: string; runtimeRevision: number }
   | {
       type: 'session_state'
       turnState: 'running' | 'idle'
@@ -126,6 +134,21 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
+  | {
+      type: 'user_message_accepted'
+      requestId: string
+      status: 'accepted' | 'observed' | 'dispatching'
+      replayed: boolean
+      ticketId: string | null
+      manifest: { containsSecrets: boolean; secretFieldCount: number } | null
+    }
+  | {
+      type: 'user_message_rejected'
+      requestId: string
+      code: string
+      retryable: boolean
+      message: string
+    }
   | { type: 'user_message_replay'; content: string }
   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
@@ -136,6 +159,7 @@ export type ServerMessage =
       providerId: string | null
       modelId: string
       effortLevel?: string
+      runtimeRevision?: number
     }
   // CLI 回传的权限模式变化（如 ExitPlanMode 退出 plan 后恢复、Shift+Tab）。
   // 桌面端据此把选择器校正回 CLI 的真实权限，避免本地影子值漂移。
@@ -343,7 +367,7 @@ export type UIMessage =
    * the user's own prompt render identically, which is what flattened the
    * member transcript.
    */
-  | { id: string; type: 'user_text'; content: string; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; teammateFrom?: string }
+  | { id: string; type: 'user_text'; content: string; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; teammateFrom?: string; managedContext?: ManagedContextSubmission }
   | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
   | { id: string; type: 'thinking'; content: string; timestamp: number }
   | {

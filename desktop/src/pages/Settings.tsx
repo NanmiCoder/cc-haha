@@ -24,6 +24,10 @@ import { H5AccessSettings } from './settings/H5AccessSettings'
 import { GeneralSettings } from './settings/GeneralSettings'
 import { AboutSettings } from './settings/AboutSettings'
 import { ProviderSettings } from './settings/ProviderSettings'
+import {
+  CONCEPT_KNOWLEDGE_SETTINGS_SECTION_ID,
+  ConceptKnowledgeSettingsPage,
+} from '../features/managed-resources/integration/settingsEntry'
 
 export function Settings() {
   return getDesktopHost().isDesktop ? <DesktopSettings /> : <H5Settings />
@@ -80,6 +84,7 @@ export function DesktopSettings() {
             <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
             <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
             <TabButton icon="account_tree" label={t('settings.tab.trace')} active={activeTab === 'trace'} onClick={() => setActiveTab('trace')} />
+            <TabButton icon="menu_book" label={t('settings.tab.conceptKnowledge')} active={activeTab === CONCEPT_KNOWLEDGE_SETTINGS_SECTION_ID} onClick={() => setActiveTab(CONCEPT_KNOWLEDGE_SETTINGS_SECTION_ID)} />
             <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
           </div>
           <div className="mt-2 border-t border-[var(--color-border-separator)] pt-2">
@@ -103,6 +108,7 @@ export function DesktopSettings() {
           {activeTab === 'pets' && <PetSettings />}
           {activeTab === 'computerUse' && <ComputerUseSettings />}
           {activeTab === 'trace' && <TraceList />}
+          {activeTab === CONCEPT_KNOWLEDGE_SETTINGS_SECTION_ID && <ConceptKnowledgeSettingsPage />}
           {activeTab === 'diagnostics' && <DiagnosticsSettings />}
           {activeTab === 'about' && <AboutSettings />}
         </div>

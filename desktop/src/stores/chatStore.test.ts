@@ -30,6 +30,7 @@ const {
   updateSessionTitleMock,
   updateSessionMessageCountMock,
   updateSessionPermissionModeMock,
+  updateSessionSensitivityMock,
   sessionStoreSnapshot,
   cliTaskStoreSnapshot,
   connectionStateHandlers,
@@ -57,6 +58,7 @@ const {
   updateSessionTitleMock: vi.fn(),
   updateSessionMessageCountMock: vi.fn(),
   updateSessionPermissionModeMock: vi.fn(),
+  updateSessionSensitivityMock: vi.fn(),
   sessionStoreSnapshot: {
     sessions: [] as Array<{
       id: string
@@ -146,6 +148,7 @@ vi.mock('./sessionStore', () => ({
       updateSessionTitle: updateSessionTitleMock,
       updateSessionMessageCount: updateSessionMessageCountMock,
       updateSessionPermissionMode: updateSessionPermissionModeMock,
+      updateSessionSensitivity: updateSessionSensitivityMock,
     }),
   },
 }))
@@ -232,6 +235,34 @@ describe('stripGeneratedImageMetadataLines', () => {
   })
 })
 
+describe('managed-context sensitivity receipts', () => {
+  it('marks the renderer session sensitive as soon as a secret-bearing turn is accepted', () => {
+    updateSessionSensitivityMock.mockReset()
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_accepted',
+      requestId: '22222222-2222-4222-8222-222222222222',
+      status: 'accepted',
+      replayed: false,
+      ticketId: 'ticket-1',
+      manifest: { containsSecrets: true, secretFieldCount: 1 },
+    })
+    expect(updateSessionSensitivityMock).toHaveBeenCalledWith(TEST_SESSION_ID, true)
+  })
+
+  it('does not mark a public managed-context turn as sensitive', () => {
+    updateSessionSensitivityMock.mockReset()
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_accepted',
+      requestId: '22222222-2222-4222-8222-222222222222',
+      status: 'accepted',
+      replayed: false,
+      ticketId: 'ticket-1',
+      manifest: { containsSecrets: false, secretFieldCount: 0 },
+    })
+    expect(updateSessionSensitivityMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('Agent Teams workbench invalidation', () => {
   it('binds team creation to the lead session before workbench hydration', () => {
     handleTeamCreatedMock.mockReset()
@@ -271,6 +302,7 @@ describe('Agent Teams workbench invalidation', () => {
     useChatStore.getState().handleServerMessage('lead-session', {
       type: 'connected',
       sessionId: 'lead-session',
+      runtimeRevision: 1,
     })
 
     expect(handleTeamCreatedMock).toHaveBeenCalledWith(

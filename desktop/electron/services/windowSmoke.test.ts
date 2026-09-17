@@ -1,12 +1,34 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { writeWindowSmokeSnapshot } from './windowSmoke'
+import { writeWindowSmokeScreenshot, writeWindowSmokeSnapshot } from './windowSmoke'
 
 describe('Electron window smoke diagnostics', () => {
   it('stays disabled unless a log path is configured', () => {
     expect(() => writeWindowSmokeSnapshot(null, 'disabled', {})).not.toThrow()
+  })
+
+  it('captures a PNG only when a screenshot path is configured', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'cc-haha-window-smoke-shot-'))
+    const screenshotPath = join(tempDir, 'window.png')
+    const capturePage = vi.fn(async () => ({ toPNG: () => Buffer.from('fake-png') }))
+    const window = {
+      isDestroyed: () => false,
+      webContents: { capturePage },
+    } as never
+    try {
+      await writeWindowSmokeScreenshot(window, {})
+      expect(capturePage).not.toHaveBeenCalled()
+      await writeWindowSmokeScreenshot(window, {
+        CC_HAHA_ELECTRON_WINDOW_SMOKE_SCREENSHOT: screenshotPath,
+      })
+      expect(capturePage).toHaveBeenCalledTimes(1)
+      expect(existsSync(screenshotPath)).toBe(true)
+      expect(readFileSync(screenshotPath)).toEqual(Buffer.from('fake-png'))
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   it('writes a focused visible window snapshot for packaged UI diagnostics', () => {

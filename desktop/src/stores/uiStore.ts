@@ -58,6 +58,7 @@ const SETTINGS_TABS = [
   'pets',
   'computerUse',
   'trace',
+  'conceptKnowledge',
   'diagnostics',
   'about',
 ] as const
@@ -245,6 +246,7 @@ export type SettingsTab =
   | 'pets'
   | 'computerUse'
   | 'trace'
+  | 'conceptKnowledge'
   | 'diagnostics'
   | 'about'
 

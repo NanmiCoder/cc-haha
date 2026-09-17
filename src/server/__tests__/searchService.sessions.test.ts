@@ -13,6 +13,11 @@ import { withResolvers } from '../../utils/withResolvers.js'
 import { SearchService } from '../services/searchService.js'
 import { SessionService } from '../services/sessionService.js'
 import type { LocalIndexGateway } from '../services/localIndex/sessionIndex.js'
+import { composeUserContent } from '../features/managedContext/composer.js'
+import {
+  markSessionSensitive,
+  resetSensitivityPolicyForTests,
+} from '../../services/managedContext/sensitivityPolicy.js'
 
 let tmpDir: string
 let service: SearchService
@@ -53,9 +58,35 @@ beforeEach(async () => {
   service = new SearchService()
 })
 
-afterEach(cleanupTmpDir)
+afterEach(async () => {
+  resetSensitivityPolicyForTests()
+  await cleanupTmpDir()
+})
 
 describe('SearchService.searchSessions', () => {
+  it('keeps sensitive fallback search on projected user text only', async () => {
+    const secret = 'fake-host-password-123'
+    const body = 'visible sensitive fallback question'
+    const managed = composeUserContent({
+      userText: body,
+      contextText: JSON.stringify({ password: secret }),
+    }).content
+    await writeSessionFile('proj-a', 'sensitive-fallback', [
+      { type: 'user', uuid: 'u-sensitive', message: { role: 'user', content: managed } },
+      { type: 'assistant', uuid: 'a-sensitive', message: { role: 'assistant', content: [{ type: 'text', text: `assistant repeated ${secret}` }] } },
+    ])
+    markSessionSensitive('sensitive-fallback')
+    ;(service as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => false
+
+    expect((await service.searchSessions(secret)).results).toEqual([])
+    const visible = await service.searchSessions(body)
+    expect(visible.results).toHaveLength(1)
+    expect(visible.results[0]?.sessionId).toBe('sensitive-fallback')
+    expect(visible.results[0]?.matches).toEqual([
+      expect.objectContaining({ role: 'user', snippet: body }),
+    ])
+  })
+
   it('uses a JSON-escaped fixed-string path scan before bounded line-number extraction', async () => {
     const query = '他说 "SQLite\\路径"\n搜索'
     const entry = {

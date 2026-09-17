@@ -54,6 +54,10 @@ vi.mock('../../pages/SubagentRunPage', () => ({
   ),
 }))
 
+vi.mock('../../features/managed-resources/ui/routerIntegration', () => ({
+  ManagedResourcesRouterBranch: () => <div data-testid="hosts-workspace" />,
+}))
+
 import { ContentRouter } from './ContentRouter'
 import { MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -299,6 +303,21 @@ describe('ContentRouter tab surfaces', () => {
 
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
     expect(useTabStore.getState().tabs.find(tab => tab.sessionId === 'session-1')).toMatchObject({ type: 'session' })
+  })
+
+  it('renders hosts workspace when activeTabType is hosts', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: '__hosts__',
+        title: 'Hosts',
+        type: 'hosts',
+        status: 'idle',
+      }],
+      activeTabId: '__hosts__',
+    })
+
+    render(<ContentRouter />)
+    expect(screen.getByTestId('hosts-workspace')).toBeInTheDocument()
   })
 })
 

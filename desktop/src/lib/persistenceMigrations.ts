@@ -27,13 +27,14 @@ const LIGHT_THEME_STORAGE_KEY = 'cc-haha-light-theme'
 const DARK_THEME_STORAGE_KEY = 'cc-haha-dark-theme'
 const LOCALE_STORAGE_KEY = 'cc-haha-locale'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
-const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'connectors', 'traces'] as const
+const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'connectors', 'traces', 'hosts'] as const
 const PERSISTED_SPECIAL_TAB_IDS: Record<(typeof PERSISTED_SPECIAL_TAB_TYPES)[number], string> = {
   settings: '__settings__',
   scheduled: '__scheduled__',
   market: '__market__',
   connectors: '__connectors__',
   traces: '__traces__',
+  hosts: '__hosts__',
 }
 const SUPPORTED_LOCALES = ['en', 'zh', 'zh-TW', 'jp', 'kr']
 const WORKSPACE_PERSISTED_TAB_KINDS = ['file', 'browser', 'review', 'terminal']
@@ -58,6 +59,7 @@ function getPersistedSpecialTabType(tab: Record<string, unknown>): (typeof PERSI
   if (tab.sessionId === '__connectors__') return 'market'
   if (tab.sessionId === '__market__') return 'market'
   if (tab.sessionId === '__traces__') return 'traces'
+  if (tab.sessionId === '__hosts__') return 'hosts'
   return isPersistedSpecialTabType(tab.type) ? tab.type === 'connectors' ? 'market' : tab.type : null
 }
 
@@ -76,7 +78,7 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
       : isRecord(parsed) && Array.isArray(parsed.openTabs)
         ? parsed.openTabs
         : []
-    const openTabs = rawTabs
+    const mappedTabs = rawTabs
       .filter((tab): tab is Record<string, unknown> => isRecord(tab))
       .filter((tab) => typeof tab.sessionId === 'string' && typeof tab.title === 'string')
       .filter((tab) => tab.type !== 'terminal' && !String(tab.sessionId).startsWith('__terminal__'))
@@ -88,7 +90,14 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
           type: specialType ?? 'session',
         }
       })
-      .filter((tab, index, tabs) => tabs.findIndex(other => other.sessionId === tab.sessionId) === index)
+    const seenIds = new Set<string>()
+    const openTabs = []
+    for (const tab of mappedTabs) {
+      if (!seenIds.has(tab.sessionId)) {
+        seenIds.add(tab.sessionId)
+        openTabs.push(tab)
+      }
+    }
     const legacyActive = isRecord(parsed) ? rawTabs.find(tab => isRecord(tab) && tab.sessionId === parsed.activeTabId) : undefined
     const activeType = isRecord(legacyActive) ? getPersistedSpecialTabType(legacyActive) : null
     const normalizedActive = activeType ? PERSISTED_SPECIAL_TAB_IDS[activeType] : isRecord(parsed) ? parsed.activeTabId : null

@@ -16,6 +16,7 @@ type ActionDialogProps = {
   open: boolean
   onClose: () => void
   title: string
+  closeLabel?: string
   body: ReactNode
   actions: ActionDialogAction[]
   width?: number
@@ -26,6 +27,7 @@ export function ActionDialog({
   open,
   onClose,
   title,
+  closeLabel,
   body,
   actions,
   width = 460,
@@ -38,6 +40,7 @@ export function ActionDialog({
       open={open}
       onClose={busy ? () => {} : onClose}
       title={title}
+      closeLabel={closeLabel}
       width={width}
       footer={(
         <>

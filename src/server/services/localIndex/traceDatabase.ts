@@ -39,6 +39,7 @@ type OwnedStatement = {
     changes: number
     lastInsertRowid: bigint | number
   }
+  finalize(): void
 }
 
 export function getTraceIndexDatabasePath(): string {
@@ -150,8 +151,15 @@ export function openTraceIndexDatabase(options?: {
     },
     close() {
       if (closed) return
-      database.clearQueryCache()
+      for (const statement of statements.values()) {
+        try {
+          statement.finalize()
+        } catch {
+          // Keep closing the database even if a cached statement was already finalized.
+        }
+      }
       statements.clear()
+      database.clearQueryCache()
       database.close(true)
       closed = true
     },

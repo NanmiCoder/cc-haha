@@ -14,6 +14,7 @@ type ModalProps = {
   open: boolean
   onClose: () => void
   title?: string
+  closeLabel?: string
   children: ReactNode
   width?: number
   footer?: ReactNode
@@ -24,6 +25,7 @@ export function Modal({
   open,
   onClose,
   title,
+  closeLabel = 'Close dialog',
   children,
   width = 560,
   footer,
@@ -118,7 +120,7 @@ export function Modal({
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close dialog"
+              aria-label={closeLabel}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
             >
               <span className="material-symbols-outlined text-[18px]">close</span>

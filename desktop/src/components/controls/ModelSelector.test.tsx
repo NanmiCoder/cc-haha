@@ -22,10 +22,10 @@ import { useHahaOpenAIOAuthStore } from '../../stores/hahaOpenAIOAuthStore'
 import { useHahaGrokOAuthStore } from '../../stores/hahaGrokOAuthStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
-import { useSessionStore } from '@/stores/sessionStore'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import type { ModelInfo } from '../../types/settings'
 
@@ -593,6 +593,120 @@ describe('ModelSelector', () => {
       providerId: 'provider-a',
       modelId: 'provider-fast',
       effortLevel: 'high',
+    })
+  })
+
+  it('requires confirmation before a sensitive session switches providers and cancellation keeps the old runtime', async () => {
+    const setSessionRuntime = vi.fn()
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: MODELS,
+      currentModel: MODELS[0],
+      activeProviderName: 'Provider A',
+    })
+    useProviderStore.setState({
+      providers: [
+        {
+          id: 'provider-a', presetId: 'custom', name: 'Provider A', apiKey: '***',
+          baseUrl: 'https://a.example.test', apiFormat: 'anthropic',
+          models: { main: 'a-main', haiku: 'a-fast', sonnet: 'a-main', opus: '' },
+        },
+        {
+          id: 'provider-b', presetId: 'custom', name: 'Provider B', apiKey: '***',
+          baseUrl: 'https://b.example.test', apiFormat: 'anthropic',
+          models: { main: 'b-main', haiku: 'b-fast', sonnet: 'b-main', opus: '' },
+        },
+      ],
+      activeId: 'provider-a',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSessionRuntimeStore.getState().setSelection('sensitive-session', {
+      providerId: 'provider-a', modelId: 'a-main',
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: 'sensitive-session', title: 'Sensitive', createdAt: '2026-09-13T00:00:00.000Z',
+        modifiedAt: '2026-09-13T00:00:00.000Z', messageCount: 1, projectPath: '/tmp/project',
+        projectRoot: '/tmp/project', workDir: '/tmp/project', workDirExists: true,
+        sensitiveContext: true,
+      }],
+      activeSessionId: 'sensitive-session',
+    })
+    useChatStore.setState({ setSessionRuntime } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    render(<ModelSelector runtimeKey="sensitive-session" />)
+    await clickByRole(/a-main/i)
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /b-main/i }))
+
+    expect(await screen.findByText('Switch provider for a sensitive session?')).toBeInTheDocument()
+    expect(useSessionRuntimeStore.getState().selections['sensitive-session']).toMatchObject({
+      providerId: 'provider-a', modelId: 'a-main',
+    })
+    expect(setSessionRuntime).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(useSessionRuntimeStore.getState().selections['sensitive-session']).toMatchObject({
+      providerId: 'provider-a', modelId: 'a-main',
+    })
+    expect(setSessionRuntime).not.toHaveBeenCalled()
+
+    await clickByRole(/a-main/i)
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /b-main/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch provider' }))
+
+    expect(useSessionRuntimeStore.getState().selections['sensitive-session']).toMatchObject({
+      providerId: 'provider-b', modelId: 'b-main',
+    })
+    expect(setSessionRuntime).toHaveBeenCalledWith('sensitive-session', expect.objectContaining({
+      providerId: 'provider-b', modelId: 'b-main',
+    }))
+  })
+
+  it('allows a sensitive same-provider model change and warns that history can remain in scope', async () => {
+    const setSessionRuntime = vi.fn()
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: MODELS,
+      currentModel: MODELS[0],
+      activeProviderName: 'Provider A',
+    })
+    useProviderStore.setState({
+      providers: [{
+        id: 'provider-a', presetId: 'custom', name: 'Provider A', apiKey: '***',
+        baseUrl: 'https://a.example.test', apiFormat: 'anthropic',
+        models: { main: 'a-main', haiku: 'a-fast', sonnet: 'a-main', opus: '' },
+      }],
+      activeId: 'provider-a',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSessionRuntimeStore.getState().setSelection('sensitive-session', {
+      providerId: 'provider-a', modelId: 'a-main',
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: 'sensitive-session', title: 'Sensitive', createdAt: '2026-09-13T00:00:00.000Z',
+        modifiedAt: '2026-09-13T00:00:00.000Z', messageCount: 1, projectPath: '/tmp/project',
+        projectRoot: '/tmp/project', workDir: '/tmp/project', workDirExists: true,
+        sensitiveContext: true,
+      }],
+    })
+    useChatStore.setState({ setSessionRuntime } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    render(<ModelSelector runtimeKey="sensitive-session" />)
+    await clickByRole(/a-main/i)
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /a-fast/i }))
+
+    expect(useSessionRuntimeStore.getState().selections['sensitive-session']).toMatchObject({
+      providerId: 'provider-a', modelId: 'a-fast',
+    })
+    expect(setSessionRuntime).toHaveBeenCalledWith('sensitive-session', expect.objectContaining({
+      providerId: 'provider-a', modelId: 'a-fast',
+    }))
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+      type: 'warning',
+      message: 'This session contains credential history. The selected model on this provider may continue to receive that history.',
     })
   })
 

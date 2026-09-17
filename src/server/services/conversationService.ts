@@ -65,6 +65,7 @@ import {
 } from './networkSettings.js'
 import { readTraceCaptureSettings } from './traceCaptureService.js'
 import { logError } from '../../utils/log.js'
+import { composeUserContent } from '../features/managedContext/composer.js'
 import {
   createImageMetadataText,
   maybeResizeAndDownsampleImageBuffer,
@@ -165,6 +166,11 @@ type SendMessageOptions = {
   canSend?: () => boolean
   messageUuid?: string
   onCommitted?: () => void
+  /**
+   * M7-B §8.3: reserved model context from the staged ticket. `null`/absent
+   * keeps the original code path untouched.
+   */
+  managedContextContent?: string | null
 }
 
 type HandleSdkPayloadOptions = {
@@ -615,7 +621,12 @@ export class ConversationService {
     attachments?: AttachmentRef[],
     options?: SendMessageOptions,
   ): Promise<boolean> {
-    const userContent = await this.buildUserContent(content, sessionId, attachments)
+    const userContent = await this.buildUserContent(
+      content,
+      sessionId,
+      attachments,
+      options?.managedContextContent ?? null,
+    )
     let session = this.sessions.get(sessionId)
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false
@@ -2249,9 +2260,17 @@ export class ConversationService {
     content: string,
     sessionId: string,
     attachments?: AttachmentRef[],
+    managedContextContent?: string | null,
   ): Promise<UserContentBlock[]> {
     const materialized = await this.materializeAttachments(sessionId, attachments)
-    const trimmed = content.trim()
+    // §8.3: the ONE composition point. With no reserved context this is a
+    // byte-identical no-op; with context the block is added exactly once and
+    // the original body/attachments below are untouched.
+    const composed = composeUserContent({
+      userText: content,
+      contextText: managedContextContent ?? null,
+    })
+    const trimmed = composed.content.trim()
     const text = materialized.pathPrefix
       ? `${materialized.pathPrefix}${trimmed || 'Please analyze the attached files.'}`.trim()
       : trimmed

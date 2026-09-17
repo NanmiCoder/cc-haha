@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "assignmentId": "REPLACE_WITH_CURRENT_ASSIGNMENT_ID",
+  "stageId": "M0.1",
+  "attempt": 1,
+  "status": "ready_for_review",
+  "submittedAt": "REPLACE_WITH_ISO_UTC",
+  "baseHead": "REPLACE_WITH_ACTUAL_GIT_HEAD",
+  "baselinePath": "baselines/REPLACE_WITH_CURRENT_ASSIGNMENT_ID.json",
+  "summary": "REPLACE_WITH_ACTUAL_BEHAVIOR",
+  "changedFiles": [],
+  "acceptanceEvidence": [
+    {
+      "criterionId": "C01",
+      "status": "not_run",
+      "description": "REPLACE_WITH_ACTUAL_RESULT",
+      "artifactPaths": []
+    }
+  ],
+  "checks": [
+    {
+      "name": "REPLACE_WITH_CHECK_NAME",
+      "command": "REPLACE_WITH_ACTUALLY_EXECUTED_COMMAND",
+      "cwd": "D:/srcs/cchaha/cc-haha",
+      "status": "not_run",
+      "exitCode": null,
+      "startedAt": null,
+      "finishedAt": null,
+      "artifactPath": null,
+      "note": "not_run MUST NOT be described as passed"
+    }
+  ],
+  "resolvedFindingIds": [],
+  "remainingIssues": [],
+  "blockers": [],
+  "artifacts": [],
+  "frozenForReview": true
+}

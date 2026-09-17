@@ -1,0 +1,5 @@
+@import "../../../src/theme/globals.css";
+
+/* Vite's fixture root is not the desktop root. Scan the same production
+   components as the application build, rather than only this entry point. */
+@source "../../../src";

@@ -68,6 +68,15 @@ import {
 import type { AttachmentRef } from '../types/chat'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
+import {
+  managedContextAvailable,
+  useComposerContextEntry,
+} from '../features/managed-resources/integration/composerIntegration'
+import {
+  adoptManagedContextSession,
+  hasManagedContextSelection,
+  prepareManagedContextSubmission,
+} from '../features/managed-resources/integration/chatSubmission'
 
 type Attachment = ComposerAttachment
 
@@ -136,6 +145,7 @@ export function EmptySession() {
   const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
+  const composingRef = useRef(false)
   const composerContainerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -185,6 +195,14 @@ export function EmptySession() {
     : undefined
   const draftModelLabel = draftRuntimeSelection?.modelId ?? currentModel?.name ?? currentModel?.id
   const isMobileComposer = useMobileViewport() && !isDesktopRuntime()
+  // U05: the draft composer's managed-resources context entry. It shares the
+  // store with ChatInput's composer — one controller, not a second state model.
+  const managedContext = useComposerContextEntry({
+    scope: 'draft',
+    sessionId: null,
+    compact: isMobileComposer,
+    enabled: managedContextAvailable(),
+  })
 
   useEffect(() => {
     composerRef.current?.focus()
@@ -417,6 +435,14 @@ export function EmptySession() {
       setActiveView('code')
       useTabStore.getState().openTab(sessionId, 'New Session')
       connectToSession(sessionId)
+      // U07/M6-B: the draft selection is the same model as a session selection.
+      // It moves onto the new session in one store update and is persisted for
+      // it, so the first send carries what the home composer showed and the
+      // draft no longer owns a separate copy. Guarded so the no-selection send
+      // path keeps its original (synchronous) timeline.
+      if (hasManagedContextSelection()) await adoptManagedContextSession(sessionId)
+      // U07/M6-B: the one prepare for this send point.
+      const preparedContext = prepareManagedContextSubmission()
       const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
         type: attachment.type,
         name: attachment.name,
@@ -428,7 +454,10 @@ export function EmptySession() {
       // serialized from the live document; the bubble keeps the pill text.
       const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
       if (serializedText || attachmentPayload.length > 0) {
-        sendMessage(sessionId, serializedText, attachmentPayload, { displayContent: text })
+        sendMessage(sessionId, serializedText, attachmentPayload, {
+          displayContent: text,
+          ...(preparedContext ? { managedContext: preparedContext } : {}),
+        })
       }
       setInput('')
       setMentions([])
@@ -485,11 +514,23 @@ export function EmptySession() {
       setSlashMenuOpen(false)
       setFileSearchOpen(true)
     }
+
+    // U05: managed-resources context triggers (/hh /ce /db /rd) share one store
+    // with the ChatInput composer.
+    managedContext.syncTrigger({
+      value,
+      cursorPos,
+      composing: composingRef.current,
+      tokenRanges: findMentionRanges(value, nextMentions),
+    })
   }
 
   const handleComposerKeyDown = (event: KeyboardEvent): boolean => {
     // Ignore key events during IME composition (e.g. Chinese input method)
     if (event.isComposing || event.keyCode === 229) return false
+
+    // A managed-context selection must not fall through to message sending.
+    if (managedContext.handleKeyDown(event)) return true
 
     // Route reference selection and directory navigation to the unified menu
     if (fileSearchOpen) {
@@ -798,6 +839,8 @@ export function EmptySession() {
                   onChange={handleComposerChange}
                   onKeyDown={handleComposerKeyDown}
                   onPaste={handleComposerPaste}
+                  onCompositionStart={() => { composingRef.current = true }}
+                  onCompositionEnd={() => { composingRef.current = false }}
                   placeholder={t('empty.placeholder')}
                   className="flex-1"
                   editorClassName={`overflow-y-auto leading-relaxed text-[var(--color-text-primary)] ${
@@ -884,6 +927,7 @@ export function EmptySession() {
                     draft
                     compact={isMobileComposer}
                   />
+                  {managedContext.node}
                   <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same
                       component, shape, size and icon. See the note there for

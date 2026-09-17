@@ -49,6 +49,10 @@ function collect(dir: string, match: (file: string) => boolean, out: string[] = 
   return out
 }
 
+function relativePosix(from: string, to: string): string {
+  return relative(from, to).replaceAll('\\', '/')
+}
+
 /** Mirrors the `@/` alias and extensionless/index resolution Vite and tsc both apply. */
 function resolveSpecifier(specifier: string, fromFile: string): string | null {
   let base: string
@@ -119,7 +123,7 @@ describe('component reachability', () => {
   it('finds the entry points it is supposed to walk from', () => {
     // A typo in ENTRY_HTML, or a renamed entry, would make everything look unreachable
     // and the failure message would send the reader hunting in the wrong place.
-    const entries = entryPoints().map((path) => relative(ROOT, path))
+    const entries = entryPoints().map((path) => relativePosix(ROOT, path))
     expect(entries).toContain('src/main.tsx')
     expect(entries.length).toBeGreaterThanOrEqual(2)
     // The walk must actually traverse: main.tsx alone proves nothing.
@@ -130,7 +134,7 @@ describe('component reachability', () => {
   it('reaches every component from an entry point', () => {
     const unreachable = components
       .filter((path) => !reachable.has(path))
-      .map((path) => relative(SRC, path))
+      .map((path) => relativePosix(SRC, path))
       .filter((path) => !(path in ALLOWED_UNREACHABLE))
       .sort()
 

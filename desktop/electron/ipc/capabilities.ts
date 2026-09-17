@@ -1,5 +1,37 @@
 import { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
+import { HostToolsInputSchema } from '../../src/features/managed-resources/api/hostToolsApi'
+import { ApplicationOperationInputSchema } from '../../src/features/managed-resources/api/applicationOperationsApi'
 import { ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './channels'
+import { FolderTransferInputSchema, RevealCredentialInputSchema, SaveHostInputSchema, SaveApplicationInputSchema } from '../../src/features/managed-resources/api/hostManagementApi'
+import {
+  CloseDataSessionInputSchema,
+  DeleteDataConnectionInputSchema,
+  GetDataConnectionInputSchema,
+  ListDataConnectionsInputSchema,
+  OpenDataSessionInputSchema,
+  RedisReadInputSchema,
+  RedisScanInputSchema,
+  SaveDataConnectionInputSchema,
+  SqlCancelInputSchema,
+  SqlDescribeTableInputSchema,
+  SqlExecuteInputSchema,
+  SqlListDatabasesInputSchema,
+  SqlListSchemasInputSchema,
+  SqlListTablesInputSchema,
+  SqlPreviewInputSchema,
+  TestDataConnectionInputSchema,
+} from '../../src/features/managed-resources/api/dataConnectionsApi'
+import {
+  M4_PATH_MAX_CHARS,
+  M4_PAYLOAD_FIELDS,
+  isM4AbsolutePosixPath,
+  isM4BaseRevision,
+  isM4EditText,
+  isM4FileName,
+  isM4Generation,
+  isM4OwnerId,
+  isM4Uuid,
+} from '../../src/features/managed-resources/api/m4IpcContract'
 
 type Validator = (payload: unknown) => boolean
 
@@ -10,7 +42,7 @@ const noPayload: Validator = value => value === undefined
 const optionalRecord: Validator = value => value === undefined || isRecord(value)
 const stringPayload: Validator = value => typeof value === 'string'
 const booleanPayload: Validator = value => typeof value === 'boolean'
-const hasOnlyKeys = (value: Record<string, unknown>, allowedKeys: string[]) =>
+const hasOnlyKeys = (value: Record<string, unknown>, allowedKeys: readonly string[]) =>
   Object.keys(value).every(key => allowedKeys.includes(key))
 
 const MAX_TERMINAL_DIMENSION = 1_000
@@ -304,6 +336,145 @@ const updateCheckOptions: Validator = value => {
   return value.proxy === undefined || (typeof value.proxy === 'string' && value.proxy.trim().length > 0)
 }
 
+// ==========================================
+// SSH Connection & Terminal (M3) validators
+// ==========================================
+//
+// The renderer is the source of truth for the user's intent, but it is also
+// the side that talks to a hostile network. Each channel rejects unknown
+// fields, oversized strings, and impossible dimensions before the payload
+// reaches main. The detailed shape check happens inside the service layer
+// (Zod); here we only enforce wire-format invariants.
+
+const MAX_SSH_WRITE_BYTES = 64 * 1024
+const MAX_SSH_RESERVED_FIELDS = 16
+
+// Every value-level rule below comes from `m4IpcContract.ts`, the same module
+// the main-process strict Zod schemas import. The preload gate used to keep
+// its own copies, which is how it ended up rejecting a legal download payload
+// (missing `localToken`) and letting ~1 MiB of CJK text through that the
+// handler then rejected on UTF-8 byte length. One rule, one place.
+const isPositiveInt = (value: unknown): boolean =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0
+
+const sshCommonFields = (value: Record<string, unknown>): boolean =>
+  isM4OwnerId(value.ownerId)
+
+type SshPayloadKind =
+  | 'create' | 'start' | 'answer' | 'write' | 'resize' | 'ack' | 'disconnect'
+  | 'list' | 'stat' | 'download' | 'upload' | 'cancelTransfer' | 'getTransfer'
+  | 'editOpen' | 'editSave' | 'editClose' | 'mintUpload' | 'mintDownload'
+  | 'resolveToken' | 'revokeToken'
+
+// Shared allowed-field table, keyed by validator kind. Only the M4 kinds are
+// listed: the M3 SSH connect/write/resize payloads have their own shape and
+// are checked inline below.
+const M4_FIELDS_BY_KIND: Partial<Record<SshPayloadKind, readonly string[]>> = {
+  list: M4_PAYLOAD_FIELDS.sftpList,
+  stat: M4_PAYLOAD_FIELDS.sftpStat,
+  download: M4_PAYLOAD_FIELDS.transferStartDownload,
+  upload: M4_PAYLOAD_FIELDS.transferStartUpload,
+  cancelTransfer: M4_PAYLOAD_FIELDS.transferCancel,
+  getTransfer: M4_PAYLOAD_FIELDS.transferGet,
+  editOpen: M4_PAYLOAD_FIELDS.remoteEditOpen,
+  editSave: M4_PAYLOAD_FIELDS.remoteEditSave,
+  editClose: M4_PAYLOAD_FIELDS.remoteEditClose,
+  mintUpload: M4_PAYLOAD_FIELDS.mintToken,
+  mintDownload: M4_PAYLOAD_FIELDS.mintToken,
+  resolveToken: M4_PAYLOAD_FIELDS.resolveToken,
+  revokeToken: M4_PAYLOAD_FIELDS.revokeToken,
+}
+
+const sshConnectionInput = (kind: SshPayloadKind): Validator =>
+  value => {
+    if (!isRecord(value)) return false
+    if (Object.keys(value).length > MAX_SSH_RESERVED_FIELDS) return false
+    if (!sshCommonFields(value)) return false
+    // M4 field sets are checked against the shared table so the preload gate
+    // and the handler schema advertise exactly the same keys.
+    const sharedFields = M4_FIELDS_BY_KIND[kind]
+    if (sharedFields && !hasOnlyKeys(value, sharedFields)) return false
+    switch (kind) {
+      case 'create': {
+        if (!hasOnlyKeys(value, ['ownerId', 'hostId', 'expectedRevision', 'cols', 'rows'])) return false
+        if (typeof value.hostId !== 'string' || value.hostId.length === 0 || value.hostId.length > 256) return false
+        if (value.expectedRevision !== undefined && !isPositiveInt(value.expectedRevision)) return false
+        if (value.cols !== undefined && (typeof value.cols !== 'number' || !Number.isInteger(value.cols) || value.cols < 2 || value.cols > 500)) return false
+        if (value.rows !== undefined && (typeof value.rows !== 'number' || !Number.isInteger(value.rows) || value.rows < 1 || value.rows > 300)) return false
+        return true
+      }
+      case 'start':
+      case 'disconnect': {
+        if (!hasOnlyKeys(value, ['ownerId', 'connectionId'])) return false
+        return isM4Uuid(value.connectionId)
+      }
+      case 'answer': {
+        if (!hasOnlyKeys(value, ['ownerId', 'connectionId', 'challengeId', 'decision'])) return false
+        if (!isM4Uuid(value.connectionId)) return false
+        if (!isM4Uuid(value.challengeId)) return false
+        return value.decision === 'trust' || value.decision === 'reject'
+      }
+      case 'write': {
+        if (!hasOnlyKeys(value, ['ownerId', 'connectionId', 'generation', 'data', 'isBase64'])) return false
+        if (!isM4Uuid(value.connectionId)) return false
+        if (typeof value.generation !== 'number' || !Number.isInteger(value.generation) || value.generation < 1) return false
+        if (typeof value.data !== 'string' || value.data.length === 0 || value.data.length > MAX_SSH_WRITE_BYTES * 4) return false
+        if (value.isBase64 !== undefined && typeof value.isBase64 !== 'boolean') return false
+        return true
+      }
+      case 'resize': {
+        if (!hasOnlyKeys(value, ['ownerId', 'connectionId', 'generation', 'cols', 'rows'])) return false
+        if (!isM4Uuid(value.connectionId)) return false
+        if (typeof value.generation !== 'number' || !Number.isInteger(value.generation) || value.generation < 1) return false
+        if (typeof value.cols !== 'number' || !Number.isInteger(value.cols) || value.cols < 2 || value.cols > 500) return false
+        if (typeof value.rows !== 'number' || !Number.isInteger(value.rows) || value.rows < 1 || value.rows > 300) return false
+        return true
+      }
+      case 'ack': {
+        if (!hasOnlyKeys(value, ['ownerId', 'connectionId', 'generation', 'bytesAcked'])) return false
+        if (!isM4Uuid(value.connectionId)) return false
+        if (typeof value.generation !== 'number' || !Number.isInteger(value.generation) || value.generation < 1) return false
+        if (!isPositiveInt(value.bytesAcked)) return false
+        return true
+      }
+      case 'list':
+      case 'stat':
+      case 'editOpen': {
+        if (!isM4Uuid(value.connectionId)) return false
+        if (!isM4Generation(value.generation)) return false
+        return isM4AbsolutePosixPath(value.absolutePath, M4_PATH_MAX_CHARS)
+      }
+      case 'download':
+      case 'upload': {
+        if (!isM4Uuid(value.connectionId)) return false
+        if (!isM4Generation(value.generation)) return false
+        if (!isM4Uuid(value.jobId)) return false
+        if (!isM4AbsolutePosixPath(value.remotePath, M4_PATH_MAX_CHARS)) return false
+        return isM4Uuid(value.localToken)
+      }
+      case 'cancelTransfer':
+      case 'getTransfer': {
+        return isM4Uuid(value.jobId)
+      }
+      case 'editSave': {
+        if (!isM4Uuid(value.editId)) return false
+        if (!isM4BaseRevision(value.baseRevision)) return false
+        return isM4EditText(value.text)
+      }
+      case 'editClose': {
+        return isM4Uuid(value.editId)
+      }
+      case 'mintUpload':
+      case 'mintDownload': {
+        return isM4FileName(value.fileName)
+      }
+      case 'resolveToken':
+      case 'revokeToken': {
+        return isM4Uuid(value.token)
+      }
+    }
+  }
+
 const localePreference: Validator = value =>
   value === 'en'
   || value === 'zh'
@@ -403,6 +574,70 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,
   [ELECTRON_IPC_CHANNELS.zoomSet]: zoomPayload,
   [ELECTRON_IPC_CHANNELS.appearanceSetApplied]: appliedAppearance,
+  [ELECTRON_IPC_CHANNELS.mrGetCapabilities]: noPayload,
+  [ELECTRON_IPC_CHANNELS.mrListHosts]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrGetHost]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveHost]: value => SaveHostInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrDeleteHost]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveApplication]: value => SaveApplicationInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrDeleteApplication]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrListTags]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveTag]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrDeleteTag]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveCredential]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrDeleteCredential]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrRevealCredential]: value => RevealCredentialInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrProvideTemporaryCredential]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrListConcepts]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrGetConcept]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveConcept]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrDeleteConcept]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrListDataConnections]: value => ListDataConnectionsInputSchema.safeParse(value ?? {}).success,
+  [ELECTRON_IPC_CHANNELS.mrGetDataConnection]: value => GetDataConnectionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrSaveDataConnection]: value => SaveDataConnectionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrDeleteDataConnection]: value => DeleteDataConnectionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrTestDataConnection]: value => TestDataConnectionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrOpenDataSession]: value => OpenDataSessionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrCloseDataSession]: value => CloseDataSessionInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrListDatabases]: value => SqlListDatabasesInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrListSchemas]: value => SqlListSchemasInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrListTables]: value => SqlListTablesInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrDescribeTable]: value => SqlDescribeTableInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrPreviewTable]: value => SqlPreviewInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrExecuteQuery]: value => SqlExecuteInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrCancelQuery]: value => SqlCancelInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrScanRedisKeys]: value => RedisScanInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrReadRedisKey]: value => RedisReadInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrGetSelection]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrSaveSelection]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrDeleteSelection]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrPrepareContext]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrExportMetadata]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrImportMetadata]: optionalRecord,
+  [ELECTRON_IPC_CHANNELS.mrCreateConnection]: sshConnectionInput('create'),
+  [ELECTRON_IPC_CHANNELS.mrSftpList]: sshConnectionInput('list'),
+  [ELECTRON_IPC_CHANNELS.mrMintUploadToken]: sshConnectionInput('mintUpload'),
+  [ELECTRON_IPC_CHANNELS.mrMintDownloadToken]: sshConnectionInput('mintDownload'),
+  [ELECTRON_IPC_CHANNELS.mrResolveLocalToken]: sshConnectionInput('resolveToken'),
+  [ELECTRON_IPC_CHANNELS.mrRevokeLocalToken]: sshConnectionInput('revokeToken'),
+  [ELECTRON_IPC_CHANNELS.mrSftpStat]: sshConnectionInput('stat'),
+  [ELECTRON_IPC_CHANNELS.mrTransferStartDownload]: sshConnectionInput('download'),
+  [ELECTRON_IPC_CHANNELS.mrTransferStartUpload]: sshConnectionInput('upload'),
+  [ELECTRON_IPC_CHANNELS.mrTransferUploadFolder]: value => FolderTransferInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrTransferDownloadFolder]: value => FolderTransferInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrTransferCancel]: sshConnectionInput('cancelTransfer'),
+  [ELECTRON_IPC_CHANNELS.mrTransferGet]: sshConnectionInput('getTransfer'),
+  [ELECTRON_IPC_CHANNELS.mrRemoteEditOpen]: sshConnectionInput('editOpen'),
+  [ELECTRON_IPC_CHANNELS.mrRemoteEditSave]: sshConnectionInput('editSave'),
+  [ELECTRON_IPC_CHANNELS.mrRemoteEditClose]: sshConnectionInput('editClose'),
+  [ELECTRON_IPC_CHANNELS.mrHostTools]: value => HostToolsInputSchema.safeParse(value).success,
+  [ELECTRON_IPC_CHANNELS.mrApplicationOperation]: value => ApplicationOperationInputSchema.safeParse(value).success && !(value && typeof value === 'object' && 'ownerId' in value),
+  [ELECTRON_IPC_CHANNELS.mrStartConnection]: sshConnectionInput('start'),
+  [ELECTRON_IPC_CHANNELS.mrAnswerHostKey]: sshConnectionInput('answer'),
+  [ELECTRON_IPC_CHANNELS.mrWriteConnection]: sshConnectionInput('write'),
+  [ELECTRON_IPC_CHANNELS.mrResizeConnection]: sshConnectionInput('resize'),
+  [ELECTRON_IPC_CHANNELS.mrAckOutput]: sshConnectionInput('ack'),
+  [ELECTRON_IPC_CHANNELS.mrDisconnect]: sshConnectionInput('disconnect'),
 } satisfies Record<ElectronIpcChannel, Validator>
 
 const allowedChannels = new Set<ElectronIpcChannel>(

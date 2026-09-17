@@ -154,6 +154,32 @@ describe('electron desktop host', () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
+  it('routes M10 data-browser operations through explicit validated IPC channels', async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true, data: {} })
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    const connectionId = '11111111-1111-4111-8111-111111111111'
+    const dataSessionId = '22222222-2222-4222-8222-222222222222'
+    const queryId = '33333333-3333-4333-8333-333333333333'
+
+    await host.dataConnections.openConnection(connectionId, 2)
+    await host.dataConnections.executeQuery({
+      dataSessionId, generation: 1, queryId, sql: 'select 1', params: [], maxRows: 100,
+    })
+    await host.dataConnections.scanKeys({
+      dataSessionId, generation: 1, cursor: '0', match: 'orders:*', countHint: 50,
+    })
+
+    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.mrOpenDataSession, {
+      connectionId, expectedRevision: 2,
+    })
+    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.mrExecuteQuery, {
+      dataSessionId, generation: 1, queryId, sql: 'select 1', params: [], maxRows: 100,
+    })
+    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.mrScanRedisKeys, {
+      dataSessionId, generation: 1, cursor: '0', match: 'orders:*', countHint: 50,
+    })
+  })
+
   it('advertises custom window chrome for the Electron frameless shell', () => {
     const host = createElectronHost({
       invoke: vi.fn(),

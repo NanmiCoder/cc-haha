@@ -17,8 +17,10 @@ export {
   TRACE_LIST_PREVIEW_CHARS,
   TRACE_STREAM_CAPTURE_BYTES,
   traceCaptureService,
+  trackTraceCaptureBackgroundTask,
   trimTraceCallPreviews,
   updateTraceCaptureSettings,
+  waitForTraceCaptureIdleForTests,
 } from '../../services/api/traceCapture.js'
 export type {
   RecordTraceCallInput,

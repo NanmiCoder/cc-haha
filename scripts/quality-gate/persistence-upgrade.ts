@@ -30,12 +30,12 @@ const checks: Check[] = [
   },
   {
     title: 'Server persistent JSON migrations',
-    command: ['bun', 'test', './src/server/__tests__/persistence-upgrade.test.ts'],
+    command: [process.execPath, 'test', './src/server/__tests__/persistence-upgrade.test.ts'],
   },
   {
     title: 'Desktop UI preference migrations',
     command: [
-      'bun',
+      process.execPath,
       'test',
       './src/server/__tests__/desktop-ui-preferences.test.ts',
       '--test-name-pattern',
@@ -44,7 +44,19 @@ const checks: Check[] = [
   },
   {
     title: 'Desktop localStorage migrations',
-    command: ['bun', 'run', 'test', '--', '--run', 'src/lib/persistenceMigrations.test.ts'],
+    command: [process.execPath, 'run', 'test', '--', '--run', 'src/lib/persistenceMigrations.test.ts'],
+    cwd: 'desktop',
+  },
+  {
+    title: 'Desktop managed-resource context selection migrations',
+    command: [
+      process.execPath,
+      'run',
+      'test',
+      '--',
+      '--run',
+      'electron/services/managedResources/contextSelections/contextSelectionsRepository.test.ts',
+    ],
     cwd: 'desktop',
   },
 ]

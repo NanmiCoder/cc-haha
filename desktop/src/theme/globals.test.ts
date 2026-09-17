@@ -205,7 +205,7 @@ describe('desktop theme tokens', () => {
   it('keeps the UI zoom slider thumb visible on both ink grounds', () => {
     // The thumb is a light disc on a light track; on a dark ground it needs an
     // accent border to read at all. Both dark palettes get the override.
-    expect(css).toContain('[data-theme="dark"] .settings-zoom-control,\n[data-theme="ink-blue"] .settings-zoom-control')
+    expect(normalizedCss).toContain('[data-theme="dark"] .settings-zoom-control,\n[data-theme="ink-blue"] .settings-zoom-control')
     expect(css).toContain('--settings-zoom-thumb-bg: var(--color-surface-bright);')
     expect(css).toContain('--settings-zoom-thumb-border: var(--color-brand);')
     expect(css).toContain('box-shadow: var(--settings-zoom-thumb-shadow);')

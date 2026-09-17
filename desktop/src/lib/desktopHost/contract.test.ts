@@ -10,7 +10,11 @@ describe('desktop host contract', () => {
     expect(browserHost.capabilities).toEqual({
       appMode: false,
       clipboard: false,
+      conceptKnowledge: false,
+      conversationContext: false,
+      dataConnections: false,
       dialogs: false,
+      hostManagement: false,
       notifications: false,
       previewWebview: false,
       workspaceBrowser: false,
@@ -186,5 +190,77 @@ describe('desktop host contract', () => {
     expect(stopExit()).toBeUndefined()
     expect(outputHandler).not.toHaveBeenCalled()
     expect(exitHandler).not.toHaveBeenCalled()
+  })
+
+  it('returns UNAVAILABLE for managed resources browser host methods', async () => {
+    const unavailable = { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+
+    await expect(browserHost.hostManagement.getCapabilities()).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.listHosts()).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.getHost('h1')).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.saveHost({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.deleteHost('h1', 1)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.listTags()).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.saveTag({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.deleteTag('t1', 1)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.saveApplication({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.deleteApplication({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.saveCredential({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.deleteCredential('c1', 1)).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.revealCredential('c1')).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.provideTemporaryCredential('h1', { kind: 'ssh-password', password: 'p' })).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.exportMetadata()).resolves.toEqual(unavailable)
+    await expect(browserHost.hostManagement.importMetadata()).resolves.toEqual(unavailable)
+
+    await expect(browserHost.conceptKnowledge.listConcepts()).resolves.toEqual(unavailable)
+    await expect(browserHost.conceptKnowledge.getConcept('c1')).resolves.toEqual(unavailable)
+    await expect(browserHost.conceptKnowledge.saveConcept({} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.conceptKnowledge.deleteConcept('c1', 1)).resolves.toEqual(unavailable)
+
+    await expect(browserHost.conversationContext.getSelection('s1')).resolves.toEqual(unavailable)
+    await expect(browserHost.conversationContext.saveSelection('s1', {} as any)).resolves.toEqual(unavailable)
+    await expect(browserHost.conversationContext.deleteSelection('s1')).resolves.toEqual(unavailable)
+  })
+
+  it('returns the same UNAVAILABLE result for every M4 browser host method, with no side effects', async () => {
+    const unavailable = { ok: false, error: { code: 'UNAVAILABLE', messageKey: 'managedResources.errors.desktopOnly' } }
+    const connectionId = '11111111-1111-4111-8111-111111111111'
+    const jobId = '22222222-2222-4222-8222-222222222222'
+    const editId = '33333333-3333-4333-8333-333333333333'
+    const token = '44444444-4444-4444-8444-444444444444'
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+
+    try {
+      const results = await Promise.all([
+        browserHost.hostManagement.mintUploadToken('report.txt'),
+        browserHost.hostManagement.mintDownloadToken('report.txt'),
+        browserHost.hostManagement.resolveLocalToken(token),
+        browserHost.hostManagement.revokeLocalToken(token),
+        browserHost.hostManagement.sftpList(connectionId, 1, '/home/tester'),
+        browserHost.hostManagement.sftpStat(connectionId, 1, '/home/tester/notes.txt'),
+        browserHost.hostManagement.transferStartDownload(jobId, connectionId, 1, '/home/tester/a.bin', token),
+        browserHost.hostManagement.transferStartUpload(jobId, connectionId, 1, '/home/tester/a.bin', token),
+        browserHost.hostManagement.transferCancel(jobId),
+        browserHost.hostManagement.transferGet(jobId),
+        browserHost.hostManagement.remoteEditOpen(connectionId, 1, '/home/tester/notes.txt'),
+        browserHost.hostManagement.remoteEditSave(editId, 'rev-1', 'hello'),
+        browserHost.hostManagement.remoteEditClose(editId),
+      ])
+
+      expect(results).toHaveLength(13)
+      // One consistent, recognizable desktop-only result — no method invents a
+      // success, and no two of them disagree about the reason.
+      const distinct = new Set(results.map(result => JSON.stringify(result)))
+      expect([...distinct]).toEqual([JSON.stringify(unavailable)])
+      expect(results.every(result => result.ok === false)).toBe(true)
+
+      // No side effects: the browser fallback never reaches the network.
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

@@ -358,6 +358,20 @@ describe('tabStore', () => {
     expect(sessionsApi.list).toHaveBeenCalledExactlyOnceWith({ limit: 200 })
   })
 
+  it('restores the local hosts singleton while the sidecar is unavailable without discarding saved sessions', async () => {
+    const persisted = JSON.stringify({ openTabs: [
+      { sessionId: '__hosts__', title: 'Hosts', type: 'hosts' },
+      { sessionId: '__hosts__', title: 'Duplicate', type: 'hosts' },
+      { sessionId: 'saved-offline', title: 'Saved offline', type: 'session' },
+    ], activeTabId: '__hosts__' })
+    localStorage.setItem('cc-haha-open-tabs', persisted)
+    vi.mocked(sessionsApi.list).mockRejectedValueOnce(new ApiError(503, 'Starting up'))
+    await useTabStore.getState().restoreTabs()
+    expect(useTabStore.getState().tabs.map(tab => tab.sessionId)).toEqual(['__hosts__', 'saved-offline'])
+    expect(useTabStore.getState().activeTabId).toBe('__hosts__')
+    expect(localStorage.getItem('cc-haha-open-tabs')).toBe(persisted)
+  })
+
   it('preserves saved tabs when a historical lookup has a transient failure', async () => {
     const persisted = JSON.stringify({
       openTabs: [{ sessionId: 'history-offline', title: 'Saved session', type: 'session' }],

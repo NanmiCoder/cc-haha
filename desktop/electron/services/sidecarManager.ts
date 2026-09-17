@@ -379,7 +379,18 @@ export function appendHostDiagnostic(
     tempDescriptor = undefined
     ensurePrivateHostDiagnosticsDirectory(diagnosticsDir)
     assertRegularHostDiagnosticsFileOrMissing(filePath)
-    renameSync(tempPath, filePath)
+    const renameAttempts = process.platform === 'win32' ? 5 : 1
+    for (let attempt = 0; attempt < renameAttempts; attempt += 1) {
+      try {
+        renameSync(tempPath, filePath)
+        break
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        const retryable = code === 'EACCES' || code === 'EBUSY' || code === 'EPERM'
+        if (!retryable || attempt === renameAttempts - 1) throw error
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 * (attempt + 1))
+      }
+    }
   } catch {
     if (tempDescriptor !== undefined) {
       try {

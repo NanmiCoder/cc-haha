@@ -116,8 +116,8 @@ describe('DoctorService', () => {
 
     // Reported paths are abbreviated, and configDir renders as `~/.claude`, so
     // an `.agents` root built from the config dir would show up nested under it.
-    expect(byId('user-skills')).toBe(path.join('~', '.claude', 'skills'))
-    expect(byId('user-agent-skills')).toBe(path.join('~', '.agents', 'skills'))
+    expect(byId('user-skills')).toBe('~/.claude/skills')
+    expect(byId('user-agent-skills')).toBe('~/.agents/skills')
   })
 
   test('drops the .agents targets when cross-client discovery is switched off', async () => {

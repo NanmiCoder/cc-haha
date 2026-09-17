@@ -13,6 +13,7 @@ import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { SavedProvider } from '../../types/provider'
 import type { RuntimeSelection } from '../../types/runtime'
@@ -34,10 +35,12 @@ import {
   GROK_OFFICIAL_PROVIDER_ID,
 } from '../../constants/grokOfficialProvider'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { SearchField } from '@/components/ui/SearchField'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+import { sensitiveRuntimeSwitchPlan } from '../../features/managed-resources/integration/providerDisclosure'
 import {
   getModelReasoningCapabilityOverride,
   isOpenAIReasoningModel,
@@ -278,10 +281,16 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const runtimeSelection = useSessionRuntimeStore((state) =>
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
+  const sensitiveContext = useSessionStore((state) => (
+    runtimeKey && runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY
+      ? state.sessions.find((session) => session.id === runtimeKey)?.sensitiveContext === true
+      : false
+  ))
   const [open, setOpen] = useState(false)
   const [effortOpen, setEffortOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null)
+  const [pendingSensitiveSelection, setPendingSensitiveSelection] = useState<RuntimeSelection | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const effortButtonRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -583,13 +592,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     open: openSelector,
   }), [openSelector])
 
-  const handleRuntimeSelect = (selection: RuntimeSelection) => {
-    const provider = providers.find((entry) => entry.id === selection.providerId)
-    const normalizedSelection = normalizeRuntimeSelection(
-      selection,
-      provider?.apiFormat,
-      provider ? getBundledPresetReasoningProviderKind(provider.presetId) : undefined,
-    )
+  const applyRuntimeSelection = (normalizedSelection: RuntimeSelection) => {
     onRuntimeSelectionChange?.(normalizedSelection)
     if (runtimeKey) {
       useSessionRuntimeStore.getState().setSelection(runtimeKey, normalizedSelection)
@@ -598,6 +601,32 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       }
     }
     setOpen(false)
+  }
+
+  const handleRuntimeSelect = (selection: RuntimeSelection) => {
+    const provider = providers.find((entry) => entry.id === selection.providerId)
+    const normalizedSelection = normalizeRuntimeSelection(
+      selection,
+      provider?.apiFormat,
+      provider ? getBundledPresetReasoningProviderKind(provider.presetId) : undefined,
+    )
+    const disclosure = sensitiveRuntimeSwitchPlan({
+      sensitiveContext,
+      current: activeRuntimeSelection,
+      next: normalizedSelection,
+    })
+    if (disclosure === 'confirm-provider') {
+      setPendingSensitiveSelection(normalizedSelection)
+      setOpen(false)
+      return
+    }
+    applyRuntimeSelection(normalizedSelection)
+    if (disclosure === 'notice-model') {
+      useUIStore.getState().addToast({
+        type: 'warning',
+        message: t('model.sensitiveSameProviderNotice'),
+      })
+    }
   }
 
   const handleRuntimeEffortSelect = (level: ReasoningEffortLevel) => {
@@ -904,6 +933,21 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         )}
       </div>
       {dropdown}
+      <ConfirmDialog
+        open={pendingSensitiveSelection !== null}
+        onClose={() => setPendingSensitiveSelection(null)}
+        onConfirm={() => {
+          const selection = pendingSensitiveSelection
+          if (!selection) return
+          setPendingSensitiveSelection(null)
+          applyRuntimeSelection(selection)
+        }}
+        title={t('model.sensitiveProviderSwitchTitle')}
+        body={t('model.sensitiveProviderSwitchBody')}
+        confirmLabel={t('model.sensitiveProviderSwitchConfirm')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+      />
       {canEditRuntimeEffort && selectedRuntimeEffort && (
         <ReasoningEffortPopover
           open={effortOpen}

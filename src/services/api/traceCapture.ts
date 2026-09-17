@@ -16,6 +16,7 @@ import {
   type TraceSessionOverview,
 } from '../../server/services/localIndex/traceIndex.js'
 import { resolveLocalIndexMode } from '../../server/services/localIndex/config.js'
+import { shouldSuppressTraceBodyCapture } from '../managedContext/sensitivityPolicy.js'
 import type { LocalIndexMode } from '../../server/services/localIndex/types.js'
 import {
   captureSourceFingerprint,
@@ -251,6 +252,7 @@ type TraceScopeContext = {
 }
 
 const traceWriteQueues = new Map<string, Promise<void>>()
+const traceBackgroundTasks = new Set<Promise<void>>()
 const traceReadCache = new Map<string, TraceReadCacheEntry>()
 const canonicalTraceRevisions = new Map<string, CanonicalTraceRevisionState>()
 type TraceIndexState = {
@@ -336,6 +338,21 @@ export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptur
   }
   await writeManagedSettings(nextSettings, scope)
   return normalizeTraceCaptureSettings(nextSettings, scope)
+}
+
+/**
+ * §8.4: the body marker stored for a session whose content capture was stopped
+ * by the sensitivity policy. Metadata (status, duration, model, hashes of
+ * nothing) is still recorded; only the body/preview is withheld.
+ */
+export function createSuppressedTraceBodySnapshot(): TraceBodySnapshot {
+  return {
+    contentType: 'text',
+    bytes: 0,
+    sha256: createHash('sha256').update('').digest('hex'),
+    preview: '[managed-context] sensitive session: body capture disabled',
+    truncated: false,
+  }
 }
 
 export function createTraceBodySnapshot(
@@ -485,19 +502,29 @@ function isTraceRecord(value: unknown): value is TraceJsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/**
- * Wait for all in-flight trace appends (including their index projections) to
- * finish. Test teardown should drain before clearing state: a background
- * projection still running after `clearTraceCaptureStateForTests` would
- * re-open the index database and hold a file handle past the temp dir
- * removal on Windows.
- */
-export async function drainTraceCaptureForTests(): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const pending = [...traceWriteQueues.values()]
-    if (pending.length === 0) return
-    await Promise.allSettled(pending)
+export function trackTraceCaptureBackgroundTask(task: Promise<unknown>): void {
+  const tracked = task.then(
+    () => undefined,
+    () => undefined,
+  )
+  traceBackgroundTasks.add(tracked)
+  void tracked.finally(() => {
+    traceBackgroundTasks.delete(tracked)
+  })
+}
+
+export async function waitForTraceCaptureIdleForTests(): Promise<void> {
+  while (traceWriteQueues.size > 0 || traceBackgroundTasks.size > 0) {
+    await Promise.allSettled([
+      ...traceWriteQueues.values(),
+      ...traceBackgroundTasks.values(),
+    ])
   }
+}
+
+/** Drain writes and deferred captures before tearing down a sandbox or its index. */
+export async function drainTraceCaptureForTests(): Promise<void> {
+  await waitForTraceCaptureIdleForTests()
 }
 export function clearTraceCaptureStateForTests(): void {
   traceWriteQueues.clear()
@@ -548,6 +575,7 @@ class TraceCaptureService {
   async recordCall(input: RecordTraceCallInput): Promise<TraceCallRecord | null> {
     if (!input.sessionId.trim()) return null
     if (!isTraceCaptureEnabled()) return null
+    const bodyCaptureSuppressed = shouldSuppressTraceBodyCapture(input.sessionId)
 
     const startedAt = input.startedAt ?? new Date().toISOString()
     const completedAt = input.completedAt
@@ -567,15 +595,21 @@ class TraceCaptureService {
         method: input.request.method ?? 'POST',
         url: sanitizeUrl(input.request.url ?? ''),
         headers: sanitizeHeaders(input.request.headers),
-        body: input.request.bodySnapshot ?? createTraceBodySnapshot(input.request.body ?? null),
-        ...createRequestSemanticField(input.request.body, input.source),
+        body: bodyCaptureSuppressed
+          ? createSuppressedTraceBodySnapshot()
+          : input.request.bodySnapshot ?? createTraceBodySnapshot(input.request.body ?? null),
+        ...(bodyCaptureSuppressed
+          ? {}
+          : createRequestSemanticField(input.request.body, input.source)),
       },
       ...(input.response
         ? {
             response: {
               status: input.response.status,
               headers: sanitizeHeaders(input.response.headers),
-              body: input.response.bodySnapshot ?? createTraceBodySnapshot(input.response.body ?? null),
+              body: bodyCaptureSuppressed
+                ? createSuppressedTraceBodySnapshot()
+                : input.response.bodySnapshot ?? createTraceBodySnapshot(input.response.body ?? null),
             },
           }
         : {}),
@@ -589,6 +623,7 @@ class TraceCaptureService {
   async recordEvent(input: RecordTraceEventInput): Promise<TraceEventRecord | null> {
     if (!input.sessionId.trim()) return null
     if (!isTraceCaptureEnabled()) return null
+    const messageCaptureSuppressed = shouldSuppressTraceBodyCapture(input.sessionId)
 
     const event: TraceEventRecord = {
       id: input.id ?? randomUUID(),
@@ -601,7 +636,9 @@ class TraceCaptureService {
       ...(input.provider ? { provider: input.provider } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.title ? { title: input.title } : {}),
-      ...(input.message ? { message: redactSecretsInText(input.message) } : {}),
+      ...(input.message && !messageCaptureSuppressed
+        ? { message: redactSecretsInText(input.message) }
+        : {}),
       ...(input.metadata ? { metadata: sanitizeMetadata(input.metadata) } : {}),
     }
 

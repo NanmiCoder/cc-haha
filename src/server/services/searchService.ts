@@ -14,6 +14,7 @@ import { createInterface } from 'readline'
 import { StringDecoder } from 'string_decoder'
 import { ApiError } from '../middleware/errorHandler.js'
 import { ripgrepCommand } from '../../utils/ripgrep.js'
+import { shouldSuppressSearchContentCapture } from '../../services/managedContext/sensitivityPolicy.js'
 import {
   sessionService,
   type IndexedSessionSearchMetadata,
@@ -228,6 +229,14 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
+}
+
+function ownerSessionIdForTranscriptPath(projectsDir: string, filePath: string): string {
+  const relativePath = path.relative(path.resolve(projectsDir), path.resolve(filePath))
+  const parts = relativePath.split(path.sep).filter(Boolean)
+  if (parts.length >= 3) return parts[1]!
+  const leaf = parts.at(-1) ?? path.basename(filePath)
+  return path.basename(leaf, '.jsonl')
 }
 
 export class SearchService {
@@ -507,6 +516,8 @@ export class SearchService {
       throwIfAborted(options?.signal)
       const lineNumbers = matchedLines.get(path.resolve(filePath))
       if (!lineNumbers || lineNumbers.size === 0) continue
+      const sensitivitySessionId = ownerSessionIdForTranscriptPath(projectsDir, filePath)
+      const safeProjectionOnly = shouldSuppressSearchContentCapture(sensitivitySessionId)
 
       let extracted: { matches: SessionMatch[]; matchCount: number; bytesRead: number }
       const targeted = await this.readEntriesAtLines(filePath, lineNumbers)
@@ -517,7 +528,7 @@ export class SearchService {
           ...this.extractSessionMatchesFromEntries(
             targeted.entries,
             trimmedQuery,
-            { caseSensitive, matchesPerSession },
+            { caseSensitive, matchesPerSession, safeProjectionOnly },
           ),
           bytesRead: targeted.bytesRead,
         }
@@ -526,7 +537,7 @@ export class SearchService {
           filePath,
           lineNumbers,
           trimmedQuery,
-          { caseSensitive, matchesPerSession, signal: options?.signal },
+          { caseSensitive, matchesPerSession, safeProjectionOnly, signal: options?.signal },
         )
         if (options?.metrics) options.metrics.fallbackFiles += 1
       }
@@ -1032,6 +1043,7 @@ export class SearchService {
     opts: {
       caseSensitive: boolean
       matchesPerSession: number
+      safeProjectionOnly?: boolean
       signal?: AbortSignal
     },
   ): Promise<{ matches: SessionMatch[]; matchCount: number; bytesRead: number }> {
@@ -1077,7 +1089,7 @@ export class SearchService {
   private extractSessionMatchesFromEntries(
     entries: Array<{ entry: Record<string, unknown>; lineNumber: number }>,
     query: string,
-    opts: { caseSensitive: boolean; matchesPerSession: number },
+    opts: { caseSensitive: boolean; matchesPerSession: number; safeProjectionOnly?: boolean },
   ): { matches: SessionMatch[]; matchCount: number } {
     const needle = opts.caseSensitive ? query : query.toLowerCase()
     const matches: SessionMatch[] = []
@@ -1085,7 +1097,7 @@ export class SearchService {
 
     for (const { entry: rawEntry, lineNumber: lineNo } of entries) {
       const entry = rawEntry as RawSearchEntry
-      for (const segment of this.extractUserAssistantSegments(entry)) {
+      for (const segment of this.extractUserAssistantSegments(entry, opts.safeProjectionOnly)) {
         const haystack = opts.caseSensitive ? segment.text : segment.text.toLowerCase()
         if (!haystack.includes(needle)) continue // ripgrep false positive (JSON noise)
 
@@ -1118,8 +1130,10 @@ export class SearchService {
    */
   private extractUserAssistantSegments(
     entry: RawSearchEntry,
+    safeProjectionOnly = false,
   ): Array<{ role: SessionMatchRole; text: string }> {
-    return extractSearchableSegments(entry)
+    const segments = extractSearchableSegments(entry)
+    return safeProjectionOnly ? segments.filter(segment => segment.role === 'user') : segments
   }
 
   /** Window a single match into a one-line, highlighted snippet. */

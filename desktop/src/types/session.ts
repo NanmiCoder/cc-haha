@@ -32,6 +32,8 @@ export type SessionListItem = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: ReasoningEffortLevel
+  /** Durable public policy bit; no credential material is exposed. */
+  sensitiveContext?: boolean
 }
 
 export type SessionWorkspaceState = 'available' | 'worktree_removed' | 'missing'

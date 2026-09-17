@@ -181,7 +181,7 @@ export async function executeDeterministicDesktopSmoke(
   })
   seedDesktopUiSmokeProvider(sandbox.configDir)
 
-  const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(serverPort)], {
+  const server = Bun.spawn([process.execPath, 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(serverPort)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',

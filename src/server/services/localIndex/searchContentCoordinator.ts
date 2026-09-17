@@ -49,6 +49,8 @@ export type SearchContentCoordinatorStatus = {
 export interface SearchContentCoordinator {
   start(): Promise<void>
   stop(): Promise<void>
+  /** Drop and re-project every source owned by one session under current sensitivity policy. */
+  sanitizeSession(sessionId: string): Promise<void>
   search(
     query: string,
     options?: SearchContentQueryOptions & { signal?: AbortSignal },
@@ -757,6 +759,39 @@ export function createSearchContentCoordinator(
         cancelCorruptionRecovery: true,
         resetStatus: true,
       })
+    },
+    async sanitizeSession(sessionId) {
+      if (!sessionId || !started || !index || !projector) return
+      const paths = index.listSources()
+        .filter(source => source.ownerSessionId === sessionId)
+        .map(source => resolve(source.path))
+      if (paths.length === 0) return
+
+      // Invalidate reads synchronously before queued deletion/reprojection. If a
+      // caller falls back to JSONL while this runs, SearchService applies the
+      // same sensitivity policy to the canonical transcript.
+      setBuilding()
+      const expectedLifecycle = lifecycle
+      const processedRevision = dirtyRevision
+      const operation = async (): Promise<void> => {
+        if (!started || expectedLifecycle !== lifecycle || !projector) return
+        for (const sourcePath of paths) projector.deleteSource(sourcePath)
+        await runTargeted(expectedLifecycle, processedRevision, paths)
+      }
+      const queued = writerQueue.then(operation, operation)
+      writerQueue = queued.catch(() => undefined)
+      try {
+        await queued
+      } catch (error) {
+        if (started && expectedLifecycle === lifecycle) {
+          status = {
+            ...status,
+            state: 'degraded',
+            lastErrorCode: errorCode(error, 'SEARCH_CONTENT_SANITIZE_FAILED'),
+          }
+        }
+        throw error
+      }
     },
     search(query, options = {}) {
       if (

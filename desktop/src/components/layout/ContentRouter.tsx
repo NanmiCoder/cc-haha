@@ -11,6 +11,7 @@ import { TraceSession } from '../../pages/TraceSession'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
 import { returnToTraceList } from '../../lib/traceNavigation'
+import { ManagedResourcesRouterBranch } from '../../features/managed-resources/ui/routerIntegration'
 
 export function ContentRouter() {
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -38,6 +39,8 @@ export function ContentRouter() {
     page = <ScheduledTasks />
   } else if (activeTabType === 'connectors' || activeTabType === 'market') {
     page = <ExtensionMarket />
+  } else if (activeTabType === 'hosts') {
+    page = <ManagedResourcesRouterBranch />
   } else if (activeTabType === 'trace') {
     const traceTabId = activeTabId
     const traceSessionId = tabs.find((t) => t.sessionId === traceTabId)?.traceSessionId

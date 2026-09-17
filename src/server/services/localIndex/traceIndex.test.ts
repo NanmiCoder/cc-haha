@@ -54,6 +54,20 @@ function observingDatabase(sql: string[]): TraceIndexDatabase {
 }
 
 describe('trace index', () => {
+  test('releases cached statements before close so the database directory can be removed immediately', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-index-close-'))
+    database = openTraceIndexDatabase({ path: path.join(tmpDir, 'trace-index-v1.sqlite') })
+    database.read(operation => operation.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+    ))
+
+    database.close()
+    database = undefined
+    await fs.rm(tmpDir, { recursive: true, force: true })
+    await expect(fs.stat(tmpDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    tmpDir = undefined
+  })
+
   test('uses an independent schema containing only scalar metadata and byte locators', async () => {
     await createTestIndex()
 

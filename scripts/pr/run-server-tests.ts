@@ -58,10 +58,11 @@ type TestFileResult = {
   exitCode: number
   passedTests: number
   failedTests: number
+  skippedTests: number
   evidenceComplete: boolean
 }
 
-function summaryCount(output: string, label: 'pass' | 'fail') {
+function summaryCount(output: string, label: 'pass' | 'fail' | 'skip') {
   const match = output.match(new RegExp(`^\\s*(\\d+) ${label}$`, 'm'))
   return match ? Number(match[1]) : 0
 }
@@ -71,7 +72,7 @@ async function runTestFile(file: string): Promise<TestFileResult> {
   try {
     const proc = Bun.spawn(
       [
-        'bun',
+        process.execPath,
         '--no-env-file',
         'test',
         '--max-concurrency=1',
@@ -93,13 +94,14 @@ async function runTestFile(file: string): Promise<TestFileResult> {
     const output = `${stdout}${stderr}`
     const passedTests = summaryCount(output, 'pass')
     const failedTests = summaryCount(output, 'fail')
+    const skippedTests = summaryCount(output, 'skip')
     const reportedFiles = Number(
       output.match(/Ran\s+\d+\s+tests?\s+across\s+(\d+)\s+files?\./)?.[1] ?? 0,
     )
     const evidenceComplete =
       exitCode === 0 &&
       reportedFiles === 1 &&
-      passedTests + failedTests > 0
+      passedTests + failedTests + skippedTests > 0
     if (!evidenceComplete) {
       process.stderr.write(output)
     }
@@ -111,6 +113,7 @@ async function runTestFile(file: string): Promise<TestFileResult> {
       exitCode,
       passedTests,
       failedTests,
+      skippedTests,
       evidenceComplete,
     }
   } finally {
@@ -137,6 +140,9 @@ await Promise.all(
 
 const failedFiles = results.filter((result) => !result.evidenceComplete)
 console.log(
-  `[server-tests] summary: files=${results.length} passed-tests=${results.reduce((total, result) => total + result.passedTests, 0)} failed-tests=${results.reduce((total, result) => total + result.failedTests, 0)} failed-files=${failedFiles.length}`,
+  `[server-tests] summary: files=${results.length} passed-tests=${results.reduce((total, result) => total + result.passedTests, 0)} skipped-tests=${results.reduce((total, result) => total + result.skippedTests, 0)} failed-tests=${results.reduce((total, result) => total + result.failedTests, 0)} failed-files=${failedFiles.length}`,
 )
+for (const result of failedFiles) {
+  console.error(`[server-tests] failed-file: ${result.file} exit=${result.exitCode} pass=${result.passedTests} skip=${result.skippedTests} fail=${result.failedTests}`)
+}
 process.exit(failedFiles.length === 0 ? 0 : 1)

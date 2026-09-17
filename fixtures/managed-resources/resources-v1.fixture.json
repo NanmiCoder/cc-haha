@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "revision": 7,
+  "futureTopLevel": {
+    "migrationNote": "preserve-me"
+  },
+  "tags": [
+    {
+      "id": "30000000-0000-4000-8000-000000000101",
+      "revision": 2,
+      "createdAt": "2026-09-01T00:00:00.000Z",
+      "updatedAt": "2026-09-02T00:00:00.000Z",
+      "namespace": "host",
+      "name": "Legacy Test",
+      "normalizedName": "legacy test",
+      "colorToken": null,
+      "futureTagField": "preserve-me"
+    },
+    {
+      "id": "30000000-0000-4000-8000-000000000102",
+      "revision": 1,
+      "createdAt": "2026-09-01T00:00:00.000Z",
+      "updatedAt": "2026-09-01T00:00:00.000Z",
+      "namespace": "concept",
+      "name": "Legacy Knowledge",
+      "normalizedName": "legacy knowledge",
+      "colorToken": "blue",
+      "futureTagField": "preserve-me-too"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "10000000-0000-4000-8000-000000000101",
+      "revision": 3,
+      "createdAt": "2026-09-01T00:00:00.000Z",
+      "updatedAt": "2026-09-03T00:00:00.000Z",
+      "name": "legacy-host",
+      "address": "192.0.2.101",
+      "port": 22,
+      "username": "legacy",
+      "auth": {
+        "type": "password",
+        "credentialId": null
+      },
+      "tagIds": ["30000000-0000-4000-8000-000000000101"],
+      "initialDirectory": "/opt/legacy",
+      "applications": [],
+      "notes": "legacy host metadata",
+      "futureHostField": {
+        "preserved": true
+      }
+    }
+  ],
+  "concepts": [
+    {
+      "id": "20000000-0000-4000-8000-000000000101",
+      "revision": 4,
+      "createdAt": "2026-09-01T00:00:00.000Z",
+      "updatedAt": "2026-09-04T00:00:00.000Z",
+      "title": "Legacy Concept",
+      "summary": "Legacy summary",
+      "bodyMarkdown": "# Legacy concept\n\nPreserved body.",
+      "tagIds": ["30000000-0000-4000-8000-000000000102"],
+      "dependsOnIds": [],
+      "referenceIds": [],
+      "futureConceptField": "preserve-me"
+    }
+  ]
+}

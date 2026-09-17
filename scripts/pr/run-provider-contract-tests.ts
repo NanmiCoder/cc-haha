@@ -52,7 +52,7 @@ for (const testFile of testFiles) {
   let exitCode = 1
   try {
     const proc = Bun.spawn([
-      'bun',
+      process.execPath,
       '--no-env-file',
       'test',
       rootBunTestFilter(testFile),

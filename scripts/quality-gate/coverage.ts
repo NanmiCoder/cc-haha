@@ -448,20 +448,23 @@ export function hasUsableCoverageSummary(summary: CoverageSummary) {
   return Object.values(summary).some((coverage) => coverage.total > 0)
 }
 
+export function resolveCoverageCommand(command: string[], bunExecutable = process.execPath) {
+  return command[0] === 'bun' ? [bunExecutable, ...command.slice(1)] : command
+}
+
 export async function runCommand(command: string[], cwd: string, logPath: string) {
   const started = Date.now()
   const sandboxHome = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-test-'))
-  const header = `$ ${command.join(' ')}\n`
+  const resolvedCommand = resolveCoverageCommand(command)
+  const header = `$ ${resolvedCommand.join(' ')}\n`
   const capturePath = join(sandboxHome, 'coverage-output.log')
   let logFd: number | undefined
   try {
     // Reporters such as Vitest delete their output directory on startup. Keep
     // the live capture outside that directory until the process has finished.
     logFd = openSync(capturePath, 'w')
-    // Bun's synchronous text coverage reporter can fail while writing a large
-    // report to a pipe, before it emits LCOV or its test-count summary. Give
-    // both streams a regular file descriptor, with no pipe buffer to exhaust.
-    const proc = Bun.spawn(command, {
+    // Use a regular file descriptor to avoid exhausting reporter pipe buffers.
+    const proc = Bun.spawn(resolvedCommand, {
       cwd,
       env: createSandboxedTestEnvironment(sandboxHome),
       stdout: logFd,

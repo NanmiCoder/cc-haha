@@ -18,7 +18,7 @@ const suites: ContractSuite[] = [
     name: 'server WebSocket handler contracts',
     cwd: root,
     command: [
-      'bun',
+      process.execPath,
       '--no-env-file',
       'test',
       rootBunTestFilter('src/server/__tests__/websocket-handler.test.ts'),
@@ -28,7 +28,7 @@ const suites: ContractSuite[] = [
     name: 'server mock CLI conversation contracts',
     cwd: root,
     command: [
-      'bun',
+      process.execPath,
       '--no-env-file',
       'test',
       rootBunTestFilter('src/server/__tests__/conversations.test.ts'),
@@ -38,7 +38,7 @@ const suites: ContractSuite[] = [
     name: 'desktop transport, store, and first-turn contracts',
     cwd: resolve(root, 'desktop'),
     command: [
-      'bun',
+      process.execPath,
       '--no-env-file',
       'run',
       'test',

@@ -33,8 +33,11 @@ function readJson(pathname: string): { scripts?: Record<string, string> } {
 }
 
 function extractWindowsX64BunTarget(source: string) {
-  const match = source.match(/case 'x86_64-pc-windows-msvc':[\s\S]*?return '([^']+)'/)
-  return match?.[1] ?? null
+  const block = source.match(
+    /case 'x86_64-pc-windows-msvc':([\s\S]*?)case 'aarch64-pc-windows-msvc':/,
+  )?.[1] ?? ''
+  const targets = [...block.matchAll(/return '([^']+)'/g)].map(match => match[1])
+  return targets.at(-1) ?? null
 }
 
 type SidecarProcess = {
@@ -362,8 +365,24 @@ async function terminateCompiledSidecar(processHandle: SidecarProcess): Promise<
 }
 
 describe('build-sidecars Windows x64 target mapping', () => {
+  it('uses the running Bun executable when PATH has no bun shim', () => {
+    expect(readBuildScript()).toContain(
+      "[process.execPath, 'run', path.join(desktopRoot, 'scripts/scan-missing-imports.ts')]",
+    )
+  })
+
   it('uses the baseline Bun runtime so older CPUs do not crash with Illegal Instruction', () => {
     expect(extractWindowsX64BunTarget(readBuildScript())).toBe('bun-windows-x64-baseline')
+  })
+
+  it('requires an explicit opt-in before using the AVX2 Windows x64 runtime', () => {
+    const source = readBuildScript()
+    const block = source.match(
+      /case 'x86_64-pc-windows-msvc':([\s\S]*?)case 'aarch64-pc-windows-msvc':/,
+    )?.[1] ?? ''
+
+    expect(block).toContain("CC_HAHA_BUN_WINDOWS_X64_TARGET === 'bun-windows-x64'")
+    expect(block).toContain("return 'bun-windows-x64'")
   })
 
   it('compiles the sidecar with the transcript classifier feature', () => {

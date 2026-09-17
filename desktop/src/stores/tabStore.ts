@@ -14,6 +14,7 @@ export const SCHEDULED_TAB_ID = '__scheduled__'
 export const CONNECTORS_TAB_ID = '__connectors__'
 export const MARKET_TAB_ID = '__market__'
 export const TRACE_LIST_TAB_ID = '__traces__'
+export const HOSTS_TAB_ID = '__hosts__'
 export const TERMINAL_TAB_PREFIX = '__terminal__'
 export const TRACE_TAB_PREFIX = '__trace__'
 export const WORKBENCH_TAB_PREFIX = '__workbench__'
@@ -21,8 +22,8 @@ export const SUBAGENT_TAB_PREFIX = '__subagent__'
 export const TEAM_TAB_PREFIX = '__team__'
 export const TEAM_MEMBER_TAB_PREFIX = 'team-member:'
 
-export type TabType = 'session' | 'settings' | 'scheduled' | 'connectors' | 'market' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent' | 'team' | 'team-member'
-type PersistentSpecialTabType = 'settings' | 'scheduled' | 'connectors' | 'market' | 'traces'
+export type TabType = 'session' | 'settings' | 'scheduled' | 'connectors' | 'market' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent' | 'team' | 'team-member' | 'hosts'
+type PersistentSpecialTabType = 'settings' | 'scheduled' | 'connectors' | 'market' | 'traces' | 'hosts'
 
 export type Tab = {
   sessionId: string
@@ -54,6 +55,7 @@ type TabStore = {
   activeTabId: string | null
 
   openTab: (sessionId: string, title: string, type?: TabType) => void
+  openHostsTab: (title?: string) => string
   openTracesTab: (title?: string) => string
   openTraceTab: (sessionId: string, title?: string) => string
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
@@ -92,6 +94,7 @@ const PERSISTENT_SPECIAL_TAB_IDS: Record<PersistentSpecialTabType, string> = {
   market: MARKET_TAB_ID,
   connectors: CONNECTORS_TAB_ID,
   traces: TRACE_LIST_TAB_ID,
+  hosts: HOSTS_TAB_ID,
 }
 
 function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabType }): PersistentSpecialTabType | null {
@@ -100,7 +103,8 @@ function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabT
   if (tab.sessionId === CONNECTORS_TAB_ID) return 'market'
   if (tab.sessionId === MARKET_TAB_ID) return 'market'
   if (tab.sessionId === TRACE_LIST_TAB_ID) return 'traces'
-  if (tab.type === 'connectors' || tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market' || tab.type === 'traces') {
+  if (tab.sessionId === HOSTS_TAB_ID) return 'hosts'
+  if (tab.type === 'connectors' || tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market' || tab.type === 'traces' || tab.type === 'hosts') {
     return tab.type === 'connectors' ? 'market' : tab.type
   }
   return null
@@ -144,6 +148,28 @@ export const useTabStore = create<TabStore>((set, get) => ({
       })
     }
     get().saveTabs()
+  },
+
+  openHostsTab: (title = '主机管理') => {
+    const { tabs } = get()
+    const existing = tabs.find((tab) => tab.sessionId === HOSTS_TAB_ID)
+    if (existing) {
+      set({
+        tabs: tabs.map((tab) => (
+          tab.sessionId === HOSTS_TAB_ID
+            ? { ...tab, title, type: 'hosts' }
+            : tab
+        )),
+        activeTabId: HOSTS_TAB_ID,
+      })
+    } else {
+      set({
+        tabs: [...tabs, { sessionId: HOSTS_TAB_ID, title, type: 'hosts', status: 'idle' }],
+        activeTabId: HOSTS_TAB_ID,
+      })
+    }
+    get().saveTabs()
+    return HOSTS_TAB_ID
   },
 
   openTracesTab: (title = 'Traces') => {
@@ -445,7 +471,30 @@ export const useTabStore = create<TabStore>((set, get) => ({
         return
       }
 
-      const { sessions } = await sessionsApi.list({ limit: 200 })
+      let sessions: SessionListItem[]
+      try {
+        const result = await sessionsApi.list({ limit: 200 })
+        sessions = result.sessions
+      } catch {
+        if (!restoreStillCurrent()) return
+        // Local host tools remain usable while the sidecar is starting. A failed
+        // network lookup is not evidence that a saved session has been deleted.
+        const offlineTabs = data.openTabs.flatMap<Tab>(tab => {
+          const special = getPersistentSpecialTabType(tab)
+          if (special) return [{ sessionId: PERSISTENT_SPECIAL_TAB_IDS[special], title: tab.title, type: special, status: 'idle' as const }]
+          const id = getPersistedSessionId(tab)
+          if (!id) return []
+          return [{ sessionId: tab.type === 'trace' ? TRACE_TAB_PREFIX + id : id, title: tab.title,
+            type: tab.type === 'trace' ? 'trace' as const : 'session' as const, status: 'idle' as const,
+            ...(tab.type === 'trace' ? { traceSessionId: id } : {}) }]
+        })
+        const unique = offlineTabs.filter((tab, i) => offlineTabs.findIndex(other => other.sessionId === tab.sessionId) === i)
+        const active = data.openTabs.find(tab => tab.sessionId === data.activeTabId)
+        const special = active && getPersistentSpecialTabType(active)
+        const normalized = special ? PERSISTENT_SPECIAL_TAB_IDS[special] : data.activeTabId
+        set({ tabs: unique, activeTabId: unique.some(tab => tab.sessionId === normalized) ? normalized : unique[0]?.sessionId ?? null })
+        return
+      }
       if (!restoreStillCurrent()) return
       const sessionsById = new Map(sessions.map((session) => [session.id, session]))
       const historicalSessions: SessionListItem[] = []

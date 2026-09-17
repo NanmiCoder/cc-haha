@@ -40,6 +40,7 @@ import {
   createTraceBodySnapshot,
   TRACE_STREAM_CAPTURE_BYTES,
   traceCaptureService,
+  trackTraceCaptureBackgroundTask,
   type TraceBodySnapshot,
   type TraceProviderInfo,
 } from '../services/traceCaptureService.js'
@@ -1090,42 +1091,44 @@ function startProxyTraceCall({
   startedAt: string
 }): string {
   const callId = createTraceCallId()
-  void traceCaptureService.recordCall({
-    id: callId,
-    sessionId: context.sessionId,
-    source: 'proxy',
-    provider: context.provider,
-    model,
-    status: 'pending',
-    startedAt,
-    request: {
-      method: 'POST',
-      url: upstreamUrl,
-      headers: requestHeaders,
-      bodySnapshot: createTraceBodySnapshot({
-        pending: true,
-        note: 'proxy request body captured on call completion',
-      }),
-    },
-    metadata: {
+  trackTraceCaptureBackgroundTask((async () => {
+    await traceCaptureService.recordCall({
+      id: callId,
+      sessionId: context.sessionId,
+      source: 'proxy',
+      provider: context.provider,
+      model,
+      status: 'pending',
+      startedAt,
+      request: {
+        method: 'POST',
+        url: upstreamUrl,
+        headers: requestHeaders,
+        bodySnapshot: createTraceBodySnapshot({
+          pending: true,
+          note: 'proxy request body captured on call completion',
+        }),
+      },
+      metadata: {
+        phase: 'upstream_fetch_started',
+        ...(context.protocolTrace ? { protocolTrace: context.protocolTrace.snapshot() } : {}),
+      },
+    })
+    await traceCaptureService.recordEvent({
+      sessionId: context.sessionId,
+      callId,
+      source: 'proxy',
+      provider: context.provider,
+      model,
+      timestamp: startedAt,
       phase: 'upstream_fetch_started',
-      ...(context.protocolTrace ? { protocolTrace: context.protocolTrace.snapshot() } : {}),
-    },
-  })
-  void traceCaptureService.recordEvent({
-    sessionId: context.sessionId,
-    callId,
-    source: 'proxy',
-    provider: context.provider,
-    model,
-    timestamp: startedAt,
-    phase: 'upstream_fetch_started',
-    severity: 'info',
-    title: 'Upstream fetch started',
-    metadata: {
-      url: upstreamUrl,
-    },
-  })
+      severity: 'info',
+      title: 'Upstream fetch started',
+      metadata: {
+        url: upstreamUrl,
+      },
+    })
+  })())
   return callId
 }
 
@@ -1148,7 +1151,7 @@ type RecordProxyTraceInput = {
 }
 
 function recordProxyTraceInBackground(input: RecordProxyTraceInput): void {
-  void recordProxyTrace(input).catch(() => {})
+  trackTraceCaptureBackgroundTask(recordProxyTrace(input))
 }
 
 async function recordProxyTrace({
@@ -1406,12 +1409,12 @@ function captureTraceStream(
         }
         controller.close()
         await finishDecompressor()
-        void finalize()
+        trackTraceCaptureBackgroundTask(finalize())
       } catch (err) {
         controller.error(err)
         activelyEnded = true
         await finishDecompressor()
-        void finalize(err, 'error')
+        trackTraceCaptureBackgroundTask(finalize(err, 'error'))
       } finally {
         reader?.releaseLock()
         reader = null
@@ -1423,7 +1426,7 @@ function captureTraceStream(
         : new Error(reason ? `Stream cancelled: ${String(reason)}` : 'Stream cancelled')
       activelyEnded = true
       await finishDecompressor()
-      void finalize(error, 'cancelled')
+      trackTraceCaptureBackgroundTask(finalize(error, 'cancelled'))
       await reader?.cancel(reason).catch(() => undefined)
     },
   })

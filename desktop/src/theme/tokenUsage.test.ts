@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -49,6 +49,10 @@ const definedTokens = new Set(
 
 const sourceFiles = collectSourceFiles(SRC_ROOT)
 
+function sourceRelativePath(file: string): string {
+  return relative(SRC_ROOT, file).replaceAll('\\', '/')
+}
+
 describe('css custom property usage', () => {
   it('resolves every var(--token) referenced from components', () => {
     const unresolved: string[] = []
@@ -57,7 +61,8 @@ describe('css custom property usage', () => {
       // preview-agent 是注入到第三方页面的独立脚本：它的样式活在 Shadow DOM 里，
       // 页面上不存在 globals.css，token 由那段样式自己定义自己消费。自洽性由
       // preview-agent/editBubble.test.ts 用同等强度的检查守住。
-      if (file.includes('/preview-agent/')) continue
+      const relativePath = sourceRelativePath(file)
+      if (relativePath.startsWith('preview-agent/')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {
@@ -66,7 +71,7 @@ describe('css custom property usage', () => {
           if (definedTokens.has(token)) continue
           if (TAILWIND_BUILTIN.has(token)) continue
           if (RUNTIME_INJECTED.has(token)) continue
-          unresolved.push(`${file.replace(SRC_ROOT, 'src')}:${index + 1}  ${token}`)
+          unresolved.push(`src/${relativePath}:${index + 1}  ${token}`)
         }
       })
     }

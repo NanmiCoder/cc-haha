@@ -6,6 +6,7 @@ type ConfirmDialogProps = {
   onClose: () => void
   onConfirm: () => void | Promise<void>
   title: string
+  closeLabel?: string
   body: ReactNode
   confirmLabel: string
   cancelLabel: string
@@ -18,6 +19,7 @@ export function ConfirmDialog({
   onClose,
   onConfirm,
   title,
+  closeLabel,
   body,
   confirmLabel,
   cancelLabel,
@@ -29,6 +31,7 @@ export function ConfirmDialog({
       open={open}
       onClose={onClose}
       title={title}
+      closeLabel={closeLabel}
       body={body}
       loading={loading}
       actions={[

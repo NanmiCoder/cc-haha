@@ -234,7 +234,6 @@ export async function archiveRemoteSession(
       reject(timeoutError())
       controller.abort()
     }, timeoutMs)
-    if (typeof timeout === 'object') timeout.unref?.()
   })
   const archive = (async () => {
     await checkAndRefreshOAuthTokenIfNeeded()

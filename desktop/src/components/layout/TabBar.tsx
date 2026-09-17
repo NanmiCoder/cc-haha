@@ -12,10 +12,12 @@ import {
   TRACE_LIST_TAB_ID,
   TRACE_TAB_PREFIX,
   WORKBENCH_TAB_PREFIX,
+  HOSTS_TAB_ID,
   useTabStore,
   type Tab,
   type TabType,
 } from '../../stores/tabStore'
+import { HostsTabButton } from '../../features/managed-resources/ui/tabIntegration'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
@@ -75,6 +77,7 @@ const TAB_TYPE_ICON: Partial<Record<TabType, string>> = {
   subagent: 'smart_toy',
   team: 'account_tree',
   'team-member': 'smart_toy',
+  hosts: 'dns',
 }
 const TAB_TYPE_ICON_FALLBACK = 'tab'
 const desktopHost = getDesktopHost()
@@ -101,6 +104,7 @@ function isSessionTabId(tabId: string | null) {
     tabId !== MARKET_TAB_ID &&
     tabId !== CONNECTORS_TAB_ID &&
     tabId !== TRACE_LIST_TAB_ID &&
+    tabId !== HOSTS_TAB_ID &&
     !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
     !tabId.startsWith(TRACE_TAB_PREFIX) &&
     !tabId.startsWith(WORKBENCH_TAB_PREFIX) &&
@@ -587,7 +591,8 @@ export function TabBar() {
         {tabs.map((tab, index) => {
           const displayTitle = tab.type === 'settings'
             ? t('settings.title')
-            : tab.type === 'market' || tab.type === 'connectors' ? t('sidebar.extensions') : (tab.title || t('tabs.untitled'))
+            : tab.type === 'hosts' ? t('managedResources.title')
+              : tab.type === 'market' || tab.type === 'connectors' ? t('sidebar.extensions') : (tab.title || t('tabs.untitled'))
           return (
             <TabItem
               key={tab.sessionId}
@@ -658,6 +663,7 @@ export function TabBar() {
         {isDesktopRuntime && isActiveSessionTab && !isWorkbenchOpen && (
           <OpenProjectMenu path={openProjectPath} />
         )}
+        <HostsTabButton />
         {isActiveSessionTab && activeTabId ? (
           <WorkspaceLayoutControls
             layout={workspaceLayout}

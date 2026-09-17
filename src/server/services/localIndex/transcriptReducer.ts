@@ -1,6 +1,7 @@
 import { cleanSessionTitleSource } from '../../../utils/sessionTitleText.js'
 import { SYNTHETIC_MODEL } from '../../../utils/messages.js'
 import { extractShotCountFromAssistantContent } from '../../../utils/shotStats.js'
+import { projectManagedContextContent } from '../../../services/managedContext/blockFormat.js'
 import { normalizeDriveRootPathForPlatform } from '../windowsDrivePath.js'
 import {
   activeGapMs,
@@ -174,11 +175,14 @@ export function extractGoalCreationTitle(entry: ReducerEntry): string | null {
 }
 
 export function extractTranscriptUserTitle(content: unknown): string | null {
+  const projected = projectManagedContextContent(content)
+  if (!projected.ok) return null
+
   let text: string | undefined
-  if (typeof content === 'string') {
-    text = content
-  } else if (Array.isArray(content)) {
-    const textBlock = content.find(
+  if (typeof projected.content === 'string') {
+    text = projected.content
+  } else if (Array.isArray(projected.content)) {
+    const textBlock = projected.content.find(
       (block: Record<string, unknown>) => block.type === 'text' && typeof block.text === 'string',
     )
     if (textBlock) text = textBlock.text as string

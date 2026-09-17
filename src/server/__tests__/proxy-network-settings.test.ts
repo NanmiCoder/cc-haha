@@ -8,6 +8,7 @@ import {
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
   traceCaptureService,
+  waitForTraceCaptureIdleForTests,
 } from '../services/traceCaptureService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
@@ -23,6 +24,8 @@ async function setup() {
 }
 
 async function teardown() {
+  // Drain work bound to this config before changing scope or closing its database.
+  await waitForTraceCaptureIdleForTests()
   if (originalConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
@@ -31,7 +34,7 @@ async function teardown() {
   resetSettingsCache()
   await drainTraceCaptureForTests()
   clearTraceCaptureStateForTests()
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 }
 
 async function waitForTraceCall(sessionId: string) {

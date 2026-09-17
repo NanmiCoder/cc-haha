@@ -139,7 +139,7 @@ describe('cu-helper daemon system commands', () => {
     })
   })
 
-  test('creates a private runtime directory before the native daemon binds', () => {
+  test.skipIf(process.platform === 'win32')('creates a private runtime directory before the native daemon binds', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-cu-runtime-test-'))
     try {
       const runtimeDir = path.join(root, '.runtime')
@@ -653,8 +653,8 @@ describe('cu-helper stale daemon reaping', () => {
     h.run()
     expect(h.killed).toEqual([900])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.7.sock',
-      '/runtime/cu-helper.daemon.200.7.sock.pid',
+      path.join('/runtime', 'cu-helper.daemon.200.7.sock'),
+      path.join('/runtime', 'cu-helper.daemon.200.7.sock.pid'),
     ])
   })
 
@@ -670,8 +670,8 @@ describe('cu-helper stale daemon reaping', () => {
     h.run()
     expect(h.killed).toEqual([])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.sock',
-      '/runtime/cu-helper.daemon.200.sock.pid',
+      path.join('/runtime', 'cu-helper.daemon.200.sock'),
+      path.join('/runtime', 'cu-helper.daemon.200.sock.pid'),
     ])
   })
 
@@ -681,13 +681,13 @@ describe('cu-helper stale daemon reaping', () => {
         'cu-helper.daemon.not-a-pid.sock.pid',
         'cu-helper.daemon.200.sock.pid',
       ],
-      pidfiles: { '/runtime/cu-helper.daemon.200.sock.pid': '900junk' },
+      pidfiles: { [path.join('/runtime', 'cu-helper.daemon.200.sock.pid')]: '900junk' },
     })
     h.run()
     expect(h.killed).toEqual([])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.sock',
-      '/runtime/cu-helper.daemon.200.sock.pid',
+      path.join('/runtime', 'cu-helper.daemon.200.sock'),
+      path.join('/runtime', 'cu-helper.daemon.200.sock.pid'),
     ])
   })
 })

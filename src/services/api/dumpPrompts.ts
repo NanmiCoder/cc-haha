@@ -6,12 +6,14 @@ import { dirname, join } from 'path'
 import { getSessionId } from 'src/bootstrap/state.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
+import { shouldSuppressPromptDumpCapture } from '../managedContext/sensitivityPolicy.js'
 import {
   captureResponseTraceSnapshot,
   createTraceCallId,
   createTraceBodySnapshot,
   shouldCaptureApiTrace,
   traceCaptureService,
+  trackTraceCaptureBackgroundTask,
 } from './traceCapture.js'
 import type { TraceBodySnapshot, TraceProviderInfo, TraceResponseCapture } from './traceCapture.js'
 
@@ -255,7 +257,7 @@ export function createDumpPromptsFetch(
       // Parsing + stringifying the request (system prompt + tool schemas = MBs)
       // takes hundreds of ms. Defer so it doesn't block the actual API call —
       // this is debug tooling for /issue, not on the critical path.
-      if (typeof traceRequestBody === 'string') {
+      if (typeof traceRequestBody === 'string' && !shouldSuppressPromptDumpCapture(traceSessionId)) {
         setImmediate(dumpRequest, traceRequestBody, timestamp, state, filePath)
       }
     }
@@ -336,47 +338,49 @@ export function createDumpPromptsFetch(
       if (timestamp && traceCallId) {
         const completedAt = new Date().toISOString()
         const aborted = Boolean(init?.signal?.aborted) || isAbortLikeError(err)
-        void traceCaptureService.recordCall({
-          id: traceCallId,
-          sessionId: traceSessionId,
-          source: 'anthropic',
-          querySource: options?.querySource,
-          provider: traceProvider,
-          model: traceModel,
-          status: 'error',
-          startedAt: timestamp,
-          completedAt,
-          durationMs: Date.now() - traceStartedAtMs,
-          request: {
-            method: traceRequestMethod,
-            url: traceRequestUrl,
-            headers: traceRequestHeaders,
-            bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
-          },
-          error: err,
-          metadata: {
-            ...encodingMetadata,
+        trackTraceCaptureBackgroundTask((async () => {
+          await traceCaptureService.recordCall({
+            id: traceCallId,
+            sessionId: traceSessionId,
+            source: 'anthropic',
+            querySource: options?.querySource,
+            provider: traceProvider,
+            model: traceModel,
+            status: 'error',
+            startedAt: timestamp,
+            completedAt,
+            durationMs: Date.now() - traceStartedAtMs,
+            request: {
+              method: traceRequestMethod,
+              url: traceRequestUrl,
+              headers: traceRequestHeaders,
+              bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
+            },
+            error: err,
+            metadata: {
+              ...encodingMetadata,
+              phase: 'api_call_failed',
+              ...(aborted ? { aborted: true } : {}),
+            },
+          })
+          await traceCaptureService.recordEvent({
+            sessionId: traceSessionId,
+            callId: traceCallId,
+            source: 'anthropic',
+            provider: traceProvider,
+            model: traceModel,
+            timestamp: completedAt,
             phase: 'api_call_failed',
-            ...(aborted ? { aborted: true } : {}),
-          },
-        })
-        void traceCaptureService.recordEvent({
-          sessionId: traceSessionId,
-          callId: traceCallId,
-          source: 'anthropic',
-          provider: traceProvider,
-          model: traceModel,
-          timestamp: completedAt,
-          phase: 'api_call_failed',
-          severity: 'error',
-          title: 'API call failed',
-          message: err instanceof Error ? err.message : String(err),
-          metadata: {
-            ...encodingMetadata,
-            url: traceRequestUrl,
-            ...(aborted ? { aborted: true } : {}),
-          },
-        })
+            severity: 'error',
+            title: 'API call failed',
+            message: err instanceof Error ? err.message : String(err),
+            metadata: {
+              ...encodingMetadata,
+              url: traceRequestUrl,
+              ...(aborted ? { aborted: true } : {}),
+            },
+          })
+        })())
       }
       throw err
     }
@@ -384,7 +388,7 @@ export function createDumpPromptsFetch(
     if (timestamp && traceCallId) {
       const cloned = response.clone()
       const abortSignal = init?.signal ?? undefined
-      void (async () => {
+      trackTraceCaptureBackgroundTask((async () => {
         const callBase = {
           id: traceCallId,
           sessionId: traceSessionId,
@@ -521,11 +525,16 @@ export function createDumpPromptsFetch(
             responseCaptureFailed: true,
           },
         })
-      })()
+      })())
     }
 
     // Save response async
-    if (timestamp && response.ok && process.env.USER_TYPE === 'ant') {
+    if (
+      timestamp &&
+      response.ok &&
+      process.env.USER_TYPE === 'ant' &&
+      !shouldSuppressPromptDumpCapture(traceSessionId)
+    ) {
       const cloned = response.clone()
       void (async () => {
         try {

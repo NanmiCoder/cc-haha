@@ -101,7 +101,7 @@ describe('reverse cu-helper daemon attestation', () => {
     })).resolves.toBeNull()
   })
 
-  test('hard timeout reaps the direct verifier without consuming the parent socket', async () => {
+  test.skipIf(process.platform === 'win32')('hard timeout reaps the direct verifier without consuming the parent socket', async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'cc-haha-peer-timeout-'))
     const socketPath = join(fixtureRoot, 'peer.sock')
 

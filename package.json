@@ -40,6 +40,7 @@
     "quality:smoke": "bun run quality:gate --mode baseline --allow-live --only 'provider-smoke:*' --only 'desktop-smoke:*'",
     "test:package-smoke": "bun run scripts/quality-gate/package-smoke/index.ts",
     "test:package-smoke:current": "bun run scripts/quality-gate/package-smoke/current.ts",
+    "test:packaged-windows-smoke": "bun run scripts/quality-gate/package-smoke/windows-launch.ts",
     "docs:dev": "npm --prefix site run dev",
     "docs:build": "npm --prefix site run build",
     "docs:preview": "npm --prefix site run preview",

@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 let configDir: string | null = null
 
+async function removeConfigDir(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await rm(path, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (process.platform !== 'win32' || !['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '') || attempt === 19) {
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+}
+
 afterEach(async () => {
   if (configDir) {
-    await rm(configDir, { recursive: true, force: true })
+    await removeConfigDir(configDir)
     configDir = null
   }
 })
@@ -29,7 +45,9 @@ describe('print mode partial output', () => {
 
       try {
         const child = Bun.spawn(
-          ['./bin/claude-haha', '--bare', '-p', 'Reply briefly'],
+          // --bare still allows the built-in Computer Use MCP. This output-only
+          // fixture must not start its native helper or hold its venv executable open.
+          [process.execPath, '--no-env-file', './bin/claude-haha', '--bare', '--no-computer-use', '-p', 'Reply briefly'],
           {
             cwd: process.cwd(),
             env: {
@@ -70,6 +88,7 @@ describe('print mode partial output', () => {
         expect(stdout).toContain('FIRST_PARTIAL_SENTINEL')
         expect(stdout).toContain('SECOND_PARTIAL_SENTINEL')
         expect(stdout).toContain('MIDSTREAM_SENTINEL_ERROR')
+        expect(existsSync(join(configDir, '.runtime', 'venv'))).toBe(false)
       } finally {
         server.stop(true)
       }
@@ -106,7 +125,7 @@ describe('print mode partial output', () => {
 
       try {
         const child = Bun.spawn(
-          ['./bin/claude-haha', '--bare', '-p', 'Reply briefly'],
+          [process.execPath, '--no-env-file', './bin/claude-haha', '--bare', '--no-computer-use', '-p', 'Reply briefly'],
           {
             cwd: process.cwd(),
             env: {
@@ -135,14 +154,16 @@ describe('print mode partial output', () => {
           },
         )
 
-        const [stdout, exitCode] = await Promise.all([
+        const [stdout, , exitCode] = await Promise.all([
           new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
           child.exited,
         ])
 
         expect(exitCode).toBe(1)
         expect(stdout.match(/TRANSPORT_PARTIAL_SENTINEL/g)).toHaveLength(1)
         expect(stdout).toMatch(/socket|connection|stream/i)
+        expect(existsSync(join(configDir, '.runtime', 'venv'))).toBe(false)
       } finally {
         server.stop(true)
       }

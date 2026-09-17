@@ -1,6 +1,11 @@
 import type { SettingsTab } from '../../stores/uiStore'
 import type { TranslationKey } from '../../i18n'
 import type { SlashCommandOption } from '../../types/slashCommand'
+import {
+  classifyContextSlash,
+  type ContextSlashClassification,
+  type ContextTriggerOptions,
+} from '../../features/managed-resources/integration/parserBridge'
 
 export type {
   SlashCommandKind,
@@ -447,3 +452,26 @@ export function insertSlashTrigger(
     cursorPos: before.length + token.length,
   }
 }
+
+/**
+ * U06 — context triggers (`/hh` `/ce` open the managed-resources picker, `/db`
+ * `/rd` report the local unavailability) resolved by the feature bridge.
+ *
+ * Nothing above this line changed: `findSlashTrigger` and the command menu keep
+ * the four existing commands and their behaviour for every input this does not
+ * own. The bridge answers `{ type: 'none' }` for those, which is the signal to
+ * fall back to the original parser.
+ */
+export function findContextSlash(
+  value: string,
+  cursorPos: number,
+  options: ContextTriggerOptions = {},
+): ContextSlashClassification {
+  return classifyContextSlash(value, cursorPos, options)
+}
+
+export type {
+  ContextSlashClassification,
+  ContextSlashTrigger,
+  ContextTriggerOptions,
+} from '../../features/managed-resources/integration/parserBridge'

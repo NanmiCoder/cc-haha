@@ -30,18 +30,24 @@ import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleWorkflowsApi } from './api/workflows.js'
+import { handleManagedContextApi } from './features/managedContext/api.js'
 
 import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, projectRemoteProvider, projectRemoteSettings, replaceRemoteCompatibility, validateRemoteSettingsPatch, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import { ProviderService } from './services/providerService.js'
 import type { SavedProvider } from './types/provider.js'
 import { remoteProviderNeedsCredentials } from './remoteProviderCredentials.js'
 
-export async function handleApiRequest(req: Request, url: URL, context: ApiRequestContext = {}): Promise<Response> {
-  if (!context.remoteBrowser) return routeApiRequest(req, url)
+// The socket peer is supplied by Bun.serve, never by forwarding headers.
+export type ApiRequestOptions = ApiRequestContext & { clientAddress?: string | null }
+
+export async function handleApiRequest(req: Request, url: URL, context: ApiRequestOptions = {}): Promise<Response> {
+  // Apply the same empty-segment normalization as routeApiRequest before authorizing.
+  if (context.remoteBrowser && url.pathname.split('/').filter(Boolean)[1] === 'context-tickets') return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
+  if (!context.remoteBrowser) return routeApiRequest(req, url, context)
   const parts = url.pathname.split('/').filter(Boolean)
   const isProvider = parts[1] === 'providers'
   const isSettings = parts[1] === 'settings'
-  if (!isProvider && !isSettings) return routeApiRequest(req, url)
+  if (!isProvider && !isSettings) return routeApiRequest(req, url, context)
   if ((isProvider && !remoteProviderRouteAllowed(parts, req.method)) || (isSettings && !remoteSettingsRouteAllowed(parts, req.method))) {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
@@ -73,7 +79,7 @@ export async function handleApiRequest(req: Request, url: URL, context: ApiReque
       }
       req = new Request(req.url, { method: req.method, headers: req.headers, body: JSON.stringify(input) })
     }
-    const response = await routeApiRequest(req, url)
+    const response = await routeApiRequest(req, url, context)
     if (!response.ok) return response
     const body = await response.json() as Record<string, unknown>
     if (isSettings && req.method === 'GET') return Response.json(projectRemoteSettings(body))
@@ -87,7 +93,7 @@ export async function handleApiRequest(req: Request, url: URL, context: ApiReque
   }
 }
 
-async function routeApiRequest(req: Request, url: URL): Promise<Response> {
+async function routeApiRequest(req: Request, url: URL, options: ApiRequestOptions): Promise<Response> {
   const path = url.pathname
   const segments = path.split('/').filter(Boolean) // ['api', 'sessions', ...]
 
@@ -194,6 +200,11 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
 
     case 'traces':
       return handleTracesApi(req, url, segments)
+
+    case 'context-tickets':
+      return handleManagedContextApi(req, url, segments, {
+        clientAddress: options.clientAddress ?? null,
+      })
 
     case 'filesystem':
       return handleFilesystemRoute(url.pathname, url)

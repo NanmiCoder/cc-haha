@@ -63,6 +63,15 @@ import {
 import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState } from '../../lib/sessionWorkspace'
 import { hasRunningSubagentTasks } from '../../lib/backgroundTasks'
+import {
+  managedContextAvailable,
+  useComposerContextEntry,
+} from '../../features/managed-resources/integration/composerIntegration'
+import {
+  adoptManagedContextSession,
+  hasManagedContextSelection,
+  prepareManagedContextSubmission,
+} from '../../features/managed-resources/integration/chatSubmission'
 
 type GitInfo = SessionGitInfo
 
@@ -289,6 +298,13 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const useCompactChrome = compact || isMobileComposer
   const fitsAtLeast = (minWidth: number) => shellWidth === null ? !compact : shellWidth >= minWidth
   const useCompactControls = isMobileComposer || !fitsAtLeast(TOOLBAR_LOCATION_MIN_WIDTH)
+  // U05: managed-resources context entry (Hosts/Concepts buttons + /hh /ce /db /rd).
+  const managedContext = useComposerContextEntry({
+    scope: 'session',
+    sessionId: activeTabId,
+    compact: useCompactControls,
+    enabled: managedContextAvailable(),
+  })
   const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
   const referenceCwd = activeLaunchWorkDir || resolvedWorkDir || ''
   const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}`
@@ -659,6 +675,12 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? text.length
     detectSlashTrigger(text, cursorPos)
     detectAtTrigger(text, cursorPos, nextMentions)
+    managedContext.syncTrigger({
+      value: text,
+      cursorPos,
+      composing: composingRef.current,
+      tokenRanges: findMentionRanges(text, nextMentions),
+    })
   }
 
   const selectSlashCommand = useCallback((command: string) => {
@@ -728,6 +750,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     disconnectSession(oldId)
     replaceTabSession(oldId, newId)
     connectToSession(newId)
+    // U07/M6-B: the composer's selection follows the replaced session id in one
+    // store update and is persisted for it before the first send. Guarded so the
+    // no-selection launch path keeps its original (synchronous) timeline.
+    if (hasManagedContextSelection()) await adoptManagedContextSession(newId)
     deleteSession(oldId).catch(() => {})
     return newId
   }, [activeTabId])
@@ -875,6 +901,12 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       }
     }
 
+    // U07/M6-B: the single prepare for all three send points below. Both branches
+    // send this exact snapshot, so a selection can never be prepared twice — and
+    // the queued branch stores it on the item instead of preparing at flush time.
+    const preparedContext = prepareManagedContextSubmission()
+    const contextSubmission = preparedContext ? { managedContext: preparedContext } : {}
+
     const targetChatState = useChatStore.getState().sessions[targetSessionId]?.chatState ?? 'idle'
     if (!isMemberSession && targetChatState !== 'idle') {
       queueUserMessage(targetSessionId, {
@@ -882,11 +914,13 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
         attachments: [...uploadAttachmentPayload, ...workspaceAttachmentPayload],
         displayContent,
         displayAttachments: visibleAttachmentPayload,
+        ...contextSubmission,
       })
     } else {
       sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
         displayContent,
         displayAttachments: visibleAttachmentPayload,
+        ...contextSubmission,
       })
     }
     invalidatePendingPastes()
@@ -912,6 +946,9 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   const handleComposerKeyDown = (event: KeyboardEvent): boolean => {
     // Ignore key events during IME composition (e.g. Chinese input method)
     if (composingRef.current || event.isComposing || event.keyCode === 229) return false
+
+    // A managed-context selection must not fall through to message sending.
+    if (managedContext.handleKeyDown(event)) return true
 
     // Route reference selection and directory navigation to the unified menu
     if (fileSearchOpen) {
@@ -1526,6 +1563,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                   }
                 />
               )}
+              {!isMemberSession && managedContext.node}
               {!isMemberSession && activeTabId && (
                 <ModelSelector
                   ref={modelSelectorRef}
