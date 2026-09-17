@@ -584,6 +584,7 @@ describe('ProviderService', () => {
           'gpt-5.6-terra': 353_400,
           'gpt-5.6-luna': 353_400,
           'gpt-5.3-codex': 258_400,
+          'gpt-5.3-codex-spark': 121_600,
           'gpt-5.4': 950_000,
           'gpt-5.5': 258_400,
           'gpt-5.4-mini': 258_400,

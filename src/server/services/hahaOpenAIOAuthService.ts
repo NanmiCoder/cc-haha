@@ -28,6 +28,7 @@ import {
   type OpenAITokenFetchOptions,
 } from '../../services/openaiAuth/client.js'
 import type { OpenAIOAuthTokenResponse } from '../../services/openaiAuth/types.js'
+import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
 import {
   getNetworkProxyUrl,
   loadNetworkSettings,
@@ -149,6 +150,7 @@ export class HahaOpenAIOAuthService {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
+    clearOpenAICodexModelCatalogCache()
   }
 
   async startSession(_input: { serverPort: number }): Promise<OpenAIOAuthSession> {
@@ -310,6 +312,7 @@ export class HahaOpenAIOAuthService {
       clientId: normalized.clientId ?? null,
     }
     await this.saveTokens(tokens)
+    clearOpenAICodexModelCatalogCache()
     return tokens
   }
 
