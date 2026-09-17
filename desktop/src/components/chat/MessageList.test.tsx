@@ -1724,7 +1724,7 @@ describe('MessageList nested tool calls', () => {
     expect(container.querySelector('[data-virtual-message-item]')).not.toBeNull()
   })
 
-  it('splits large virtualization spacers into content-visibility chunks', async () => {
+  it('splits large virtualization spacers and excludes them from scroll anchoring', async () => {
     const messages: UIMessage[] = Array.from({ length: 240 }, (_, index) => ({
       id: `assistant-${index}`,
       type: 'assistant_text',
@@ -1758,6 +1758,11 @@ describe('MessageList nested tool calls', () => {
     expect(topChunks.length).toBeGreaterThan(1)
     expect(bottomChunks.length).toBeGreaterThan(1)
 
+    const topSpacer = container.querySelector('[data-virtual-spacer="top"]') as HTMLElement
+    const bottomSpacer = container.querySelector('[data-virtual-spacer="bottom"]') as HTMLElement
+    expect(topSpacer.style.overflowAnchor).toBe('none')
+    expect(bottomSpacer.style.overflowAnchor).toBe('none')
+
     const firstTopChunk = topChunks[0] as HTMLElement
     expect(firstTopChunk.style.contentVisibility).toBe('auto')
     expect(firstTopChunk.style.containIntrinsicSize).toMatch(/^0 \d+px$/)
@@ -1768,6 +1773,18 @@ describe('MessageList nested tool calls', () => {
     for (const item of visibleItems) {
       expect((item as HTMLElement).style.contentVisibility).toBe('')
     }
+
+    // A spacer below the chunking threshold must carry the same guard. If the
+    // browser anchors to either shape, ResizeObserver corrections can move the
+    // virtual window and feed a continuous scroll toward older messages.
+    scrollArea.scrollTop = 1800
+    await act(async () => {
+      fireEvent.scroll(scrollArea)
+    })
+
+    const smallTopSpacer = container.querySelector('[data-virtual-spacer="top"]') as HTMLElement
+    expect(smallTopSpacer.querySelector('[data-virtual-spacer-chunk]')).toBeNull()
+    expect(smallTopSpacer.style.overflowAnchor).toBe('none')
   })
 
   it('renders sub-agent tool calls inline beneath the parent agent tool call', () => {
