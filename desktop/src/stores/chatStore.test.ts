@@ -187,6 +187,7 @@ function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState 
     messages: [],
     chatState: 'streaming',
     connectionState: 'connected',
+    hasReceivedSessionState: true,
     historyStatus: 'idle',
     historyHydrated: false,
     historyError: null,
@@ -5381,6 +5382,61 @@ describe('chatStore history mapping', () => {
     }))
     expect(messages).not.toContainEqual(expect.objectContaining({
       content: 'stale minimal reconnect row',
+    }))
+  })
+
+  it('replaces an initial cold history prefix after the first idle sync snapshot', async () => {
+    let resolveInitialHistory!: (value: { messages: MessageEntry[] }) => void
+    let resolveTerminalHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getMessages)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitialHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveTerminalHistory = resolve
+      }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    const onConnectionState = connectionStateHandlers.get(TEST_SESSION_ID)
+    onConnectionState?.('connected')
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'session_state',
+      turnState: 'idle',
+    })
+
+    resolveInitialHistory({
+      messages: [{
+        id: 'stale-initial-tail',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:00.000Z',
+        content: 'partial tail before the turn was persisted',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    resolveTerminalHistory({
+      messages: [{
+        id: 'durable-terminal-tail',
+        type: 'assistant',
+        timestamp: '2026-09-02T00:00:01.000Z',
+        content: 'complete durable tail after reconnect',
+      }],
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
+    })
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(messages).toContainEqual(expect.objectContaining({
+      content: 'complete durable tail after reconnect',
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({
+      content: 'partial tail before the turn was persisted',
     }))
   })
 
@@ -10937,6 +10993,46 @@ describe('chatStore history mapping', () => {
       code: 'STOP_BACKGROUND_TASK_FAILED',
       message: 'Task is not running',
     })
+  })
+
+  it('settles a stale running task when the CLI reports that it no longer exists', () => {
+    const existingMessage = {
+      id: 'existing-message',
+      type: 'assistant_text' as const,
+      content: 'Keep this message',
+      timestamp: 1,
+    }
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          messages: [existingMessage],
+          backgroundAgentTasks: {
+            'bash-task-stale': {
+              taskId: 'bash-task-stale',
+              taskType: 'local_bash',
+              status: 'running',
+              startedAt: 1,
+              updatedAt: 1,
+            },
+          },
+          stoppingBackgroundTaskIds: { 'bash-task-stale': true },
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'background_task_stop_failed',
+      taskId: 'bash-task-stale',
+      message: 'No task found with ID: bash-task-stale',
+      code: 'not_found',
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.stoppingBackgroundTaskIds).toEqual({})
+    expect(session?.backgroundAgentTasks?.['bash-task-stale']?.status).toBe('stopped')
+    expect(session?.messages).toEqual([existingMessage])
+    expect(updateTabStatusMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'idle')
   })
 
   it('does not surface a stop error when the task already finished naturally', () => {

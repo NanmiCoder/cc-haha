@@ -20,7 +20,10 @@ import {
   __resetDisconnectGraceMsForTests,
   __setDisconnectGraceMsForTests,
 } from '../ws/disconnectGraceConfig.js'
-import { conversationService } from '../services/conversationService.js'
+import {
+  ConversationControlError,
+  conversationService,
+} from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { sessionService } from '../services/sessionService.js'
 import * as titleService from '../services/titleService.js'
@@ -3862,6 +3865,52 @@ describe('WebSocket handler session isolation', () => {
     })
   })
 
+  it('settles a stale background task when the CLI says it no longer exists', async () => {
+    const sessionId = `stop-background-stale-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    let outputCallback: ((cliMsg: any) => void) | null = null
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallback = callback
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(conversationService, 'requestControl').mockRejectedValue(
+      new ConversationControlError('No task found with ID: stale-bash', 'not_found'),
+    )
+
+    handleWebSocket.open(ws)
+    outputCallback?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'stale-bash',
+      tool_use_id: 'stale-bash-tool',
+      task_type: 'local_bash',
+    })
+    ws.sent.length = 0
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'stop_background_task',
+      taskId: 'stale-bash',
+    }))
+    await flushMicrotasks()
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'background_task_stop_failed',
+      taskId: 'stale-bash',
+      message: 'No task found with ID: stale-bash',
+      code: 'not_found',
+    })
+
+    ws.sent.length = 0
+    handleWebSocket.message(ws, JSON.stringify({ type: 'sync_state' }))
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+  })
+
   it('rejects malformed background task ids without throwing from the async handler', async () => {
     const ws = makeClientSocket(`stop-background-invalid-${crypto.randomUUID()}`)
     const requestControl = spyOn(conversationService, 'requestControl').mockResolvedValue({})
@@ -4452,6 +4501,49 @@ describe('WebSocket handler session isolation', () => {
     }))
   })
 
+  it('persists a shell terminal event while every renderer is disconnected', async () => {
+    const sessionId = `shell-terminal-disconnect-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const outputCallbacks: Array<(cliMsg: any) => void> = []
+    spyOn(globalThis, 'setTimeout').mockImplementation(() => 789 as any)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.push(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    const append = spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+
+    handleWebSocket.open(ws)
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'shell-terminal-after-disconnect',
+      tool_use_id: 'shell-terminal-after-disconnect-tool',
+      description: 'Finish after refresh',
+      task_type: 'local_bash',
+    })
+
+    handleWebSocket.close(ws, 1006, 'renderer refreshed before shell completion')
+    outputCallbacks.at(-1)?.({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'shell-terminal-after-disconnect',
+      tool_use_id: 'shell-terminal-after-disconnect-tool',
+      task_type: 'local_bash',
+      status: 'completed',
+      summary: 'Finished while disconnected',
+    })
+    await flushMicrotasks()
+
+    expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      taskId: 'shell-terminal-after-disconnect',
+      toolUseId: 'shell-terminal-after-disconnect-tool',
+      status: 'completed',
+      summary: 'Finished while disconnected',
+    }))
+  })
+
   it('cancels an armed idle timer when a background task starts late', () => {
     const sessionId = `late-background-task-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId, 'pet')
@@ -4615,6 +4707,45 @@ describe('WebSocket handler session isolation', () => {
       turnState: 'idle',
       activeBackgroundTaskIds: [],
     })
+  })
+
+  it('broadcasts committed user input and replays it to a client joining mid-turn', async () => {
+    const sessionId = `multi-client-user-input-${crypto.randomUUID()}`
+    const first = makeClientSocket(sessionId)
+    const second = makeClientSocket(sessionId)
+    const third = makeClientSocket(sessionId)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    spyOn(conversationService, 'sendMessage').mockImplementation(
+      async (_sid, _content, _attachments, options) => {
+        options?.onCommitted?.()
+        return true
+      },
+    )
+
+    handleWebSocket.open(first)
+    handleWebSocket.open(second)
+    first.sent.length = 0
+    second.sent.length = 0
+
+    handleWebSocket.message(first, JSON.stringify({
+      type: 'user_message',
+      content: '同步到所有客户端',
+    }))
+    await flushMicrotasks(30)
+
+    const replay = {
+      type: 'user_message_replay',
+      content: '同步到所有客户端',
+    }
+    expect(first.sent.map((payload) => JSON.parse(payload))).toContainEqual(replay)
+    expect(second.sent.map((payload) => JSON.parse(payload))).toContainEqual(replay)
+
+    handleWebSocket.open(third)
+    expect(third.sent.map((payload) => JSON.parse(payload))).toContainEqual(replay)
   })
 
   it('terminates the desktop turn when user-message handling throws unexpectedly', async () => {

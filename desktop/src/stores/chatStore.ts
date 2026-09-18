@@ -127,6 +127,8 @@ export type PerSessionState = {
   connectionState: ConnectionState
   /** True after the server's authoritative reconnect snapshot has arrived. */
   connectionSnapshotReady?: boolean
+  /** Whether this renderer lifecycle has received an authoritative turn snapshot. */
+  hasReceivedSessionState?: boolean
   historyStatus?: 'idle' | 'loading' | 'ready' | 'error'
   /** True once durable transcript history has been applied for this lifecycle. */
   historyHydrated?: boolean
@@ -203,6 +205,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   isPreparingTurn: false,
   connectionState: 'disconnected',
   connectionSnapshotReady: false,
+  hasReceivedSessionState: false,
   historyStatus: 'idle',
   historyHydrated: false,
   historyError: null,
@@ -2176,6 +2179,7 @@ async function fetchAndMapSessionHistory(
 
 type HistoryLoadInFlight = {
   lifecycleGeneration: number
+  mode: 'normal' | 'terminal-reconnect'
   promise: Promise<void>
 }
 
@@ -2621,6 +2625,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           // were persisted while this renderer was offline. Keep the visible
           // cache, but require one lossless durable backfill for this lifecycle.
           historyHydrated: false,
+          hasReceivedSessionState: false,
           awaitingReconnectSync: false,
           preHydrationSocketGapPending: false,
           historyBootstrapDisabled: options?.minimalBootstrap === true,
@@ -3159,6 +3164,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const lifecycleGeneration = currentHistoryLifecycle(sessionId)
     const existingLoad = historyLoadsInFlight.get(sessionId)
     if (existingLoad?.lifecycleGeneration === lifecycleGeneration) {
+      if (
+        options?.mode === 'terminal-reconnect' &&
+        existingLoad.mode !== 'terminal-reconnect'
+      ) {
+        // A cold REST request may have started before sync_state established
+        // that the disconnected turn already ended. Let that useful offline
+        // request finish, then fetch once more so its pre-terminal snapshot
+        // cannot permanently hide the tail of the conversation.
+        await existingLoad.promise
+        if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return
+        return get().loadHistory(sessionId, options)
+      }
       return existingLoad.promise
     }
     if (existingLoad) historyLoadsInFlight.delete(sessionId)
@@ -3597,7 +3614,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     })()
 
-    historyLoadsInFlight.set(sessionId, { lifecycleGeneration, promise: load })
+    historyLoadsInFlight.set(sessionId, {
+      lifecycleGeneration,
+      mode: options?.mode ?? 'normal',
+      promise: load,
+    })
     return load
   },
 
@@ -4085,7 +4106,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       case 'session_state': {
         let session = get().sessions[sessionId]
         if (!session) break
+        const initialConnectionSnapshot = session.hasReceivedSessionState !== true
+        if (initialConnectionSnapshot) {
+          update(() => ({ hasReceivedSessionState: true }))
+          session = { ...session, hasReceivedSessionState: true }
+        }
         const automaticReconnectSnapshot = session.awaitingReconnectSync === true
+        if (
+          initialConnectionSnapshot &&
+          !automaticReconnectSnapshot &&
+          session.historyHydrated !== true
+        ) {
+          // The first REST request starts in parallel with the socket handshake
+          // and can therefore represent an older on-disk prefix. Freeze a
+          // dormant boundary before an idle sync_state activates terminal
+          // replacement; the first response is then rebased as stale baseline
+          // and the queued terminal request can replace it with the durable tail.
+          ensureTerminalReconnectHistoryBoundary(sessionId, session, {
+            activated: false,
+            preHydrationGap: true,
+          })
+        }
         const recoveredPreHydrationSocketGap =
           automaticReconnectSnapshot &&
           session.preHydrationSocketGapPending === true
@@ -4234,7 +4275,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               hasRunningBackgroundTasks(session.backgroundAgentTasks) ? 'running' : 'idle',
             )
           }
-          if (automaticReconnectSnapshot) {
+          if (automaticReconnectSnapshot || initialConnectionSnapshot) {
             // An idle reconnect snapshot is authoritative for everything that
             // predates it. Preserve only rows that arrive after the REST
             // request starts, including concurrent SubAgent progress.
@@ -5115,11 +5156,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
       }
 
-      case 'background_task_stop_failed':
+      case 'background_task_stop_failed': {
+        const taskAlreadySettled = msg.code === 'not_found' || msg.code === 'not_running'
         update((session) => {
           const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
           delete stoppingBackgroundTaskIds[msg.taskId]
           const task = session.backgroundAgentTasks?.[msg.taskId]
+          if (taskAlreadySettled && task?.status === 'running') {
+            return {
+              stoppingBackgroundTaskIds,
+              backgroundAgentTasks: {
+                ...session.backgroundAgentTasks,
+                [msg.taskId]: {
+                  ...task,
+                  status: 'stopped' as const,
+                  updatedAt: Date.now(),
+                },
+              },
+            }
+          }
           if (!task && session.historyStatus === 'loading') {
             return {
               stoppingBackgroundTaskIds,
@@ -5147,7 +5202,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }),
           }
         })
+        if (taskAlreadySettled) {
+          const tasks = get().sessions[sessionId]?.backgroundAgentTasks
+          useTabStore.getState().updateTabStatus(
+            sessionId,
+            hasRunningBackgroundTasks(tasks) ? 'running' : 'idle',
+          )
+        }
         break
+      }
 
       case 'team_created':
         useTeamStore.getState().handleTeamCreated(

@@ -133,7 +133,12 @@ export type ServerMessage =
   // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
-  | { type: 'background_task_stop_failed'; taskId: string; message: string }
+  | {
+      type: 'background_task_stop_failed'
+      taskId: string
+      message: string
+      code?: 'not_found' | 'not_running' | 'unsupported_type'
+    }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
   | { type: 'team_update'; teamName: string; members: TeamMemberStatus[]; incarnationId?: string; leadSessionId?: string; createdAt?: number }

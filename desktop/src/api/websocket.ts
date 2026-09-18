@@ -65,7 +65,6 @@ class WebSocketManager {
     this.emitConnectionState(conn, conn.state)
 
     ws.onopen = () => {
-      const isReconnect = conn.reconnectAttempt > 0
       conn.reconnectAttempt = 0
       this.emitConnectionState(conn, 'connected')
       this.startPingLoop(sessionId, conn)
@@ -73,12 +72,13 @@ class WebSocketManager {
         const msg = conn.pendingMessages.shift()!
         ws.send(JSON.stringify(msg))
       }
-      // Ask for authoritative turn state only on an automatic reconnect. This
-      // is deliberately queued after pending user messages so the server sees
-      // those turns before deciding whether the session is running or idle.
-      if (isReconnect) {
-        ws.send(JSON.stringify({ type: 'sync_state' } satisfies ClientMessage))
-      }
+      // Every renderer connection needs an authoritative snapshot. A full page
+      // refresh/app relaunch creates a fresh WebSocketManager, so restricting
+      // this to automatic reconnects leaves it unable to distinguish a live
+      // turn from transcript history that ended while the renderer was away.
+      // Keep it behind queued messages so the server observes those turns
+      // before deciding whether the session is running or idle.
+      ws.send(JSON.stringify({ type: 'sync_state' } satisfies ClientMessage))
     }
 
     ws.onmessage = (event) => {

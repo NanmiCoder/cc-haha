@@ -18,6 +18,7 @@ import type {
 import { RUNTIME_CONFIG_APPLIED_EVENT } from './events.js'
 import * as os from 'node:os'
 import {
+  ConversationControlError,
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
@@ -190,6 +191,7 @@ type RuntimeOverride = {
 
 type ActiveUserTurnState = {
   messageSent: boolean
+  replayContent?: string
   sendStarted?: boolean
   interruptBoundaryPending?: boolean
   replacementAfterStop?: boolean
@@ -604,6 +606,13 @@ export const handleWebSocket = {
 
     const msg: ServerMessage = { type: 'connected', sessionId }
     sendMessage(ws, msg)
+    const activeTurn = activeUserTurns.get(sessionId)
+    if (activeTurn?.messageSent && activeTurn.replayContent) {
+      sendMessage(ws, {
+        type: 'user_message_replay',
+        content: activeTurn.replayContent,
+      })
+    }
     const toolRequestIds = replayPendingPermissionRequests(ws, sessionId)
     const computerUseRequestIds = replayPendingComputerUsePermissionRequests(ws, sessionId)
     sendMessage(ws, {
@@ -791,6 +800,7 @@ async function handleUserMessage(
 ) {
   const persistTitleSource = sessionService.shouldPersistSession()
   const { sessionId } = ws.data
+  activeTurn.replayContent = message.content
 
   const desktopSlashCommand = getDesktopSlashCommand(message.content)
   if (desktopSlashCommand?.commandName === 'clear' && desktopSlashCommand.args.trim()) {
@@ -958,6 +968,12 @@ async function handleUserMessage(
       messageUuid: activeTurn.expectedReplayUuid,
       onCommitted: () => {
         activeTurn.messageSent = true
+        if (activeTurn.replayContent) {
+          sendToSession(sessionId, {
+            type: 'user_message_replay',
+            content: activeTurn.replayContent,
+          })
+        }
       },
     },
   )
@@ -1872,8 +1888,17 @@ async function requestStopBackgroundTask(
       task_id: taskId,
     })
   } catch (error) {
+    if (isAlreadySettledTaskControlError(error)) {
+      untrackCliBackgroundTask(sessionId, taskId)
+      scheduleDisconnectedSessionCleanupIfIdle(sessionId)
+    }
     reportBackgroundTaskStopFailure(sessionId, ws, taskId, error)
   }
+}
+
+function isAlreadySettledTaskControlError(error: unknown): boolean {
+  return error instanceof ConversationControlError &&
+    (error.code === 'not_found' || error.code === 'not_running')
 }
 
 const AGENT_STOP_CONTROL_TIMEOUT_MS = 3_000
@@ -1931,7 +1956,11 @@ async function requestStopTrackedAgentTask(
 
   const latest = activeAgentTasks.get(sessionId)?.get(current.taskId)
   if (latest !== current) return
-  if (controlError === undefined || !conversationService.hasSession(sessionId)) {
+  if (
+    controlError === undefined ||
+    !conversationService.hasSession(sessionId) ||
+    isAlreadySettledTaskControlError(controlError)
+  ) {
     current.localStopConfirmed = true
   }
 
@@ -2016,6 +2045,12 @@ function reportBackgroundTaskStopFailure(
     type: 'background_task_stop_failed',
     taskId,
     message,
+    ...(error instanceof ConversationControlError &&
+        (error.code === 'not_found' ||
+          error.code === 'not_running' ||
+          error.code === 'unsupported_type')
+      ? { code: error.code }
+      : {}),
   }
   if (ws && activeSessions.get(sessionId)?.has(ws)) {
     sendMessage(ws, payload)
@@ -3633,6 +3668,10 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
   cancelSessionDisconnectWatcher(sessionId)
 
   const onComplete = (cliMsg: any) => {
+    // With no renderer callbacks left, terminal task events still have to
+    // reach durable history. Otherwise a later cold start reconstructs the
+    // launch row as running forever and Stop can only report "not found".
+    void persistCliTaskNotification(sessionId, cliMsg)
     const cliRunState = trackCliRunState(sessionId, cliMsg)
     const taskLifecycle = trackCliBackgroundTaskLifecycle(sessionId, cliMsg)
     stopLateAgentTaskIfRequested(sessionId, taskLifecycle)

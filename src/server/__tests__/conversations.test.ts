@@ -14,6 +14,7 @@ import { withResolvers } from '../../utils/withResolvers.js'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
+  ConversationControlError,
   ConversationService,
   ConversationStartupError,
   MAX_CAPTURED_SDK_MESSAGE_BYTES,
@@ -149,6 +150,60 @@ describe('ConversationService', () => {
     }
 
     await expect(request).resolves.toEqual({ ok: true })
+  })
+
+  it('should classify stale stop-task responses from the CLI', async () => {
+    const svc = new ConversationService()
+    const sid = crypto.randomUUID()
+    const sent: unknown[] = []
+    const session: any = {
+      proc: { kill() {}, exited: Promise.resolve(0) },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      outputDrain: Promise.resolve(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    }
+    ;(svc as any).sessions.set(sid, session)
+
+    const request = svc.requestControl(sid, { subtype: 'stop_task' }, 1_000)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const requestId = (sent[0] as any).request_id
+    for (const callback of [...session.outputCallbacks]) {
+      callback({
+        type: 'control_response',
+        response: {
+          subtype: 'error',
+          request_id: requestId,
+          error: 'No task found with ID: stale-task',
+        },
+      })
+    }
+
+    let caught: unknown
+    try {
+      await request
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(ConversationControlError)
+    expect(caught).toMatchObject({
+      message: 'No task found with ID: stale-task',
+      code: 'not_found',
+    })
   })
 
   it('should remove a pending control callback when the HTTP request is aborted', async () => {

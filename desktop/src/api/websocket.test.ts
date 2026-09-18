@@ -87,8 +87,12 @@ describe('wsManager reconnect buffering', () => {
     expect(firstSocket?.url).toContain('/ws/session-reconnect')
 
     firstSocket!.open()
+    expect(firstSocket!.sent).toEqual([
+      JSON.stringify({ type: 'sync_state' }),
+    ])
     wsManager.send('session-reconnect', { type: 'user_message', content: 'first' })
     expect(firstSocket!.sent).toEqual([
+      JSON.stringify({ type: 'sync_state' }),
       JSON.stringify({ type: 'user_message', content: 'first' }),
     ])
 

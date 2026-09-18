@@ -273,6 +273,32 @@ export class ConversationStartupError extends Error {
   }
 }
 
+export type ConversationControlErrorCode =
+  | 'not_found'
+  | 'not_running'
+  | 'unsupported_type'
+
+export class ConversationControlError extends Error {
+  constructor(
+    message: string,
+    readonly code?: ConversationControlErrorCode,
+  ) {
+    super(message)
+    this.name = 'ConversationControlError'
+  }
+}
+
+function classifyControlError(
+  request: Record<string, unknown>,
+  message: string,
+): ConversationControlErrorCode | undefined {
+  if (request.subtype !== 'stop_task') return undefined
+  if (message.startsWith('No task found with ID:')) return 'not_found'
+  if (/^Task .+ is not running \(status: .+\)$/.test(message)) return 'not_running'
+  if (message.startsWith('Unsupported task type:')) return 'unsupported_type'
+  return undefined
+}
+
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private deletedSessions = new Set<string>()
@@ -916,7 +942,11 @@ export class ConversationService {
         }
 
         if (msg.response.subtype === 'error') {
-          finish(() => reject(new Error(String(msg.response.error || 'Control request failed'))))
+          const message = String(msg.response.error || 'Control request failed')
+          finish(() => reject(new ConversationControlError(
+            message,
+            classifyControlError(request, message),
+          )))
           return
         }
 
