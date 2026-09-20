@@ -1,4 +1,12 @@
-// Lock file whose mtime IS lastConsolidatedAt. Body is the holder's PID.
+// Mutex lock (.consolidate-lock, body = holder PID) plus a success stamp
+// (.consolidate-last) whose mtime IS lastConsolidatedAt.
+//
+// Split into two files so an interrupted run cannot postpone the next one:
+// when the client dies mid-dream the process never reaches the rollback
+// path, and while the lock mtime used to double as lastConsolidatedAt the
+// fresh acquire timestamp silently delayed the next trigger by minHours
+// (issue #1349). The lock mtime now only serves the mutex/stale-holder
+// logic; the time gate reads the success stamp.
 //
 // Lives inside the memory dir (getAutoMemPath) so it keys on git-root
 // like memory does, and so it's writable even when the memory path comes
@@ -14,6 +22,7 @@ import { listCandidates } from '../../utils/listSessionsImpl.js'
 import { getProjectDir } from '../../utils/sessionStorage.js'
 
 const LOCK_FILE = '.consolidate-lock'
+const LAST_FILE = '.consolidate-last'
 
 // Stale past this even if the PID is live (PID reuse guard).
 const HOLDER_STALE_MS = 60 * 60 * 1000
@@ -22,13 +31,40 @@ function lockPath(): string {
   return join(getAutoMemPath(), LOCK_FILE)
 }
 
+function lastPath(): string {
+  return join(getAutoMemPath(), LAST_FILE)
+}
+
 /**
- * mtime of the lock file = lastConsolidatedAt. 0 if absent.
- * Per-turn cost: one stat.
+ * mtime of the success stamp = lastConsolidatedAt. 0 if absent.
+ *
+ * Falls back to the lock mtime while no stamp exists yet, so installs
+ * from before the split keep their existing schedule; the first fallback
+ * read freezes the legacy mtime into the stamp so a later interrupted
+ * acquire cannot postpone the gate.
+ *
+ * Per-turn cost: one stat (two on the pre-split fallback path).
  */
 export async function readLastConsolidatedAt(): Promise<number> {
   try {
+    const s = await stat(lastPath())
+    return s.mtimeMs
+  } catch {
+    // No success stamp yet — fall through to the legacy lock mtime.
+  }
+  try {
     const s = await stat(lockPath())
+    // One-time migration for pre-split installs: freeze the legacy mtime
+    // into the stamp so a later acquire (which refreshes the lock mtime)
+    // followed by a crash cannot postpone the gate. Best-effort — if the
+    // write fails we still return the legacy value and retry next read.
+    try {
+      await writeFile(lastPath(), String(process.pid))
+      const t = s.mtimeMs / 1000
+      await utimes(lastPath(), t, t)
+    } catch {
+      // Keep the fallback value; migration retries on the next read.
+    }
     return s.mtimeMs
   } catch {
     return 0
@@ -124,14 +160,15 @@ export async function listSessionsTouchedSince(
 }
 
 /**
- * Stamp from manual /dream. Optimistic — fires at prompt-build time,
- * no post-skill completion hook. Best-effort.
+ * Stamp a completed consolidation (auto-dream success or manual /dream).
+ * Writes the success stamp whose mtime is lastConsolidatedAt. Optimistic —
+ * fires when the run completes, best-effort.
  */
 export async function recordConsolidation(): Promise<void> {
   try {
     // Memory dir may not exist yet (manual /dream before any auto-trigger).
     await mkdir(getAutoMemPath(), { recursive: true })
-    await writeFile(lockPath(), String(process.pid))
+    await writeFile(lastPath(), String(process.pid))
   } catch (e: unknown) {
     logForDebugging(
       `[autoDream] recordConsolidation write failed: ${(e as Error).message}`,

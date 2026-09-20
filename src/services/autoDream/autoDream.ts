@@ -40,6 +40,7 @@ import {
   listSessionsTouchedSince,
   tryAcquireConsolidationLock,
   rollbackConsolidationLock,
+  recordConsolidation,
 } from './consolidationLock.js'
 import {
   registerDreamTask,
@@ -233,6 +234,9 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
       })
 
       completeDreamTask(taskId, setAppState)
+      // Stamp success: the time gate keys on this, so an interrupted run
+      // (which never gets here) no longer postpones the next trigger.
+      await recordConsolidation()
       // Inline completion summary in the main transcript (same surface as
       // extractMemories's "Saved N memories" message).
       const dreamState = context.toolUseContext.getAppState().tasks?.[taskId]
