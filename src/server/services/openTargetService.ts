@@ -143,6 +143,26 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     },
   },
   {
+    id: 'zed',
+    kind: 'ide',
+    label: 'Zed',
+    icon: 'zed',
+    platforms: ['darwin', 'win32', 'linux'],
+    commands: {
+      darwin: ['zed'],
+      win32: ['zed.cmd', 'zed.exe'],
+      linux: ['zed'],
+    },
+    windowsExecutableNames: ['zed.exe'],
+    appPaths: {
+      darwin: ['/Applications/Zed.app', posixPath.join(homedir(), 'Applications', 'Zed.app')],
+      win32: [
+        join(homedir(), 'AppData', 'Local', 'Programs', 'Zed', 'zed.exe'),
+        join(homedir(), 'AppData', 'Local', 'Zed', 'zed.exe'),
+      ],
+    },
+  },
+  {
     id: 'sublime',
     kind: 'ide',
     label: 'Sublime Text',

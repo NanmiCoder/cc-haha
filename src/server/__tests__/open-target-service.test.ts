@@ -167,6 +167,53 @@ describe('openTargetService', () => {
     expect(result.primaryTargetId).toBe('finder')
   })
 
+  it('detects Zed on each platform from the app or command', async () => {
+    const mac = createService('darwin', {
+      paths: { '/Applications/Zed.app': true },
+    })
+    expect((await mac.service.listTargets()).targets.map((target) => target.id))
+      .toContain('zed')
+
+    const commandPath = 'C:\\Users\\me\\AppData\\Local\\Programs\\Zed\\bin\\zed.cmd'
+    const executablePath = 'C:\\Users\\me\\AppData\\Local\\Programs\\Zed\\zed.exe'
+    const windows = createService('win32', {
+      commandPaths: { 'zed.cmd': commandPath },
+      paths: { [executablePath]: true },
+    })
+    expect((await windows.service.listTargets()).targets.map((target) => target.id))
+      .toContain('zed')
+
+    const linux = createService('linux', { commands: { zed: true } })
+    expect((await linux.service.listTargets()).targets.map((target) => target.id))
+      .toContain('zed')
+  })
+
+  it('launches Zed with the resolved target on each platform', async () => {
+    const dir = await makeDir()
+    const mac = createService('darwin', {
+      paths: { '/Applications/Zed.app': true },
+    })
+    const linux = createService('linux', { commands: { zed: true } })
+    const commandPath = 'C:\\Users\\me\\AppData\\Local\\Programs\\Zed\\bin\\zed.cmd'
+    const executablePath = 'C:\\Users\\me\\AppData\\Local\\Programs\\Zed\\zed.exe'
+    const windows = createService('win32', {
+      commandPaths: { 'zed.cmd': commandPath },
+      paths: { [executablePath]: true },
+    })
+
+    try {
+      await mac.service.openTarget({ targetId: 'zed', path: dir })
+      await linux.service.openTarget({ targetId: 'zed', path: dir })
+      await windows.service.openTarget({ targetId: 'zed', path: dir })
+
+      expect(mac.launched).toEqual([{ command: 'open', args: ['-a', '/Applications/Zed.app', dir] }])
+      expect(linux.launched).toEqual([{ command: 'zed', args: [dir] }])
+      expect(windows.launched).toEqual([{ command: executablePath, args: [dir] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('falls back to Explorer when no Windows IDE is detected', async () => {
     const { service } = createService('win32')
 
