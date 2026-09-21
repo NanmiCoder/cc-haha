@@ -2,7 +2,7 @@
 @plugin "@tailwindcss/typography";
 
 /* ─── Dark variant binding ────────────────────────────────────────
-   The app has six themes switched via `<html data-theme>`. Following the OS
+   The app has eight themes switched via `<html data-theme>`. Following the OS
    is resolved in JS (src/theme/systemAppearance.ts) and lands on that same
    attribute, so `data-theme` stays the single source of truth here. Without
    this binding, Tailwind's default `dark:` compiles to
@@ -10,10 +10,10 @@
    accident for someone following the system, plainly wrong for anyone on a
    fixed palette.
 
-   Two of the six sit on a dark ground — `dark` and `ink-blue` — so both are
+   Three themes sit on a dark ground — `dark`, `deep-night`, and `ink-blue` — so all are
    listed. Binding only `dark` is how a `dark:` utility would silently render
    its light branch on ink-blue. */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *));
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="deep-night"], [data-theme="deep-night"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *));
 
 /* ─── Self-hosted fonts (no Google CDN dependency) ────────────── */
 
@@ -602,6 +602,7 @@
 }
 
 [data-theme="dark"],
+[data-theme="deep-night"],
 [data-theme="ink-blue"] {
   --color-terminal-ansi-black: #1F1F1F;
   --color-terminal-ansi-red: #FF6D67;
@@ -809,6 +810,101 @@
   --cc-ac-rgb: 150, 68, 43;
   --cc-er-rgb: 199, 68, 54;
   --cc-scrim-rgb: 19, 17, 14;
+}
+
+/* 釉白 glaze-white — porcelain-gray chrome, gently lifting into white */
+[data-theme="glaze-white"] {
+  color-scheme: light;
+
+  --cc-bg: #F9F9F9;
+  --cc-s0: #E0E0E0;
+  --cc-s1: #E2E2E2;
+  --cc-s2: #FDFDFD;
+  --cc-bd: #D7D7D7;
+  --cc-bd2: #BEBEBE;
+  --cc-bd-strong: #747474;
+  --cc-tab-edge: #C3C3C3;
+  --cc-tab-sep: #CFCFCF;
+  --cc-t1: #242424;
+  --cc-t2: #606060;
+  --cc-t3: #707070;
+
+  --cc-ac: #4A4A4A;
+  --cc-ac2: #2F2F2F;
+  --cc-ac-soft: #E7E7E7;
+  --cc-ac-soft-hover: #DDDDDD;
+  --cc-ac-border: #BDBDBD;
+  --cc-ac-ink: #333333;
+  --cc-on-ac: #FFFFFF;
+
+  /* Theme-only surfaces. The semantic layer reads them with fallbacks so the
+     other palettes remain unchanged. */
+  --cc-sidebar-bg-image: linear-gradient(180deg, #E0E0E0 0%, #F7F7F7 100%);
+  --cc-sidebar-active: #F7F7F7;
+
+  --cc-ok: #2C7A58;
+  --cc-ok-soft: #E4F3EB;
+  --cc-ok-ink: #216242;
+  --cc-wn: #986600;
+  --cc-wn-soft: #FFF4D6;
+  --cc-wn-ink: #785100;
+  --cc-er: #C23B58;
+  --cc-er-soft: #FBE9ED;
+  --cc-er-soft-hover: #F7DDE4;
+  --cc-er-ink: #9E2D47;
+  --cc-info: #2C5F8E;
+  --cc-info-soft: #E6F0F7;
+  --cc-info-ink: #285276;
+
+  --cc-teal: #19726B;
+  --cc-teal-soft: #E4F3F1;
+  --cc-teal-border: #B9DCD7;
+  --cc-teal-icon: #DDF0ED;
+
+  --cc-diff-add: #E5F4EB;
+  --cc-diff-add-gutter: #D6ECDD;
+  --cc-diff-add-word: #DDF0E4;
+  --cc-diff-del: #FBE9ED;
+  --cc-diff-del-gutter: #F5DCE3;
+  --cc-diff-del-word: #F1CCD6;
+  --cc-diff-mark: #ECECEC;
+  --cc-diff-mark-gutter: #DFDFDF;
+  --cc-code: #F3F3F3;
+
+  --cc-heat-0: #EEEEEE;
+  --cc-heat-1: #D8D8D8;
+  --cc-heat-2: #BFBFBF;
+  --cc-heat-3: #979797;
+  --cc-heat-4: #666666;
+
+  --cc-shadow-card: 0 1px 3px rgba(32, 32, 32, 0.05), 0 8px 28px rgba(32, 32, 32, 0.08);
+  --cc-shadow-composer: 0 1px 2px rgba(32, 32, 32, 0.05), 0 8px 24px rgba(32, 32, 32, 0.07);
+  --cc-shadow-overlay: 0 12px 30px rgba(32, 32, 32, 0.12), 0 28px 70px rgba(32, 32, 32, 0.16);
+
+  --cc-bg-rgb: 249, 249, 249;
+  --cc-s1-rgb: 238, 238, 238;
+  --cc-t1-rgb: 36, 36, 36;
+  --cc-t2-rgb: 96, 96, 96;
+  --cc-bd2-rgb: 190, 190, 190;
+  --cc-ac-rgb: 74, 74, 74;
+  --cc-er-rgb: 194, 59, 88;
+  --cc-scrim-rgb: 20, 22, 34;
+}
+
+/* Keep the page and conversation rail as two independent gradients. Session
+   hover is a cool two-step mask; selection is a white-edged capsule with a
+   deliberately lower, #CCCCCC-based shadow. */
+[data-theme="glaze-white"] #content-area {
+  background-image: linear-gradient(180deg, #F9F9F9 0%, #FDFDFD 100%);
+}
+
+[data-theme="glaze-white"] .sidebar-session-row--idle:hover {
+  background-image: linear-gradient(180deg, #EDEDED 0%, #EDEDED 50%, #E2E2E2 100%);
+}
+
+[data-theme="glaze-white"] .sidebar-session-row--selected,
+[data-theme="glaze-white"] .sidebar-session-row--active {
+  box-shadow: 0 0 0 1px #FFFFFF, 0 10px 26px rgba(204, 204, 204, 0.76);
 }
 
 /* 纸墨 paper */
@@ -1117,6 +1213,90 @@
   --cc-scrim-rgb: 6, 6, 6;
 }
 
+/* 夜凝 deep-night — graphite sidebar, charcoal workspace, restrained light */
+[data-theme="deep-night"] {
+  color-scheme: dark;
+
+  /* The workspace recedes behind the conversation rail, rather than treating
+     both panes as one black slab. */
+  --cc-bg: #202020;
+  --cc-s0: #363636;
+  --cc-s1: #404040;
+  --cc-s2: #2A2A2A;
+  --cc-bd: #484848;
+  --cc-bd2: #686868;
+  --cc-bd-strong: #888888;
+  --cc-tab-edge: #525252;
+  --cc-tab-sep: #414141;
+  --cc-t1: #F2F2F2;
+  --cc-t2: #C2C2C2;
+  --cc-t3: #9A9A9A;
+
+  --cc-ac: #D8D8D8;
+  --cc-ac2: #F2F2F2;
+  --cc-ac-soft: #474747;
+  --cc-ac-soft-hover: #535353;
+  --cc-ac-border: #787878;
+  --cc-ac-ink: #FFFFFF;
+  --cc-on-ac: #202020;
+
+  --cc-ok: #89CCA7;
+  --cc-ok-soft: #284036;
+  --cc-ok-ink: #9FE2BD;
+  --cc-wn: #E7C878;
+  --cc-wn-soft: #4A3E21;
+  --cc-wn-ink: #F6DB91;
+  --cc-er: #F08B9C;
+  --cc-er-soft: #4A2B32;
+  --cc-er-soft-hover: #5D333D;
+  --cc-er-ink: #FFA8B5;
+  --cc-info: #B9CEF5;
+  --cc-info-soft: #2D384B;
+  --cc-info-ink: #D0E0FF;
+
+  --cc-teal: #80D2C7;
+  --cc-teal-soft: #1E3E3B;
+  --cc-teal-border: #3C625E;
+  --cc-teal-icon: #294E49;
+
+  --cc-diff-add: #254033;
+  --cc-diff-add-gutter: #315343;
+  --cc-diff-add-word: #2B493A;
+  --cc-diff-del: #492D34;
+  --cc-diff-del-gutter: #5B3640;
+  --cc-diff-del-word: #683E49;
+  --cc-diff-mark: #3C3C3C;
+  --cc-diff-mark-gutter: #4A4A4A;
+  --cc-code: #292929;
+
+  --cc-heat-0: #404040;
+  --cc-heat-1: #585858;
+  --cc-heat-2: #777777;
+  --cc-heat-3: #A0A0A0;
+  --cc-heat-4: #D2D2D2;
+
+  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.42), 0 8px 28px rgba(0, 0, 0, 0.46);
+  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.52), 0 14px 44px rgba(0, 0, 0, 0.58);
+  --cc-shadow-overlay: 0 12px 30px rgba(0, 0, 0, 0.62), 0 28px 70px rgba(0, 0, 0, 0.68);
+
+  --cc-bg-rgb: 32, 32, 32;
+  --cc-s1-rgb: 64, 64, 64;
+  --cc-t1-rgb: 242, 242, 242;
+  --cc-t2-rgb: 194, 194, 194;
+  --cc-bd2-rgb: 104, 104, 104;
+  --cc-ac-rgb: 216, 216, 216;
+  --cc-er-rgb: 240, 139, 156;
+  --cc-scrim-rgb: 0, 0, 0;
+}
+
+/* The selected conversation remains #202020 against its #363636 rail. A
+   one-pixel white rim seeds a soft 36px halo, keeping the highlight close to
+   the capsule instead of reading as a rectangular panel shadow. */
+[data-theme="deep-night"] .sidebar-session-row--selected,
+[data-theme="deep-night"] .sidebar-session-row--active {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.38), 0 0 36px rgba(255, 255, 255, 0.18);
+}
+
 /* 墨夜蓝 ink-blue */
 [data-theme="ink-blue"] {
   color-scheme: dark;
@@ -1346,9 +1526,9 @@
   --color-sidebar-search-bg: var(--cc-bg);
   --color-sidebar-search-border: var(--cc-bd);
   --color-sidebar-item-hover: var(--cc-s1);
-  --color-sidebar-item-active: var(--cc-bg);
+  --color-sidebar-item-active: var(--cc-sidebar-active, var(--cc-bg));
   --color-sidebar-item-active-border: var(--cc-bd);
-  --sidebar-panel-bg-image: none;
+  --sidebar-panel-bg-image: var(--cc-sidebar-bg-image, none);
 
   /* Activity heatmap */
   --color-activity-heat-0: var(--cc-heat-0);
@@ -1513,6 +1693,7 @@
 
 /* Ink themes: lift the syntax ramp off the paper values. */
 [data-theme="dark"],
+[data-theme="deep-night"],
 [data-theme="ink-blue"] {
   --color-file-typescript-container: #203B55;
   --color-on-file-typescript-container: #92CAF7;

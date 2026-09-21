@@ -284,10 +284,12 @@ export function GeneralSettings() {
 
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
     { value: 'white', label: t('settings.general.appearance.white') },
+    { value: 'glaze-white', label: t('settings.general.appearance.glazeWhite') },
     { value: 'paper', label: t('settings.general.appearance.paper') },
     { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') },
     { value: 'celadon', label: t('settings.general.appearance.celadon') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
+    { value: 'deep-night', label: t('settings.general.appearance.deepNight') },
     { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
   ]
   // Split by ground, in the order THEMES already lists them, so the two rows
