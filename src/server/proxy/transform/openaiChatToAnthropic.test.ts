@@ -28,3 +28,13 @@ describe('Chat non-streaming response integrity', () => {
     expect(result.content.some(block => block.type === 'tool_use')).toBe(false)
   })
 })
+
+// Issue #1327: zero-valued compatibility cache fields must not hide OpenAI usage.
+for (const direct of [{ cache_creation_input_tokens: 0 }, { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }]) {
+  test(`nested prompt cache survives zero direct fields ${JSON.stringify(direct)}`, () => {
+    const upstream = response({}, 'stop')
+    upstream.choices[0].message.tool_calls = undefined
+    upstream.usage = { prompt_tokens: 149293, completion_tokens: 551, prompt_tokens_details: { cached_tokens: 147840 }, ...direct }
+    expect(openaiChatToAnthropic(upstream, 'fixture').usage).toEqual({ input_tokens: 1453, output_tokens: 551, cache_read_input_tokens: 147840 })
+  })
+}

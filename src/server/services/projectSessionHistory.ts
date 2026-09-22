@@ -11,6 +11,11 @@ export type ProjectHistoryOptions = {
   beforeId?: string
 }
 export type ProjectHistoryPage = { sessions: SessionListItem[]; nextCursor: string | null }
+export type ProjectSessionPreviews = {
+  sessions: SessionListItem[]
+  projects: Array<{ projectRoot: string; total: number }>
+  total: number
+}
 export type ProjectHistoryRow = IndexedSessionRow & { logicalProjectRoot: string }
 type Snapshot = { scope: string; root: string; expiresAt: number; rows: ProjectHistoryRow[] }
 
@@ -104,6 +109,63 @@ export class ProjectSessionHistory {
       }
     }
     throw new ApiError(409, 'Project history changed during loading; retry from the first page', 'PROJECT_HISTORY_CHANGED')
+  }
+
+  /** Return only the newest rows needed to paint each sidebar project group. */
+  async listPreviews(requestedLimit = 6): Promise<ProjectSessionPreviews> {
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit <= 0) {
+      throw ApiError.badRequest('Invalid per-project limit')
+    }
+    const limit = Math.min(20, requestedLimit)
+    const scope = this.source.scope()
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const mutation = this.source.mutation()
+      const catalog = await this.loadCatalog()
+      if (scope !== this.source.scope()) throw this.expired()
+
+      const grouped = new Map<string, { total: number; rows: ProjectHistoryRow[]; seen: Set<string> }>()
+      for (const row of catalog) {
+        let project = grouped.get(row.logicalProjectRoot)
+        if (!project) {
+          project = { total: 0, rows: [], seen: new Set() }
+          grouped.set(row.logicalProjectRoot, project)
+        }
+        if (project.seen.has(row.id)) continue
+        project.seen.add(row.id)
+        project.total += 1
+        // Keep a bounded fallback tail so a handful of stale index rows do not
+        // leave an otherwise healthy project preview empty.
+        if (project.rows.length < limit * 2) project.rows.push(row)
+      }
+
+      const sessions: SessionListItem[] = []
+      for (const project of grouped.values()) {
+        let hydrated = 0
+        for (const row of project.rows) {
+          const session = await this.source.hydrate(row)
+          if (session) {
+            sessions.push(session)
+            hydrated += 1
+          }
+          if (hydrated >= limit) break
+        }
+      }
+      if (mutation !== this.source.mutation()) continue
+      if (scope !== this.source.scope()) throw this.expired()
+
+      sessions.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt) || a.id.localeCompare(b.id))
+      const projects = [...grouped.entries()].map(([projectRoot, project]) => ({
+        projectRoot,
+        total: project.total,
+      }))
+      return {
+        sessions,
+        projects,
+        total: projects.reduce((sum, project) => sum + project.total, 0),
+      }
+    }
+    throw new ApiError(409, 'Project history changed during loading; retry', 'PROJECT_HISTORY_CHANGED')
   }
 
   private async loadCatalog(): Promise<ProjectHistoryRow[]> {

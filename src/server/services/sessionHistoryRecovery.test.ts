@@ -40,6 +40,9 @@ test('recovery retains goal and todo evidence outside the visible tail, includin
   const page = await service.getSessionHistoryPage(id)
   expect(page.page.hasMore).toBe(true)
   expect(page.page.scannedBytes).toBeLessThanOrEqual(HISTORY_SCAN_BYTES)
+  const referenced = await service.getSessionHistoryPage(id, { projectContext: false })
+  expect(referenced.page.contextScanBytes).toBe(0)
+  expect(referenced.messages.map(message => message.id)).toEqual(page.messages.map(message => message.id))
   expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(2 * 1024 * 1024)
   expect(page.messages.every(message => message.id.startsWith('body-'))).toBe(true)
   const recovery = await service.getSessionHistoryRecovery(id)
@@ -136,17 +139,23 @@ test('recovery resolves sidechain ancestry through Agent calls without attaching
 })
 
 
-test('a multi-megabyte foreground tool output preserves all small-session messages and does not degrade recovery', async () => {
+test('a multi-megabyte foreground tool output preserves complete paged messages and does not degrade recovery', async () => {
   await writeFile(file, [
     entry('assistant', 'call', [{ type: 'tool_use', id: 'bash', name: 'Bash', input: { command: 'cat large-log' } }]),
     entry('user', 'result', [{ type: 'tool_result', tool_use_id: 'bash', content: 'x'.repeat(4 * 1024 * 1024) }]),
     ...Array.from({ length: 158 }, (_, index) => entry('assistant', `reply-${index}`, 'ok')),
   ].map(value => JSON.stringify(value)).join('\n') + '\n')
-  const page = await service.getSessionHistoryPage(id)
-  expect(page.messages).toHaveLength(160)
-  expect(page.messages.find(message => message.id === 'result')?.bodyTruncated).toBe(true)
-  expect(page.page.nextCursor).toBeNull()
-  expect(page.page.omittedOversizedEntries).toBe(0)
+  const latest = await service.getSessionHistoryPage(id)
+  expect(latest.messages).toHaveLength(158)
+  const large = await service.getSessionHistoryPage(id, { cursor: latest.page.nextCursor! })
+  expect(large.messages).toHaveLength(1)
+  expect(large.messages[0]).toMatchObject({ id: 'result', content: [{ type: 'tool_result', tool_use_id: 'bash', content: 'x'.repeat(4 * 1024 * 1024) }] })
+  expect(large.messages[0]?.bodyTruncated).toBeUndefined()
+  expect(large.page.omittedOversizedEntries).toBe(0)
+  const oldest = await service.getSessionHistoryPage(id, { cursor: large.page.nextCursor! })
+  expect(oldest.messages.map(message => message.id)).toEqual(['call'])
+  expect(oldest.page.nextCursor).toBeNull()
+  expect([...oldest.messages, ...large.messages, ...latest.messages]).toHaveLength(160)
   const recovery = await service.getSessionHistoryRecovery(id)
   expect(recovery.status).toBe('ready')
   expect(recovery.omittedRecords).toBe(0)

@@ -128,6 +128,22 @@ describe('goalState', () => {
     expect(cleared).toBeNull()
   })
 
+  test('does not resurrect a cleared goal from an in-flight turn transcript (#1339)', () => {
+    const { appState, context } = hookContext()
+    const transcript = [
+      createCommandInputMessage('<local-command-stdout>Goal set: ship it</local-command-stdout>'),
+    ]
+    setThreadGoalHook(context, 'thread-cleared-in-flight', 'ship it')
+    clearThreadGoalHook(context, 'thread-cleared-in-flight')
+
+    expect(ensureThreadGoalHookFromTranscript(context, 'thread-cleared-in-flight', transcript)).toBeNull()
+    expect(appState.sessionHooks.get('thread-cleared-in-flight')?.hooks.Stop).toBeUndefined()
+
+    setThreadGoalHook(context, 'thread-cleared-in-flight', 'new goal')
+    expect(getThreadGoal('thread-cleared-in-flight')?.objective).toBe('new goal')
+    clearThreadGoalHook(context, 'thread-cleared-in-flight')
+  })
+
   test('identifies standalone goal local command output for SDK forwarding', () => {
     expect(
       isGoalLocalCommandOutputContent(

@@ -396,13 +396,22 @@ export async function discoverActivityTranscriptSources(
   return { complete, candidates }
 }
 
+/**
+ * The public state describes whether a committed snapshot can be served, not
+ * whether a reconciliation happens to be running. `backfill_state.state` only
+ * records projection progress, so it cannot answer that; committed rows can.
+ * Reopening an index that already has some keeps it servable while the
+ * catch-up generation runs, and an empty one stays `building` so an empty page
+ * is read as "still loading" rather than "there are no sessions".
+ */
 function initialBuildingStatus(
   mode: Exclude<LocalIndexMode, 'off'>,
   persisted: PersistedBackfillState | null,
+  hasCommittedRows: boolean,
 ): LocalIndexStatus {
   return {
     mode,
-    state: 'building',
+    state: hasCommittedRows ? 'ready' : 'building',
     discovered: persisted?.discovered ?? 0,
     indexed: persisted?.indexed ?? 0,
     degradedSources: persisted?.degraded ?? 0,
@@ -471,19 +480,37 @@ export function createLocalIndexCoordinator(
   let rebuildPromise: Promise<LocalIndexStatus> | undefined
   let runtimeReconfigurePromise: Promise<void> | undefined
   let databaseFailureCooldownUntil = 0
+  let checkpointBusy = false
   let scheduling: LocalIndexSchedulingMetrics = {
     maxBatchSize: 0,
     yieldCount: 0,
   }
 
+  const noteTransientDatabaseBusy = (): void => {
+    databaseFailureCooldownUntil = Math.max(
+      databaseFailureCooldownUntil,
+      now() + busyCooldownMs,
+    )
+  }
+
+  /**
+   * A busy passive checkpoint means some WAL frames are still in use, not that
+   * the committed snapshot is unreadable. Remember it so the checkpoint is not
+   * retried on every reconciliation, but keep serving reads: cutting them off
+   * for the whole cooldown would drop the sidebar back to a full JSONL scan
+   * each time a writer happens to be mid-transaction.
+   */
+  const noteCheckpointBusy = (): void => {
+    checkpointBusy = true
+    databaseFailureCooldownUntil = Math.max(
+      databaseFailureCooldownUntil,
+      now() + busyCooldownMs,
+    )
+  }
+
   const markDegraded = (error: unknown, fallback: string): void => {
     const code = errorCode(error, fallback)
-    if (code === 'SQLITE_BUSY') {
-      databaseFailureCooldownUntil = Math.max(
-        databaseFailureCooldownUntil,
-        now() + busyCooldownMs,
-      )
-    }
+    if (code === 'SQLITE_BUSY') noteTransientDatabaseBusy()
     const currentStatus = status.mode === mode
       ? status
       : { ...OFF_STATUS, mode }
@@ -510,9 +537,10 @@ export function createLocalIndexCoordinator(
     try {
       const checkpoint = activeDatabase.checkpointPassive?.()
       if (checkpoint && checkpoint.busy > 0) {
-        markDegraded({ code: 'SQLITE_BUSY' }, 'LOCAL_INDEX_CHECKPOINT_FAILED')
+        noteCheckpointBusy()
         return
       }
+      checkpointBusy = false
       const storage = activeDatabase.getStorageStats?.()
       if (!storage) return
       status = {
@@ -711,7 +739,14 @@ export function createLocalIndexCoordinator(
 
     status = {
       ...status,
-      state: outstandingReconciliationFailures() > 0 ? 'degraded' : 'building',
+      // A catch-up over an already-served snapshot is not a rebuild. Keep
+      // serving it while this generation runs; only a snapshot that never
+      // finished (or one with rows still unaccounted for) is `building`.
+      state: outstandingReconciliationFailures() > 0
+        ? 'degraded'
+        : status.state === 'ready'
+          ? 'ready'
+          : 'building',
       // A new discovery generation resets to rows that are actually persisted.
       // From this point both counters only move forward until the generation ends.
       discovered: knownPaths.size,
@@ -956,7 +991,14 @@ export function createLocalIndexCoordinator(
     if (storageLimited) return
     status = {
       ...status,
-      state: outstandingReconciliationFailures() > 0 ? 'degraded' : 'building',
+      // Reconciling a watched batch never withdraws a snapshot that is already
+      // being served. `building` is reserved for the first generation, before
+      // any complete snapshot exists.
+      state: outstandingReconciliationFailures() > 0
+        ? 'degraded'
+        : status.state === 'building'
+          ? 'building'
+          : 'ready',
       degradedSources: outstandingReconciliationFailures(),
       lastErrorCode: latestFailedPathCode() ?? fullSweepFailureCode,
     }
@@ -1123,7 +1165,7 @@ export function createLocalIndexCoordinator(
       fullSweepFailureCode = persisted?.state === 'degraded' && failedPaths.size === 0
         ? persisted.lastErrorCode ?? 'LOCAL_INDEX_DISCOVERY_INCOMPLETE'
         : null
-      status = initialBuildingStatus(mode, persisted)
+      status = initialBuildingStatus(mode, persisted, activeIndex.countSources() > 0)
       if (outstandingReconciliationFailures() > 0) {
         status = {
           ...status,
@@ -1330,7 +1372,7 @@ export function createLocalIndexCoordinator(
 
   const indexReadAllowed = (): boolean =>
     synchronizeRuntimeConfiguration() &&
-    now() >= databaseFailureCooldownUntil
+    (checkpointBusy || now() >= databaseFailureCooldownUntil)
 
   const coordinator: LocalIndexCoordinator = {
     async start(): Promise<void> {
@@ -1437,6 +1479,18 @@ export function createLocalIndexCoordinator(
       }
     },
 
+    getSessionSuggestionMetadata(sessionIds) {
+      if (!indexReadAllowed() || !index?.getSessionSuggestionMetadata) return null
+      try { return index.getSessionSuggestionMetadata(sessionIds) }
+      catch (error) { markDegraded(error, 'LOCAL_INDEX_READ_FAILED'); return null }
+    },
+
+    searchSessionMetadata(query, options): SessionIndexPage | null {
+      if (!indexReadAllowed() || !index?.searchSessionMetadata) return null
+      try { return index.searchSessionMetadata(query, options) }
+      catch (error) { markDegraded(error, 'LOCAL_INDEX_READ_FAILED'); return null }
+    },
+
     findSearchCandidates(
       filters: SessionSearchCandidateFilters,
     ): IndexedSessionSearchCandidate[] | null {
@@ -1466,6 +1520,16 @@ export function createLocalIndexCoordinator(
       } catch (error) {
         markDegraded(error, 'LOCAL_INDEX_READ_FAILED')
         return null
+      }
+    },
+
+    updateSessionTitle(sessionId: string, title: string): boolean {
+      if (!synchronizeRuntimeConfiguration() || !index?.updateSessionTitle) return false
+      try {
+        return index.updateSessionTitle(sessionId, title)
+      } catch (error) {
+        markDegraded(error, 'LOCAL_INDEX_TITLE_WRITE_FAILED')
+        return false
       }
     },
 

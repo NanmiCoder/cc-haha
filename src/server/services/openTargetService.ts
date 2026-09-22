@@ -151,7 +151,7 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     commands: {
       darwin: ['zed'],
       win32: ['zed.cmd', 'zed.exe'],
-      linux: ['zed'],
+      linux: ['zed', 'zeditor'],
     },
     windowsExecutableNames: ['zed.exe'],
     appPaths: {
@@ -160,8 +160,7 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
         join(homedir(), 'AppData', 'Local', 'Programs', 'Zed', 'zed.exe'),
         join(homedir(), 'AppData', 'Local', 'Zed', 'zed.exe'),
       ],
-    },
-  },
+    },  },
   {
     id: 'sublime',
     kind: 'ide',

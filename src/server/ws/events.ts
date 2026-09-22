@@ -19,7 +19,7 @@ export type PermissionMode =
 export type ClientMessage =
   | { type: 'prewarm_session' }
   | { type: 'sync_state' }
-  | { type: 'user_message'; content: string; attachments?: AttachmentRef[] }
+  | { type: 'user_message'; content: string; attachments?: AttachmentRef[]; sessionReferences?: { sessionId: string }[] }
   | {
       type: 'permission_response'
       requestId: string
@@ -106,7 +106,7 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string }
+  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[] }
   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /**
    * `text` is a fragment when the CLI streams `thinking_delta`, and a whole block when

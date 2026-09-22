@@ -116,7 +116,7 @@ describe('fetchTraceCallDetail', () => {
     expect(traceCallRequests(fetchMock)).toHaveLength(2)
   })
 
-  it('keeps same-revision terminal calls cached and refetches after the revision token changes', async () => {
+  it('keeps a call cached while its content key is unchanged and refetches when that key changes', async () => {
     let version = 'old'
     const fetchMock = mockFetch(() => jsonResponse({
       call: makeCall({

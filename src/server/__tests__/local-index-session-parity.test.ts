@@ -40,6 +40,7 @@ class FakeLocalIndexGateway implements LocalIndexGateway {
   buildOnList = false
   listCalls = 0
   findCalls = 0
+  titleWrites: Array<{ sessionId: string; title: string }> = []
   lastListOptions: { project?: string; limit?: number; offset?: number } | undefined
 
   async start(): Promise<void> {}
@@ -66,6 +67,19 @@ class FakeLocalIndexGateway implements LocalIndexGateway {
   }
   getSession(sessionId: string): IndexedSessionRow | null {
     return this.page.sessions.find(session => session.id === sessionId) ?? null
+  }
+  updateSessionTitle(sessionId: string, title: string): boolean {
+    this.titleWrites.push({ sessionId, title })
+    let changed = false
+    this.page = {
+      ...this.page,
+      sessions: this.page.sessions.map(session => {
+        if (session.id !== sessionId) return session
+        changed = true
+        return { ...session, title }
+      }),
+    }
+    return changed
   }
 
   setReady(mode: LocalIndexMode = 'on'): void {
@@ -657,6 +671,42 @@ describe('SessionService local-index routing parity', () => {
     }
     expect((await reader.listSessions()).sessions[0]?.title).toBe('Reconciled indexed title')
     expect(gateway.listCalls).toBe(2)
+  })
+
+  it('persists a collaboration metadata title into the index before a cold restart', async () => {
+    const projectDir = '-tmp-project'
+    const filePath = await writeSession(
+      projectDir,
+      SESSION_A,
+      'Initial child title',
+      '2026-07-15T00:00:00.000Z',
+    )
+    const gateway = new FakeLocalIndexGateway()
+    gateway.setReady()
+    gateway.page = {
+      sessions: [indexedRow(filePath, projectDir, SESSION_A, 'Initial child title')],
+      total: 1,
+    }
+    gateway.matches = [{ filePath, projectDir }]
+    const writer = new SessionService(gateway)
+
+    await writer.appendSessionMetadata(SESSION_A, {
+      workDir: configDir,
+      customTitle: '最终子会话标题',
+    })
+
+    expect(gateway.titleWrites).toContainEqual({
+      sessionId: SESSION_A,
+      title: '最终子会话标题',
+    })
+    const restartedGateway = new FakeLocalIndexGateway()
+    restartedGateway.setReady()
+    restartedGateway.page = {
+      sessions: gateway.page.sessions.map(session => ({ ...session })),
+      total: gateway.page.total,
+    }
+    const restarted = new SessionService(restartedGateway)
+    expect((await restarted.listSessions()).sessions[0]?.title).toBe('最终子会话标题')
   })
 
   it('isolates shared mutation epochs between different gateways', async () => {

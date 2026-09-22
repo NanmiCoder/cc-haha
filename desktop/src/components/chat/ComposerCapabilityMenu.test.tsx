@@ -2,11 +2,14 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
+import { sessionCollaborationApi } from '@/api/sessionCollaboration'
 import { filesystemApi } from '@/api/filesystem'
 import type { CapabilityMenuSection } from './capabilityMenuModel'
 
+vi.mock('@/api/sessionCollaboration', () => ({ sessionCollaborationApi: { list: vi.fn() } }))
 vi.mock('@/api/filesystem', () => ({ filesystemApi: { browse: vi.fn(), search: vi.fn() } }))
 beforeEach(() => {
+  vi.mocked(sessionCollaborationApi.list).mockClear().mockResolvedValue({ sessions: [] })
   vi.mocked(filesystemApi.search).mockResolvedValue({ currentPath: '/work', parentPath: '/', entries: [] })
 })
 
@@ -153,6 +156,8 @@ describe('ComposerCapabilityMenu', () => {
 
     fireEvent.change(searchInput(), { target: { value: 'no-such-capability' } })
     expect(await screen.findByText('No matching references')).toBeInTheDocument()
+    expect(sessionCollaborationApi.list).toHaveBeenCalledWith('no-such-capability', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 

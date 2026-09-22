@@ -1485,10 +1485,13 @@ describe('Models API', () => {
     }
     expect(body.provider).toEqual({ id: 'grok-official', name: 'Grok Official' })
     expect(body.models.map((model) => model.id)).toEqual([
+      'grok-4.7',
+      'grok-4.7-build-fast',
       'grok-4.6',
       'grok-4.5',
-      'grok-composer-2.5-fast',
     ])
+    expect(body.models.find((model) => model.id === 'grok-4.7')?.context).toBe('500000')
+    expect(body.models.find((model) => model.id === 'grok-4.7-build-fast')?.context).toBe('500000')
     expect(body.models.find((model) => model.id === 'grok-4.6')?.context).toBe('500000')
     expect(body.models.find((model) => model.id === 'grok-4.5')?.context).toBe('500000')
   })

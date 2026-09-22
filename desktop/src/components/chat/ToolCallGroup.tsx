@@ -106,6 +106,8 @@ type Props = {
   isStreaming?: boolean
   /** This run is the tail of a turn that is still producing into it. */
   isLive?: boolean
+  /** Stable key that survives virtualized row unmount/remount. */
+  disclosureKey?: string
 }
 
 export type OpenAgentRunPayload = {
@@ -128,6 +130,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   showOpenRun = true,
   isStreaming,
   isLive = false,
+  disclosureKey,
 }: Props) {
   const resolvedSteps = useMemo(() => steps ?? toActivitySteps(toolCalls), [steps, toolCalls])
   const memoryActivity = getMemoryToolActivity(toolCalls, resultMap)
@@ -160,6 +163,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            disclosureKey={disclosureKey}
           />
         ) : null}
       </div>
@@ -180,6 +184,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       showOpenRun={showOpenRun}
       isStreaming={isStreaming}
       isLive={isLive}
+      disclosureKey={disclosureKey}
     />
   )
 })
@@ -199,6 +204,7 @@ function ToolCallGroupContent({
   showOpenRun = true,
   isStreaming,
   isLive = false,
+  disclosureKey,
 }: ContentProps) {
   const toolCalls = activityStepToolCalls(steps)
   const hasImageGeneration = toolCalls.some((toolCall) => isImageGenerationToolName(toolCall.toolName))
@@ -309,6 +315,7 @@ function ToolCallGroupContent({
       activeThinkingId={activeThinkingId}
       isStreaming={isStreaming}
       isLive={isLive}
+      disclosureKey={disclosureKey}
     />
   )
 }

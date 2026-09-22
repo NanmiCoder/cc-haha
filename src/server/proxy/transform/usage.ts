@@ -58,12 +58,14 @@ export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined)
     usage.cache_creation_input_tokens,
   )
   const hasDirectCacheUsage =
-    directCacheRead !== undefined || directCacheCreation !== undefined
+    (directCacheRead ?? 0) > 0 || (directCacheCreation ?? 0) > 0
   const nestedCacheRead = validTokenCount(
     usage.input_tokens_details?.cached_tokens,
   ) ?? validTokenCount(usage.prompt_tokens_details?.cached_tokens) ?? 0
 
-  // Direct cache_* fields use Anthropic's exclusive-input semantics. Nested
+  // Positive direct cache_* fields use Anthropic's exclusive-input semantics.
+  // Some Chat gateways include zero placeholders alongside real nested counts;
+  // those placeholders must not suppress the nested cache hit accounting. Nested
   // OpenAI details are inclusive in input/prompt and must be subtracted. Cap
   // malformed nested cache counts at the reported input to preserve totals.
   const cacheRead = hasDirectCacheUsage

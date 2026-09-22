@@ -419,7 +419,7 @@ describe('EmptySession', () => {
     })
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
     expect(getComposerText()).toContain('Please review @README.md')
-    expect(mocks.search).toHaveBeenCalledWith('README', '/workspace/project')
+    expect(mocks.search).toHaveBeenCalledWith('README', '/workspace/project', { signal: expect.any(AbortSignal) })
     expect(screen.queryByRole('combobox', { name: 'Search skills, plugins, files…' })).not.toBeInTheDocument()
     expect(mocks.wsSend).not.toHaveBeenCalled()
     expect(mocks.createSession).not.toHaveBeenCalled()

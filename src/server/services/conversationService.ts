@@ -374,7 +374,16 @@ export class ConversationService {
     }
 
     if (shouldReplacePlaceholder) {
-      await sessionService.clearSessionTranscript(sessionId, workDir)
+      // A collaboration session is named before its first turn starts. Replacing
+      // that empty launch placeholder must not erase the only title copy before
+      // the CLI creates the real worktree transcript. User-initiated /clear does
+      // not pass a title and therefore keeps its existing reset semantics.
+      await sessionService.clearSessionTranscript(
+        sessionId,
+        workDir,
+        undefined,
+        launchInfo.customTitle,
+      )
     }
 
     let launchWorkDir = workDir
@@ -565,8 +574,12 @@ export class ConversationService {
       !!options?.model ||
       !!options?.effort
     if (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata) {
+      // system/init can move a newly-created session into its worktree while
+      // startup is still awaiting the SDK. Once that authoritative cwd is
+      // known, never recreate a late metadata placeholder in launchWorkDir.
+      const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
       await sessionService.appendSessionMetadata(sessionId, {
-        workDir: launchWorkDir,
+        workDir: metadataWorkDir,
         customTitle: launchInfo?.customTitle ?? null,
         repository: launchRepository,
         permissionMode: options?.permissionMode || launchInfo?.permissionMode,
@@ -894,6 +907,7 @@ export class ConversationService {
     request: Record<string, unknown>,
     timeoutMs = 10_000,
     signal?: AbortSignal,
+    canSend?: () => boolean,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
@@ -964,7 +978,7 @@ export class ConversationService {
         handleAbort()
         return
       }
-      const sent = this.sessions.get(sessionId) === session && this.sendSdkMessage(sessionId, {
+      const sent = (!canSend || canSend()) && this.sessions.get(sessionId) === session && this.sendSdkMessage(sessionId, {
         type: 'control_request',
         request_id: requestId,
         request,
@@ -1617,6 +1631,8 @@ export class ConversationService {
       networkRuntimeMetadata.streamMaxDurationDerived =
         !cleanEnv.CLAUDE_STREAM_MAX_DURATION_MS
     }
+    delete cleanEnv.CC_HAHA_SESSION_COLLABORATION_TOKEN
+    delete cleanEnv.CC_HAHA_SESSION_ID
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
     if (options?.resumeInterruptedTurn === false) {
       delete cleanEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
@@ -1755,7 +1771,11 @@ export class ConversationService {
           }
         : {}),
       ...(desktopServerUrl
-        ? { CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl }
+        ? {
+            CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl,
+            CC_HAHA_SESSION_COLLABORATION_TOKEN: new URL(sdkUrl!).searchParams.get('token') ?? '',
+            CC_HAHA_SESSION_ID: new URL(sdkUrl!).pathname.split('/').pop() ?? '',
+          }
         : {}),
       ...(sdkUrl
         ? {

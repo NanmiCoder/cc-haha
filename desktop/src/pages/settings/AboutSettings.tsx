@@ -11,6 +11,7 @@ import { formatBytes } from '../../lib/formatBytes'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { publicAssetPath } from '../../lib/publicAsset'
 import { BrandSeal } from '../../components/composite/BrandSeal'
+import { Modal } from '@/components/ui/Modal'
 import { isValidHttpProxyUrl } from '../settings/shared'
 
 /**
@@ -51,6 +52,7 @@ export function AboutSettings() {
   const [updateProxyDraft, setUpdateProxyDraft] = useState(updateProxy)
   const [updateProxySaveError, setUpdateProxySaveError] = useState<string | null>(null)
   const [isSavingUpdateProxy, setIsSavingUpdateProxy] = useState(false)
+  const [communityOpen, setCommunityOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -414,6 +416,41 @@ export function AboutSettings() {
           </div>
         </button>
       </div>
+
+      {/* The QR is the same image README.md embeds under "User Group". A dialog
+          keeps it on screen; expanding inline pushed it below the fold. */}
+      <div className="mt-3 w-full">
+        <button
+          type="button"
+          onClick={() => setCommunityOpen(true)}
+          aria-haspopup="dialog"
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
+        >
+          <span className="material-symbols-outlined text-[20px] text-[var(--color-text-tertiary)]">qr_code_2</span>
+          <div className="flex-1 text-left">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.about.community')}</div>
+            <div className="text-xs text-[var(--color-text-tertiary)]">{t('settings.about.communityDesc')}</div>
+          </div>
+        </button>
+      </div>
+
+      <Modal
+        open={communityOpen}
+        onClose={() => setCommunityOpen(false)}
+        title={t('settings.about.community')}
+        width={360}
+      >
+        <div className="flex flex-col items-center gap-3 pb-2">
+          <img
+            src={publicAssetPath('icons/wechat-group-qr.png')}
+            alt={t('settings.about.communityQrAlt')}
+            width={240}
+            height={240}
+            className="rounded-[var(--radius-md)]"
+          />
+          <p className="text-center text-xs text-[var(--color-text-tertiary)]">{t('settings.about.communityHint')}</p>
+        </div>
+      </Modal>
     </div>
   )
 }

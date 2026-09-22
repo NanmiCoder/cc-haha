@@ -1,6 +1,7 @@
 import { CodeViewer } from './CodeViewer'
 import { memo, useState } from 'react'
 import { useTranslation } from '../../i18n'
+import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { InlineImageGallery } from './InlineImageGallery'
 
 type Props = {
@@ -8,6 +9,8 @@ type Props = {
   isError: boolean
   toolName?: string
   standalone?: boolean
+  /** Stable key that survives virtualized row unmount/remount. */
+  disclosureKey?: string
 }
 
 /**
@@ -15,8 +18,9 @@ type Props = {
  * inline within ToolCallBlock (i.e., when the tool_use and tool_result
  * are NOT grouped together by MessageList).
  */
-export const ToolResultBlock = memo(function ToolResultBlock({ content, isError, toolName, standalone = true }: Props) {
-  const [expanded, setExpanded] = useState(false)
+export const ToolResultBlock = memo(function ToolResultBlock({ content, isError, toolName, standalone = true, disclosureKey }: Props) {
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const expanded = disclosureKey ? (getDisclosure(disclosureKey) ?? localExpanded) : localExpanded
   const t = useTranslation()
 
   // Don't render standalone if this result is already rendered inline
@@ -35,7 +39,11 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
       {/* Status header */}
       <button
         type="button"
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => {
+        const next = !expanded
+        setLocalExpanded(next)
+        if (disclosureKey) setDisclosure(disclosureKey, next)
+      }}
         className={`flex w-full items-center justify-between px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider ${
         isError
           ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
@@ -82,7 +90,11 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
 
       {hasMore && (
         <button
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => {
+            const next = !expanded
+            setLocalExpanded(next)
+            if (disclosureKey) setDisclosure(disclosureKey, next)
+          }}
           className="w-full py-1 text-[10px] font-medium text-[var(--color-text-accent)] hover:underline bg-[var(--color-surface-container-low)] border-t border-[var(--color-border)]"
         >
           {expanded ? t('tool.showLess') : t('tool.showMore', { count: text.length - 200 })}

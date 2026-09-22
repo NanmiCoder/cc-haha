@@ -19,6 +19,7 @@ vi.mock('../../api/sessions', () => ({
 
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { WorkspaceFileTreePane } from './WorkspaceFileTreePane'
+import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore'
 
 const SESSION = 'session-a'
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
@@ -458,5 +459,43 @@ describe('filter field', () => {
       await Promise.resolve()
     })
     expect(screen.getByTestId('workspace-file-tree-filter')).toHaveValue('')
+  })
+})
+
+// #1322: a whole file must be attachable without opening it and selecting lines.
+describe('file chat references', () => {
+  beforeEach(() => useWorkspaceChatContextStore.setState({ referencesBySession: {} }))
+
+  it('adds a right-clicked file to its own session without opening it', async () => {
+    const { onOpen } = await renderPane()
+    fireEvent.contextMenu(screen.getByTestId('workspace-tree-row-README.md'), { clientX: 30, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add to chat' }))
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toEqual([
+      expect.objectContaining({ kind: 'file', path: 'README.md', name: 'README.md' }),
+    ])
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('supports keyboard invocation and dismisses without adding', async () => {
+    await renderPane()
+    const file = screen.getByTestId('workspace-tree-row-README.md')
+    fireEvent.keyDown(file, { key: 'F10', shiftKey: true })
+    expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('menuitem'), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toBeUndefined()
+  })
+
+  it('closes an old session menu when switching sessions', async () => {
+    const view = await renderPane()
+    fireEvent.contextMenu(screen.getByTestId('workspace-tree-row-README.md'))
+    expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toBeInTheDocument()
+    await act(async () => {
+      view.rerender(<WorkspaceFileTreePane sessionId="session-b" selectedPath={null} onOpen={vi.fn()} />)
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession).toEqual({})
   })
 })

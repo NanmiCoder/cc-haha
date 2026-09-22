@@ -6114,19 +6114,22 @@ describe('WebSocket Chat Integration', () => {
           firstMessages.push(msg)
 
           if (msg.type === 'connected') {
-            ws1.send(JSON.stringify({ type: 'user_message', content: 'resume after reconnect' }))
+            ws1.send(JSON.stringify({ type: 'user_message', content: 'MOCK_RECONNECT_GATE resume after reconnect' }))
             return
           }
 
           if (msg.type === 'thinking' && !reconnected) {
             reconnected = true
-            ws1.close()
-
-            setTimeout(() => {
+            ws1.onclose = () => {
               ws2 = new WebSocket(`${wsUrl}/ws/${sessionId}`)
               ws2.onmessage = (reconnectEvent) => {
                 const reconnectMsg = JSON.parse(reconnectEvent.data as string)
                 secondMessages.push(reconnectMsg)
+                if (reconnectMsg.type === 'connected') {
+                  void conversationService.requestControl(sessionId, {
+                    subtype: 'mock_release_reconnect_stream',
+                  }).catch(error => handleFailure(String(error)))
+                }
                 if (reconnectMsg.type === 'error') {
                   handleFailure(reconnectMsg.message)
                   return
@@ -6136,7 +6139,8 @@ describe('WebSocket Chat Integration', () => {
                 }
               }
               ws2.onerror = () => handleFailure(`WebSocket reconnect error for session ${sessionId}`)
-            }, 50)
+            }
+            ws1.close()
           }
         }
 

@@ -27,6 +27,7 @@ import {
   searchContentCoordinator,
 } from './localIndex/searchContentCoordinator.js'
 import type {
+  SearchContentSuggestions,
   SearchContentMatch,
   SearchContentQueryOptions,
   SearchContentQueryResult,
@@ -203,6 +204,7 @@ type SearchEntryLineRead = {
 }
 
 type SearchServiceOptions = {
+  suggestIndexedSessions?: (query: string, options: { limit?: number; signal?: AbortSignal }) => SearchContentSuggestions | null
   readEntriesAtLines?: (
     filePath: string,
     lineNumbers: Set<number>,
@@ -231,6 +233,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export class SearchService {
+  private readonly suggestIndexedSessions: NonNullable<SearchServiceOptions['suggestIndexedSessions']>
   private readonly readEntriesAtLines: NonNullable<SearchServiceOptions['readEntriesAtLines']>
   private readonly getMetadataForPaths: NonNullable<SearchServiceOptions['getMetadataForPaths']>
   private readonly getCandidatesForFilters: NonNullable<SearchServiceOptions['getCandidatesForFilters']>
@@ -239,6 +242,7 @@ export class SearchService {
   private readonly commandAvailability = new Map<string, Promise<boolean>>()
 
   constructor(options: SearchServiceOptions = {}) {
+    this.suggestIndexedSessions = options.suggestIndexedSessions ?? ((query, options) => searchContentCoordinator.suggestSessions(query, options))
     this.readEntriesAtLines = options.readEntriesAtLines ?? ((filePath, lineNumbers) =>
       sessionService.readSessionEntriesAtLines(
         filePath,
@@ -301,6 +305,27 @@ export class SearchService {
   // ---------------------------------------------------------------------------
   // 会话历史搜索
   // ---------------------------------------------------------------------------
+
+  /** Menu suggestions deliberately trust the disposable index, never opening canonical transcripts. */
+  async searchSessionSuggestions(query: string, options: { limit?: number; signal?: AbortSignal; deadlineMs?: number } = {}) {
+    throwIfAborted(options.signal)
+    if (!query.trim()) return { sessions: [], truncated: false, indexUnavailable: false }
+    // The FTS lookup is one synchronous statement, so the deadline is checked
+    // before it starts. A picker that already spent its budget on metadata
+    // returns that page instead of stalling every other request.
+    if (options.deadlineMs !== undefined && Date.now() > options.deadlineMs) {
+      return { sessions: [], truncated: true, indexUnavailable: false }
+    }
+    const projected = this.suggestIndexedSessions(query, options)
+    throwIfAborted(options.signal)
+    return {
+      sessions: projected?.sessions.map(item => ({ sessionId: item.ownerSessionId,
+        ownerTranscriptPath: item.ownerTranscriptPath, projectPath: item.projectPath,
+        modifiedAt: new Date(item.modifiedAtMs).toISOString() })) ?? [],
+      truncated: projected?.truncated ?? true,
+      indexUnavailable: projected === null,
+    }
+  }
 
   /**
    * Full-text search across all session transcripts.

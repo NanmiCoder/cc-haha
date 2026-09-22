@@ -1,3 +1,5 @@
+import { splitSessionReferenceContext } from './sessionReferenceContext.js'
+import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { readHistoryContexts } from './sessionHistoryContext.js'
 import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './sessionHistoryRecovery.js'
 /**
@@ -7,8 +9,8 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
-import { HISTORY_SEMANTIC_RECORD_BYTES, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
-import { constants, createReadStream, type Stats } from 'node:fs'
+import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
@@ -79,6 +81,7 @@ import {
   type ProjectHistoryOptions,
   type ProjectHistoryPage,
   type ProjectHistoryRow,
+  type ProjectSessionPreviews,
 } from './projectSessionHistory.js'
 
 // ============================================================================
@@ -213,6 +216,9 @@ export type MessageUsage = {
 }
 
 export type MessageEntry = {
+  sessionReferences?: { sessionId: string }[]
+  /** Present when this user-position message was delivered from another session. */
+  collaboration?: { sourceSessionId: string; messageId: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown
@@ -812,6 +818,14 @@ export class SessionService {
     sharedState.epoch += 1
     sharedState.bypass = this.readIndexMutationBypass()
     this.observedSharedMutationEpoch = sharedState.epoch
+  }
+
+  private syncIndexedSessionTitle(sessionId: string, title: string): void {
+    // Title entries are tiny, authoritative mutations. Patch an existing index
+    // row immediately so a cold restart cannot briefly serve the older title
+    // while the transcript watcher is still queued. The watcher still performs
+    // the full source projection (fingerprint, locators, and metadata) later.
+    this.localIndexGateway.updateSessionTitle?.(sessionId, title)
   }
 
   private prepareSessionListCaches(scope: string): void {
@@ -1794,6 +1808,16 @@ export class SessionService {
     ).length
   }
 
+  /** A real conversation, including a collaboration delivery persisted as isMeta. */
+  private hasConversationTranscript(entries: RawEntry[]): boolean {
+    return entries.some((entry) => {
+      if (!entry.message?.role) return false
+      if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system') return false
+      if (!entry.isMeta) return true
+      return entry.type === 'user' && parseSessionCollaborationEnvelope(entry.message.content) !== null
+    })
+  }
+
   // --------------------------------------------------------------------------
   // Entry → MessageEntry conversion
   // --------------------------------------------------------------------------
@@ -1849,10 +1873,34 @@ export class SessionService {
         }) ?? undefined
       : undefined
 
+    let content = msg.content
+    let sessionReferences: { sessionId: string }[] | undefined
+    let collaboration: { sourceSessionId: string; messageId: string } | undefined
+    if (type === 'user') {
+      const envelope = parseSessionCollaborationEnvelope(content)
+      if (envelope) {
+        // Render only the payload; the prompt wrapper is model-facing transport.
+        content = envelope.text
+        collaboration = { sourceSessionId: envelope.senderSessionId, messageId: envelope.messageId }
+      } else if (typeof content === 'string') {
+        const parsed = splitSessionReferenceContext(content)
+        content = parsed.content
+        sessionReferences = parsed.sessionReferences
+      } else if (Array.isArray(content)) {
+        content = content.map((block: Record<string, unknown>) => {
+          if (block.type !== 'text' || typeof block.text !== 'string') return block
+          const parsed = splitSessionReferenceContext(block.text)
+          if (parsed.sessionReferences) sessionReferences = parsed.sessionReferences
+          return { ...block, text: parsed.content }
+        })
+      }
+    }
     return {
       id: entry.uuid || crypto.randomUUID(),
       type,
-      content: msg.content,
+      content,
+      ...(sessionReferences ? { sessionReferences } : {}),
+      ...(collaboration ? { collaboration } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
@@ -2032,7 +2080,10 @@ export class SessionService {
   }
 
   private isVisibleTranscriptMessageEntry(entry: RawEntry): boolean {
-    if (!entry.message?.role || entry.isMeta) return false
+    if (!entry.message?.role) return false
+    // Collaboration deliveries are persisted as isMeta prompts; they carry a real
+    // cross-session message the user must see, so they are the one exception.
+    if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message.content)) return false
     if (
       entry.type !== 'user' &&
       entry.type !== 'assistant' &&
@@ -2585,7 +2636,7 @@ export class SessionService {
           const projectsRoot = indexedMatches.length > 0
             ? await fs.realpath(this.getProjectsDir())
             : null
-          const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number }> = []
+          const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number; hasTranscript: boolean }> = []
           let hydrationFailed = false
           for (const match of indexedMatches) {
             try {
@@ -2595,7 +2646,12 @@ export class SessionService {
                 sessionId,
                 projectsRoot!,
               )
-              hydratedMatches.push({ ...match, mtimeMs: stat.mtimeMs })
+              const entries = await this.readJsonlFile(match.filePath)
+              hydratedMatches.push({
+                ...match,
+                mtimeMs: stat.mtimeMs,
+                hasTranscript: this.hasConversationTranscript(entries),
+              })
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
                 hydrationFailed = true
@@ -2609,7 +2665,7 @@ export class SessionService {
             indexedMutationEpoch === getSharedSessionMutationState(this.localIndexGateway).epoch
           ) {
             return hydratedMatches
-              .sort((a, b) => b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
+              .sort((a, b) => Number(b.hasTranscript) - Number(a.hasTranscript) || b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
               .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
           }
           if (hydrationFailed) this.markIndexReadFailure()
@@ -2636,19 +2692,25 @@ export class SessionService {
       return []
     }
 
-    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number }> = []
+    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number; hasTranscript: boolean }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
         const stat = await fs.stat(filePath)
-        matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
+        const entries = await this.readJsonlFile(filePath)
+        matches.push({
+          filePath,
+          projectDir: dir,
+          mtimeMs: stat.mtimeMs,
+          hasTranscript: this.hasConversationTranscript(entries),
+        })
       } catch {
         continue
       }
     }
 
     return matches
-      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
+      .sort((a, b) => Number(b.hasTranscript) - Number(a.hasTranscript) || b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
       .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
   }
 
@@ -3259,6 +3321,11 @@ export class SessionService {
     return this.projectHistory.list(options)
   }
 
+  /** Load the newest few sessions for every logical project in one request. */
+  listProjectPreviews(perProjectLimit?: number): Promise<ProjectSessionPreviews> {
+    return this.projectHistory.listPreviews(perProjectLimit)
+  }
+
   private projectHistoryRevision(): string {
     this.syncSharedMutationEpoch()
     const scope = this.getConfigDir()
@@ -3330,6 +3397,58 @@ export class SessionService {
       rows.push({ ...row, logicalProjectRoot: root || row.workDir || row.projectPath || 'unknown' })
     }
     return rows
+  }
+
+  getSessionSuggestionMetadata(sessionIds: string[]): Array<{ id: string; title: string; workDir: string | null; projectPath: string; modifiedAt: string }> {
+    this.syncSharedMutationEpoch()
+    if (this.getUsableIndexMode() !== 'on') return []
+    try {
+      const rows = this.localIndexGateway.getSessionSuggestionMetadata?.(sessionIds.slice(0, 100)) ?? []
+      if (!this.indexStatusRemainsUsable()) return []
+      return rows.map(({ id, title, workDir, projectPath, modifiedAt }) => ({ id, title, workDir, projectPath, modifiedAt }))
+    } catch { this.markIndexReadFailure(); return [] }
+  }
+
+  /** Metadata-only reference lookup: no per-result transcript or workspace hydration. */
+  async searchSessionMetadata(query: string, options: { limit?: number; offset?: number; signal?: AbortSignal; deadlineMs?: number } = {}): Promise<{ sessions: Array<{ id: string; title: string; workDir: string | null; projectPath: string; modifiedAt: string }>; total: number; truncated?: boolean }> {
+    options.signal?.throwIfAborted()
+    this.syncSharedMutationEpoch()
+    const limit = Math.min(100, Math.max(1, options.limit ?? 30))
+    const offset = Math.max(0, options.offset ?? 0)
+    const epoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    if (this.getUsableIndexMode() === 'on') {
+      try {
+        const result = this.localIndexGateway.searchSessionMetadata?.(query, { limit, offset })
+        if (result && epoch === getSharedSessionMutationState(this.localIndexGateway).epoch && this.indexStatusRemainsUsable()) {
+          return { sessions: result.sessions.map(({ id, title, workDir, projectPath, modifiedAt }) => ({ id, title, workDir, projectPath, modifiedAt })), total: result.total }
+        }
+      } catch { this.markIndexReadFailure() }
+    }
+    // Scan the metadata projection once, rank before limiting, and reuse its
+    // summary cache. Do not hydrate every workspace or repeatedly page lists.
+    const scope = this.getConfigDir()
+    this.prepareSessionListCaches(scope)
+    const rows: Array<{ id: string; title: string; workDir: string | null; projectPath: string; modifiedAt: string }> = []
+    let truncated = false
+    for (const file of await this.discoverSessionFiles(undefined, scope)) {
+      options.signal?.throwIfAborted()
+      // The picker shares this process with every other request. Stop walking
+      // transcripts once its budget is spent and return the rows already read.
+      if (options.deadlineMs !== undefined && Date.now() > options.deadlineMs) { truncated = true; break }
+      try {
+        const summary = await this.getCachedSessionListSummary(file.filePath, file.projectDir, await fs.stat(file.filePath), scope)
+        rows.push({ id: file.sessionId, title: summary.title, workDir: summary.workDir, projectPath: file.projectDir, modifiedAt: summary.modifiedAt })
+      } catch { /* Match sidebar behavior for unreadable transcripts. */ }
+    }
+    const needle = query.trim().toLowerCase()
+    const rank = (row: typeof rows[number]) => {
+      if (!needle) return 0
+      const names = [row.title.toLowerCase(), row.id.toLowerCase()]
+      return names.includes(needle) ? 3 : names.some(value => value.startsWith(needle)) ? 2 : names.some(value => value.includes(needle)) ? 1 : 0
+    }
+    const matches = rows.filter(row => [row.title, row.id, row.workDir ?? '', row.projectPath].some(value => value.toLowerCase().includes(needle)))
+    matches.sort((a, b) => rank(b) - rank(a) || Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt) || a.id.localeCompare(b.id) || a.projectPath.localeCompare(b.projectPath))
+    return { sessions: matches.slice(offset, offset + limit), total: matches.length, ...(truncated ? { truncated } : {}) }
   }
 
   /** List all sessions, optionally filtered by physical project path. */
@@ -3841,12 +3960,13 @@ export class SessionService {
     return recovery
   }
 
-  private async projectHistoryPageEntries(filePath: string, result: Awaited<ReturnType<typeof readBoundedHistoryPage>>, signal?: AbortSignal): Promise<{ entries: RawEntry[]; contextScanBytes: number }> {
+  private async projectHistoryPageEntries(filePath: string, result: Awaited<ReturnType<typeof readBoundedHistoryPage>>, signal?: AbortSignal, includeUnownedSidechains = false): Promise<{ entries: RawEntry[]; contextScanBytes: number }> {
     const context = await readHistoryContexts({
       filePath,
       sourceVersion: result.page.sourceVersion,
       offsets: result.entries.map(item => item.byteStart),
       signal,
+      includeUnownedSidechains,
       classify: raw => {
         const entry = raw as RawEntry
         const user = entry.message?.role === 'user' && !entry.isMeta
@@ -3865,7 +3985,7 @@ export class SessionService {
     return { entries: visibleEntries, contextScanBytes: context.scannedBytes }
   }
 
-  async getSessionHistoryPage(sessionId: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<{
+  async getSessionHistoryPage(sessionId: string, options: { cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; projectContext?: boolean } = {}): Promise<{
     messages: MessageEntry[]
     taskNotifications: SessionTaskNotification[]
     page: HistoryPageInfo
@@ -3879,10 +3999,18 @@ export class SessionService {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
     const result = await readBoundedHistoryPage(found.filePath, options)
-    const projection = await this.projectHistoryPageEntries(found.filePath, result, options.signal)
+    // A referenced-session read only needs the records on this page. Building
+    // the ownership index scans the transcript from the start, which is what
+    // stalls the shared server while a model pages backward.
+    const projection = options.projectContext === false
+      ? { entries: result.entries.map(item => item.entry as RawEntry), contextScanBytes: 0 }
+      : await this.projectHistoryPageEntries(found.filePath, result, options.signal)
     const entries = result.entries.map(item => item.entry as RawEntry)
     const response = { messages: this.entriesToMessages(projection.entries), taskNotifications: this.taskNotificationsFromEntries(entries), page: { ...result.page, contextScanBytes: projection.contextScanBytes } }
-    if (Buffer.byteLength(JSON.stringify(response)) > 2 * 1024 * 1024) {
+    // The full-history path is already bounded by the reader's own byte budget,
+    // so only the single-record page path needs the "one oversized record"
+    // envelope check.
+    if (!options.full && Buffer.byteLength(JSON.stringify(response)) > 2 * HISTORY_SEMANTIC_RECORD_BYTES + HISTORY_PAGE_BYTES) {
       throw new ApiError(413, 'History page exceeded its response budget', 'HISTORY_PAGE_TOO_LARGE')
     }
     return response
@@ -3988,6 +4116,7 @@ export class SessionService {
       const entries: RawEntry[] = []
       const taskNotifications: SessionTaskNotification[] = []
       let bytes = 0
+      let incomplete = false
       let suppressTaskNotificationResponse = false
       const scan = await streamBoundedHistory(filePath, raw => {
         const entry = raw as RawEntry
@@ -3999,19 +4128,22 @@ export class SessionService {
         const content = Array.isArray(message?.content) ? message.content.filter((block: any) =>
           block?.type === 'tool_use' ? ids.has(block.id) : block?.type === 'tool_result' && ids.has(block.tool_use_id)) : []
         const notices = this.taskNotificationsFromEntries([entry]).filter(notice => ids.has(notice.toolUseId))
-        if (content.length && !suppressTaskNotificationResponse) {
-          const selected = { ...entry, message: { ...message, content } } as RawEntry
-          bytes += Buffer.byteLength(JSON.stringify(selected))
-          entries.push(selected)
+        const selected = content.length && !suppressTaskNotificationResponse
+          ? displayPreview({ ...entry, message: { ...message, content } }) : undefined
+        if (selected?.bodyTruncated) incomplete = true
+        const selectedBytes = (selected ? Buffer.byteLength(JSON.stringify(selected)) : 0) +
+          (notices.length ? Buffer.byteLength(JSON.stringify(notices)) : 0)
+        if (bytes + selectedBytes > 2 * 1024 * 1024 || entries.length + taskNotifications.length + (selected ? 1 : 0) + notices.length > 2048) {
+          incomplete = true
+          return
         }
-        if (notices.length) bytes += Buffer.byteLength(JSON.stringify(notices))
+        bytes += selectedBytes
+        if (selected) entries.push(selected as RawEntry)
         taskNotifications.push(...notices)
-        if (bytes > 2 * 1024 * 1024 || entries.length + taskNotifications.length > 2048) {
-          throw new ApiError(413, 'Agent lookup exceeds its viewing budget', 'SUBAGENT_LOOKUP_LIMIT')
-        }
-      })
-      if (scan.omittedRecords) throw new ApiError(413, 'Agent lookup contains records above the viewing limit', 'SUBAGENT_LOOKUP_INCOMPLETE')
-      const transcript = { messages: this.entriesToMessages(entries), taskNotifications, historyComplete: true }
+      }, undefined, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES })
+      // A skipped record may be unrelated to this Agent. Preserve the evidence
+      // we did read without claiming that absence proves a missing run.
+      const transcript = { messages: this.entriesToMessages(entries), taskNotifications, historyComplete: !incomplete && scan.omittedRecords === 0 }
       this.subagentLookupCache.delete(key)
       this.subagentLookupCache.set(key, { version, transcript })
       while (this.subagentLookupCache.size > 4) this.subagentLookupCache.delete(this.subagentLookupCache.keys().next().value!)
@@ -4041,12 +4173,12 @@ export class SessionService {
               if (retainedBytes > 2 * 1024 * 1024) throw new ApiError(413, 'Agent transcript changed beyond its viewing budget', 'SUBAGENT_RECORD_LIMIT')
               if (entries.length >= 10_000) throw new ApiError(413, 'Agent transcript exceeds its record budget', 'SUBAGENT_RECORD_LIMIT')
               entries.push(entry as RawEntry)
-            })
+            }, undefined, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES })
             return { messages: this.entriesToMessages(entries), taskNotifications: this.taskNotificationsFromEntries(entries), historyComplete: scan.omittedRecords === 0 }
           })
         }
         const result = await readBoundedHistoryPage(filePath)
-        const projection = await this.projectHistoryPageEntries(filePath, result)
+        const projection = await this.projectHistoryPageEntries(filePath, result, undefined, true)
         const entries = result.entries.map(item => item.entry as RawEntry)
         return {
           messages: this.entriesToMessages(projection.entries),
@@ -4393,6 +4525,7 @@ export class SessionService {
     }
 
     await this.appendJsonlEntry(found.filePath, entry)
+    this.syncIndexedSessionTitle(sessionId, title)
     this.invalidateSessionListCache()
   }
 
@@ -4412,6 +4545,7 @@ export class SessionService {
       aiTitle: title,
       timestamp: new Date().toISOString(),
     })
+    this.syncIndexedSessionTitle(sessionId, title)
     this.invalidateSessionListCache()
   }
 
@@ -4477,6 +4611,7 @@ export class SessionService {
     sessionId: string,
     fallbackWorkDir?: string,
     preservedPermissionMode?: string,
+    preservedCustomTitle?: string | null,
   ): Promise<void> {
     const persist = this.shouldPersistSession()
     const nextEpoch = (this.taskNotificationMutationEpochs.get(sessionId) ?? 0) + 1
@@ -4498,7 +4633,9 @@ export class SessionService {
         } : null)
         if (info) {
           this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
-            ...info, transcriptMessageCount: 0, customTitle: null,
+            ...info,
+            transcriptMessageCount: 0,
+            customTitle: preservedCustomTitle?.trim() || null,
             ...(preservedPermissionMode && VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
               ? { permissionMode: preservedPermissionMode } : {}),
           })
@@ -4520,15 +4657,33 @@ export class SessionService {
         throw ApiError.notFound(`Session not found: ${sessionId}`)
       }
 
-      const entries = await this.readJsonlFile(found.filePath)
-      const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || fallbackWorkDir || process.cwd()
-      const repository = this.resolveRepositoryFromEntries(entries)
+      // Only the newest metadata survives a clear. Walk the transcript one
+      // record at a time so a large session is not parsed into one array.
+      const preserved = { workDir: undefined as string | undefined, cwd: undefined as string | undefined,
+        repository: undefined as PreparedSessionWorkspace['repository'] | undefined,
+        permissionMode: undefined as string | undefined }
+      await streamBoundedHistory(found.filePath, entry => {
+        const record = entry as RawEntry
+        if (record.type === 'session-meta') {
+          if (typeof (record as Record<string, unknown>).workDir === 'string') preserved.workDir = (record as Record<string, unknown>).workDir as string
+          if (typeof record.permissionMode === 'string' && VALID_SESSION_PERMISSION_MODES.has(record.permissionMode)) preserved.permissionMode = record.permissionMode
+        }
+        if (typeof record.cwd === 'string' && record.cwd.trim()) preserved.cwd = record.cwd
+        const repository = (record as Record<string, unknown>).repository
+        if (repository && typeof repository === 'object') preserved.repository = repository as PreparedSessionWorkspace['repository']
+      }, undefined, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES }).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      })
+      const workDir = (preserved.workDir && normalizeDriveRootPathForPlatform(preserved.workDir))
+        || (preserved.cwd && normalizeDriveRootPathForPlatform(preserved.cwd))
+        || this.desanitizePath(found.projectDir) || fallbackWorkDir || process.cwd()
+      const repository = preserved.repository
       const permissionMode = (
         preservedPermissionMode &&
         VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
       )
         ? preservedPermissionMode
-        : this.resolvePermissionModeFromEntries(entries)
+        : preserved.permissionMode
       const now = new Date().toISOString()
 
       const initialEntry = {
@@ -4551,13 +4706,26 @@ export class SessionService {
         timestamp: now,
       }
 
+      const customTitleEntry = preservedCustomTitle?.trim()
+        ? {
+            type: 'custom-title',
+            customTitle: preservedCustomTitle.trim(),
+            timestamp: now,
+          }
+        : null
+
       if (!this.shouldPersistSession()) return
       this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
       await fs.writeFile(
         found.filePath,
-        `${JSON.stringify(initialEntry)}\n${JSON.stringify(metaEntry)}\n`,
+        [initialEntry, metaEntry, ...(customTitleEntry ? [customTitleEntry] : [])]
+          .map(entry => JSON.stringify(entry))
+          .join('\n') + '\n',
         'utf-8',
       )
+      if (customTitleEntry) {
+        this.syncIndexedSessionTitle(sessionId, customTitleEntry.customTitle)
+      }
       this.invalidateSessionListCache()
     } catch (error) {
       // Clear aborts old-generation appends so none can land after a successful
@@ -4635,9 +4803,43 @@ export class SessionService {
 
     const normalizedWorkDir = normalizeDriveRootPathForPlatform(metadata.workDir)
     const targetProjectDir = this.sanitizePath(normalizedWorkDir)
-    const targetFilePath = path.join(this.getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
+    const requestedFilePath = path.join(this.getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
+    // A session has one transcript. Startup can still name the directory it was
+    // launched from after the CLI has moved into its worktree and written the
+    // conversation there; metadata belongs on that file, not on a second copy.
+    let targetFilePath = requestedFilePath
+    for (const match of matches) {
+      if (match.filePath === requestedFilePath) continue
+      const entries = await this.readJsonlFile(match.filePath)
+      if (this.hasConversationTranscript(entries)) {
+        targetFilePath = match.filePath
+        break
+      }
+    }
 
-    if (!metadata.customTitle && !this.memoryLaunchInfo.has(this.memorySessionKey(sessionId))) {
+    // Startup names the directory the session was launched from, so a
+    // collaboration title can land on that placeholder. Once the conversation
+    // lives in another transcript, keep the title with the file that survives
+    // placeholder cleanup instead of letting the only copy be deleted.
+    let customTitle = metadata.customTitle ?? null
+    if (!customTitle) {
+      const target = matches.find((match) => match.filePath === targetFilePath)
+      const targetTitle = target
+        ? (await this.getMetadataProjection(target.filePath, target.projectDir)).customTitle
+        : null
+      if (!targetTitle) {
+        for (const match of matches) {
+          if (match.filePath === targetFilePath) continue
+          const title = (await this.getMetadataProjection(match.filePath, match.projectDir)).customTitle
+          if (title) {
+            customTitle = title
+            break
+          }
+        }
+      }
+    }
+
+    if (!customTitle && !this.memoryLaunchInfo.has(this.memorySessionKey(sessionId))) {
       if (this.metadataMatchesLaunchInfo(previousInfo, {
         ...metadata,
         workDir: normalizedWorkDir,
@@ -4667,12 +4869,13 @@ export class SessionService {
       timestamp: new Date().toISOString(),
     })
 
-    if (metadata.customTitle && this.canPersistTitle(sessionId, metadata.customTitle)) {
+    if (customTitle && this.canPersistTitle(sessionId, customTitle)) {
       await this.appendJsonlEntry(targetFilePath, {
         type: 'custom-title',
-        customTitle: metadata.customTitle,
+        customTitle,
         timestamp: new Date().toISOString(),
       })
+      this.syncIndexedSessionTitle(sessionId, customTitle)
     }
     this.invalidateSessionListCache()
   }
@@ -4701,7 +4904,7 @@ export class SessionService {
       const entries = await this.readJsonlFile(filePath)
       if (entries.length === 0) continue
 
-      if (this.countTranscriptMessages(entries) > 0) continue
+      if (this.hasConversationTranscript(entries)) continue
 
       await fs.rm(filePath, { force: true })
       removed += 1
@@ -4741,33 +4944,51 @@ export class SessionService {
     }
 
     const removedIds = new Set(removedMessageIds)
-    const filteredEntries = entries.filter(
-      (entry) => {
-        if (typeof entry.uuid !== 'string') return true
-        if (removedIds.has(entry.uuid)) return false
-        if (
-          entry.message?.role &&
-          (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
-        ) {
-          return remainingMessageIds.has(entry.uuid)
-        }
-        return true
-      },
-    )
-
-    const content =
-      filteredEntries.length > 0
-        ? filteredEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
-        : ''
+    const kept = (entry: RawEntry): boolean => {
+      if (typeof entry.uuid !== 'string') return true
+      if (removedIds.has(entry.uuid)) return false
+      if (
+        entry.message?.role &&
+        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+      ) {
+        return remainingMessageIds.has(entry.uuid)
+      }
+      return true
+    }
+    // Copy the original lines that survive. Re-serializing every retained entry
+    // would hold the whole transcript as one string on the request thread.
     const transcriptStats = await fs.stat(found.filePath)
     const tempFilePath = `${found.filePath}.rewind-${crypto.randomUUID()}.tmp`
+    const output = createWriteStream(tempFilePath, { mode: transcriptStats.mode })
+    let failed = false
+    const fail = (error: Error) => { if (!failed) { failed = true; output.destroy(error) } }
     try {
-      await fs.writeFile(tempFilePath, content, {
-        encoding: 'utf-8',
-        mode: transcriptStats.mode,
+      await new Promise<void>((resolve, reject) => {
+        output.on('error', reject)
+        output.on('finish', resolve)
+        void (async () => {
+          const input = createReadStream(found.filePath, { encoding: 'utf8' })
+          try {
+            for await (const line of createInterface({ input, crlfDelay: Infinity })) {
+              if (line.trim()) {
+                try {
+                  if (!kept(JSON.parse(line) as RawEntry)) continue
+                } catch { /* Keep a line the transcript reader would also keep. */ }
+              }
+              if (!output.write(`${line}\n`)) await new Promise<void>(resume => output.once('drain', resume))
+            }
+            output.end()
+          } catch (error) {
+            fail(error instanceof Error ? error : new Error(String(error)))
+          } finally {
+            input.destroy()
+          }
+        })()
       })
+      if (!this.shouldPersistSession()) return { removedCount: 0, removedMessageIds: [] }
       await fs.rename(tempFilePath, found.filePath)
     } finally {
+      output.destroy()
       await fs.rm(tempFilePath, { force: true })
     }
     this.invalidateSessionListCache()
@@ -4981,8 +5202,10 @@ export class SessionService {
       // Only process transcript entries (user / assistant / system with messages)
       if (!entry.message?.role) continue
 
-      // Skip meta entries (CLI internal bookkeeping)
-      if (entry.isMeta) continue
+      // Skip meta entries (CLI internal bookkeeping). Collaboration deliveries
+      // are the exception: the isMeta prompt carries a real cross-session
+      // message that must render as an ordinary user-position bubble.
+      if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message.content)) continue
 
       const isTaskNotification =
         entry.message.role === 'user' &&

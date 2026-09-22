@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { SearchField } from '@/components/ui/SearchField'
 import { Button } from '@/components/ui/Button'
@@ -9,6 +9,10 @@ import { useTranslation } from '../../i18n'
 import { EMPTY_WORKSPACE_TREE_VIEW, useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { basenameOf } from '../../lib/workspace/types'
 import { useRovingTree } from './treeKeyboard'
+import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore'
+import { useDismissable } from '@/hooks/useDismissable'
+import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
+import { useMenuKeyboard } from '@/components/workbench/menuKeyboard'
 
 export type WorkspaceFileTreePaneProps = {
   sessionId: string
@@ -42,6 +46,21 @@ export function WorkspaceFileTreePane({
   autoFocus = false,
 }: WorkspaceFileTreePaneProps) {
   const t = useTranslation()
+  const [contextMenu, setContextMenu] = useState<{ sessionId: string; row: TreeRow; x: number; y: number } | null>(null)
+  const menu = contextMenu?.sessionId === sessionId ? contextMenu : null
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuTriggerRef = useRef<HTMLElement | null>(null)
+  const closeMenu = useCallback(() => setContextMenu(null), [])
+  useEffect(closeMenu, [closeMenu, sessionId])
+  useDismissable({ open: menu !== null, refs: [menuRef], onDismiss: closeMenu })
+  const handleMenuKeyDown = useMenuKeyboard({ open: menu !== null, menuRef, triggerRef: menuTriggerRef, onClose: closeMenu })
+  const menuPosition = useAnchoredPosition({
+    open: menu !== null,
+    anchorRect: { top: menu?.y ?? 0, bottom: menu?.y ?? 0, left: menu?.x ?? 0, right: menu?.x ?? 0 },
+    floatingRef: menuRef,
+    offset: 0,
+    clampHeight: true,
+  })
   const treeView = useWorkspaceContentStore((state) => state.treeViewBySession[sessionId] ?? EMPTY_WORKSPACE_TREE_VIEW)
   const setTreeView = useWorkspaceContentStore((state) => state.setTreeView)
   const { filter } = treeView
@@ -312,7 +331,21 @@ export function WorkspaceFileTreePane({
                   handleActivate(row)
                 }}
                 onFocus={() => setFocusedPath(row.path)}
-                onKeyDown={(event) => handleKeyDown(event, row)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  menuTriggerRef.current = event.currentTarget
+                  setContextMenu({ sessionId, row, x: event.clientX, y: event.clientY })
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                    event.preventDefault()
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    menuTriggerRef.current = event.currentTarget
+                    setContextMenu({ sessionId, row, x: rect.left, y: rect.bottom })
+                    return
+                  }
+                  handleKeyDown(event, row)
+                }}
                 style={{ paddingLeft: 6 + row.depth * 16 }}
                 className={[
                   'relative flex h-[34px] cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
@@ -339,6 +372,26 @@ export function WorkspaceFileTreePane({
           })
         )}
       </div>
+      {menu ? (
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={t('workspace.addSelectionToChat')}
+          onKeyDown={handleMenuKeyDown}
+          style={menuPosition.style}
+          className="fixed z-[var(--z-dropdown)] min-w-[160px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+        >
+          <Button role="menuitem" variant="ghost" size="sm" onClick={() => {
+            useWorkspaceChatContextStore.getState().addReference(sessionId, {
+              kind: 'file', path: menu.row.path, name: menu.row.name,
+              isDirectory: menu.row.isDirectory,
+            })
+            closeMenu()
+          }}>
+            {t('workspace.addSelectionToChat')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

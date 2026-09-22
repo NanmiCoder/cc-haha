@@ -61,9 +61,11 @@ describe('ApiSmart sponsor provider', () => {
     expect(dialog.getByDisplayValue('https://direct.aruhub.com:8443')).toBeInTheDocument()
     expect(dialog.getAllByDisplayValue('claude-opus-5')).toHaveLength(2)
     expect(dialog.getAllByDisplayValue('claude-sonnet-5')).toHaveLength(2)
-    expect(dialog.getByText(/注册即送 1 美元全模型通用额度/)).toBeInTheDocument()
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    const offer = dialog.getByRole('button', { name: /注册即送 1 美元全模型通用额度/ })
+    fireEvent.click(offer)
     expect(open).toHaveBeenCalledWith('https://aruhub.com/sign-up?aff=Z54g')
+    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    expect(open).toHaveBeenCalledTimes(2)
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-aruhub-key' } })
     expect(dialog.getByText(/注册即送 1 美元全模型通用额度/)).toBeInTheDocument()
     fireEvent.change(dialog.getByDisplayValue('https://direct.aruhub.com:8443'), { target: { value: 'https://other.invalid' } })
@@ -78,6 +80,47 @@ describe('ApiSmart sponsor provider', () => {
       apiKey: 'fake-aruhub-key',
       models: { main: 'claude-opus-5', haiku: 'claude-sonnet-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5' },
     })))
+  })
+
+  it('lets a preset switch protocol while the preset endpoint stays put', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'saved-aruhub', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'AruHub' }))
+
+    // AruHub is an Anthropic-endpoint preset that also serves OpenAI, so the
+    // protocol starts on the preset's own value and is the user's to change.
+    const formatTrigger = dialog.getByRole('button', { name: /Anthropic Messages \(native\)/ })
+    expect(dialog.queryByText(/point the base URL at an endpoint that serves it/)).not.toBeInTheDocument()
+
+    fireEvent.click(formatTrigger)
+    fireEvent.click(await screen.findByRole('option', { name: /OpenAI Chat Completions/ }))
+
+    expect(dialog.getByText(/point the base URL at an endpoint that serves it/)).toBeInTheDocument()
+    // The address is the user's to replace, so switching must not rewrite it.
+    expect(dialog.getByDisplayValue('https://direct.aruhub.com:8443')).toBeInTheDocument()
+
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-aruhub-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'aruhub',
+      baseUrl: 'https://direct.aruhub.com:8443',
+      apiFormat: 'openai_chat',
+      apiKey: 'fake-aruhub-key',
+    })))
+  })
+
+  it('does not warn about the endpoint while a preset keeps its own protocol', async () => {
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
+
+    expect(dialog.getByRole('button', { name: /OpenAI Chat Completions \(proxy\)/ })).toBeInTheDocument()
+    expect(dialog.queryByText(/point the base URL at an endpoint that serves it/)).not.toBeInTheDocument()
   })
 
   it('prefills the sponsor connection, opens its landing page, and saves the selected models', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   handlePreviewLink,
   isAbsoluteLocalPath,
+  isRootedLocalPath,
   localFileUrl,
   previewFsUrl,
   type PreviewLinkDeps,
@@ -20,6 +21,37 @@ function makeDeps(overrides?: Partial<PreviewLinkDeps>): PreviewLinkDeps {
 }
 
 describe('handlePreviewLink', () => {
+  it.each([
+    ['C:\\Users\\me\\page.htm', 'local-file/C%3A/Users/me/page.htm'],
+    ['~/Desktop/发布清单.htm', 'local-file/~/Desktop/%E5%8F%91%E5%B8%83%E6%B8%85%E5%8D%95.htm'],
+    ['./out/page.htm', 'preview-fs/s1/./out/page.htm'],
+  ])('keeps browser routing correct for %s', (filePath, route) => {
+    const deps = makeDeps()
+    expect(handlePreviewLink(filePath, deps)).toBe(true)
+    expect(deps.openBrowser).toHaveBeenCalledWith('s1', `http://127.0.0.1:8787/${route}`)
+    expect(deps.openFilePreview).not.toHaveBeenCalled()
+  })
+
+  it('preserves home-relative source reveal and system-document routing', () => {
+    const deps = makeDeps()
+    expect(handlePreviewLink('~/src/app.ts:42:8', deps)).toBe(true)
+    expect(deps.openFilePreview).toHaveBeenCalledWith('s1', '~/src/app.ts', { line: 42, column: 8 })
+    expect(handlePreviewLink('~/Desktop/brief.docx', deps)).toBe(true)
+    expect(deps.openSystemFile).toHaveBeenCalledWith('~/Desktop/brief.docx')
+    expect(deps.openBrowser).not.toHaveBeenCalled()
+  })
+
+  it.each(['~/Desktop/checklist.html', '~\\Desktop\\checklist.html'])(
+    'routes home-relative HTML %s through local-file', (filePath) => {
+      const deps = makeDeps()
+      expect(handlePreviewLink(filePath, deps)).toBe(true)
+      expect(deps.openBrowser).toHaveBeenCalledWith(
+        's1', 'http://127.0.0.1:8787/local-file/~/Desktop/checklist.html',
+      )
+      expect(deps.openFilePreview).not.toHaveBeenCalled()
+    },
+  )
+
   it('routes loopback urls to openBrowser with the url', () => {
     const deps = makeDeps()
     const handled = handlePreviewLink('http://localhost:5173/', deps)
@@ -151,6 +183,15 @@ describe('isAbsoluteLocalPath', () => {
     expect(isAbsoluteLocalPath('out/index.html')).toBe(false)
     expect(isAbsoluteLocalPath('./page.html')).toBe(false)
   })
+})
+
+describe('isRootedLocalPath', () => {
+  it.each(['~', '~/Desktop/page.html', '~\\Desktop\\page.html', '/tmp/page.html', 'C:\\temp\\page.html'])(
+    'recognizes rooted path %s', (filePath) => expect(isRootedLocalPath(filePath)).toBe(true),
+  )
+  it.each(['~other/page.html', './~/page.html', 'out/page.html', 'C:page.html'])(
+    'does not expand relative or other-user path %s', (filePath) => expect(isRootedLocalPath(filePath)).toBe(false),
+  )
 })
 
 describe('localFileUrl', () => {

@@ -12,6 +12,7 @@ import {
   closeSessionConnection,
   getActiveSessionIds,
   handleWebSocket,
+  stopSessionTurn,
   __registerPendingSessionStartupForTests,
   translateCliMessage,
   type WebSocketData,
@@ -23,6 +24,7 @@ import {
 import { conversationService } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { sessionService } from '../services/sessionService.js'
+import { observeSessionTurns, type SessionTurnEvent } from '../services/sessionTurnEvents.js'
 import * as titleService from '../services/titleService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { activeBackgroundTaskIds } from '../ws/agentTaskState.js'
@@ -152,6 +154,21 @@ describe('WebSocket handler session title lifecycle', () => {
     resetSettingsCache()
     __resetWebSocketHandlerStateForTests()
     mock.restore()
+  })
+
+  it('replays a persisted custom title when a renderer reconnects before the index refreshes', async () => {
+    const sessionId = `title-reconnect-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('安全相关更新分析')
+
+    handleWebSocket.open(ws)
+    await flushMicrotasks()
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'session_title_updated',
+      sessionId,
+      title: '安全相关更新分析',
+    })
   })
 
   it('does not regenerate a title when a resumed session already has transcript messages', async () => {
@@ -2481,6 +2498,8 @@ describe('WebSocket handler session isolation', () => {
 
     handleWebSocket.open(first)
     handleWebSocket.open(second)
+    await flushMicrotasks()
+    getCustomTitle.mockClear()
     outputCallback?.({
       type: 'system',
       subtype: 'task_started',
@@ -3686,6 +3705,15 @@ describe('WebSocket handler session isolation', () => {
     expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 30_000)).toBe(true)
   })
 
+  it('group Stop interrupts an idle live CLI to revoke queued collaboration work', () => {
+    const sessionId = `stop-idle-collaboration-${crypto.randomUUID()}`
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    const interrupt = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    stopSessionTurn(sessionId)
+    expect(interrupt).toHaveBeenCalledTimes(1)
+    expect(interrupt).toHaveBeenCalledWith(sessionId)
+  })
+
   it('counts repeated Stop clicks once for the same foreground turn', async () => {
     const sessionId = `stop-replacement-same-turn-repeated-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
@@ -4001,6 +4029,36 @@ describe('WebSocket handler session isolation', () => {
       subtype: 'task_notification',
       data: running,
     })
+  })
+
+  it('notifies the background scheduler when a tool permission is resolved', () => {
+    const events: SessionTurnEvent[] = []
+    const unsubscribe = observeSessionTurns(event => { events.push(event) })
+    const ws = makeClientSocket('permission-scheduler')
+    const respond = spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+    try {
+      handleWebSocket.message(ws, JSON.stringify({ type: 'permission_response', requestId: 'approved', allowed: true }))
+      expect(events).toEqual([{ type: 'output', sessionId: 'permission-scheduler', message: { type: 'control_response', request_id: 'approved' } }])
+      respond.mockReturnValue(false)
+      handleWebSocket.message(ws, JSON.stringify({ type: 'permission_response', requestId: 'stale', allowed: true }))
+      expect(events).toHaveLength(1)
+    } finally { unsubscribe() }
+  })
+
+  it('reports an unavailable session reference without starting or reopening its inbox', async () => {
+    const ws = makeClientSocket('invalid-reference-owner')
+    const events: SessionTurnEvent[] = []
+    const unsubscribe = observeSessionTurns(event => { events.push(event) })
+    spyOn(sessionService, 'shouldPersistSession').mockReturnValue(false)
+    spyOn(sessionService, 'getSessionSummary').mockResolvedValue(null)
+    const send = spyOn(conversationService, 'sendMessage')
+    try {
+      handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Read it', sessionReferences: [{ sessionId: 'deleted-source' }] }))
+      await flushMicrotasks()
+      expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({ type: 'error', code: 'NOT_FOUND', message: 'Referenced session is unavailable: deleted-source' }))
+      expect(send).not.toHaveBeenCalled()
+      expect(events.some(event => event.type === 'user-input')).toBe(false)
+    } finally { unsubscribe() }
   })
 
   it('broadcasts tool and Computer Use permission resolutions to every client', () => {
@@ -4921,6 +4979,11 @@ describe('WebSocket handler session isolation', () => {
     const ws = makeClientSocket(sessionId)
     spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
 
+    const reconnectTitle = spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
+    handleWebSocket.open(ws)
+    await flushMicrotasks()
+    reconnectTitle.mockRestore()
+
     let rejectFirst!: (error: Error) => void
     let customTitleCalls = 0
     spyOn(sessionService, 'getCustomTitle').mockImplementation(() => {
@@ -4933,7 +4996,6 @@ describe('WebSocket handler session isolation', () => {
       return new Promise(() => {})
     })
 
-    handleWebSocket.open(ws)
     handleWebSocket.message(ws, JSON.stringify({
       type: 'user_message',
       content: 'older turn',

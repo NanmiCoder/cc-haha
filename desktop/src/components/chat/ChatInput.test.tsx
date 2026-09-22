@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getSlashCommands: vi.fn(),
   listAgents: vi.fn(),
   listReferences: vi.fn(),
+  listSessionReferences: vi.fn(),
   getRepositoryContext: vi.fn(),
   createRepositoryBranch: vi.fn(),
   getRecentProjects: vi.fn(),
@@ -44,6 +45,8 @@ vi.mock('../../api/sessions', () => ({
     getRecentProjects: mocks.getRecentProjects,
   },
 }))
+
+vi.mock('../../api/sessionCollaboration', () => ({ sessionCollaborationApi: { list: mocks.listSessionReferences } }))
 
 vi.mock('../../api/composerReferences', () => ({
   composerReferencesApi: { list: mocks.listReferences },
@@ -213,6 +216,7 @@ describe('ChatInput file mentions', () => {
     mocks.webviewDragHandlers.length = 0
     Reflect.deleteProperty(window, 'desktopHost')
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    mocks.listSessionReferences.mockResolvedValue({ sessions: [] })
     viewportMocks.isMobile = false
     useSettingsStore.setState({ locale: 'en' })
     useChatStore.setState(initialChatState, true)
@@ -1845,6 +1849,22 @@ describe('ChatInput file mentions', () => {
     })
   })
 
+  it('sends selected session references separately and preserves them when a running turn queues the prompt', async () => {
+    mocks.listSessionReferences.mockResolvedValue({ sessions: [{ sessionId: 'prior', title: 'Auth review', cwd: '/other', status: 'idle', updatedAt: 1 }] })
+    render(<ChatInput compact />)
+    setComposerText('@Auth', 5)
+    fireEvent.click(await screen.findByRole('option', { name: 'Auth review' }))
+    expect(document.querySelector('[data-mention-kind="session"]')).toHaveTextContent('Auth review')
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message', content: '@Auth review', attachments: [], sessionReferences: [{ sessionId: 'prior' }],
+    })
+    setComposerText('@Auth', 5)
+    fireEvent.click(await screen.findByRole('option', { name: 'Auth review' }))
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(useChatStore.getState().sessions[sessionId]?.queuedUserMessages?.[0]).toMatchObject({ sessionReferences: [{ sessionId: 'prior' }] })
+  })
+
   it('selects an exact slash skill on Enter without executing and preserves its canonical identity', async () => {
     mocks.listReferences.mockResolvedValue({ plugins: [], skills: [{
       kind: 'skill', id: 'skill:team:review', name: 'team:review', displayName: 'Review',
@@ -1941,7 +1961,7 @@ describe('ChatInput file mentions', () => {
     })
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
     expect(getComposerText()).toContain('Please review @README.md')
-    expect(mocks.search).toHaveBeenCalledWith('README', '/repo')
+    expect(mocks.search).toHaveBeenCalledWith('README', '/repo', { signal: expect.any(AbortSignal) })
     expect(screen.queryByRole('combobox', { name: 'Search skills, plugins, files…' })).not.toBeInTheDocument()
     expect(mocks.wsSend).not.toHaveBeenCalled()
     fireEvent.keyDown(getComposerElement(), { key: 'Enter' })

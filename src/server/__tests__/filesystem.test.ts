@@ -246,7 +246,7 @@ describe('filesystem API', () => {
     expect(srcPaths.indexOf('src/hooks')).toBeLessThan(srcPaths.indexOf('scripts/quality-gate/baseline/fixtures/cross-module-refactor/src'))
   })
 
-  it('falls back to ripgrep search outside git and still respects ignore files', async () => {
+  it('searches non-git trees without materializing every path and still respects ignore files', async () => {
     const homeFixtureDir = await fsp.mkdtemp(path.join(os.homedir(), 'claude-filesystem-test-'))
     cleanupDirs.add(homeFixtureDir)
     await fsp.mkdir(path.join(homeFixtureDir, 'app'), { recursive: true })
@@ -323,6 +323,20 @@ describe('filesystem API', () => {
     })
 
     expect(files).toEqual(['a-target/needle.ts'])
+  })
+
+  it('stops a bounded filesystem search when its caller is superseded', async () => {
+    const fixtureDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-filesystem-abort-'))
+    cleanupDirs.add(fixtureDir)
+    await fsp.mkdir(path.join(fixtureDir, 'nested'), { recursive: true })
+    await fsp.writeFile(path.join(fixtureDir, 'nested', 'needle.ts'), '')
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(getProjectSearchFiles(fixtureDir, {
+      signal: controller.signal,
+      fallbackOptions: { searchQuery: 'needle' },
+    })).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('accepts /private/tmp aliases on macOS for browsing and file serving', async () => {

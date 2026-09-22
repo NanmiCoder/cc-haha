@@ -230,7 +230,9 @@ describe('local index coordinator', () => {
     })
 
     await coordinator.start()
-    expect(coordinator.isSessionScopeReady()).toBe(false)
+    // The committed rows keep the public state `ready`; the failing read is
+    // what must pull it back down and open the cooldown.
+    expect(coordinator.getPublicStatus().state).toBe('ready')
     expect(coordinator.listSessions()).toEqual({ sessions: [], total: 0 })
     expect(indexedReads).toBe(1)
     expect(coordinator.getPublicStatus()).toMatchObject({
@@ -272,9 +274,12 @@ describe('local index coordinator', () => {
 
     expect(checkpoints).toBe(1)
     expect(storageReads).toBe(0)
+    // A busy passive checkpoint is transient: WAL frames are still live, but
+    // the committed snapshot can be served. It must not bounce the public
+    // state through `degraded`, or the next reconciliation flips it back.
     expect(coordinator.getPublicStatus()).toMatchObject({
-      state: 'degraded',
-      lastErrorCode: 'SQLITE_BUSY',
+      state: 'building',
+      lastErrorCode: null,
     })
     await coordinator.stop()
   })
@@ -407,6 +412,99 @@ describe('local index coordinator', () => {
     expect(coordinator.listSessions({ limit: 10 }).sessions.map(row => row.id)).toEqual(['second'])
     await coordinator.stop()
     expect(watcherStops).toBe(1)
+  })
+
+  it('keeps serving a ready snapshot while a watched batch reconciles', async () => {
+    const root = await createTempDir('coordinator-stable-ready')
+    const configDir = join(root, 'config')
+    const databasePath = join(configDir, 'cc-haha', 'db', 'index-v1.sqlite')
+    const first = await createRealTranscript(configDir, '-repo', 'first', 'First')
+    let watcherOptions!: ReconciliationWatcherOptions
+    let releaseProjection!: () => void
+    const projectionGate = new Promise<void>(resolve => {
+      releaseProjection = resolve
+    })
+    let projections = 0
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => configDir,
+      resolveDatabasePath: () => databasePath,
+      createProjector: options => {
+        const projector = createSessionProjector(options)
+        return {
+          ...projector,
+          async projectSource(candidate, progress) {
+            projections += 1
+            if (projections > 1) await projectionGate
+            return projector.projectSource(candidate, progress)
+          },
+        }
+      },
+      createWatcher: options => {
+        watcherOptions = options
+        return {
+          async start() {},
+          async stop() {},
+          queueTranscriptPath() {},
+          queueFullSweep() {},
+          getMetrics: () => ({ queuedPaths: 0, maxBatchSize: 0, yielded: 0, fullSweeps: 0, watchFailures: 0 }),
+        }
+      },
+    })
+
+    await coordinator.start()
+    await waitFor(() => coordinator.getPublicStatus().state === 'ready')
+
+    const reconciling = watcherOptions.onBatch({ paths: [first.path], fullSweep: false })
+    await waitFor(() => projections === 2)
+    // The batch is mid-flight and the snapshot is already served, so readers
+    // must keep seeing `ready` rather than a `building` gap.
+    expect(coordinator.getPublicStatus().state).toBe('ready')
+    expect(coordinator.listSessions({ limit: 10 }).total).toBe(1)
+
+    releaseProjection()
+    await reconciling
+    expect(coordinator.getPublicStatus().state).toBe('ready')
+    await coordinator.stop()
+  })
+
+  it('serves the committed snapshot while a passive checkpoint stays busy', async () => {
+    const index: SessionIndex = {
+      ...createFakeIndex([candidate(1)]),
+      // Present so startup reaches the committed-row check. Without them the
+      // activity probe throws and start bails out before publishing anything.
+      getActivitySource: () => null,
+      listActivitySources: () => [],
+      countActivitySources: () => 0,
+      getActivityBackfillState: () => null,
+      aggregateActivity: () => { throw new Error('not used') },
+      explainAggregatePlan: () => [],
+    }
+    const database: LocalIndexDatabase = {
+      ...fakeDatabase(() => {}),
+      checkpointPassive: () => ({ busy: 1, logFrames: 4, checkpointedFrames: 0 }),
+      getStorageStats: () => {
+        throw new Error('storage stats must not be read while the checkpoint is busy')
+      },
+    }
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => '/tmp/config',
+      resolveDatabasePath: () => '/tmp/config/cc-haha/db/index-v1.sqlite',
+      openDatabase: () => database,
+      createIndex: () => index,
+      discoverSources: async () => [],
+      schedule: () => {},
+    })
+
+    await coordinator.start()
+
+    expect(coordinator.getPublicStatus()).toMatchObject({
+      state: 'ready',
+      lastErrorCode: null,
+    })
+    expect(coordinator.listSessions().sessions.map(row => row.id)).toEqual(['session-1'])
+    await coordinator.stop()
   })
 
   it('keeps a failed exact path degraded across unrelated successful batches until that path converges', async () => {
@@ -1161,11 +1259,18 @@ describe('local index coordinator', () => {
     expect(first.listSessions().sessions.map(row => row.id)).toEqual([firstCandidate.sessionId])
     await first.stop()
 
-    const restarted = createLocalIndexCoordinator()
+    const restarted = createLocalIndexCoordinator({
+      // Past anything the first generation could have stamped, so its catch-up
+      // completion is observable without spinning on a state change.
+      now: () => Date.parse('2099-01-01T00:00:00.000Z'),
+    })
     await restarted.start()
     expect(restarted.listSessions().sessions.map(row => row.id)).toEqual(['first'])
-    expect(restarted.getPublicStatus().state).toBe('building')
-    await waitFor(() => restarted.getPublicStatus().state === 'ready')
+    // The persisted backfill already reached `ready`, so reopening serves it
+    // immediately instead of reporting `building` for the catch-up generation.
+    expect(restarted.getPublicStatus().state).toBe('ready')
+    await waitFor(() => restarted.getPublicStatus().lastUpdatedAt === '2099-01-01T00:00:00.000Z')
+    expect(restarted.getPublicStatus().state).toBe('ready')
     await restarted.stop()
 
     process.env.CLAUDE_CONFIG_DIR = join(secondRoot, 'config')
@@ -1221,13 +1326,16 @@ describe('local index coordinator', () => {
     await restarted.start()
 
     expect(restarted.listSessions({ limit: 100 }).total).toBe(25)
+    // The 25 committed rows are already servable, so the resumed generation
+    // must not withdraw them behind a `building` state while it finishes.
     expect(restarted.getPublicStatus()).toMatchObject({
-      state: 'building',
+      state: 'ready',
       indexed: 25,
       discovered: 25,
     })
-    await waitFor(() => restarted.getPublicStatus().state === 'ready')
-    expect(restarted.listSessions({ limit: 100 }).total).toBe(30)
+    await waitFor(() => restarted.listSessions({ limit: 100 }).total === 30)
+    // The catch-up finished without ever dropping the servable snapshot.
+    expect(restarted.getPublicStatus().state).toBe('ready')
     await restarted.stop()
   })
 
@@ -1679,8 +1787,9 @@ describe('local index coordinator', () => {
 
     expect(deleteCommits).toBe(0)
     expect(index.getSource(existing.path)).not.toBeNull()
+    // Stopping does not rewrite the status; what it must not do is let the
+    // aborted generation overwrite whatever was published before it aborted.
     expect(coordinator.getPublicStatus()).toEqual(stoppedStatus)
-    expect(coordinator.getPublicStatus().state).not.toBe('ready')
     expect(closeCount).toBe(1)
   })
 

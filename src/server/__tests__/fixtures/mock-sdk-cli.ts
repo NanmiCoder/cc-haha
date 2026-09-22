@@ -1,5 +1,7 @@
-import { mkdir, appendFile, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, appendFile, readFile, writeFile, readdir } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { dirname, join } from 'node:path'
+import { formatSessionCollaborationPrompt } from '../../../utils/sessionCollaborationEnvelope.js'
 
 const args = process.argv.slice(2)
 
@@ -38,6 +40,7 @@ const resumeTranscriptPath = process.env.MOCK_SDK_RESUME_TRANSCRIPT_PATH
 const resumeUpstreamUrl = process.env.MOCK_SDK_RESUME_UPSTREAM_URL
 let initSent = false
 let firstUserExitScheduled = false
+let releaseReconnectStream: (() => void) | undefined
 
 /**
  * Deterministic tool-use support.
@@ -243,6 +246,57 @@ if (!sdkUrl) {
 
 const ws = new WebSocket(sdkUrl)
 
+const collaborationInbox = new Map<string, { input: any; status: 'queued' | 'consumed' }>()
+const collaborationQueue: any[] = []
+let collaborationRunning = false
+let normalRunning = false
+let collaborationEpoch = 0
+
+function collaborationUuid(id: string): string {
+  const hash = createHash('sha256').update('desktop-session-message:' + id).digest('hex')
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+}
+
+async function appendCollaborationHistory(input: any, reply?: string) {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR!, 'projects')
+  for (const directory of await readdir(projects).catch(() => [])) {
+    const file = join(projects, directory, `${sessionId}.jsonl`)
+    try { await readFile(file) } catch { continue }
+    const uuid = collaborationUuid(input.message_id)
+    const record = reply === undefined
+      // Mirror the real CLI: consumed session messages persist as isMeta user
+      // entries whose content is the collaboration envelope, not bare text.
+      ? { type: 'user', uuid, sessionId, isMeta: true, message: { role: 'user', content: formatSessionCollaborationPrompt({ senderSessionId: input.sender_session_id, messageId: input.message_id, text: input.text }) }, timestamp: new Date().toISOString() }
+      : { type: 'assistant', uuid: crypto.randomUUID(), parentUuid: uuid, sessionId, message: { role: 'assistant', content: [{ type: 'text', text: reply }] }, timestamp: new Date().toISOString() }
+    await appendFile(file, JSON.stringify(record) + '\n')
+    return
+  }
+}
+
+async function drainCollaboration() {
+  if (normalRunning || collaborationRunning) return
+  collaborationRunning = true
+  const epoch = collaborationEpoch
+  try {
+    while (collaborationQueue.length && epoch === collaborationEpoch) {
+      const input = collaborationQueue.shift()
+      const record = collaborationInbox.get(input.message_id)!
+      await appendCollaborationHistory(input)
+      record.status = 'consumed'
+      emit(ws, { type: 'system', subtype: 'session_message_receipt', message_id: input.message_id, source_uuid: collaborationUuid(input.message_id), status: 'consumed', duplicate: false, session_id: sessionId, uuid: crypto.randomUUID() })
+      emit(ws, { type: 'stream_event', event: { type: 'message_start' }, session_id: sessionId })
+      if (streamDelayMs > 0) await delay(streamDelayMs)
+      if (epoch !== collaborationEpoch) break
+      const reply = `Echo: ${input.text}`
+      await appendCollaborationHistory(input, reply)
+      emit(ws, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] }, session_id: sessionId })
+      emit(ws, { type: 'result', subtype: 'success', is_error: false, result: reply, usage: { input_tokens: 3, output_tokens: 2 }, session_id: sessionId, uuid: crypto.randomUUID() })
+    }
+  } finally { collaborationRunning = false }
+}
+
+
+
 function sendInit() {
   if (initSent) return
   initSent = true
@@ -275,11 +329,33 @@ ws.addEventListener('message', (event) => {
   void (async () => {
     for (const line of lines) {
       const parsed = JSON.parse(line)
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_release_reconnect_stream') {
+        releaseReconnectStream?.()
+        releaseReconnectStream = undefined
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: {} }, session_id: sessionId })
+        continue
+      }
+
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_exit_after_api_error_ack') {
         process.exit(1)
       }
 
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'enqueue_session_message') {
+        sendInit()
+        const input = parsed.request
+        const previous = collaborationInbox.get(input.message_id)
+        if (!previous) {
+          collaborationInbox.set(input.message_id, { input, status: 'queued' })
+          collaborationQueue.push(input)
+        }
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: { message_id: input.message_id, status: previous?.status ?? 'queued', duplicate: !!previous } }, session_id: sessionId })
+        if (input.start_if_idle) void drainCollaboration()
+        continue
+      }
+
       if (parsed.type === 'user') {
+        normalRunning = true
+        try {
         sendInit()
         if (exitAfterFirstUserMs > 0 && !firstUserExitScheduled) {
           firstUserExitScheduled = true
@@ -382,6 +458,11 @@ ws.addEventListener('message', (event) => {
           },
           session_id: sessionId,
         })
+        // A reconnect test controls this boundary explicitly, so scheduler load
+        // cannot let the text finish before its replacement socket attaches.
+        if (text.startsWith('MOCK_RECONNECT_GATE ')) {
+          await new Promise<void>(resolve => { releaseReconnectStream = resolve })
+        }
         if (streamDelayMs > 0) await delay(streamDelayMs)
         emit(ws, {
           type: 'stream_event',
@@ -406,6 +487,7 @@ ws.addEventListener('message', (event) => {
           usage: { input_tokens: 3, output_tokens: 2 },
           session_id: sessionId,
         })
+        } finally { normalRunning = false; void drainCollaboration() }
       }
 
       if (parsed.type === 'control_response' && typeof parsed.response?.request_id === 'string') {
@@ -424,6 +506,9 @@ ws.addEventListener('message', (event) => {
       }
 
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'interrupt') {
+        collaborationEpoch++
+        for (const message of collaborationQueue) collaborationInbox.delete(message.message_id)
+        collaborationQueue.length = 0
         emit(ws, {
           type: 'result',
           subtype: 'success',

@@ -528,7 +528,7 @@ async function resolveTranscript(
     if (!agentId || seen.has(agentId)) continue
     seen.add(agentId)
     const transcript = await sessionService.getSubagentTranscript(sessionId, agentId, { bounded: true })
-    if (transcript.messages.length > 0 || transcript.taskNotifications.length > 0) {
+    if (transcript.messages.length > 0 || transcript.taskNotifications.length > 0 || transcript.historyComplete === false) {
       return { agentId, ...transcript }
     }
   }
@@ -539,17 +539,21 @@ async function resolveRunFromToolRef(
   sessionId: string,
   rootMessages: MessageEntry[],
   toolRef: string,
+  rootComplete = true,
 ): Promise<{
+  historyComplete: boolean
   resolution: SubagentRunResolution
   lookupToolUseId: string
   expectedOwnerAgentId: string | null
 } | null> {
+  const unknownResolution: SubagentRunResolution = { agentId: null, hasResult: false, isAsyncLaunch: false, isError: false }
   const exactResolution = resolveSubagentRunFromMessages(rootMessages, toolRef)
   const nestedRef = parseCanonicalNestedAgentToolRef(toolRef)
   if (!nestedRef) {
-    if (!exactResolution) return null
+    if (!exactResolution && rootComplete) return null
     return {
-      resolution: exactResolution,
+      historyComplete: rootComplete,
+      resolution: exactResolution ?? unknownResolution,
       lookupToolUseId: toolRef,
       expectedOwnerAgentId: null,
     }
@@ -559,6 +563,7 @@ async function resolveRunFromToolRef(
   if (strictParentAgentId) {
     if (exactResolution) {
       return {
+        historyComplete: rootComplete,
         resolution: exactResolution,
         lookupToolUseId: nestedRef.leafToolUseId,
         expectedOwnerAgentId: strictParentAgentId,
@@ -573,9 +578,10 @@ async function resolveRunFromToolRef(
       parentTranscript.messages,
       nestedRef.leafToolUseId,
     )
-    return nestedResolution
+    return nestedResolution || parentTranscript.historyComplete === false || !rootComplete
       ? {
-          resolution: nestedResolution,
+          historyComplete: rootComplete && parentTranscript.historyComplete !== false,
+          resolution: nestedResolution ?? unknownResolution,
           lookupToolUseId: nestedRef.leafToolUseId,
           expectedOwnerAgentId: strictParentAgentId,
         }
@@ -604,13 +610,16 @@ async function resolveRunFromToolRef(
     )
     if (nestedResolution) {
       return {
+        historyComplete: rootComplete && fragments.every(fragment => fragment.historyComplete !== false),
         resolution: nestedResolution,
         lookupToolUseId: nestedRef.leafToolUseId,
         expectedOwnerAgentId: fragment.agentId,
       }
     }
   }
-  return null
+  return fragments.some(fragment => fragment.historyComplete === false) || !rootComplete
+    ? { historyComplete: false, resolution: unknownResolution, lookupToolUseId: nestedRef.leafToolUseId, expectedOwnerAgentId: nestedRef.parentAgentId }
+    : null
 }
 
 function notificationForToolRef(
@@ -684,7 +693,7 @@ export async function getSubagentRunByAgentId(
         : workflowState.agent.state === 'error' || workflowState.run.status === 'failed'
           ? 'failed'
           : 'running'
-    : 'completed'
+    : transcript.historyComplete === false ? 'unknown' : 'completed'
 
   return {
     sessionId,
@@ -717,8 +726,9 @@ export async function getSubagentRunByTool(
   // Only the root-level `Agent` tool call is resolved here — its child
   // transcript is read separately below. Pulling the merged view instead would
   // re-materialize every linked subagent on each card open.
-  const { messages: parentMessages, taskNotifications } = await sessionService.getSubagentRunLookup(sessionId, toolUseId)
-  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId)
+  const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId)
+  const { messages: parentMessages, taskNotifications } = parentLookup
+  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false)
   if (!resolvedToolRef) return null
   const { resolution, lookupToolUseId, expectedOwnerAgentId } = resolvedToolRef
 
@@ -769,7 +779,9 @@ export async function getSubagentRunByTool(
           messages: transcript.messages,
           taskNotifications: transcript.taskNotifications,
         }
-  const status = statusFromResolution(resolution, notification)
+  const historyComplete = resolvedToolRef.historyComplete && transcript.historyComplete !== false
+  const status = !resolvedToolRef.historyComplete && !resolution.hasResult && !notification?.status
+    ? 'unknown' : statusFromResolution(resolution, notification)
   const resolvedAgentId = transcript.agentId
     ?? metadataAgentId
     ?? normalizeAgentIdHint(resolution.agentId ?? undefined)
@@ -814,9 +826,9 @@ export async function getSubagentRunByTool(
     ...(truncated.truncated ? { activityMessages: activity.messages } : {}),
     taskNotifications: transcript.taskNotifications,
     activityTaskNotifications: activity.taskNotifications,
-    truncated: truncated.truncated || transcript.historyComplete === false,
-    historyComplete: transcript.historyComplete !== false,
-    activityComplete: transcript.historyComplete !== false,
+    truncated: truncated.truncated || !historyComplete,
+    historyComplete,
+    activityComplete: historyComplete,
     ...(latestTimestamp(resolution.updatedAt, notification?.timestamp, latestTranscriptTimestamp)
       ? { updatedAt: latestTimestamp(resolution.updatedAt, notification?.timestamp, latestTranscriptTimestamp) }
       : {}),

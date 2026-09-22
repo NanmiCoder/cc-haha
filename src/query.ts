@@ -1,3 +1,4 @@
+import { isPendingSessionMessage } from './utils/sessionMessageInbox.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { OpenAICodexTurnState } from './services/openaiAuth/turnState.js'
 import type {
@@ -1601,6 +1602,10 @@ async function* queryLoop(
       [...messagesForQuery, ...assistantMessages, ...toolResults],
       querySource,
     )) {
+      // Stop may remove a peer command while attachment discovery is awaiting.
+      if (attachment.type === 'attachment' && attachment.attachment.type === 'queued_command' &&
+        attachment.attachment.origin?.kind === 'channel' && attachment.attachment.origin.server === 'session-collaboration' &&
+        !isPendingSessionMessage(attachment.attachment.source_uuid)) continue
       yield attachment
       toolResults.push(attachment)
     }

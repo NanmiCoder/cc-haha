@@ -248,7 +248,7 @@ export function SubagentRunPage({
           ...state.sessions,
           [tabId]: {
             ...existing,
-            messages: preserveLiveConversation
+            messages: preserveLiveConversation || (data.historyComplete === false && transcriptMessages.length === 0)
               ? existing.messages
               : [...transcriptMessages, ...localMessages],
             agentTaskNotifications: mergedActivity.agentTaskNotifications,
@@ -328,6 +328,7 @@ export function SubagentRunPage({
           <span>{t('subagentRun.agent')}: {data.agentId ?? t('subagentRun.unknown')}</span>
           {data.description ? <span>{data.description}</span> : null}
           {data.outputFile ? <span>{t('subagentRun.output')}: {data.outputFile}</span> : null}
+          {data.historyComplete === false ? <span role="status">{t('subagentRun.incompleteHistory')}</span> : null}
         </>
       ) : null}
       backLabel={t('subagentRun.backToParent')}
@@ -625,6 +626,7 @@ function AgentSessionView({
   const t = useTranslation()
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const sessionState = useChatStore((state) => state.sessions[sessionId])
+  const runModel = useMemo(() => latestRunModel(sessionState?.messages), [sessionState?.messages])
   const isActivityPanelOpen = useActivityPanelStore((state) => state.isOpen(sessionId))
   const closeActivityPanel = useActivityPanelStore((state) => state.close)
   const dismissBackgroundTaskKeys = useActivityPanelStore((state) => state.dismissBackgroundTaskKeys)
@@ -781,7 +783,23 @@ function AgentSessionView({
             {backLabel}
           </Button>
         )}
-        titleAddon={status ? <StatusBadge status={status} t={t} /> : null}
+        titleAddon={(
+          <>
+            {status ? <StatusBadge status={status} t={t} /> : null}
+            {runModel ? (
+              <Badge
+                tone="neutral"
+                size="xs"
+                bordered
+                mono
+                title={t('subagentRun.model')}
+                aria-label={`${t('subagentRun.model')}: ${runModel}`}
+              >
+                {runModel}
+              </Badge>
+            ) : null}
+          </>
+        )}
         actions={(
           <>
             {hasVisibleActivity ? <SessionActivityButton sessionId={sessionId} /> : null}
@@ -837,6 +855,22 @@ function AgentSessionView({
       ) : null}
     </SessionChatSurface>
   )
+}
+
+/**
+ * The model a run executed on, read from the newest transcript turn that
+ * reported one. Assistant messages carry whatever the provider actually
+ * served, which is the only place the resolved model survives: the Agent tool
+ * input records an override only, and the runtime discards the model it
+ * resolved for an inheriting run. A run that has not answered yet has nothing
+ * to show, so the header renders no badge rather than guessing.
+ */
+function latestRunModel(messages: UIMessage[] | undefined): string | undefined {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = messages?.[index]
+    if (message?.type === 'assistant_text' && message.model) return message.model
+  }
+  return undefined
 }
 
 function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationFn }) {

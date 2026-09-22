@@ -431,6 +431,7 @@ export async function handleSessionsApi(
 
 async function listSessions(req: Request, url: URL): Promise<Response> {
   const project = url.searchParams.get('project') || undefined
+  const view = url.searchParams.get('view')
   const requestedLimit = parseInt(url.searchParams.get('limit') || '20', 10)
   const offset = parseInt(url.searchParams.get('offset') || '0', 10)
 
@@ -442,6 +443,19 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
   }
 
   const petAccess = isPetAccessAuthorized(req)
+  if (!petAccess && view !== null) {
+    if (view !== 'sidebar') throw ApiError.badRequest('Invalid session list view')
+    const rawPerProjectLimit = url.searchParams.get('perProjectLimit') ?? '6'
+    if (!/^\d+$/.test(rawPerProjectLimit)) throw ApiError.badRequest('Invalid perProjectLimit parameter')
+    const perProjectLimit = Number(rawPerProjectLimit)
+    if (!Number.isSafeInteger(perProjectLimit) || perProjectLimit <= 0) {
+      throw ApiError.badRequest('Invalid perProjectLimit parameter')
+    }
+    return Response.json({
+      ...await sessionService.listProjectPreviews(perProjectLimit),
+      index: localIndexCoordinator.getPublicStatus(),
+    })
+  }
   const limit = petAccess ? Math.min(requestedLimit, PET_SESSION_LIMIT) : requestedLimit
   const result = await sessionService.listSessions({
     ...(petAccess ? {} : { project }),
@@ -479,8 +493,17 @@ async function getSession(sessionId: string): Promise<Response> {
 }
 
 async function getSessionMessages(req: Request, sessionId: string, url: URL): Promise<Response> {
+  const mode = url.searchParams.get('mode')
+  if (mode !== null && mode !== 'full' && mode !== 'page') throw ApiError.badRequest('Invalid history mode')
+  const cursor = url.searchParams.get('cursor') ?? undefined
+  // A full read always starts from the tail; mixing it with a cursor would
+  // silently turn it back into a paged read with a larger budget.
+  if (mode === 'full' && cursor) throw ApiError.badRequest('mode=full does not take a cursor')
   return Response.json(await sessionService.getSessionHistoryPage(sessionId, {
-    cursor: url.searchParams.get('cursor') ?? undefined,
+    cursor,
+    // `mode=full` returns the whole transcript up to the reader's byte budget in
+    // one response so the desktop timeline never stitches pages together.
+    full: mode === 'full',
     signal: req.signal,
   }))
 }

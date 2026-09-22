@@ -168,6 +168,29 @@ describe('SubagentRunPage', () => {
     useTeamStore.getState().clearTeam()
   })
 
+  it('shows incomplete evidence without hiding content and can recover on refresh', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ historyComplete: false, activityComplete: false, truncated: true, status: 'unknown' }))
+      .mockResolvedValue(subagentRun({ historyComplete: true }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Partial Agent" />)
+    expect(await screen.findByText('Some history could not be read. Available content is shown; refresh to retry.')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-conversation')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(screen.queryByText('Some history could not be read. Available content is shown; refresh to retry.')).not.toBeInTheDocument())
+    expect(screen.getByTestId('subagent-conversation')).toBeInTheDocument()
+  })
+
+  it('preserves displayed messages when a refresh cannot read any history', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ messages: [{ id: 'retained', type: 'assistant', content: 'Previously readable answer', timestamp: TRANSCRIPT_TIMESTAMP }] }))
+      .mockResolvedValue(subagentRun({ messages: [], prompt: undefined, result: undefined, summary: undefined, historyComplete: false, activityComplete: false, status: 'unknown' }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Partial Agent" />)
+    await screen.findByText('Previously readable answer')
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await screen.findByText('Some history could not be read. Available content is shown; refresh to retry.')
+    expect(screen.getByText('Previously readable answer')).toBeInTheDocument()
+  })
+
   it('returns to the parent session and closes its own tab via the back button', async () => {
     vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun())
     useTabStore.getState().openTab('session-1', 'Parent session')
@@ -442,6 +465,46 @@ describe('SubagentRunPage', () => {
     expect(transcript).toHaveTextContent('Finding')
     expect(transcript).not.toHaveTextContent('assistant_text')
     expectSharedSessionSurface('subagent')
+  })
+
+  it('shows the model the newest transcript turn answered on, not an earlier one', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({
+      messages: [
+        { id: 'msg-user', type: 'user', content: 'Read files', timestamp: TRANSCRIPT_TIMESTAMP },
+        {
+          id: 'msg-assistant-1',
+          type: 'assistant',
+          content: [{ type: 'text', text: 'First pass' }],
+          model: 'claude-haiku-4-5',
+          timestamp: TRANSCRIPT_TIMESTAMP,
+        },
+        {
+          id: 'msg-assistant-2',
+          type: 'assistant',
+          content: [{ type: 'text', text: 'Second pass' }],
+          model: 'claude-sonnet-5',
+          timestamp: TRANSCRIPT_TIMESTAMP,
+        },
+      ],
+    }))
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    expect(within(header).getByText('claude-sonnet-5')).toBeInTheDocument()
+    expect(within(header).queryByText('claude-haiku-4-5')).not.toBeInTheDocument()
+  })
+
+  it('omits the model badge while no turn has reported one', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun())
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    expect(within(header).queryByTitle('Model')).not.toBeInTheDocument()
+    expect(within(header).getByText('Completed')).toBeInTheDocument()
   })
 
   it('uses compact main-session chrome and mobile transcript behavior on narrow screens', async () => {

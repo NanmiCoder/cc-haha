@@ -104,18 +104,16 @@ describe('normalizeRuntimeSelection', () => {
     })
   })
 
-  it('removes effort from a non-reasoning Grok model', () => {
+  it('keeps xhigh for Grok models that support it', () => {
     expect(normalizeRuntimeSelection({
       providerId: 'grok-official',
-      modelId: 'grok-composer-2.5-fast',
+      modelId: 'grok-4.7',
       effortLevel: 'xhigh',
     })).toEqual({
       providerId: 'grok-official',
-      modelId: 'grok-composer-2.5-fast',
+      modelId: 'grok-4.7',
+      effortLevel: 'xhigh',
     })
-  })
-
-  it('keeps xhigh for grok-4.6 which supports it', () => {
     expect(normalizeRuntimeSelection({
       providerId: 'grok-official',
       modelId: 'grok-4.6',

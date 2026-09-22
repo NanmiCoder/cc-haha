@@ -171,6 +171,27 @@ describe('session messages HTTP surface', () => {
     } finally { canonical.mockRestore() }
   })
 
+  it('returns the whole bounded transcript in one response for mode=full', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
+    const content = 'x'.repeat(16 * 1024)
+    for (let n = 0; n < 60; n++) await fs.appendFile(filePath, JSON.stringify({ type: 'assistant', uuid: `full-${n}`, timestamp: '2026-01-02T00:00:00Z', message: { role: 'assistant', content } }) + '\n')
+    const response = await api('GET', `/api/sessions/${sessionId}/messages?mode=full`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { messages: Array<{ id?: string }>; page: { historyComplete: boolean; nextCursor: string | null } }
+    // Every appended record arrives without a cursor walk, oldest first.
+    const ids = body.messages.map(message => message.id ?? '').filter(id => id.startsWith('full-'))
+    expect(ids).toEqual(Array.from({ length: 60 }, (_, n) => `full-${n}`))
+    expect(body.page.historyComplete).toBe(true)
+    expect(body.page.nextCursor).toBeNull()
+  })
+
+  it('rejects an unknown history mode', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const response = await api('GET', `/api/sessions/${sessionId}/messages?mode=sideways`)
+    expect(response.status).toBe(400)
+  })
+
   it('returns messages and task notifications without a second transcript scan', async () => {
     const sessionId = await seedSessionWithSubagent()
     await fs.appendFile(path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`),

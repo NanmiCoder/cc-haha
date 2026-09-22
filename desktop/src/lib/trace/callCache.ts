@@ -12,6 +12,8 @@ export async function fetchTraceCallDetail(
   callId: string,
   revisionKey?: string,
 ): Promise<TraceCallRecord | null> {
+  // revisionKey is the call's own content, not the session revision. Callers pass
+  // the same key for an unchanged call, so a sibling span does not bust this cache.
   const prefix = `${getBaseUrl()}\0${sessionId}\0${callId}\0`
   const key = `${prefix}${revisionKey ?? 'legacy'}`
   const cached = callCache.get(key)

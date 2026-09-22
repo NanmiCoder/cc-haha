@@ -20,6 +20,9 @@ const RETIRED_GROK_MODEL_IDS = new Set([
   'grok-4.3',
   'grok-4.20-reasoning',
   'grok-4.20-non-reasoning',
+  // Dropped from the live /v1/models feed, so a session still pinned to it
+  // would send an ID the gateway no longer serves.
+  'grok-composer-2.5-fast',
 ])
 
 export const DRAFT_RUNTIME_SELECTION_KEY = '__draft__'

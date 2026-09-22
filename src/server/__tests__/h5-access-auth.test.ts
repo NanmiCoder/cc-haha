@@ -23,6 +23,7 @@ let originalH5DistDir: string | undefined
 let originalClaudeAppRoot: string | undefined
 let originalServerAuthRequired: string | undefined
 let originalLocalAccessToken: string | undefined
+let originalTrustedRendererOrigin: string | undefined
 let originalPetAccessToken: string | undefined
 let originalServerPort = 3456
 const PHONE_ORIGIN = 'https://phone.example'
@@ -221,6 +222,8 @@ beforeEach(async () => {
   originalClaudeAppRoot = process.env.CLAUDE_APP_ROOT
   originalServerAuthRequired = process.env.SERVER_AUTH_REQUIRED
   originalLocalAccessToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
+  originalTrustedRendererOrigin = process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN
+  delete process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN
   originalPetAccessToken = process.env.CC_HAHA_PET_ACCESS_TOKEN
   originalServerPort = ProviderService.getServerPort()
   process.env.CLAUDE_CONFIG_DIR = tmpDir
@@ -257,6 +260,8 @@ afterEach(async () => {
   else process.env.SERVER_AUTH_REQUIRED = originalServerAuthRequired
   if (originalLocalAccessToken === undefined) delete process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
   else process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = originalLocalAccessToken
+  if (originalTrustedRendererOrigin === undefined) delete process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN
+  else process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN = originalTrustedRendererOrigin
   if (originalPetAccessToken === undefined) delete process.env.CC_HAHA_PET_ACCESS_TOKEN
   else process.env.CC_HAHA_PET_ACCESS_TOKEN = originalPetAccessToken
 
@@ -269,6 +274,34 @@ afterEach(async () => {
 })
 
 describe('remote H5 auth and CORS integration', () => {
+  test('allows only the configured dev renderer preflight with a desktop process token', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'fixture-desktop-token'
+    process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN = 'http://localhost:1420'
+    await restartRemoteServer()
+    const headers = {
+      Origin: 'http://localhost:1420',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'authorization,content-type',
+    }
+    const preflight = await fetch(`${baseUrl}/api/settings`, { method: 'OPTIONS', headers })
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(headers.Origin)
+    const authenticated = await fetch(`${baseUrl}/api/settings`, {
+      headers: { Origin: headers.Origin, Authorization: 'Bearer fixture-desktop-token' },
+    })
+    expect(authenticated.status).toBe(200)
+    const unauthenticated = await fetch(`${baseUrl}/api/settings`, { headers: { Origin: headers.Origin } })
+    expect(unauthenticated.status).toBe(403)
+    for (const origin of ['http://localhost:5173', 'http://127.0.0.1:1420', 'http://localhost:1421', 'http://[::1]:1420']) {
+      const response = await fetch(`${baseUrl}/api/settings`, { method: 'OPTIONS', headers: { ...headers, Origin: origin } })
+      expect(response.status).toBe(403)
+    }
+    for (const endpoint of ['/api/h5-access', '/api/h5-access/enable', '/api/settings/session-cleanup']) {
+      const response = await fetch(`${baseUrl}${endpoint}`, { method: 'OPTIONS', headers })
+      expect(response.status).toBe(403)
+    }
+  })
+
   test('serves the packaged H5 shell and static assets from the remote server', async () => {
     const shellResponse = await fetch(`${baseUrl}/`)
     expect(shellResponse.status).toBe(200)

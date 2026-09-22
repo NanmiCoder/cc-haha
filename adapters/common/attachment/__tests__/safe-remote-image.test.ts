@@ -276,12 +276,14 @@ describe('loadSafeRemoteImage', () => {
     if (!address || typeof address === 'string') throw new Error('missing test port')
 
     const startedAt = Date.now()
-    const hop = await requestPinnedRemoteImageHop(
-      new URL(`http://images.example:${address.port}/slow.png`),
-      { address: '127.0.0.1', family: 4 },
-      50,
-    )
     await expect((async () => {
+      // The total deadline also covers connection setup and response headers.
+      // Under instrumentation it can expire before the body iterator exists.
+      const hop = await requestPinnedRemoteImageHop(
+        new URL(`http://images.example:${address.port}/slow.png`),
+        { address: '127.0.0.1', family: 4 },
+        50,
+      )
       for await (const _chunk of hop.body) {
         // Consume until the total request deadline aborts the stream.
       }

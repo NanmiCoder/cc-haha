@@ -37,6 +37,7 @@ import type { UIMessage } from '../../types/chat'
 import type { MessageEntry } from '../../types/session'
 import type { PerSessionState } from '../../stores/chatStore'
 import { FindInPageModal } from '../search/FindInPageModal'
+import { getConversationFindController } from '../search/conversationFindBridge'
 
 const ACTIVE_TAB = 'active-tab'
 
@@ -346,107 +347,41 @@ describe('MessageList nested tool calls', () => {
       { id: 'cached-reply', type: 'assistant_text', content: 'Cached reply', timestamp: 2 },
     ]
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      messages, historyStatus: 'idle', historyHydrated: false, historyWindowed: false,
+      messages, historyStatus: 'idle', historyHydrated: false,
     }) } })
     render(<MessageList />)
     expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
     act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      messages, historyStatus: 'loading', historyHydrated: false, historyWindowed: false,
+      messages, historyStatus: 'loading', historyHydrated: false,
     }) } }))
     expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
     act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      messages, historyStatus: 'ready', historyHydrated: false, historyWindowed: false,
+      messages, historyStatus: 'ready', historyHydrated: false,
     }) } }))
     expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
     const partialPage = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
     act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      messages, historyWindowed: false, historyPage: partialPage,
+      messages, historyStatus: 'ready', historyHydrated: true, historyPage: partialPage,
     }) } }))
-    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
-    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      messages, historyWindowed: true, historyPage: partialPage,
-    }) } }))
-    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back conversation' }))
     await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledTimes(1))
   })
 
-  it('defers checkpoint transcript work until explicitly requested for a bounded history window', async () => {
-    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, messages: [
-      { id: 'user-1', transcriptMessageId: 'user-1', type: 'user_text', content: 'User prompt', timestamp: 1 },
-      { id: 'reply', transcriptMessageId: 'reply', type: 'assistant_text', content: 'Assistant reply', timestamp: 2 },
-    ] }) } })
-    vi.mocked(sessionsApi.getTurnCheckpoints).mockResolvedValue({ checkpoints: [{
-      target: { targetUserMessageId: 'a-different-old-user', userMessageIndex: 0, userMessageCount: 200 },
-      code: { available: true, filesChanged: ['wrong.ts'], insertions: 1, deletions: 0 },
-    }] })
-    render(<MessageList />)
-    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back conversation' }))
-    await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Roll back conversation' }).hasAttribute('disabled')).toBe(false))
-    expect(screen.queryByRole('region', { name: 'Turn changed files' })).toBeNull()
-  })
 
-  it('scrolls into older history without buttons or replacing live state and jumps back to live', async () => {
+
+  it('mounts older history ahead of the live rows only when the user asks for it', async () => {
     const page = { nextCursor: 'older-cursor', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, historyPage: page, messages: [{ id: 'live', type: 'assistant_text', content: 'current live message', timestamp: 1 }] }) } })
     const getPage = vi.spyOn(sessionsApi, 'getHistoryPage')
-      .mockResolvedValueOnce({ messages: [{ id: 'old', type: 'assistant', content: 'older page message', timestamp: '2020-01-01T00:00:00Z' }], page: { ...page, nextCursor: null, hasMore: false } })
-      .mockResolvedValueOnce({ messages: [{ id: 'latest', type: 'assistant', content: 'latest page message', timestamp: '2026-01-01T00:00:00Z' }], page: { ...page, historyComplete: true } })
+      .mockResolvedValueOnce({ messages: [{ id: 'old', type: 'assistant', content: 'older page message', timestamp: '2020-01-01T00:00:00Z' }], page: { ...page, nextCursor: null, hasMore: false, historyComplete: true } })
     render(<MessageList />)
-    expect(screen.queryByTestId('history-window-notice')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Older messages' })).toBeNull()
+    expect(screen.queryByText('older page message')).toBeNull()
     expect(getPage).not.toHaveBeenCalled()
-    const scroller = screen.getByTestId('message-list').firstElementChild as HTMLElement
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 })
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1800 })
-    scroller.scrollTop = 100
-    fireEvent.wheel(scroller, { deltaY: -100 })
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
     expect(await screen.findByText('older page message')).toBeTruthy()
-    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages[0]?.id).toBe('live')
     expect(getPage).toHaveBeenCalledWith(ACTIVE_TAB, { cursor: 'older-cursor' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    fireEvent.click(screen.getByRole('button', { name: 'Latest' }))
-    expect(await screen.findByText('latest page message')).toBeTruthy()
-    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.historyBrowseMessages).toBeUndefined()
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages.map((message) => message.id)).toEqual(['old', 'live'])
   })
 
-  it('scrolls forward through history and does not mistake the historical window bottom for the live tail', async () => {
-    const loadNewer = vi.spyOn(useChatStore.getState(), 'loadNewerHistory').mockResolvedValue()
-    const page = { nextCursor: 'older', previousCursor: 'newer', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 100, omittedOversizedEntries: 0 }
-    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      historyPage: page, historyWindowed: true, historyViewingOlder: true,
-      messages: [{ id: 'live', type: 'assistant_text', content: 'Live content', timestamp: 10 }],
-      historyBrowseMessages: [{ id: 'old', type: 'assistant_text', content: 'Historical content', timestamp: 1 }],
-    }) } })
-    render(<MessageList />)
-    const scroller = screen.getByTestId('message-list').firstElementChild as HTMLElement
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 })
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1800 })
-    scroller.scrollTop = 1200
-    fireEvent.wheel(scroller, { deltaY: 100 })
-    await waitFor(() => expect(loadNewer).toHaveBeenCalledWith(ACTIVE_TAB))
-    expect(screen.getByRole('button', { name: 'Latest' })).toBeTruthy()
-    expect(screen.getByText('Historical content')).toBeTruthy()
-    expect(screen.queryByText('Live content')).toBeNull()
-  })
-
-  it('loads disk history when live retention created a gap after an initially complete page', async () => {
-    const loadOlder = vi.spyOn(useChatStore.getState(), 'loadOlderHistory').mockResolvedValue()
-    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
-      historyLiveGap: true, historyWindowed: true,
-      historyPage: { nextCursor: null, hasMore: false, historyComplete: true, sourceVersion: 'v1', scannedBytes: 100, omittedOversizedEntries: 0 },
-      messages: [{ id: 'recent', type: 'assistant_text', content: 'Recent live message', timestamp: 10 }],
-    }) } })
-    render(<MessageList />)
-    expect(loadOlder).not.toHaveBeenCalled()
-    const scroller = screen.getByTestId('message-list').firstElementChild as HTMLElement
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 })
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1800 })
-    scroller.scrollTop = 100
-    fireEvent.wheel(scroller, { deltaY: -100 })
-    await waitFor(() => expect(loadOlder).toHaveBeenCalledWith(ACTIVE_TAB))
-  })
 
   it('does not render internal recovery state as a history banner', () => {
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, historyRecoveryStatus: 'incomplete' }) } })
@@ -629,6 +564,25 @@ describe('MessageList nested tool calls', () => {
     expect(assistant!.querySelectorAll('img[alt="图B"]')).toHaveLength(1)
     expect(assistant!.querySelectorAll('img[alt="图C"]')).toHaveLength(1)
     expect(assistant!.querySelector('img[alt="remote"], img[alt="loopback"]')).toBeNull()
+  })
+
+  it('measures newly mounted virtual rows before waiting for ResizeObserver delivery', () => {
+    const sessionId = 'initial-virtual-measurement'
+    dropSession(sessionId)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 0, bottom: 180, width: 800, height: this.hasAttribute('data-virtual-message-item') ? 180 : 0 } as DOMRect
+    })
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: Array.from({ length: 220 }, (_, index) => ({
+        id: `initial-measure-${index}`, type: 'assistant_text' as const,
+        content: `transcript line ${index}`, timestamp: index,
+      })),
+    }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-virtual-message-item]'))
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(getHeightsForSession(sessionId).get(row.dataset.virtualMessageItem!)).toBe(180)
+    dropSession(sessionId)
   })
 
   it('keeps fractional border-box jitter from invalidating a settled virtual row', async () => {
@@ -1128,6 +1082,59 @@ describe('MessageList nested tool calls', () => {
     expect(screen.getAllByRole('button', { name: /Turn \d of 4/ }).every((marker) => (
       marker.getAttribute('aria-current') === null
     ))).toBe(true)
+  })
+
+  it.each(['navigator', 'find', 'workspace'] as const)('replaces an existing reading anchor during %s navigation', async (entry) => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { frames.push(callback); return frames.length }))
+    const frame = async (time: number) => {
+      const scheduled = frames.splice(0)
+      await act(async () => { scheduled.forEach((callback) => callback(time)); await Promise.resolve() })
+    }
+    let scroller: HTMLElement | null = null
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const key = this.dataset.chatRenderItemKey
+      const top = key?.startsWith('navigation-anchor-') ? Number(key.split('-').at(-1)) * 200 - (scroller?.scrollTop ?? 0) : 0
+      const height = key ? 200 : 300
+      return { top, bottom: top + height, height, left: 0, right: 900, width: 900 } as DOMRect
+    })
+    const messages: UIMessage[] = Array.from({ length: 10 }, (_, index) => ({
+      id: `navigation-anchor-${index}`, type: 'user_text', content: `Unique prompt ${index}`, timestamp: index,
+    }))
+    const getPage = vi.spyOn(sessionsApi, 'getHistoryPage').mockImplementation(() => new Promise(() => {}))
+    const historyPage = { nextCursor: 'older-navigation', previousCursor: null, hasMore: true, historyComplete: false, sourceVersion: 'nav', scannedBytes: 10, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages, historyPage }) } })
+    const { container } = render(<MessageList />)
+    scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    Object.defineProperties(scroller, { clientHeight: { configurable: true, value: 300 }, scrollHeight: { configurable: true, value: 2000 } })
+    await frame(0)
+    act(() => { scroller!.scrollTop = 800; fireEvent.wheel(scroller!, { deltaY: -1 }); fireEvent.scroll(scroller!) })
+    await frame(16)
+    const original = container.querySelector<HTMLElement>('[data-chat-render-item-key="navigation-anchor-4"]')!
+    expect(original.getBoundingClientRect().top).toBe(0)
+    const target = container.querySelector<HTMLElement>('[data-chat-render-item-key="navigation-anchor-0"]')!
+    const opener = target.querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')!
+    opener.id = 'navigation-anchor-opener'
+    Object.defineProperty(target, 'scrollIntoView', { value: () => { scroller!.scrollTop = 0 } })
+    await act(async () => {
+      if (entry === 'navigator') fireEvent.click(screen.getByRole('button', { name: /Turn 1 of 10: Unique prompt 0/ }))
+      else if (entry === 'find') getConversationFindController()!.search('Unique prompt 0')
+      else {
+        useWorkspaceStore.getState().openTarget(ACTIVE_TAB, { kind: 'file', path: 'a.ts' })
+        useWorkspaceStore.getState().setOrigin(ACTIVE_TAB, { sourceTurnKey: 'navigation-anchor-0', sourceElementId: opener.id })
+        useWorkspaceStore.getState().setLayout(ACTIVE_TAB, 'hidden')
+      }
+      await Promise.resolve()
+    })
+    await frame(32)
+    await frame(48)
+    expect(scroller.scrollTop).toBe(0)
+    expect(target.getBoundingClientRect().top).toBe(0)
+    if (entry === 'workspace') expect(document.activeElement).toBe(opener)
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: { ...useChatStore.getState().sessions[ACTIVE_TAB]!, statusVerb: 'updated' } } }))
+    await frame(64)
+    expect(scroller.scrollTop).toBe(0)
+    expect(getPage).not.toHaveBeenCalled()
   })
 
   it('mounts and highlights a far virtualized message selected from the navigator', async () => {
@@ -2498,6 +2505,27 @@ describe('MessageList nested tool calls', () => {
 
     expect(group.getAttribute('data-running')).toBe('false')
     expect(group.querySelector('.thinking-dots')).toBeNull()
+  })
+
+  it('keeps an expanded tool group mounted when older and newer pages extend it', () => {
+    const tool = (index: number): UIMessage => ({
+      id: `group-page-${index}`, type: 'tool_use', toolUseId: `group-page-${index}`,
+      toolName: 'Read', input: { file_path: `/tmp/file-${index}` }, timestamp: index,
+    })
+    const messages = [tool(1), tool(2)]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages,  }) } })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+    const group = screen.getByTestId('activity-group')
+    fireEvent.click(group.querySelector('[data-chat-disclosure]')!)
+    expect(group.getAttribute('data-expanded')).toBe('true')
+    const row = group.querySelector('[data-chat-anchor-id="group-page-1"]')
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [tool(0), ...messages],  }) } }))
+    expect(screen.getByTestId('activity-group')).toBe(group)
+    expect(group.getAttribute('data-expanded')).toBe('true')
+    expect(group.querySelector('[data-chat-anchor-id="group-page-1"]')).toBe(row)
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [tool(0), ...messages, tool(3)],  }) } }))
+    expect(screen.getByTestId('activity-group')).toBe(group)
+    expect(group.getAttribute('data-expanded')).toBe('true')
   })
 
   it('summarizes repeated Edit events for one path as one changed file', () => {
@@ -6931,7 +6959,8 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText(`Session not found: ${subagentTabId}`)).toBeNull()
   })
 
-  it('confirms before rewinding to an earlier turn from a historical change card', async () => {
+  it('confirms rewind and restores the complete prompt', async () => {
+    const prompt = '做一个页面'
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
         {
@@ -7008,7 +7037,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '做一个页面',
+              content: prompt,
               timestamp: 1,
             },
             {
@@ -7034,16 +7063,14 @@ describe('MessageList nested tool calls', () => {
       },
     })
 
+    const current = useChatStore.getState().sessions[ACTIVE_TAB]!
+    useChatStore.getState().applyBoundedUpdate(() => ({ sessions: { [ACTIVE_TAB]: { ...current, historyWindowed: false } } }))
     render(<MessageList />)
 
     await expandChangedFileCards()
     const historicalCard = (await screen.findByText('first.ts')).closest('section')
     expect(historicalCard).toBeTruthy()
-    fireEvent.click(
-      within(historicalCard as HTMLElement).getByRole('button', {
-        name: 'Rewind to before this turn',
-      }),
-    )
+    fireEvent.click(within(historicalCard as HTMLElement).getByRole('button', { name: 'Rewind to before this turn' }))
 
     expect(sessionsApi.rewind).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog', { name: 'Rewind to before this turn?' })
@@ -7059,13 +7086,13 @@ describe('MessageList nested tool calls', () => {
       expect(sessionsApi.rewind).toHaveBeenLastCalledWith(ACTIVE_TAB, {
         targetUserMessageId: 'user-1',
         userMessageIndex: 0,
-        expectedContent: '做一个页面',
+        expectedContent: prompt,
         mode: 'both',
       })
     })
     expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
     expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
-      text: '做一个页面',
+      text: prompt,
       attachments: undefined,
     })
   })
@@ -7272,7 +7299,7 @@ describe('MessageList nested tool calls', () => {
       unverifiedChangeSources: [],
       mode: 'conversation',
     })
-    vi.spyOn(sessionsApi, 'getMessages').mockResolvedValue({
+    vi.spyOn(sessionsApi, 'getFullHistory').mockResolvedValue({
       messages: [
         {
           id: 'transcript-user-first',
@@ -7915,19 +7942,22 @@ describe('MessageList nested tool calls', () => {
       await Promise.resolve()
     })
 
-    await act(async () => {
-      frames.shift()?.(0)
-      await Promise.resolve()
-    })
+    // A browser runs all callbacks registered for a frame. Paging/layout
+    // callbacks share the frame; callbacks they register belong to the next one.
+    const advanceFrame = async (time: number) => {
+      const scheduled = frames.splice(0)
+      await act(async () => {
+        scheduled.forEach((callback) => callback(time))
+        await Promise.resolve()
+      })
+    }
+    await advanceFrame(0)
     const restoredItem = container.querySelector<HTMLElement>('[data-chat-render-item-key="virtual-origin-0"]')
     expect(restoredItem).not.toBeNull()
     const opener = restoredItem!.querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')!
     opener.id = 'virtual-origin-opener'
 
-    await act(async () => {
-      frames.shift()?.(16)
-      await Promise.resolve()
-    })
+    await advanceFrame(16)
 
     expect(document.activeElement).toBe(opener)
     expect(useWorkspaceStore.getState().getSession(ACTIVE_TAB).origin).toBeNull()

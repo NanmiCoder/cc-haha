@@ -16,12 +16,14 @@ export function TraceDetail({
   viewModel,
   sessionId,
   revisionKey,
+  overviewRevisionKey,
   onSelect,
 }: {
   span: TraceSpan
   viewModel: TraceViewModel
   sessionId: string
   revisionKey?: string
+  overviewRevisionKey?: string
   onSelect: (spanId: string) => void
 }) {
   const t = useTranslation()
@@ -51,6 +53,7 @@ export function TraceDetail({
             viewModel={viewModel}
             sessionId={sessionId}
             revisionKey={revisionKey}
+            overviewRevisionKey={overviewRevisionKey}
             onSelect={onSelect}
           />
         </div>
@@ -64,12 +67,14 @@ function DetailBody({
   viewModel,
   sessionId,
   revisionKey,
+  overviewRevisionKey,
   onSelect,
 }: {
   span: TraceSpan
   viewModel: TraceViewModel
   sessionId: string
   revisionKey?: string
+  overviewRevisionKey?: string
   onSelect: (spanId: string) => void
 }) {
   switch (span.kind) {
@@ -89,7 +94,7 @@ function DetailBody({
           viewModel={viewModel}
           onSelect={onSelect}
           sessionId={sessionId}
-          revisionKey={revisionKey}
+          revisionKey={overviewRevisionKey ?? revisionKey}
         />
       )
   }

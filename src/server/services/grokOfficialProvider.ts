@@ -4,8 +4,8 @@ import {
   GROK_DEFAULT_SONNET_MODEL,
   GROK_MODEL_CATALOG,
   getGrokContextWindowForModel,
+  getGrokRuntimeModelCatalog,
 } from '../../services/grokAuth/models.js'
-import { getGrokRuntimeModelCatalog } from '../../services/grokAuth/modelCatalog.js'
 import { GROK_OAUTH_FILE_ENV_KEY } from '../../services/grokAuth/storage.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 import {

@@ -15,7 +15,7 @@ import {
   getOpenAIModelCatalogEntry,
   isOpenAIResponsesModel,
 } from 'src/services/openaiAuth/models.js'
-import { GROK_MODEL_CATALOG } from 'src/services/grokAuth/models.js'
+import { GROK_MODEL_CATALOG, getGrokRuntimeModelCatalog } from 'src/services/grokAuth/models.js'
 
 export type EffortLevel = RuntimeEffortLevel | 'xhigh'
 
@@ -42,7 +42,14 @@ function shouldTrustBuiltInClaudeCapabilityList(): boolean {
 
 function getGrokCatalogEntry(model: string): (typeof GROK_MODEL_CATALOG)[number] | undefined {
   const normalized = model.trim().toLowerCase()
-  return GROK_MODEL_CATALOG.find((entry) => entry.value === normalized)
+  // The live `/v1/models` feed is authoritative; the bundled entries are only a
+  // fallback. Without this, a Grok model newer than this build matches no entry
+  // and falls through to the Claude heuristics below, which report it as
+  // effort-incapable and silently strip the parameter.
+  return (
+    getGrokRuntimeModelCatalog().find((entry) => entry.value === normalized) ??
+    GROK_MODEL_CATALOG.find((entry) => entry.value === normalized)
+  )
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
