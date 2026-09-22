@@ -747,13 +747,14 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       setRepositoryLaunchDraft(newId, repositoryLaunchDraft)
     }
     useSessionRuntimeStore.getState().moveSelection(oldId, newId)
+    if (hasManagedContextSelection()) await adoptManagedContextSession(newId)
     disconnectSession(oldId)
     replaceTabSession(oldId, newId)
     connectToSession(newId)
     // U07/M6-B: the composer's selection follows the replaced session id in one
     // store update and is persisted for it before the first send. Guarded so the
     // no-selection launch path keeps its original (synchronous) timeline.
-    if (hasManagedContextSelection()) await adoptManagedContextSession(newId)
+
     deleteSession(oldId).catch(() => {})
     return newId
   }, [activeTabId])
@@ -866,6 +867,8 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       })),
     ]
 
+    // Freeze selected sources at the click, before an asynchronous session replacement.
+    const preparedContext = prepareManagedContextSubmission()
     let targetSessionId = activeTabId!
     if (showLaunchControls && activeLaunchWorkDir && launchBranch) {
       const shouldReplaceForRepositoryLaunch =
@@ -904,7 +907,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     // U07/M6-B: the single prepare for all three send points below. Both branches
     // send this exact snapshot, so a selection can never be prepared twice — and
     // the queued branch stores it on the item instead of preparing at flush time.
-    const preparedContext = prepareManagedContextSubmission()
+    if (preparedContext && targetSessionId !== activeTabId) await adoptManagedContextSession(targetSessionId, preparedContext)
     const contextSubmission = preparedContext ? { managedContext: preparedContext } : {}
 
     const targetChatState = useChatStore.getState().sessions[targetSessionId]?.chatState ?? 'idle'

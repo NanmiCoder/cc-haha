@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+export const ProcessKindSchema = z.enum(['java', 'mysql', 'redis'])
+export type ProcessKind = z.infer<typeof ProcessKindSchema>
+export const ProcessProbeSchema = z.enum(['top', 'ports', 'connections'])
+export type ProcessProbe = z.infer<typeof ProcessProbeSchema>
+
 export const ExecutionUserSchema = z.string().max(64).regex(/^(?:[a-zA-Z_][a-zA-Z0-9_.-]*\$?)?$/)
 export const ApplicationPinSchema = z.object({
   directory: z.enum(['apps', 'conf', 'logs', 'bin/bin']),
@@ -18,10 +23,11 @@ export type HostToolsPreferences = z.infer<typeof HostToolsPreferencesSchema>
 export const emptyHostToolsPreferences = (): HostToolsPreferences => ({ runAsUser: '', collapsed: {}, javaKeywords: [], lastJavaSearch: '', pinnedFiles: [] })
 export const HostToolsScopeSchema = z.object({
   hostId: z.string().uuid(),
+  processKind: ProcessKindSchema.optional(),
   applicationId: z.string().uuid().optional(),
   rootIndex: z.number().int().min(0).max(63).optional(),
   expectedRoot: z.string().min(1).max(4096).optional(),
-}).strict().refine(value => value.applicationId ? value.rootIndex !== undefined && value.expectedRoot !== undefined : value.rootIndex === undefined && value.expectedRoot === undefined)
+}).strict().refine(value => value.applicationId ? value.processKind === undefined && value.rootIndex !== undefined && value.expectedRoot !== undefined : value.rootIndex === undefined && value.expectedRoot === undefined)
 export type HostToolsScope = z.infer<typeof HostToolsScopeSchema>
 const patch = z.object({
   runAsUser: ExecutionUserSchema.optional(),
@@ -36,11 +42,16 @@ export const HostToolsInputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('getPreferences'), scope: HostToolsScopeSchema }).strict(),
   z.object({ action: z.literal('savePreferences'), scope: HostToolsScopeSchema, patch }).strict(),
   z.object({ action: z.literal('listJava'), hostId: z.string().uuid(), connectionId: z.string().uuid(), generation: z.number().int().positive(), requestId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('listProcesses'), processKind: ProcessKindSchema, hostId: z.string().uuid(), connectionId: z.string().uuid(), generation: z.number().int().positive(), requestId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('inspectProcess'), processKind: ProcessKindSchema, probe: ProcessProbeSchema, pid: z.number().int().positive().max(2147483647), startTime: z.string().regex(/^[1-9][0-9]{0,19}$/), hostId: z.string().uuid(), connectionId: z.string().uuid(), generation: z.number().int().positive(), requestId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('cancelJava'), requestId: z.string().uuid() }).strict(),
 ])
 export type HostToolsInput = z.infer<typeof HostToolsInputSchema>
-export type JavaProcess = { pid: number; commandLine: string; xmx: string | null; xms: string | null }
+export type JavaProcess = { pid: number; commandLine: string; xmx: string | null; xms: string | null; startTime?: string }
+export type ProcessInspection = { pid: number; processKind: ProcessKind; probe: ProcessProbe; text: string; truncated: boolean; sampledAt: string }
 export type HostToolsResult =
   | { kind: 'preferences'; preferences: HostToolsPreferences }
   | { kind: 'java'; processes: JavaProcess[]; sampledAt: string; unreadable: number }
+  | { kind: 'processes'; processKind: ProcessKind; processes: JavaProcess[]; sampledAt: string; unreadable: number }
+  | ({ kind: 'processInspection' } & ProcessInspection)
   | { kind: 'cancelled' }

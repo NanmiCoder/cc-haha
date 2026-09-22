@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FileText, Folder, RefreshCw, Save, Upload, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { SearchField } from '@/components/ui/SearchField'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { RemoteFileEditor } from './RemoteFileEditor'
 import { useTranslation } from '@/i18n'
@@ -13,6 +15,7 @@ import type {
 } from '../../api/hostManagementApi'
 import type { Host } from '../../types/resourceTypes'
 import { useRemoteTransfers } from './useRemoteTransfers'
+import { RemoteTransferHeader } from './RemoteTransferHeader'
 
 type EditorState = {
   snapshot: ManagedRemoteEditSnapshot
@@ -45,6 +48,18 @@ function formatSize(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MiB`
 }
 
+export function normalizeRemoteDirectory(value: string): string | null {
+  const text = value.trim()
+  if (!text.startsWith('/') || text.length > 4096 || /[\\\\\x00-\x1f\x7f]/.test(text)) return null
+  const parts: string[] = []
+  for (const part of text.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return '/' + parts.join('/')
+}
+
 export function RemoteFilesPanel({ host }: { host: Host }) {
   const t = useTranslation()
   const ssh = useHostSshStore(state => state.byHostId[host.id])
@@ -52,6 +67,11 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
   const connectionId = ssh?.connectionId ?? null
   const generation = ssh?.generation ?? 0
   const [currentPath, setCurrentPath] = useState(host.initialDirectory || '/')
+  const [pathDraft, setPathDraft] = useState(host.initialDirectory || '/')
+  const [searchQuery, setSearchQuery] = useState('')
+  const directoryRequest = useRef(0)
+  const liveConnection = useRef('')
+  liveConnection.current = connected ? `${host.id}:${connectionId}:${generation}` : ''
   const [entries, setEntries] = useState<ManagedSftpEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -59,14 +79,20 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
   const [pendingOpen, setPendingOpen] = useState<ManagedSftpEntry | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
 
-  const sortedEntries = useMemo(() => [...entries].sort((a, b) => {
+  const sortedEntries = useMemo(() => {
+    const query = searchQuery.trim().normalize('NFC').toLowerCase()
+    return entries.filter(entry => entry.name.normalize('NFC').toLowerCase().includes(query)).sort((a, b) => {
     if (a.type === 'directory' && b.type !== 'directory') return -1
     if (a.type !== 'directory' && b.type === 'directory') return 1
     return a.name.localeCompare(b.name)
-  }), [entries])
+    })
+  }, [entries, searchQuery])
 
   useEffect(() => {
     setCurrentPath(host.initialDirectory || '/')
+    setPathDraft(host.initialDirectory || '/')
+    setSearchQuery('')
+    directoryRequest.current++
     setEntries([])
     setError(null)
     setEditor(null)
@@ -74,20 +100,33 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
 
   const loadDirectory = async (absolutePath = currentPath) => {
     if (!connectionId || !connected) return
+    const request = ++directoryRequest.current
+    const binding = liveConnection.current
+    const path = normalizeRemoteDirectory(absolutePath)
+    if (path === null) { setLoading(false); setError(t('managedResources.files.invalidDirectoryPath')); return }
     setLoading(true)
     setError(null)
-    const result = await getDesktopHost().hostManagement.sftpList(connectionId, generation, absolutePath)
-    setLoading(false)
-    if (!result.ok) {
-      setError(`${t('managedResources.files.operationFailed')}: ${result.error.code}`)
-      return
+    const current = () => request === directoryRequest.current && binding === liveConnection.current
+    try {
+      const result = await getDesktopHost().hostManagement.sftpList(connectionId, generation, path)
+      if (!current()) return
+      if (!result.ok) { setError(`${t('managedResources.files.operationFailed')}: ${result.error.code}`); return }
+      // Commit navigation only after successful SFTP validation, never on click.
+      setCurrentPath(result.data.parent.absolutePath)
+      setPathDraft(result.data.parent.absolutePath)
+      setEntries(result.data.entries)
+      if (result.data.parent.absolutePath !== currentPath) setSearchQuery('')
+    } catch {
+      if (current()) setError(t('managedResources.files.operationFailed'))
+    } finally {
+      if (current()) setLoading(false)
     }
-    setCurrentPath(result.data.parent.absolutePath)
-    setEntries(result.data.entries)
   }
 
   useEffect(() => {
     if (connected && connectionId) void loadDirectory(currentPath)
+    else setLoading(false)
+    return () => { directoryRequest.current++ }
     // `currentPath` intentionally stays user-controlled; reconnect revalidates it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, connectionId, generation])
@@ -112,7 +151,6 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
 
   const requestOpen = (entry: ManagedSftpEntry) => {
     if (entry.type === 'directory') {
-      setCurrentPath(entry.absolutePath)
       void loadDirectory(entry.absolutePath)
       return
     }
@@ -192,33 +230,45 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
     if (next) await performOpen(next)
   }
 
-  const transfers = useRemoteTransfers({ hostId: host.id, connectionId, generation, connected, onUploaded: () => { void loadDirectory(currentPath) } })
+  const transfers = useRemoteTransfers({ hostId: host.id, connectionId, generation, connected, maxConcurrent: 3, onUploaded: () => { void loadDirectory(currentPath) } })
 
   return (
     <section className="min-w-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3" aria-label={t('managedResources.files.title')}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="min-w-0">
+      <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="remote-files-header">
+        <div className="min-w-0 max-w-48 shrink-0">
           <h4 className="text-xs font-semibold text-[var(--color-text-primary)]">{t('managedResources.files.title')}</h4>
           <p className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={currentPath}>{currentPath}</p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+        <RemoteTransferHeader tasks={transfers.tasks} onCancel={transfers.cancel} />
+        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <Button size="xs" variant="secondary" icon={<RefreshCw size={12} />} disabled={!connected || loading} onClick={() => void loadDirectory(currentPath)}>
             {t('managedResources.files.refresh')}
           </Button>
-          <Button size="xs" variant="secondary" icon={<Upload size={12} />} disabled={!connected || transfers.busy} onClick={() => void transfers.upload(currentPath)}>
+          <Button size="xs" variant="secondary" icon={<Upload size={12} />} disabled={!transfers.canStart} onClick={() => void transfers.upload(currentPath)}>
             {t('managedResources.files.upload')}
           </Button>
-          <Button size="xs" variant="secondary" icon={<Folder size={12} />} data-testid="remote-upload-folder" disabled={!connected || transfers.busy} onClick={() => void transfers.uploadFolder(currentPath)}>
+          <Button size="xs" variant="secondary" icon={<Folder size={12} />} data-testid="remote-upload-folder" disabled={!transfers.canStart} onClick={() => void transfers.uploadFolder(currentPath)}>
             {t('managedResources.transfer.uploadFolder')}
           </Button>
-          <Button size="xs" variant="secondary" icon={<Download size={12} />} data-testid="remote-download-folder" disabled={!connected || transfers.busy || currentPath === '/'} onClick={() => void transfers.downloadFolder(currentPath)}>
+          <Button size="xs" variant="secondary" icon={<Download size={12} />} data-testid="remote-download-folder" disabled={!transfers.canStart || currentPath === '/'} onClick={() => void transfers.downloadFolder(currentPath)}>
             {t('managedResources.transfer.downloadFolder')}
           </Button>
         </div>
       </div>
 
+      <form className="mb-3 flex min-w-0 items-start gap-2" onSubmit={event => { event.preventDefault(); void loadDirectory(pathDraft) }}>
+        <Input size="sm" value={pathDraft} maxLength={4096} containerClassName="min-w-0 flex-1" className="font-mono"
+          aria-label={t('managedResources.files.directoryPath')} placeholder={t('managedResources.files.directoryPath')}
+          disabled={!connected} autoComplete="off" spellCheck={false} onChange={event => setPathDraft(event.currentTarget.value)}
+          onKeyDown={event => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault() }} />
+        <Button type="submit" size="sm" variant="secondary" disabled={!connected}>{t('managedResources.files.goDirectory')}</Button>
+      </form>
+
       <div data-testid="remote-files-split" className="grid min-h-0 grid-cols-[minmax(200px,1fr)_minmax(0,2fr)] gap-3" style={{ height: 'clamp(420px, 58vh, 760px)' }}>
         <div data-testid="remote-file-browser" className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] p-2">
+          <SearchField size="sm" value={searchQuery} onChange={setSearchQuery} label={t('managedResources.files.searchNames')}
+            clearLabel={t('managedResources.appOperations.clearSearch')} placeholder={t('managedResources.files.searchNames')}
+            containerClassName="mb-2 shrink-0" disabled={!connected} autoComplete="off" spellCheck={false} />
           {!connected ? (
             <div className="rounded-[var(--radius-sm)] border border-dashed border-[var(--color-border)] p-3 text-xs text-[var(--color-text-tertiary)]">
               {editor?.dirty ? t('managedResources.files.disconnectedDraft') : t('managedResources.files.connectFirst')}
@@ -228,7 +278,6 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
               {currentPath !== '/' && (
                 <Button size="xs" variant="link" className="shrink-0 justify-start" onClick={() => {
                   const next = parentPath(currentPath)
-                  setCurrentPath(next)
                   void loadDirectory(next)
                 }}>
                   ../
@@ -237,7 +286,7 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
               {loading ? (
                 <div role="status" className="py-3 text-xs text-[var(--color-text-tertiary)]">{t('managedResources.files.loading')}</div>
               ) : sortedEntries.length === 0 ? (
-                <div className="py-3 text-xs text-[var(--color-text-tertiary)]">{t('managedResources.files.empty')}</div>
+                <div className="py-3 text-xs text-[var(--color-text-tertiary)]">{searchQuery.trim() ? t('managedResources.appOperations.noMatches') : t('managedResources.files.empty')}</div>
               ) : (
                 <div className="flex min-h-0 flex-1 flex-col divide-y divide-[var(--color-border)] overflow-y-auto overscroll-contain" role="list">
                   {sortedEntries.map(entry => (
@@ -250,11 +299,11 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
                         </span>
                       </Button>
                       <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
-                      {entry.type === 'directory' && <Button size="xs" variant="ghost" className="col-span-2 justify-self-end" icon={<Download size={11} />} aria-label={`${t('managedResources.transfer.downloadFolder')}: ${entry.name}`} disabled={transfers.busy} onClick={() => void transfers.downloadFolder(entry.absolutePath)}>{t('managedResources.transfer.downloadFolder')}</Button>}
+                      {entry.type === 'directory' && <Button size="xs" variant="ghost" className="col-span-2 justify-self-end" icon={<Download size={11} />} aria-label={`${t('managedResources.transfer.downloadFolder')}: ${entry.name}`} disabled={!transfers.canStart} onClick={() => void transfers.downloadFolder(entry.absolutePath)}>{t('managedResources.transfer.downloadFolder')}</Button>}
                       {entry.type === 'file' && (
                         <div className="col-span-2 flex justify-end gap-1">
                           <Button size="xs" variant="ghost" onClick={() => requestOpen(entry)}>{t('managedResources.files.edit')}</Button>
-                          <Button size="xs" variant="ghost" icon={<Download size={11} />} disabled={transfers.busy} onClick={() => void transfers.download(entry.absolutePath, entry.name)}>{t('managedResources.files.download')}</Button>
+                          <Button size="xs" variant="ghost" icon={<Download size={11} />} disabled={!transfers.canStart} onClick={() => void transfers.download(entry.absolutePath, entry.name)}>{t('managedResources.files.download')}</Button>
                         </div>
                       )}
                     </div>
@@ -296,18 +345,6 @@ export function RemoteFilesPanel({ host }: { host: Host }) {
       </div>
 
       {error && <div role="alert" className="mt-2 text-xs text-[var(--color-error)]">{error}</div>}
-      {transfers.error && <div role="alert" className="mt-2 text-xs text-[var(--color-error)]">{t('managedResources.files.operationFailed')}: {transfers.error === 'TARGET_EXISTS' ? t('managedResources.transfer.targetExists') : transfers.error}</div>}
-      {(transfers.busy || transfers.job) && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-          <span role="status">{transfers.job?.state === 'completed' ? t('managedResources.files.transferCompleted')
-            : transfers.job?.state === 'cancelled' ? t('managedResources.transfer.cancelled')
-            : transfers.job?.state === 'failed' ? t('managedResources.files.operationFailed')
-            : transfers.job?.state === 'verifying' ? t('managedResources.transfer.verifying')
-            : transfers.job?.state === 'in_progress' ? t('managedResources.files.transferring') : t('managedResources.transfer.preparing')}</span>
-          {transfers.job && <span>{formatSize(transfers.job.transferred)} / {formatSize(transfers.job.size)}{transfers.job.folder ? ' · ' + (transfers.job.entriesCompleted ?? 0) + ' / ' + (transfers.job.entriesTotal ?? 0) : ''}</span>}
-          {transfers.busy && <Button size="xs" variant="secondary" onClick={() => void transfers.cancel()}>{t('managedResources.files.cancelTransfer')}</Button>}
-        </div>
-      )}
 
       <ConfirmDialog
         open={confirmDiscard}

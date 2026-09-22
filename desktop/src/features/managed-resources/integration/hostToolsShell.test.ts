@@ -22,6 +22,8 @@ describe('production commands executed by real Bash with isolated identity/proce
     for (const [pid, args] of processes) {
       await fs.mkdir(path.join(proc, String(pid)))
       await fs.writeFile(path.join(proc, String(pid), 'cmdline'), args.join('\0') + '\0')
+      const fields = Array.from({ length: 20 }, (_, index) => index === 19 ? '12345' : '0')
+      await fs.writeFile(path.join(proc, String(pid), 'stat'), `${pid} (fixture java) ${fields.join(' ')}\n`)
     }
     const result = spawnSync(bash, ['--noprofile', '--norc', '-c', JAVA_PROCESS_SCRIPT.replaceAll('/proc', proc)], { cwd: dir, encoding: 'utf8', timeout: 8000, env: { ...process.env, HOME: dir, BASH_ENV: '' } })
     expect(result.status, result.stderr).toBe(0)

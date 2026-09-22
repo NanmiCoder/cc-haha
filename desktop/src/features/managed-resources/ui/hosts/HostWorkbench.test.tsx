@@ -124,6 +124,8 @@ describe('Host Workbench UI Components (M2.1 - M2.4)', () => {
       expect(screen.getByText('Web-Prod-01')).toBeInTheDocument()
       expect(screen.getAllByText('deploy@192.168.1.100:22').length).toBeGreaterThan(0)
       expect(screen.getByText('Primary web gateway node')).toBeInTheDocument()
+      expect(screen.getByTestId('host-authentication-toggle')).toHaveAttribute('aria-expanded', 'false')
+      fireEvent.click(screen.getByTestId('host-authentication-toggle'))
       expect(screen.getAllByText('/var/www').length).toBeGreaterThan(0)
 
       // Terminal, remote files, and applications share one workspace tab strip.
@@ -145,7 +147,7 @@ describe('Host Workbench UI Components (M2.1 - M2.4)', () => {
       expect(screen.getByText(/Admin Account \(admin\)/i)).toBeInTheDocument()
     })
 
-    it('navigates the four workspace tabs by keyboard and exposes only the active panel', () => {
+    it('navigates all six workspace tabs by keyboard and exposes only the active panel', () => {
       useHostManagementStore.setState({ selectedHostId: 'host-1' })
       render(<HostDetail />)
       const terminal = screen.getByTestId('host-terminal-tab')
@@ -156,6 +158,13 @@ describe('Host Workbench UI Components (M2.1 - M2.4)', () => {
       expect(files).toHaveAttribute('aria-selected', 'true')
       expect(screen.getByRole('tabpanel')).toHaveAttribute('id', files.getAttribute('aria-controls'))
       fireEvent.keyDown(files, { key: 'End' })
+      const redis = screen.getByTestId('host-redis-tab')
+      expect(redis).toHaveFocus()
+      expect(redis).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tabpanel')).toHaveAttribute('id', redis.getAttribute('aria-controls'))
+      fireEvent.keyDown(redis, { key: 'ArrowLeft' })
+      expect(screen.getByTestId('host-mysql-tab')).toHaveFocus()
+      fireEvent.keyDown(screen.getByTestId('host-mysql-tab'), { key: 'ArrowLeft' })
       const java = screen.getByTestId('host-java-tab')
       expect(java).toHaveFocus()
       expect(java).toHaveAttribute('aria-selected', 'true')
@@ -303,11 +312,12 @@ describe('Host Workbench UI Components (M2.1 - M2.4)', () => {
       // HostDetail elements in English
       expect(screen.getByRole('button', { name: 'Edit Host' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Delete Host' })).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('host-authentication-toggle'))
       expect(screen.getByText('Password Authentication')).toBeInTheDocument()
       expect(screen.getByText(/Initial Dir/)).toBeInTheDocument()
-      expect(screen.getByText('Applications (1)')).toBeInTheDocument()
       expect(screen.getAllByText(/Disconnected|未连接|未連線|Not connected|연결되지 않음|未接続|Disconnected/i).length).toBeGreaterThanOrEqual(1)
       fireEvent.click(screen.getByTestId('host-applications-tab'))
+    expect(screen.getAllByText('Applications (1)')).toHaveLength(2)
       expect(screen.getByRole('button', { name: 'New Application' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Edit Application' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Delete Application' })).toBeInTheDocument()

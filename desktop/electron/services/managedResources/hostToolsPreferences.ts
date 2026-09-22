@@ -30,7 +30,9 @@ export function createHostToolsPreferences(store: ResourceDocumentStore) {
     if (loaded.status !== 'ready') throw new Error('RESOURCE_NOT_FOUND')
     const host = loaded.document.hosts.find(value => value.id === scope.hostId)
     if (!host) throw new Error('RESOURCE_NOT_FOUND')
-    if (!scope.applicationId) return JSON.stringify([host.id])
+    // Legacy Java scope is unchanged. MySQL/Redis get independent entries
+    // without changing the existing versioned preferences document shape.
+    if (!scope.applicationId) return JSON.stringify(scope.processKind && scope.processKind !== 'java' ? [host.id, 'process', scope.processKind] : [host.id])
     const app = host.applications.find(value => value.id === scope.applicationId)
     const root = app?.installPaths[scope.rootIndex!]
     if (!root || root !== scope.expectedRoot) throw new Error('APPLICATION_CHANGED')

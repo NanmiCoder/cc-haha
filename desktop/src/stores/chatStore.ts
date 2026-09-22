@@ -51,8 +51,8 @@ import type {
 } from '../types/slashCommand'
 import type { ManagedContextSubmission } from '../features/managed-resources/integration/chatSubmission'
 import { buildUserMessageFrame } from '../features/managed-resources/integration/userMessageFrame'
-import { recordManagedRuntimeRevision } from '../features/managed-resources/integration/runtimeRevision'
-import { prepareManagedUserMessage } from '../features/managed-resources/integration/prepareManagedUserMessage'
+import { clearManagedRuntimeRevision, markManagedRuntimePending, recordManagedRuntimeRevision } from '../features/managed-resources/integration/runtimeRevision'
+import { cancelPendingManagedMessages, prepareManagedUserMessage } from '../features/managed-resources/integration/prepareManagedUserMessage'
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
 
@@ -2651,6 +2651,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     wsManager.clearHandlers(sessionId)
     wsManager.connect(sessionId)
     wsManager.onConnectionState(sessionId, (connectionState) => {
+      if (connectionState === 'disconnected' || connectionState === 'reconnecting') {
+        cancelPendingManagedMessages(sessionId)
+        clearManagedRuntimeRevision(sessionId)
+      }
       const currentSession = get().sessions[sessionId]
       if (!currentSession) return
       const currentBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
@@ -2826,6 +2830,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   disconnectSession: (sessionId) => {
+    cancelPendingManagedMessages(sessionId)
+    clearManagedRuntimeRevision(sessionId)
     const session = get().sessions[sessionId]
     if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
     if (pendingDeltaBySession.has(sessionId)) {
@@ -3041,6 +3047,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       attachments,
       submission: managedSubmission,
     }).then((prepared) => {
+      if (!prepared.ok && prepared.error.code === 'CANCELLED') return
       if (!prepared.ok) {
         get().handleServerMessage(sessionId, {
           type: 'error',
@@ -3124,6 +3131,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (reconciled !== selection) {
       useSessionRuntimeStore.getState().setSelection(sessionId, reconciled)
     }
+    markManagedRuntimePending(sessionId)
     wsManager.send(sessionId, {
       type: 'set_runtime_config',
       ...reconciled,
@@ -3137,6 +3145,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   stopGeneration: (sessionId) => {
+    cancelPendingManagedMessages(sessionId)
     wsManager.send(sessionId, { type: 'stop_generation' })
     const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
@@ -4078,6 +4087,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       attachments: queuedMessage.attachments,
       submission: managedSubmission,
     }).then((prepared) => {
+      if (!prepared.ok && prepared.error.code === 'CANCELLED') return
       if (!prepared.ok) {
         set((state) => ({
           sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
@@ -4477,12 +4487,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         break
 
       case 'runtime_config_applied': {
-        recordManagedRuntimeRevision(sessionId, msg.runtimeRevision)
         const selected = useSessionRuntimeStore.getState().selections[sessionId]
         const matchesCurrentSelection = Boolean(selected) &&
           (selected?.providerId ?? null) === msg.providerId &&
           selected?.modelId === msg.modelId &&
           selected?.effortLevel === msg.effortLevel
+        if (matchesCurrentSelection || !selected) recordManagedRuntimeRevision(sessionId, msg.runtimeRevision, true)
         if (matchesCurrentSelection) {
           update((session) => ({
             runtimeConfigReadyCount: (session.runtimeConfigReadyCount ?? 0) + 1,

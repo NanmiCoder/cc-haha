@@ -6,21 +6,23 @@ import { IconButton } from '@/components/ui/IconButton'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { useTranslation } from '@/i18n'
 import type { Host } from '../../types/resourceTypes'
-import type { JavaProcess } from '../../api/hostToolsApi'
+import type { JavaProcess, ProcessKind, ProcessProbe } from '../../api/hostToolsApi'
+import { ProcessInspectionModal, type ProcessInspectionTarget } from './ProcessInspectionModal'
 import { useHostSshStore } from '../../stores/hostSshStore'
 import { useHostToolsPreferences } from './useHostToolsPreferences'
 
-type JavaProcessesPanelProps = { host: Host; onConnect: () => void }
+type JavaProcessesPanelProps = { host: Host; onConnect: () => void; processKind?: ProcessKind }
 
 export function JavaProcessesPanel(props: JavaProcessesPanelProps) {
   // Changing hosts must reset drafts before the new host's preferences arrive.
-  return <HostJavaProcessesPanel key={props.host.id} {...props} />
+  return <HostJavaProcessesPanel key={`${props.host.id}:${props.processKind ?? 'java'}`} {...props} />
 }
 
-function HostJavaProcessesPanel({ host, onConnect }: JavaProcessesPanelProps) {
+function HostJavaProcessesPanel({ host, onConnect, processKind = 'java' }: JavaProcessesPanelProps) {
   const t = useTranslation()
   const ssh = useHostSshStore(state => state.byHostId[host.id])
-  const config = useHostToolsPreferences({ hostId: host.id })
+  const config = useHostToolsPreferences({ hostId: host.id, ...(processKind !== 'java' ? { processKind } : {}) })
+  const [inspection, setInspection] = useState<ProcessInspectionTarget | null>(null)
   const [rows, setRows] = useState<JavaProcess[]>([])
   const [draftQuery, setDraftQuery] = useState<string | null>(null)
   const composing = useRef(false)
@@ -51,10 +53,12 @@ function HostJavaProcessesPanel({ host, onConnect }: JavaProcessesPanelProps) {
       requestId = id
       setLoading(true)
       try {
-        const result = await api.hostTools({ action: 'listJava', hostId: host.id, connectionId, generation, requestId: id })
+        const result = await api.hostTools(processKind === 'java'
+          ? { action: 'listJava', hostId: host.id, connectionId, generation, requestId: id }
+          : { action: 'listProcesses', processKind, hostId: host.id, connectionId, generation, requestId: id })
         if (!alive) return
         if (!result.ok) throw new Error(result.error.code)
-        if (result.data.kind !== 'java') throw new Error('INVALID_RESPONSE')
+        if (!(processKind === 'java' && result.data.kind === 'java') && !(result.data.kind === 'processes' && result.data.processKind === processKind)) throw new Error('INVALID_RESPONSE')
         setRows(result.data.processes); setSampledAt(result.data.sampledAt); setUnreadable(result.data.unreadable); setError(null)
       } catch (failure) {
         if (alive) { setRows([]); setError(failure instanceof Error ? failure.message : 'PROCESS_QUERY_FAILED') }
@@ -69,7 +73,7 @@ function HostJavaProcessesPanel({ host, onConnect }: JavaProcessesPanelProps) {
       if (timer) clearTimeout(timer)
       if (requestId) void api.hostTools({ action: 'cancelJava', requestId }).catch(() => undefined)
     }
-  }, [host.id, connected, connectionId, generation, nonce])
+  }, [host.id, connected, connectionId, generation, nonce, processKind])
   const normalized = query.trim().normalize('NFC').toLowerCase()
   const filtered = useMemo(() => {
     // Split only for matching; persist the original query and saved keyword intact.
@@ -81,7 +85,11 @@ function HostJavaProcessesPanel({ host, onConnect }: JavaProcessesPanelProps) {
     })
   }, [rows, normalized])
   if (!connected) return <div className="flex items-center gap-2 py-3 text-xs"><span>{t('managedResources.appOperations.connectFirst')}</span><Button size="xs" variant="secondary" onClick={onConnect}>{t('managedResources.appOperations.connect')}</Button></div>
-  return <section className="min-w-0 space-y-3" aria-label={t('managedResources.hostTools.javaProcesses')} data-testid="java-processes-panel">
+  const openInspection = (row: JavaProcess, probe: ProcessProbe) => {
+    if (!row.startTime || !connectionId || generation === undefined) return
+    setInspection({ hostId: host.id, connectionId, generation, pid: row.pid, startTime: row.startTime, processKind, probe })
+  }
+  return <section className="min-w-0 space-y-3" aria-label={processKind === 'java' ? t('managedResources.hostTools.javaProcesses') : t(`managedResources.process.${processKind}`)} data-testid={`${processKind}-processes-panel`}>
     <div className="flex flex-wrap items-center gap-2">
       <Search size={14} aria-hidden="true" />
       <Input type="search" size="sm" maxLength={120} value={query} disabled={!config.ready} aria-label={t('managedResources.hostTools.processSearch')} placeholder={t('managedResources.hostTools.processSearch')}
@@ -112,21 +120,23 @@ function HostJavaProcessesPanel({ host, onConnect }: JavaProcessesPanelProps) {
         <IconButton size="2xs" icon={<X size={10} />} label={`${t('managedResources.hostTools.removeKeyword')}: ${keyword}`} disabled={config.saving} onClick={() => void config.save({ removeJavaKeyword: keyword })} />
       </div>)}
     </div>}
-    <p className="text-[11px] text-[var(--color-text-tertiary)]">{t('managedResources.hostTools.processHelp')}</p>
+    <p className="text-[11px] text-[var(--color-text-tertiary)]">{processKind === 'java' ? t('managedResources.hostTools.processHelp') : t('managedResources.process.listHelp')}</p>
     <div role="status" className="text-xs text-[var(--color-text-secondary)]">{loading ? t('managedResources.appOperations.loading') : `${filtered.length} / ${rows.length}`}{sampledAt && ` · ${new Date(sampledAt).toLocaleTimeString()}`}</div>
     {unreadable > 0 && <p className="text-xs text-[var(--color-text-secondary)]">{t('managedResources.hostTools.unreadable', { count: unreadable })}</p>}
     {(error || config.error) && <p role="alert" className="text-xs text-[var(--color-error)]">{error || config.error}</p>}
     <div className="max-h-[65vh] overflow-auto rounded border border-[var(--color-border)]">
-      <table className="w-full table-fixed text-left text-xs">
+      <table className="w-full min-w-[540px] table-fixed text-left text-xs">
         <thead className="sticky top-0 bg-[var(--color-surface-container)]"><tr>
-          <th scope="col" className="w-20 p-2">PID</th><th scope="col" className="p-2">{t('managedResources.hostTools.commandLine')}</th><th scope="col" className="w-28 p-2">Xmx</th><th scope="col" className="w-28 p-2">Xms</th>
+          <th scope="col" className="w-20 p-2">PID</th><th scope="col" className="p-2">{t('managedResources.hostTools.commandLine')}</th>{processKind === 'java' && <th scope="col" className="w-32 p-2">Xmx / Xms</th>}<th scope="col" className="w-36 p-2">{t('managedResources.process.actions')}</th>
         </tr></thead>
-        <tbody>{filtered.map(row => <tr key={row.pid} className="border-t border-[var(--color-border)]" data-java-pid={row.pid}>
+        <tbody>{filtered.map(row => <tr key={row.pid} className="border-t border-[var(--color-border)]" data-java-pid={row.pid} data-process-kind={processKind}>
           <td className="p-2 align-top font-mono">{row.pid}</td><td className="whitespace-pre-wrap break-all p-2 align-top font-mono">{row.commandLine}</td>
-          <td className="p-2 align-top font-mono">{row.xmx ?? t('managedResources.hostTools.notSpecified')}</td><td className="p-2 align-top font-mono">{row.xms ?? t('managedResources.hostTools.notSpecified')}</td>
+          {processKind === 'java' && <td className="p-2 align-top font-mono"><div>Xmx: <span>{row.xmx ?? t('managedResources.hostTools.notSpecified')}</span></div><div>Xms: <span>{row.xms ?? t('managedResources.hostTools.notSpecified')}</span></div></td>}
+          <td className="p-2 align-top"><div className="flex flex-wrap gap-1">{(['top', 'ports', 'connections'] as const).map(probe => <Button key={probe} size="xs" variant="secondary" disabled={!row.startTime} aria-label={`${t(`managedResources.process.${probe}`)}: ${row.pid}`} onClick={() => openInspection(row, probe)}>{t(`managedResources.process.${probe}`)}</Button>)}</div></td>
         </tr>)}</tbody>
       </table>
-      {!loading && !error && filtered.length === 0 && <p className="p-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('managedResources.hostTools.noProcesses')}</p>}
+      {!loading && !error && filtered.length === 0 && <p className="p-4 text-center text-xs text-[var(--color-text-tertiary)]">{processKind === 'java' ? t('managedResources.hostTools.noProcesses') : t('managedResources.process.empty')}</p>}
     </div>
+    {inspection && inspection.connectionId === connectionId && inspection.generation === generation && <ProcessInspectionModal target={inspection} onClose={() => setInspection(null)} />}
   </section>
 }

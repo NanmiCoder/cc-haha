@@ -30,6 +30,7 @@ export function ProtectedPasswordReveal({ credentialId, label, compact = false }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const generationRef = useRef(0)
 
   const clearReveal = () => {
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -38,20 +39,28 @@ export function ProtectedPasswordReveal({ credentialId, label, compact = false }
   }
 
   useEffect(() => {
+    generationRef.current++
     clearReveal()
+    setBusy(false)
     setError(null)
-    return clearReveal
+    return () => {
+      generationRef.current++
+      clearReveal()
+    }
     // A credential id change must immediately evict the old plaintext.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credentialId])
 
   const reveal = async () => {
     if (busy) return
+    const generation = generationRef.current
     setBusy(true)
     setError(null)
     clearReveal()
     try {
       const result = await getDesktopHost().hostManagement.revealCredential(credentialId)
+      // Collapsing/unmounting or changing credentials invalidates the pending result.
+      if (generation !== generationRef.current) return
       if (!result.ok) {
         const translated = t(result.error.messageKey as never)
         setError(translated && translated !== result.error.messageKey ? translated : errorFallback(result.error.code))
@@ -65,9 +74,9 @@ export function ProtectedPasswordReveal({ credentialId, label, compact = false }
         setRevealed(null)
       }, remaining)
     } catch {
-      setError(errorFallback('OS_AUTH_UNAVAILABLE'))
+      if (generation === generationRef.current) setError(errorFallback('OS_AUTH_UNAVAILABLE'))
     } finally {
-      setBusy(false)
+      if (generation === generationRef.current) setBusy(false)
     }
   }
 

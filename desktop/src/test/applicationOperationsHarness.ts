@@ -15,11 +15,13 @@ import { createFakeSftpTransport } from '../../electron/services/managedResource
 import { createSftpService, createTransferService } from '../../electron/services/managedResources/sftpService'
 
 /** Real SSH channels and real IPC/services; only the remote filesystem/process is a fixture. */
-export async function createApplicationOperationsHarness(root = '/srv/fixture app', options: { holdJava?: boolean } = {}) {
+export async function createApplicationOperationsHarness(root = '/srv/fixture app', options: { holdJava?: boolean; processReplies?: Map<string, { text: string; exitCode?: number; hold?: boolean }> } = {}) {
   const fixture = await createHostWorkbenchHarness()
   const remote = await createFakeSftpTransport()
   const peers = new Set<SshFixtureConnection>()
   const commands: string[] = []
+  const processCommands: string[] = []
+  const processChannels = new Set<{ close: () => unknown }>()
   const tails = new Set<{ write: (data: string | Buffer) => unknown; close: () => unknown }>()
   let closedChannels = 0
   let javaOutput = 'CC_HAHA_JAVA_V1\nCC_HAHA_JAVA_END\t0\n'
@@ -43,6 +45,15 @@ export async function createApplicationOperationsHarness(root = '/srv/fixture ap
           javaChannels.add(channel)
           channel.once('close', () => javaChannels.delete(channel))
           if (!options.holdJava) { channel.write(javaOutput); channel.exit(javaExitCode); channel.end() }
+          return
+        }
+        const processReply = options.processReplies?.get(info.command)
+        if (processReply) {
+          processCommands.push(info.command)
+          processChannels.add(channel)
+          channel.on('error', () => {})
+          channel.once('close', () => processChannels.delete(channel))
+          if (!processReply.hold) { channel.write(processReply.text); channel.exit(processReply.exitCode ?? 0); channel.end() }
           return
         }
         commands.push(info.command)
@@ -93,6 +104,8 @@ export async function createApplicationOperationsHarness(root = '/srv/fixture ap
   fixture.services.transferService = createTransferService({ resolveSession, sftpService: fixture.services.sftpService, localPathService: fixture.services.localPathService })
   return {
     fixture, remote, root, host, application: host.applications[0]!, commands, ssh,
+    processCommands,
+    get activeProcessQueries() { return processChannels.size },
     setJavaOutput(text: string, exitCode = 0) { javaOutput = text; javaExitCode = exitCode },
     get javaQueries() { return javaQueries },
     get activeJava() { return javaChannels.size },

@@ -14,6 +14,7 @@ import { resourceErrorMessage } from './resourceErrorMessage'
 import { ApplicationEditModal } from './ApplicationEditModal'
 import { ApplicationFilesPanel } from './ApplicationFilesPanel'
 import { JavaProcessesPanel } from './JavaProcessesPanel'
+import { HostAuthenticationSection } from './HostAuthenticationSection'
 import { ProtectedPasswordReveal } from '../ProtectedPasswordReveal'
 
 export type HostDetailProps = {
@@ -38,7 +39,7 @@ export function HostDetail(_props: HostDetailProps) {
   const [referencingErrors, setReferencingErrors] = useState<HostManagementErrorReference[] | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [editingApp, setEditingApp] = useState<{ isNew: boolean; app?: HostApplication } | null>(null)
-  const [connectionView, setConnectionView] = useState<'terminal' | 'files' | 'applications' | 'java'>('terminal')
+  const [connectionView, setConnectionView] = useState<'terminal' | 'files' | 'applications' | 'java' | 'mysql' | 'redis'>('terminal')
   const [filesVisited, setFilesVisited] = useState(false)
   const workspaceId = useId()
   const handleTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -110,34 +111,30 @@ export function HostDetail(_props: HostDetailProps) {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6" data-testid="host-detail">
       {/* Top Header */}
-      <div className="flex items-start justify-between border-b border-[var(--color-border)] pb-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold text-[var(--color-text-primary)]">{host.name}</h1>
-            <span className="rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-0.5 text-xs font-mono text-[var(--color-text-secondary)]">
-              {host.username}@{host.address}:{host.port}
-            </span>
-          </div>
-          {host.notes && (
-            <p className="mt-1.5 text-xs text-[var(--color-text-secondary)]">{host.notes}</p>
-          )}
+      <div className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--color-border)] pb-4">
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap" data-testid="host-summary-line">
+          <h1 className="max-w-[32%] shrink-0 truncate text-lg font-bold text-[var(--color-text-primary)]" data-testid="host-summary-name" title={host.name}>{host.name}</h1>
+          <span className="min-w-0 max-w-[38%] truncate rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-0.5 text-xs font-mono text-[var(--color-text-secondary)]" data-testid="host-summary-endpoint" title={`${host.username}@${host.address}:${host.port}`}>
+            {host.username}@{host.address}:{host.port}
+          </span>
           {hostTags.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {hostTags.map((t) => (
+            <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" data-testid="host-summary-tags">
+              {hostTags.map((tag) => (
                 <span
-                  key={t.id}
-                  className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] text-[var(--color-text-primary)]"
+                  key={tag.id}
+                  className="shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] text-[var(--color-text-primary)]"
                 >
-                  {t.name}
+                  {tag.name}
                 </span>
               ))}
             </div>
           )}
+          {host.notes && <span className="min-w-0 truncate text-xs text-[var(--color-text-secondary)]" title={host.notes}>{host.notes}</span>}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             type="button"
             variant="secondary"
@@ -168,37 +165,13 @@ export function HostDetail(_props: HostDetailProps) {
       )}
 
       {/* Connection & Auth Section */}
-      <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] mb-3">
-          {t('managedResources.authMethod') || 'SSH 与凭据配置'}
-        </h3>
-        <div className="grid grid-cols-2 gap-4 text-xs">
-          <div>
-            <span className="text-[var(--color-text-tertiary)]">{t('managedResources.authMethod') || '认证方式'}: </span>
-            <span className="font-medium text-[var(--color-text-primary)]">
-              {host.auth.type === 'password'
-                ? (t('managedResources.authPassword') || '密码认证 (Password)')
-                : (t('managedResources.authKey') || '私钥认证 (Private Key)')}
-            </span>
-          </div>
-          <div>
-            <span className="text-[var(--color-text-tertiary)]">{t('managedResources.initialDir') || '初始工作目录'}: </span>
-            <span className="font-mono text-[var(--color-text-primary)]">
-              {host.initialDirectory || '/'}
-            </span>
-          </div>
-        </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4" data-testid="host-connection-workspace">
+        <HostAuthenticationSection
+          key={`${host.id}:${host.auth.type}:${host.auth.credentialId ?? ''}`}
+          host={host}
+        />
 
-        {host.auth.type === 'password' && host.auth.credentialId && (
-          <div className="mt-4">
-            <ProtectedPasswordReveal
-              credentialId={host.auth.credentialId}
-              label={t('managedResources.passwordReveal.sshLabel' as never) || 'SSH login password'}
-            />
-          </div>
-        )}
-
-        <div className="mt-4 flex items-center gap-1 border-b border-[var(--color-border)]" role="tablist" onKeyDown={handleTabKey} aria-label={t('managedResources.title')}>
+        <div className="mt-4 flex shrink-0 items-center gap-1 overflow-x-auto whitespace-nowrap border-b border-[var(--color-border)]" role="tablist" onKeyDown={handleTabKey} aria-label={t('managedResources.title')}>
           <button
             type="button"
             role="tab"
@@ -247,20 +220,33 @@ export function HostDetail(_props: HostDetailProps) {
             className={`inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${connectionView === 'java' ? 'border-[var(--color-brand)] text-[var(--color-brand)]' : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'}`}>
             <Layers size={14} />{t('managedResources.hostTools.javaProcesses')}
           </button>
+          {(['mysql', 'redis'] as const).map(kind => (
+            <button key={kind} type="button" role="tab" aria-selected={connectionView === kind} data-testid={`host-${kind}-tab`}
+              id={`${workspaceId}-${kind}-tab`} aria-controls={`${workspaceId}-${kind}-panel`} tabIndex={connectionView === kind ? 0 : -1}
+              onClick={() => setConnectionView(kind)}
+              className={`inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${connectionView === kind ? 'border-[var(--color-brand)] text-[var(--color-brand)]' : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'}`}>
+              <Layers size={14} aria-hidden="true" />{t(`managedResources.process.${kind}`)}
+            </button>
+          ))}
         </div>
-        <div className="min-w-0 pt-3">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-3">
           {/* Keep the active host's terminal buffer and edit draft across tabs. */}
-          <div role="tabpanel" id={`${workspaceId}-terminal-panel`} aria-labelledby={`${workspaceId}-terminal-tab`} hidden={connectionView !== 'terminal'}>
+          <div className="min-h-0 flex-1" data-testid="host-terminal-panel" role="tabpanel" id={`${workspaceId}-terminal-panel`} aria-labelledby={`${workspaceId}-terminal-tab`} hidden={connectionView !== 'terminal'}>
             <SshConsole key={host.id} host={host as Host} />
           </div>
-          <div role="tabpanel" id={`${workspaceId}-files-panel`} aria-labelledby={`${workspaceId}-files-tab`} hidden={connectionView !== 'files'}>
+          <div className="h-full min-h-0 overflow-y-auto" role="tabpanel" id={`${workspaceId}-files-panel`} aria-labelledby={`${workspaceId}-files-tab`} hidden={connectionView !== 'files'}>
             {filesVisited && <RemoteFilesPanel key={host.id} host={host as Host} />}
           </div>
-          {connectionView === 'java' && <div role="tabpanel" id={`${workspaceId}-java-panel`} aria-labelledby={`${workspaceId}-java-tab`}>
+          {connectionView === 'java' && <div className="h-full min-h-0 overflow-y-auto" role="tabpanel" id={`${workspaceId}-java-panel`} aria-labelledby={`${workspaceId}-java-tab`}>
             <JavaProcessesPanel key={host.id} host={host} onConnect={() => setConnectionView('terminal')} />
           </div>}
+          {(connectionView === 'mysql' || connectionView === 'redis') && (
+            <div className="h-full min-h-0 overflow-y-auto" role="tabpanel" id={`${workspaceId}-${connectionView}-panel`} aria-labelledby={`${workspaceId}-${connectionView}-tab`}>
+              <JavaProcessesPanel key={`${host.id}:${connectionView}`} host={host} processKind={connectionView} onConnect={() => setConnectionView('terminal')} />
+            </div>
+          )}
           {connectionView === 'applications' && (
-            <div data-testid="host-applications-panel" role="tabpanel" id={`${workspaceId}-applications-panel`} aria-labelledby={`${workspaceId}-applications-tab`}>
+            <div className="h-full min-h-0 overflow-y-auto" data-testid="host-applications-panel" role="tabpanel" id={`${workspaceId}-applications-panel`} aria-labelledby={`${workspaceId}-applications-tab`}>
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                   {t('managedResources.applications') || '受管应用与服务'} ({host.applications.length})

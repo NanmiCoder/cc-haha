@@ -734,6 +734,9 @@ export type ManagedTransferJob = {
   remotePath: string
   size: number
   transferred: number
+  verifiedBytes?: number
+  verificationMethod?: 'remote-sha256' | 'stream-sha256'
+  verificationStartedAt?: number
   state: ManagedTransferState
   error: ManagedTransferError | null
   checksum: string | null

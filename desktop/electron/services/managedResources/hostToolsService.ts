@@ -3,9 +3,10 @@ import { HostToolsInputSchema, type HostToolsInput, type HostToolsResult } from 
 import type { ManagedResourcesServices } from './registerIpc.js'
 import { createHostToolsPreferences, type HostToolsPreferencesRepository } from './hostToolsPreferences.js'
 import { JAVA_PROCESS_COMMAND, parseJavaProcesses } from './javaProcessProtocol.js'
+import { parseProcessInspection, parseServiceProcesses, processInspectionCommand, processListCommand } from './serviceProcessProtocol.js'
 
 type Services = Pick<ManagedResourcesServices, 'store' | 'sshService'>
-type Query = Extract<HostToolsInput, { action: 'listJava' }>
+type Query = Extract<HostToolsInput, { action: 'listJava' | 'listProcesses' | 'inspectProcess' }>
 export function createHostToolsService(services: Services, preferences: HostToolsPreferencesRepository = createHostToolsPreferences(services.store)) {
   const active = new Map<string, { owner: string; controller: AbortController }>()
   const cancelled = new Map<string, { owner: string; until: number }>()
@@ -45,7 +46,9 @@ export function createHostToolsService(services: Services, preferences: HostTool
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) { abort(); return }
       try {
-        client.exec(JAVA_PROCESS_COMMAND, (error, stream) => {
+        const command = input.action === 'inspectProcess' ? processInspectionCommand(input)
+          : input.action === 'listProcesses' ? processListCommand(input.processKind) : JAVA_PROCESS_COMMAND
+        client.exec(command, (error, stream) => {
           if (error) { finish(new Error('PROCESS_QUERY_FAILED')); return }
           channel = stream
           stream.on('error', () => finish(new Error('CONNECTION_LOST')))
@@ -89,6 +92,10 @@ export function createHostToolsService(services: Services, preferences: HostTool
       try {
         const text = await query(input, owner, controller.signal)
         connection(input, owner)
+        if (input.action === 'inspectProcess') return { kind: 'processInspection', pid: input.pid, processKind: input.processKind, probe: input.probe,
+          ...parseProcessInspection(text, input.pid, input.probe), sampledAt: new Date().toISOString() }
+        if (input.action === 'listProcesses') return { kind: 'processes', processKind: input.processKind,
+          ...parseServiceProcesses(text, input.processKind), sampledAt: new Date().toISOString() }
         return { kind: 'java', ...parseJavaProcesses(text), sampledAt: new Date().toISOString() }
       } finally { active.delete(input.requestId) }
     },

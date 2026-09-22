@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Cable, ShieldAlert, TerminalSquare, Unplug } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { useHostSshStore } from '../../stores/hostSshStore'
+import { subscribeTerminalOutput } from '../../stores/terminalOutputReplay'
 import { useTranslation } from '../../../../i18n'
 import { getDesktopHost } from '../../../../lib/desktopHost'
 import type { Host } from '../../types/resourceTypes'
@@ -90,24 +91,14 @@ export function SshConsole({ host }: Props) {
     try { term.focus() } catch {}
 
     const hostApi = getDesktopHost().hostManagement
+    const unlistenOutput = subscribeTerminalOutput(host.id, connectionId, generation, (bytes, parsed) => {
+      if (!isCurrent()) { parsed(); return }
+      term.write(bytes, parsed)
+    })
     void hostApi.onEvent((event: HostManagementEvent) => {
       if (!isCurrent() || !('connectionId' in event)) return
       if (event.connectionId !== connectionId || event.generation !== generation) return
-      if (event.type === 'terminal-output') {
-        try {
-          const binary = atob(event.data)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-          // xterm consumes writes asynchronously. ACK only this generation's
-          // parsed bytes, never a disposed terminal's late callback.
-          term.write(bytes, () => {
-            if (!isCurrent()) return
-            void hostApi.ackOutput({ connectionId, generation, bytesAcked: event.byteLength }).catch(() => undefined)
-          })
-        } catch {
-          // ignore malformed base64; service already validated.
-        }
-      } else if (event.type === 'connection-state') {
+      if (event.type === 'connection-state') {
         if (event.status === 'ready') term.writeln('\x1b[32m[connected]\x1b[0m')
         else if (event.status === 'failed') term.writeln(`\x1b[31m[failed] ${event.error ?? 'unknown'}\x1b[0m`)
         else if (event.status === 'closing' || event.status === 'closed') term.writeln('\x1b[33m[closed]\x1b[0m')
@@ -129,6 +120,7 @@ export function SshConsole({ host }: Props) {
 
     return () => {
       disposed = true
+      unlistenOutput()
       unlistenEvent?.()
       inputSubscription.dispose()
       resizeSubscription.dispose()
@@ -146,8 +138,8 @@ export function SshConsole({ host }: Props) {
   const answerReject = () => useHostSshStore.getState().answer(host.id, 'reject')
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-sm" data-host-id={host.id}>
-      <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-container-high)] px-3 py-2" role="toolbar" aria-label={t('managedResources.ssh.toolbar') || 'SSH 控制台工具栏'}>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-sm" data-host-id={host.id} data-testid="ssh-console">
+      <div className="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-container-high)] px-3 py-2" role="toolbar" aria-label={t('managedResources.ssh.toolbar') || 'SSH 控制台工具栏'}>
         <div className="flex min-w-0 items-center gap-2">
           <TerminalSquare size={16} className="shrink-0 text-[var(--color-success)]" />
           <div className="min-w-0">
@@ -219,7 +211,7 @@ export function SshConsole({ host }: Props) {
           {errorLabel(t, entry.lastError)}
         </div>
       ) : null}
-      <div className="relative h-[48vh] min-h-[360px] max-h-[640px] bg-[var(--color-surface)] p-2">
+      <div className="relative min-h-0 flex-1 bg-[var(--color-surface)] p-2" data-testid="ssh-terminal-viewport">
         {!entry?.connectionId && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center text-xs text-[var(--color-text-tertiary)]">
             {t('managedResources.ssh.clickToConnect' as never) || 'Click Connect to open an interactive SSH terminal.'}
@@ -227,7 +219,7 @@ export function SshConsole({ host }: Props) {
         )}
         <div
           ref={containerRef}
-          className="h-full min-h-[344px] w-full overflow-hidden rounded"
+          className="h-full min-h-0 w-full overflow-hidden rounded"
           role="region"
           aria-label={t('managedResources.ssh.terminalRegion') || 'SSH 终端输出'}
         />

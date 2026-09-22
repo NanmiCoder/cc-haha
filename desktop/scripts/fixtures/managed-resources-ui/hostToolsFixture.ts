@@ -4,13 +4,25 @@ import path from 'node:path'
 import type { BrowserWindow } from 'electron'
 import type { FakeSftpTransport } from '../../../electron/services/managedResources/sftpTestTransport'
 import { applicationScriptCommand } from '../../../electron/services/managedResources/applicationScriptCommand'
+import { processInspectionCommand, processListCommand } from '../../../electron/services/managedResources/serviceProcessProtocol'
 
 export const HOST_TOOLS_FIXTURE_ROOT = '/workspace/host-tools'
 export const HOST_TOOLS_FIXTURE_COMMAND = applicationScriptCommand(HOST_TOOLS_FIXTURE_ROOT + '/bin/bin', 'verify.sh', 'deploy')
 export const HOST_TOOLS_JAVA_FRAME = 'CC_HAHA_JAVA_V1\n' + [
   [101, ['/jdk/bin/java', '-Xms512m', '-Xmx2g', '-jar', '/srv/mon 服务.jar']],
   [202, ['/jdk/bin/java', '-Xmx1g', 'demo.Scheduler']],
-].map(([pid, args]) => `${pid}\t${Buffer.from((args as string[]).join('\0') + '\0').toString('base64')}\n`).join('') + 'CC_HAHA_JAVA_END\t0\n'
+].map(([pid, args]) => `${pid}\t${Buffer.from((args as string[]).join('\0') + '\0').toString('base64')}\t123456\n`).join('') + 'CC_HAHA_JAVA_END\t0\n'
+
+export const PROCESS_FIXTURE_REPLIES = new Map<string, string>()
+for (const [kind, pid, name] of [['java', 101, 'java'], ['mysql', 301, 'mysqld'], ['redis', 302, 'redis-server']] as const) {
+  if (kind !== 'java') PROCESS_FIXTURE_REPLIES.set(processListCommand(kind), `CC_HAHA_PROCESS_V1\t${kind}\n${pid}\t123456\t${name}\t${Buffer.from(`${name}\0--fixture-only\0`).toString('base64')}\nCC_HAHA_PROCESS_END\t0\n`)
+  for (const probe of ['top', 'ports', 'connections'] as const) {
+    const text = probe === 'top' ? `PID USER %CPU %MEM RES\n${pid} fixture 12.5 2.0 128m\n`
+      : probe === 'ports' ? `tcp LISTEN 0 128 [::]:3337 [::]:* users:(("${name}",pid=${pid},fd=9))\n`
+      : `tcp ESTAB 0 0 127.0.0.1:3337 127.0.0.1:52345 users:(("${name}",pid=${pid},fd=12))\n`
+    PROCESS_FIXTURE_REPLIES.set(processInspectionCommand({ pid, startTime: '123456', processKind: kind, probe }), `CC_HAHA_INSPECTION_V1\t${pid}\t${probe}\n${Buffer.from(text).toString('base64')}\nCC_HAHA_INSPECTION_END\n`)
+  }
+}
 
 type Controls = {
   clickButton: (key: string, selector?: string, scope?: string) => Promise<void>
@@ -85,7 +97,30 @@ export async function verifyHostTools(win: BrowserWindow, controls: Controls, re
   await waitFor('document.querySelectorAll("[data-java-pid]").length === 2', 'multi-term saved keyword selects both rows')
   await fs.writeFile(path.join(output, 'java-search-or.png'), (await win.webContents.capturePage()).toPNG())
   await fs.writeFile(path.join(output, 'java-search-or.json'), JSON.stringify({ status: 'passed', testedAt: new Date().toISOString(), orSearch: true, disjointTerms: true, lastQueryRestored: true, savedMultiTermKeyword: true, fakeRemoteProcesses: true }, null, 2) + '\n')
-  await fs.writeFile(path.join(output, 'host-tools-native.json'), JSON.stringify({ status: 'passed', testedAt: new Date().toISOString(), executionUserSaved: true, scriptConfirmedThroughIpc: true, foldRestore: true, javaColumns: ['PID', 'commandLine', 'Xmx', 'Xms'], keywordSaveAndSelectAfterRemount: true, lastSearchRestoredOnReopen: true, clearedSearchRestored: true, clickedKeywordRestored: true, fakeSftp: true, fakeRemoteProcesses: true, realCredentials: false }, null, 2) + '\n')
+  const javaColumns = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("[data-testid=java-processes-panel] th")).map(cell => cell.textContent)')
+  assert.deepEqual(javaColumns, ['PID', 'Command line', 'Xmx / Xms', 'Inspect'])
+  for (const [kind, pid] of [['java', 101], ['mysql', 301], ['redis', 302]] as const) {
+    await clickExpression(`document.querySelector('[data-testid=host-${kind}-tab]')`)
+    await waitFor(`Boolean(document.querySelector('[data-process-kind="${kind}"][data-java-pid="${pid}"]'))`, `${kind} native process entry`)
+    const target = `document.querySelector('[data-process-kind="${kind}"][data-java-pid="${pid}"] button')`
+    await clickExpression(target)
+    await waitFor('document.querySelector("[data-testid=process-inspection] pre")?.textContent.includes("12.5 2.0 128m")', `${kind} native Top probe`)
+    await clickButton('managedResources.process.ports', '[role=tab]', 'document.querySelector("[data-testid=process-inspection]")')
+    await waitFor('document.querySelector("[data-testid=process-inspection] pre")?.textContent.includes("tcp LISTEN")', `${kind} native listening ports`)
+    await clickButton('managedResources.process.connections', '[role=tab]', 'document.querySelector("[data-testid=process-inspection]")')
+    await waitFor('document.querySelector("[data-testid=process-inspection] pre")?.textContent.includes("tcp ESTAB")', `${kind} native connections`)
+    await fs.writeFile(path.join(output, `${kind}-process-inspection.png`), (await win.webContents.capturePage()).toPNG())
+    await clickButton('common.close', 'button[aria-label]', 'document.querySelector("[role=dialog]")')
+    if (kind !== 'java') {
+      await type(`[data-testid=${kind}-processes-panel] input[type=search]`, kind === 'mysql' ? 'mysqld absent' : 'redis-server absent')
+      await clickButton('managedResources.hostTools.saveKeyword')
+      await waitFor(`Array.from(document.querySelectorAll('[data-testid=${kind}-processes-panel] button')).some(button => button.textContent.includes('absent'))`, `${kind} saved OR search`)
+    }
+  }
+  await clickExpression('document.querySelector("[data-testid=host-mysql-tab]")')
+  await waitFor('document.querySelector("[data-testid=mysql-processes-panel] input[type=search]")?.value === "mysqld absent"', 'MySQL search restored independently')
+  await fs.writeFile(path.join(output, 'process-inspection.json'), JSON.stringify({ status: 'passed', javaColumns, processKinds: ['java', 'mysql', 'redis'], probes: ['top', 'ports', 'connections'], mysqlSearchRestored: true, fakeRemoteProcesses: true }, null, 2) + '\n')
+  await fs.writeFile(path.join(output, 'host-tools-native.json'), JSON.stringify({ status: 'passed', testedAt: new Date().toISOString(), executionUserSaved: true, scriptConfirmedThroughIpc: true, foldRestore: true, javaColumns, keywordSaveAndSelectAfterRemount: true, lastSearchRestoredOnReopen: true, clearedSearchRestored: true, clickedKeywordRestored: true, fakeSftp: true, fakeRemoteProcesses: true, realCredentials: false }, null, 2) + '\n')
   await clickExpression('document.querySelector("[data-testid=host-applications-tab]")')
   await clickButton('managedResources.deleteApp')
   await clickButton('common.delete', 'button', 'document.querySelector("[role=dialog]")')

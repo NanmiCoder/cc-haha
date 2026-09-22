@@ -66,6 +66,8 @@ function freezeSnapshot(snapshot: ContextSelectionSnapshot): ContextSelectionSna
   Object.freeze(snapshot.directIds)
   Object.freeze(snapshot.resolved.host)
   Object.freeze(snapshot.resolved.concept)
+  Object.freeze(snapshot.resolved.database)
+  Object.freeze(snapshot.resolved.redis)
   Object.freeze(snapshot.resolved.dataConnection)
   Object.freeze(snapshot.resolved)
   return Object.freeze(snapshot)
@@ -119,10 +121,11 @@ export async function persistManagedContextSelection(
  * Returns `true` when a selection moved. With nothing selected this is a no-op:
  * no `set`, no host call, and the draft keeps whatever it had.
  */
-export async function adoptManagedContextSession(sessionId: string): Promise<boolean> {
+export async function adoptManagedContextSession(sessionId: string, prepared?: ManagedContextSubmission | null): Promise<boolean> {
   const store = useContextSelectionStore.getState()
-  if (!store.hasSelection()) return false
-  store.migrateToSession(sessionId)
-  await persistManagedContextSelection(sessionId, useContextSelectionStore.getState().toConversationContextSelection())
+  if (!prepared && !store.hasSelection()) return false
+  if (prepared) store.adoptSnapshot(sessionId, prepared.snapshot)
+  else store.migrateToSession(sessionId)
+  await persistManagedContextSelection(sessionId, prepared?.selection ?? useContextSelectionStore.getState().toConversationContextSelection())
   return true
 }

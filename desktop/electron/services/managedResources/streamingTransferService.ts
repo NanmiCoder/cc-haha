@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises'
 import type { SFTPWrapper, Stats } from 'ssh2'
 import { isM4FileName } from '../../../src/features/managed-resources/api/m4IpcContract.js'
 import type { TransferJob, TransferService, TransferServiceOptions, FolderTransferInput } from './sftpService.js'
+import { remoteFileChecksum, REMOTE_HASH_THRESHOLD_BYTES } from './remoteFileChecksum.js'
 
 const terminal = (job: TransferJob) => ['completed', 'failed', 'cancelled'].includes(job.state)
 const safeName = isM4FileName
@@ -34,7 +35,7 @@ export function createStreamingTransferService(options: TransferServiceOptions):
     if (code === 'EACCES' || code === 'EPERM' || code === '3') return 'PERMISSION_DENIED'
     if (code === 'ENOENT' || code === '2') return 'RESOURCE_NOT_FOUND'
     if (code === 'ENOSPC') return 'NO_SPACE'
-    return /^(CANCELLED|STALE_GENERATION|DISCONNECTED|UNAUTHORIZED_OWNER|FILE_TOO_LARGE|SIZE_MISMATCH|CHECKSUM_MISMATCH|FILE_CHANGED|IS_SYMLINK|NOT_A_FILE|NOT_A_DIRECTORY|INVALID_LOCAL_PATH|INVALID_REMOTE_PATH|INVALID_FILENAME|TARGET_EXISTS|TREE_LIMIT_EXCEEDED|TRANSFER_TIMEOUT|RESOURCE_NOT_FOUND)$/.test(message) ? message : 'TRANSFER_FAILED'
+    return /^(CANCELLED|STALE_GENERATION|DISCONNECTED|UNAUTHORIZED_OWNER|FILE_TOO_LARGE|SIZE_MISMATCH|CHECKSUM_MISMATCH|FILE_CHANGED|IS_SYMLINK|NOT_A_FILE|NOT_A_DIRECTORY|INVALID_LOCAL_PATH|INVALID_REMOTE_PATH|INVALID_FILENAME|TARGET_EXISTS|TREE_LIMIT_EXCEEDED|TRANSFER_TIMEOUT|VERIFY_TIMEOUT|REMOTE_VERIFY_FAILED|VERIFY_RESPONSE_INVALID|CONNECTION_LOST|RESOURCE_NOT_FOUND)$/.test(message) ? message : 'TRANSFER_FAILED'
   }
 
   function start(input: { jobId: string; connectionId: string; ownerId: string; generation: number; remotePath: string; localToken?: string; localRoot?: string }, upload: boolean, folder: boolean): Promise<TransferJob> {
@@ -135,6 +136,7 @@ export function createStreamingTransferService(options: TransferServiceOptions):
             hash.update(chunk)
             touched = Date.now()
             if (progress) { job.transferred += chunk.length; emit(job) }
+            else { job.verifiedBytes = (job.verifiedBytes ?? 0) + chunk.length; emit(job) }
             callback(null, chunk)
           } catch (err) { callback(err as Error) }
         } })
@@ -237,9 +239,35 @@ export function createStreamingTransferService(options: TransferServiceOptions):
             destination.once('open', () => { reserved = true; if (upload) createdRemote.push({ name: to, directory: false }) })
             const checksum = await stream(source, destination, entry.size, true)
             job.state = 'verifying'
+            job.verificationStartedAt = Date.now()
+            job.verificationMethod = upload && entry.size >= REMOTE_HASH_THRESHOLD_BYTES ? 'remote-sha256' : 'stream-sha256'
+            job.verifiedBytes ??= 0
             emit(job)
-            const reread = upload ? sftp!.createReadStream(to, { highWaterMark: chunkSize }) : createReadStream(to, { highWaterMark: chunkSize })
-            if (await stream(reread, hashSink(), entry.size, false) !== checksum) fail('CHECKSUM_MISMATCH')
+            checkpoint()
+            const written = upload ? await lstat(to) : await fs.lstat(to)
+            checkFile(written.size, written.mode)
+            if (written.size !== entry.size) fail('SIZE_MISMATCH')
+            let verifiedHash: string | null = null
+            if (job.verificationMethod === 'remote-sha256') {
+              verifiedHash = await remoteFileChecksum({ client: options.resolveSession(input).client, path: to, size: entry.size,
+                signal, checkpoint, timeoutMs: options.verificationTimeoutMs })
+            }
+            if (verifiedHash === null) {
+              // SFTP-only servers or absent sha256sum: retain full verification,
+              // but report real read-back progress instead of a frozen 100% bar.
+              job.verificationMethod = 'stream-sha256'
+              emit(job)
+              const reread = upload ? sftp!.createReadStream(to, { highWaterMark: chunkSize }) : createReadStream(to, { highWaterMark: chunkSize })
+              verifiedHash = await stream(reread, hashSink(), entry.size, false)
+            } else {
+              job.verifiedBytes += entry.size
+              emit(job)
+            }
+            if (verifiedHash !== checksum) fail('CHECKSUM_MISMATCH')
+            const verified = upload ? await lstat(to) : await fs.lstat(to)
+            const writtenStamp = 'mtimeMs' in written ? written.mtimeMs : written.mtime
+            const verifiedStamp = 'mtimeMs' in verified ? verified.mtimeMs : verified.mtime
+            if (verified.size !== written.size || verifiedStamp !== writtenStamp) fail('FILE_CHANGED')
             const after = upload ? await fs.lstat(from) : await lstat(from)
             const stamp = 'mtimeMs' in after ? Number(after.mtimeMs) : Number(after.mtime) * 1000
             if (after.size !== entry.size || stamp !== entry.mtime) fail('FILE_CHANGED')

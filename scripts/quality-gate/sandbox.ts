@@ -257,6 +257,10 @@ export function createQualityGateSandbox(options: {
   const home = mkdtempSync(join(tmpdir(), `cc-haha-qa-${options.label}-`))
   const env = buildSandboxLaneEnv(home, options.envOverrides ?? {}, source)
   const configDir = env.CLAUDE_CONFIG_DIR
+  if (!configDir) {
+    rmSync(home, { recursive: true, force: true })
+    throw new Error('Sandbox config directory must be explicit')
+  }
   mkdirSync(configDir, { recursive: true })
 
   if (options.seedProviders) {

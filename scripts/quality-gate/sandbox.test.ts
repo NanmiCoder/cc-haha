@@ -203,6 +203,16 @@ describe('user state guard', () => {
 })
 
 describe('sandbox lifecycle', () => {
+  test('refuses an empty config override instead of falling back to the user config', () => {
+    const source = scratch('missing-config-source')
+    writeJson(join(source, 'settings.json'), { keep: true })
+    expect(() => createQualityGateSandbox({
+      label: 'missing-config', sourceConfigDir: source, source: { PATH: '/usr/bin' },
+      envOverrides: { CLAUDE_CONFIG_DIR: '' },
+    })).toThrow('Sandbox config directory must be explicit')
+    expect(JSON.parse(readFileSync(join(source, 'settings.json'), 'utf8'))).toEqual({ keep: true })
+  })
+
   test('creates an isolated config dir seeded from the given source and cleans up', () => {
     const source = scratch('lifecycle-source')
     writeJson(join(source, 'cc-haha', 'providers.json'), { activeId: 'p1', providers: [{ id: 'p1', name: 'Gateway' }] })

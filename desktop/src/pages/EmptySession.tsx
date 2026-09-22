@@ -74,7 +74,6 @@ import {
 } from '../features/managed-resources/integration/composerIntegration'
 import {
   adoptManagedContextSession,
-  hasManagedContextSelection,
   prepareManagedContextSubmission,
 } from '../features/managed-resources/integration/chatSubmission'
 
@@ -375,6 +374,8 @@ export function EmptySession() {
       return
     }
 
+    // Selection must not be reread after auth/session creation remounts the composer.
+    const preparedContext = prepareManagedContextSubmission()
     setIsSubmitting(true)
     try {
       const authStatus = await providersApi.authStatus()
@@ -432,6 +433,7 @@ export function EmptySession() {
           runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
         }
       }
+      if (preparedContext) await adoptManagedContextSession(sessionId, preparedContext)
       setActiveView('code')
       useTabStore.getState().openTab(sessionId, 'New Session')
       connectToSession(sessionId)
@@ -440,9 +442,7 @@ export function EmptySession() {
       // it, so the first send carries what the home composer showed and the
       // draft no longer owns a separate copy. Guarded so the no-selection send
       // path keeps its original (synchronous) timeline.
-      if (hasManagedContextSelection()) await adoptManagedContextSession(sessionId)
-      // U07/M6-B: the one prepare for this send point.
-      const preparedContext = prepareManagedContextSubmission()
+      // The frozen selection above owns this first send; never recapture after openTab.
       const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
         type: attachment.type,
         name: attachment.name,

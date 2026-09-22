@@ -85,6 +85,9 @@ export type TransferJob = {
   localPath: string
   size: number
   transferred: number
+  verifiedBytes?: number
+  verificationMethod?: 'remote-sha256' | 'stream-sha256'
+  verificationStartedAt?: number
   state: TransferState
   error: TransferError | null
   checksum: string | null
@@ -436,6 +439,7 @@ export type TransferServiceOptions = {
   maxFileBytes?: number
   chunkSize?: number
   idleTimeoutMs?: number
+  verificationTimeoutMs?: number
   maxEntries?: number
   maxDepth?: number
   emit?: (event: { type: 'transfer-update'; job: TransferJob }) => void

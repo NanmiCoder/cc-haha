@@ -175,6 +175,34 @@ void app.whenReady().then(async () => {
     assert.equal((await fs.readFile(module.services.store.filePath, 'utf8')).includes(SENTINEL), false)
     steps.push({ name: stage, status: 'passed' })
 
+    stage = 'authentication defaults collapsed with mouse and keyboard disclosure'
+    const authToggle = 'document.querySelector("[data-testid=host-authentication-toggle]")'
+    const authExpanded = `${authToggle}?.getAttribute('aria-expanded')`
+    await waitFor(`${authExpanded} === 'false'`, 'authentication starts collapsed')
+    assert.equal(await win.webContents.executeJavaScript('document.querySelector("[data-testid=host-authentication-section] [data-testid^=protected-password-]") === null'), true)
+    for (const tab of ['host-terminal-tab', 'host-files-tab', 'host-applications-tab', 'host-java-tab']) {
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelector('[data-testid=${tab}]').getBoundingClientRect().height > 0`), true)
+    }
+    await clickExpression(authToggle)
+    await waitFor(`${authExpanded} === 'true'`, 'authentication expands by mouse')
+    const expandedHeight = await win.webContents.executeJavaScript('document.querySelector("[data-testid=host-authentication-section]").getBoundingClientRect().height')
+    for (const [key, code, vk, expected] of [['Enter', 'Enter', 13, 'false'], [' ', 'Space', 32, 'true']] as const) {
+      await win.webContents.executeJavaScript(`${authToggle}.focus()`)
+      assert.equal(await win.webContents.executeJavaScript(`document.activeElement === ${authToggle}`), true)
+      // Match applicationLayoutFixture: Chromium needs text for native button activation.
+      const text = key === 'Enter' ? '\r' : ' '
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key, code, text, unmodifiedText: text, windowsVirtualKeyCode: vk })
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk })
+      await waitFor(`${authExpanded} === '${expected}'`, `authentication keyboard toggle: ${code}`)
+    }
+    await clickExpression(authToggle)
+    await waitFor(`${authExpanded} === 'false'`, 'authentication collapsed again')
+    const collapsedHeight = await win.webContents.executeJavaScript('document.querySelector("[data-testid=host-authentication-section]").getBoundingClientRect().height')
+    assert.ok(expandedHeight > collapsedHeight + 50)
+    await fs.writeFile(path.join(output, 'auth-collapse.png'), (await win.webContents.capturePage()).toPNG())
+    await fs.writeFile(path.join(output, 'auth-collapse.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(), defaultCollapsed: true, workspaceTabsVisible: true, mouseToggle: true, enterToggle: true, spaceToggle: true, expandedHeight, collapsedHeight, realOsAuthentication: false }, null, 2) + '\n')
+    steps.push({ name: stage, status: 'passed' })
+
     stage = 'native SSH single echo and side-by-side file editing'
     await workspaceFixture.verify(win, { clickButton, clickExpression, waitFor, type }, output)
     steps.push({ name: stage, status: 'passed' })

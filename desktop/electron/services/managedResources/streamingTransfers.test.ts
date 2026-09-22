@@ -41,7 +41,9 @@ describe('streaming files and recursive directories', () => {
     const received = await transfers.startDownload({ ...base(), remotePath: '/large.bin', localToken: destination.token })
     expect(received.state).toBe('completed')
     expect(received.checksum).toBe(createHash('sha256').update(bytes).digest('hex'))
-    expect(await fs.readFile(destination.absolutePath)).toEqual(bytes)
+    // Compare every byte natively; recursive assertion traversal of an 8 MiB
+    // Buffer can itself block Vitest for tens of seconds on Windows.
+    expect((await fs.readFile(destination.absolutePath)).equals(bytes)).toBe(true)
     const editor = createRemoteEditService({ resolveSession: remote.resolveSession, sftpService: sftp, localPathService: local })
     await expect(editor.open({ connectionId, ownerId, generation: 1, absolutePath: '/large.bin' })).rejects.toThrow('FILE_TOO_LARGE')
   })

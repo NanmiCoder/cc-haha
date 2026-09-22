@@ -13,11 +13,19 @@ for file in /proc/[0-9]*/cmdline; do
   first=''
   IFS= read -r -d '' first < "$file" 2>/dev/null || continue
   case "\${first##*/}" in java|java.bin)
+    statfile=\${file%/cmdline}/stat
+    before=$(cat "$statfile" 2>/dev/null) || continue
+    rest=\${before##*) }; read -r -a fields <<< "$rest"
+    start=\${fields[19]}
+    [[ "$start" =~ ^[1-9][0-9]*$ ]] || continue
     value=$(base64 < "$file" 2>/dev/null) || continue
     value=$(printf '%s' "$value" | tr -d '\\r\\n')
     [ -n "$value" ] || continue
     pid=\${file#/proc/}; pid=\${pid%/cmdline}
-    printf '%s\\t%s\\n' "$pid" "$value"
+    after=$(cat "$statfile" 2>/dev/null) || continue
+    rest=\${after##*) }; read -r -a fields <<< "$rest"
+    [ "$start" = "\${fields[19]}" ] || continue
+    printf '%s\\t%s\\t%s\\n' "$pid" "$value" "$start"
     ;;
   esac
 done
@@ -46,7 +54,7 @@ export function parseJavaProcesses(text: string): { processes: JavaProcess[]; un
   if (!end || !Number.isSafeInteger(Number(end[1])) || lines.length > 10000) throw new Error('PROCESS_RESPONSE_INVALID')
   const seen = new Set<number>()
   const processes = lines.map(line => {
-    const match = /^([1-9]\d*)\t([A-Za-z0-9+/]+={0,2})$/.exec(line)
+    const match = /^([1-9]\d*)\t([A-Za-z0-9+/]+={0,2})(?:\t([1-9]\d{0,19}))?$/.exec(line)
     if (!match) throw new Error('PROCESS_RESPONSE_INVALID')
     const pid = Number(match[1])
     const data = Buffer.from(match[2]!, 'base64')
@@ -55,7 +63,7 @@ export function parseJavaProcesses(text: string): { processes: JavaProcess[]; un
     const args = data.toString('utf8').slice(0, -1).split('\0')
     if (!/^(java|java.bin)$/.test(args[0]!.split('/').at(-1)!)) throw new Error('PROCESS_RESPONSE_INVALID')
     const commandLine = args.map(arg => arg && !/[\s'"\\]/.test(arg) ? arg : JSON.stringify(arg)).join(' ')
-    return { pid, commandLine, ...javaHeapArguments(args) }
+    return { pid, commandLine, ...javaHeapArguments(args), ...(match[3] ? { startTime: match[3] } : {}) }
   })
   return { processes: processes.sort((a, b) => a.pid - b.pid), unreadable: Number(end[1]) }
 }

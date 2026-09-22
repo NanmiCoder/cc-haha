@@ -43,7 +43,7 @@ export function HostsWorkspace() {
           <div className="flex w-80 flex-shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-sidebar)]">
             <HostList onOpenTagModal={() => setIsTagModalOpen(true)} onOpenImportExport={() => setIsImportExportOpen(true)} />
           </div>
-          <div className="flex flex-1 flex-col overflow-y-auto bg-[var(--color-surface)]">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-surface)]" data-testid="host-detail-shell">
             <HostDetail onOpenTagModal={() => setIsTagModalOpen(true)} onOpenImportExport={() => setIsImportExportOpen(true)} />
           </div>
         </div>

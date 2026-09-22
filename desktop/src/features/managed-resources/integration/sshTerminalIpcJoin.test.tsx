@@ -46,12 +46,14 @@ let server: SshServer
 const peers = new Set<import('ssh2').Connection>()
 let received: Buffer[]
 let port: number
+let initialPrompt = ''
 function output() { return Buffer.concat(terminal.output.map(bytes => Buffer.from(bytes))).toString('utf8') }
 
 beforeEach(async () => {
   terminal.output.length = 0
   terminal.inputs.clear()
   received = []
+  initialPrompt = ''
   useSettingsStore.setState({ locale: 'en' })
   useHostSshStore.getState().teardownAll()
   fixture = await createHostWorkbenchHarness()
@@ -70,6 +72,7 @@ beforeEach(async () => {
       session.on('window-change', acceptResize => acceptResize?.())
       session.on('shell', acceptShell => {
         const channel = acceptShell()
+        if (initialPrompt) channel.write(initialPrompt)
         channel.on('data', (bytes: Buffer) => { received.push(Buffer.from(bytes)); channel.write(bytes) })
       })
     }))
@@ -90,6 +93,32 @@ afterEach(async () => {
 })
 
 describe('SSH terminal DOM -> DesktopHost -> IPC -> loopback', () => {
+  it('replays the actual initial prompt when the console mounts late or reopens, without sending Enter', async () => {
+    initialPrompt = 'fixture@loopback:~$ '
+    const created = await fixture.host.hostManagement.saveHost({
+      name: 'Late terminal fixture', address: '127.0.0.1', port, username: 'fixture',
+      auth: { type: 'password', credentialId: null }, tagIds: [], initialDirectory: '/', applications: [], notes: '',
+      credential: { storage: 'vault', secret: { kind: 'ssh-password', password: 'SSH_JOIN_FAKE_ONLY' } },
+    })
+    if (!created.ok) throw new Error('Fixture create failed')
+    const host = created.data
+    await useHostSshStore.getState().start(host, 80, 24)
+    await waitFor(() => expect(useHostSshStore.getState().byHostId[host.id]?.challenge).toBeTruthy())
+    await useHostSshStore.getState().answer(host.id, 'trust')
+    await waitFor(() => expect(useHostSshStore.getState().byHostId[host.id]?.status).toBe('ready'))
+    // The SSH subscription has received bytes before any xterm exists.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const view = render(<SshConsole host={host} />)
+    await waitFor(() => expect(output()).toBe(initialPrompt))
+    expect(received).toHaveLength(0)
+    view.unmount()
+    terminal.output.length = 0
+    render(<SshConsole host={host} />)
+    await waitFor(() => expect(output()).toBe(initialPrompt))
+    expect(received).toHaveLength(0)
+    expect(fixture.calls.filter(channel => channel === ELECTRON_IPC_CHANNELS.mrWriteConnection)).toHaveLength(0)
+  }, 15000)
+
   it('forwards each input and echo once, including identical commands and repeated starts', async () => {
     const created = await fixture.host.hostManagement.saveHost({
       name: 'Loopback terminal fixture', address: '127.0.0.1', port, username: 'fixture',

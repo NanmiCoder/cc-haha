@@ -292,6 +292,7 @@ export type ContextSelectionState = {
   clearSelection: () => void
   /** Draft → session move in one atomic state update. */
   migrateToSession: (sessionId: string) => void
+  adoptSnapshot: (sessionId: string, snapshot: ContextSelectionSnapshot) => void
 
   // Picker UI
   openPicker: (kind: ContextKind) => void
@@ -541,6 +542,14 @@ export const useContextSelectionStore = create<ContextSelectionState>((set, get)
   setIncludePasswords: (include) => set({ includePasswords: include }),
 
   clearSelection: () => set({ pick: emptyPick(), includePasswords: false, highlightedIndex: 0 }),
+
+  adoptSnapshot: (sessionId, snapshot) => set({
+    scope: 'session', sessionId, includePasswords: snapshot.includePasswords,
+    pick: { draftId: snapshot.draftId,
+      sourceTags: snapshot.sourceTags.map(({ namespace, id }) => ({ namespace, id })),
+      directIds: snapshot.directIds.map(({ namespace, id }) => ({ namespace, id })),
+    },
+  }),
 
   migrateToSession: (sessionId) => {
     // One `set` call: the scope, the session and the validated pick move

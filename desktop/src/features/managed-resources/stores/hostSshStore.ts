@@ -5,6 +5,7 @@ import type {
   HostManagementEvent,
 } from '../types/resourceTypes'
 import { getDesktopHost } from '../../../lib/desktopHost/index'
+import { clearTerminalOutput, retainTerminalOutput } from './terminalOutputReplay'
 
 export type HostSshStatus =
   | 'idle'
@@ -120,7 +121,23 @@ export const useHostSshStore = create<HostSshState>((set, get) => ({
         const entryNow = get().byHostId[host.id]
         if (!entryNow) return
         if (entryNow.connectionId && entryNow.connectionId !== event.connectionId) return
+        if (event.generation < entryNow.generation) return
+        if (event.type === 'terminal-output') {
+          if (entryNow.connectionId !== event.connectionId || entryNow.generation !== event.generation) return
+          try {
+            const binary = atob(event.data)
+            const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+            if (bytes.length !== event.byteLength) return
+            retainTerminalOutput(host.id, event.connectionId, event.generation, bytes, () => {
+              const current = get().byHostId[host.id]
+              if (current?.connectionId !== event.connectionId || current.generation !== event.generation) return
+              void hostApi.ackOutput({ connectionId: event.connectionId, generation: event.generation, bytesAcked: bytes.length }).catch(() => undefined)
+            })
+          } catch { /* Never render a malformed output frame. */ }
+          return
+        }
         if (event.type === 'connection-state') {
+          if (event.generation !== entryNow.generation) clearTerminalOutput(host.id)
           set(state => {
             const existing = state.byHostId[host.id] ?? emptyEntry(host.id)
             const status = toSshStatus(event.status)
@@ -336,6 +353,7 @@ export const useHostSshStore = create<HostSshState>((set, get) => ({
       })
       return
     }
+    clearTerminalOutput(hostId)
     // The main process emits closing/closed before resolving the IPC call. Do
     // not overwrite that terminal state with a stale local "closing" value.
     set(state => {
@@ -358,6 +376,7 @@ export const useHostSshStore = create<HostSshState>((set, get) => ({
     unlistenByHost.delete(hostId)
   },
   teardownAll() {
+    clearTerminalOutput()
     for (const [, unlisten] of unlistenByHost.entries()) unlisten()
     unlistenByHost.clear()
     set({ byHostId: {} })

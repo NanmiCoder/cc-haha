@@ -29,6 +29,7 @@ import type {
   CreateConceptInput,
   ManagedContextStageRequest,
 } from '../features/managed-resources/api/hostManagementApi.js'
+import type { ContextTicketClient } from '../../electron/services/managedResources/contextTicketClient.js'
 import { useConceptKnowledgeStore } from '../features/managed-resources/stores/conceptKnowledgeStore.js'
 
 function createFakeSafeStorage() {
@@ -50,6 +51,7 @@ export type ConceptHarness = {
   tempDir: string
   /** Trusted main-process stage requests captured immediately before loopback staging. */
   stagedContextRequests: ManagedContextStageRequest[]
+  setStageClient: (client: ContextTicketClient | null) => void
   seedConcept: (input: CreateConceptInput) => Promise<Concept>
   dispose: () => Promise<void>
 }
@@ -127,6 +129,7 @@ export async function createConceptHarness(prefix = 'mr-concept-harness-'): Prom
   }
 
   const stagedContextRequests: ManagedContextStageRequest[] = []
+  let stageClient: ContextTicketClient | null = null
 
   const unregister = registerManagedResourcesIpc({
     // kept in this harness only: it observes the same trusted-main payload the
@@ -138,6 +141,7 @@ export async function createConceptHarness(prefix = 'mr-concept-harness-'): Prom
     contextTicketClient: {
       stage: async request => {
         stagedContextRequests.push(structuredClone(request))
+        if (stageClient) return stageClient.stage(request)
         return {
           ok: true as const,
           data: {
@@ -171,6 +175,7 @@ export async function createConceptHarness(prefix = 'mr-concept-harness-'): Prom
     services,
     tempDir,
     stagedContextRequests,
+    setStageClient(client) { stageClient = client },
     async seedConcept(input: CreateConceptInput) {
       const result = await libService.createConcept(input)
       if (result.status !== 'created') {

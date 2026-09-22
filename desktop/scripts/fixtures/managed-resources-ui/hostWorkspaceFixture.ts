@@ -1,7 +1,8 @@
-import { verifyHostTools, HOST_TOOLS_FIXTURE_COMMAND, HOST_TOOLS_JAVA_FRAME } from './hostToolsFixture'
+import { verifyHostTools, HOST_TOOLS_FIXTURE_COMMAND, HOST_TOOLS_JAVA_FRAME, PROCESS_FIXTURE_REPLIES } from './hostToolsFixture'
 import { JAVA_PROCESS_COMMAND } from '../../../electron/services/managedResources/javaProcessProtocol'
 import { verifyApplicationLayout } from './applicationLayoutFixture'
 import { verifyRemoteFolders } from './remoteFoldersFixture'
+import { verifyTransferHeader } from './transferHeaderFixture'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -45,11 +46,12 @@ export async function createHostWorkspaceFixture(module: ManagedResourcesModule,
       session.on('window-change', acceptResize => acceptResize?.())
       session.on('exec', (acceptExec, rejectExec, info) => {
         // Exact fixture allowlist. Never execute a command on the developer's OS.
-        if (info.command !== JAVA_PROCESS_COMMAND && info.command !== HOST_TOOLS_FIXTURE_COMMAND) { rejectExec(); return }
+        if (info.command !== JAVA_PROCESS_COMMAND && info.command !== HOST_TOOLS_FIXTURE_COMMAND && !PROCESS_FIXTURE_REPLIES.has(info.command)) { rejectExec(); return }
         const stream = acceptExec()
         stream.on('error', () => {})
         stream.resume()
         if (info.command === JAVA_PROCESS_COMMAND) stream.write(HOST_TOOLS_JAVA_FRAME)
+        else if (PROCESS_FIXTURE_REPLIES.has(info.command)) stream.write(PROCESS_FIXTURE_REPLIES.get(info.command)!)
         else { scriptCommands.push(info.command); stream.write('HOST_TOOLS_FIXTURE_OUTPUT\n') }
         stream.exit(0)
         stream.end()
@@ -93,6 +95,20 @@ export async function createHostWorkspaceFixture(module: ManagedResourcesModule,
     port,
     async verify(win: BrowserWindow, controls: Controls, output: string) {
       const { clickButton, clickExpression, waitFor, type } = controls
+      const summaryLayout = await win.webContents.executeJavaScript(`(() => {
+        const line = document.querySelector('[data-testid=host-summary-line]');
+        const name = document.querySelector('[data-testid=host-summary-name]');
+        const endpoint = document.querySelector('[data-testid=host-summary-endpoint]');
+        const tags = [...document.querySelectorAll('[data-testid=host-summary-tags] > *')];
+        const rect = element => element?.getBoundingClientRect().toJSON();
+        const centerY = element => { const box = element?.getBoundingClientRect(); return box ? box.top + box.height / 2 : null };
+        return { line: rect(line), name: rect(name), endpoint: rect(endpoint), tags: tags.map(rect), centers: [name, endpoint, ...tags].map(centerY), whiteSpace: getComputedStyle(line).whiteSpace, overflow: getComputedStyle(line).overflow };
+      })()`)
+      const centers = summaryLayout.centers.filter((value: number | null): value is number => value !== null)
+      assert.ok(centers.length >= 2, 'host summary exposes name and endpoint')
+      assert.ok(Math.max(...centers) - Math.min(...centers) < 4, 'host name, endpoint and tags stay on one row')
+      assert.equal(summaryLayout.whiteSpace, 'nowrap')
+      assert.equal(summaryLayout.overflow, 'hidden')
       await clickExpression('document.querySelector("[data-testid=host-terminal-tab]")')
       await clickButton('managedResources.ssh.connect')
       await clickButton('managedResources.ssh.trustAndContinue')
@@ -100,6 +116,32 @@ export async function createHostWorkspaceFixture(module: ManagedResourcesModule,
       const terminalText = 'document.querySelector(".xterm-rows")?.textContent'
       await waitFor(`${terminalText}?.includes('fixture$ ')`, 'single prompt')
       assert.equal(await win.webContents.executeJavaScript(`(${terminalText} || '').split('fixture$ ').length - 1`), 1)
+      assert.equal(input.length, 0, 'initial prompt appears without injecting Enter')
+      await clickExpression('document.querySelector("[data-testid=managed-resources-data-surface]")')
+      await waitFor('!document.querySelector(".xterm")', 'host terminal unmounted')
+      await clickExpression('document.querySelector("[data-testid=managed-resources-hosts-surface]")')
+      await waitFor(`${terminalText}?.includes('fixture$ ')`, 'reopened terminal restores the existing prompt')
+      assert.equal(input.length, 0, 'restoration never sends an automatic command or Enter')
+      assert.equal(peers.size, 1, 'reopening reuses the same SSH connection')
+      await fs.writeFile(path.join(output, 'terminal-prompt-replay.json'), JSON.stringify({ status: 'passed', withoutEnter: true, restoredAfterUnmount: true, sshConnections: peers.size }, null, 2) + '\n')
+      const terminalLayout = await win.webContents.executeJavaScript(`(() => {
+        const shell = document.querySelector('[data-testid=host-detail-shell]');
+        const detail = document.querySelector('[data-testid=host-detail]');
+        const workspace = document.querySelector('[data-testid=host-connection-workspace]');
+        const panel = document.querySelector('[data-testid=host-terminal-panel]');
+        const consoleNode = document.querySelector('[data-testid=ssh-console]');
+        const viewport = document.querySelector('[data-testid=ssh-terminal-viewport]');
+        const rect = element => element?.getBoundingClientRect().toJSON();
+        return { shell: rect(shell), detail: rect(detail), workspace: rect(workspace), panel: rect(panel), console: rect(consoleNode), viewport: rect(viewport), viewportFlexGrow: getComputedStyle(viewport).flexGrow, shellOverflow: getComputedStyle(shell).overflowY };
+      })()`)
+      assert.ok(Math.abs(terminalLayout.detail.bottom - terminalLayout.shell.bottom) < 2, 'host detail fills its shell')
+      assert.ok(terminalLayout.detail.bottom - terminalLayout.workspace.bottom >= 20 && terminalLayout.detail.bottom - terminalLayout.workspace.bottom <= 28, 'workspace fills detail to bottom padding')
+      assert.ok(Math.abs(terminalLayout.panel.bottom - terminalLayout.console.bottom) < 2, 'SSH console fills terminal tab panel')
+      assert.ok(terminalLayout.viewport.height > 300, 'terminal viewport receives the remaining height')
+      assert.equal(terminalLayout.viewportFlexGrow, '1')
+      assert.equal(terminalLayout.shellOverflow, 'hidden')
+      await fs.writeFile(path.join(output, 'host-terminal-fill.json'), JSON.stringify({ summaryLayout, terminalLayout }, null, 2) + '\n')
+      await fs.writeFile(path.join(output, 'host-terminal-fill.png'), (await win.webContents.capturePage()).toPNG())
       const driver = win.webContents.debugger
       await win.webContents.executeJavaScript('document.querySelector(".xterm-helper-textarea").focus()')
       for (let count = 1; count <= 2; count++) {
@@ -112,6 +154,16 @@ export async function createHostWorkspaceFixture(module: ManagedResourcesModule,
       await fs.writeFile(path.join(output, 'ssh-terminal-once.png'), (await win.webContents.capturePage()).toPNG())
       await clickExpression('document.querySelector("[data-testid=host-files-tab]")')
       await waitFor('Boolean(document.querySelector("[data-testid=remote-file-browser] [role=list]"))', 'file listing')
+      await type('input[aria-label="Paste an absolute remote directory"]', '/workspace/dir-01')
+      await clickButton('managedResources.files.goDirectory')
+      await waitFor('document.querySelector("[data-testid=remote-file-browser]").textContent.includes("keep.txt")', 'pasted directory opens via SFTP')
+      await type('[data-testid=remote-file-browser] input', 'KEEP')
+      await waitFor('document.querySelectorAll("[data-testid=remote-file-browser] [role=listitem]").length === 1', 'file name search is case insensitive')
+      await fs.writeFile(path.join(output, 'remote-search-navigation.png'), (await win.webContents.capturePage()).toPNG())
+      await type('input[aria-label="Paste an absolute remote directory"]', '/workspace')
+      await clickButton('managedResources.files.goDirectory')
+      await waitFor('document.querySelector("[data-testid=remote-file-browser]").textContent.includes("README.txt")', 'root navigation restored')
+      await fs.writeFile(path.join(output, 'remote-navigation.json'), JSON.stringify({ status: 'passed', absolutePath: true, filenameSearch: true, readOnlySftp: true }, null, 2) + '\n')
       await clickExpression('Array.from(document.querySelectorAll("[data-testid=remote-file-browser] button")).find(button => button.textContent.includes("README.txt"))')
       await waitFor('Boolean(document.querySelector("[data-testid=remote-file-editor] textarea"))', 'remote edit open')
       const geometry = await win.webContents.executeJavaScript(`(() => {
@@ -144,6 +196,7 @@ export async function createHostWorkspaceFixture(module: ManagedResourcesModule,
       await fs.writeFile(path.join(output, 'workspace-layout.json'), JSON.stringify({ geometry, inputVerifiedOnce: true, repeatedCommands: 2, draftSurvivedTabSwitch: true, savedThroughIpc: true }, null, 2) + '\n')
       await verifyRemoteEditors(win, controls, transport, output)
       await verifyRemoteFolders(win, controls, transport, sandbox, output, directorySelections)
+      await verifyTransferHeader(win, controls, transport, sftpService, transferService, sandbox, output, directorySelections)
       await verifyApplicationLayout(win, controls, transport, output)
       await verifyHostTools(win, controls, transport, scriptCommands, output)
       await clickExpression('document.querySelector("[data-testid=host-terminal-tab]")')

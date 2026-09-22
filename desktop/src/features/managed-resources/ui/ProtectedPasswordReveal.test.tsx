@@ -20,6 +20,21 @@ afterEach(() => {
 })
 
 describe('ProtectedPasswordReveal', () => {
+  it('does not retain a late password or schedule its timer after unmount', async () => {
+    let finish!: (result: { ok: true; data: { credentialId: string; kind: 'ssh-password'; password: string; expiresAt: number } }) => void
+    const pending = new Promise<{ ok: true; data: { credentialId: string; kind: 'ssh-password'; password: string; expiresAt: number } }>(resolve => { finish = resolve })
+    window.desktopHost = { ...browserHost, hostManagement: { ...browserHost.hostManagement, revealCredential: vi.fn(() => pending) } }
+    const view = render(<ProtectedPasswordReveal credentialId={credentialId} />)
+    fireEvent.click(screen.getByRole('button', { name: /verify.*reveal/i }))
+    view.unmount()
+    await act(async () => {
+      finish({ ok: true, data: { credentialId, kind: 'ssh-password', password: 'LATE_FAKE_REVEAL_ONLY', expiresAt: Date.now() + 15000 } })
+      await pending
+    })
+    expect(document.body).not.toHaveTextContent('LATE_FAKE_REVEAL_ONLY')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('shows a saved password only after the protected host call and evicts it after 15 seconds', async () => {
     const revealCredential = vi.fn(async () => ({
       ok: true as const,

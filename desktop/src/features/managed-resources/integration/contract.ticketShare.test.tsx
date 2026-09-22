@@ -16,6 +16,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
+import { startManagedContextLoopback } from '../../../test/managedContextLoopbackHarness'
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -151,6 +152,7 @@ import { createConceptHarness, type ConceptHarness } from '../../../test/concept
 import { useContextSelectionStore, resetContextSelectionStore } from '../stores/contextSelectionStore'
 import { prepareManagedContextSubmission, type ManagedContextSubmission } from './chatSubmission'
 import type { Host, ResourceTag } from '../types/resourceTypes'
+import { clearManagedRuntimeRevision } from './runtimeRevision'
 
 const SESSION_ID = 'session-ticket-share'
 const CREATED_SESSION_ID = 'created-session'
@@ -227,6 +229,7 @@ describe('M6-B one prepare for three send points', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    mocks.wsSend.mockReset()
     mocks.isMobile = false
     mocks.isTauriRuntime = false
     mocks.wsOnMessage.mockImplementation((sessionId: string, handler: (message: unknown) => void) => {
@@ -421,6 +424,157 @@ describe('M6-B one prepare for three send points', () => {
       },
     })
   }
+
+  it('delivers tag-only first-session context from real composer events through IPC, HTTP, WS and ConversationService to the mock SDK', async () => {
+    const loop = await startManagedContextLoopback()
+    let sessionId = ''
+    let createFailure: unknown
+    try {
+      harness.setStageClient(loop.stageClient)
+      mocks.create.mockImplementation(async () => {
+        const created = await loop.createSession().catch(error => { createFailure = error; throw error })
+        sessionId = created.sessionId
+        // Reproduce a scope replacement while async session creation is in flight.
+        // The click snapshot must survive a genuine store scope reset.
+        useContextSelectionStore.getState().setScope('session', 'previous-fixture-session')
+        useContextSelectionStore.getState().setScope('session', sessionId)
+        return created
+      })
+      mocks.wsOnMessage.mockImplementation((id: string, listener: (frame: never) => void) =>
+        loop.subscribe(id, frame => { act(() => listener(frame as never)) }))
+      mocks.wsSend.mockImplementation((id: string, frame: unknown) => loop.send(id, frame))
+      const home = render(<EmptySession />)
+      await settle()
+      const picker = await openEntry('host')
+      fireEvent.click(within(picker).getByRole('checkbox', { name: /^生产/ }))
+      const before = prepareCount()
+      const userText = 'DOM_SELECTED_SERVERS_FIXTURE'
+      await submit(userText)
+      await waitFor(() => { expect(createFailure).toBeUndefined(); expect(sessionId).not.toBe('') }, {
+        timeout: 20000, onTimeout: error => new Error(`${error.message}; create=${String(createFailure)}; ${JSON.stringify(loop.diagnostics())}`),
+      })
+      await waitFor(() => {
+        const failures = loop.frames(sessionId).filter(frame => frame.type === 'error' || frame.type === 'user_message_rejected')
+        expect(failures).toEqual([])
+        expect(loop.frames(sessionId).some(frame => frame.type === 'message_complete')).toBe(true)
+      }, { timeout: 60000, onTimeout: error => new Error(`${error.message}; ${JSON.stringify(loop.diagnostics())}; local=${JSON.stringify(useChatStore.getState().sessions[sessionId]?.messages)}; frames=${JSON.stringify(mocks.wsSend.mock.calls)}`) })
+      expect(prepareCount() - before).toBe(1)
+      const echoed = loop.frames(sessionId).filter(frame => frame.type === 'content_delta').map(frame => frame.text ?? '').join('')
+      expect(echoed).toContain('web-1.internal')
+      expect(echoed).toContain('web-2.internal')
+      expect(echoed).not.toContain('web-3.internal')
+      expect(echoed.split('<cc-haha:managed-context>')).toHaveLength(2)
+      expect(echoed.split(userText)).toHaveLength(2)
+      expect(harness.stagedContextRequests.at(-1)!.publicManifest.selection.directHostIds).toEqual([])
+      expect(harness.stagedContextRequests.at(-1)!.publicManifest.containsSecrets).toBe(false)
+      expect(lastUserText(sessionId)?.content).toBe(userText)
+      const frame = userMessageFrames().at(-1)![1]
+      const start = loop.frames(sessionId).length
+      loop.send(sessionId, frame)
+      await waitFor(() => expect(loop.frames(sessionId).slice(start).some(value => value.type === 'user_message_accepted' && value.replayed === true)).toBe(true))
+      expect(loop.frames(sessionId).slice(start).filter(value => value.type === 'content_delta')).toEqual([])
+      // The same actual session then sends a no-selection message on the old path.
+      home.unmount()
+      render(<ChatInput compact />)
+      await settle()
+      act(() => useContextSelectionStore.getState().clearSelection())
+      const stageCount = harness.stagedContextRequests.length
+      const next = loop.frames(sessionId).length
+      await submit('PLAIN_CHAT_FIXTURE')
+      await waitFor(() => expect(loop.frames(sessionId).slice(next).some(value => value.type === 'message_complete')).toBe(true), { timeout: 60000 })
+      expect(harness.stagedContextRequests).toHaveLength(stageCount)
+      const plain = loop.frames(sessionId).slice(next).filter(value => value.type === 'content_delta').map(value => value.text ?? '').join('')
+      expect(plain).toContain('PLAIN_CHAT_FIXTURE')
+      expect(plain).not.toContain('web-1.internal')
+    } finally {
+      cleanup()
+      if (sessionId) useChatStore.getState().disconnectSession(sessionId)
+      harness.setStageClient(null)
+      await loop.close()
+    }
+  }, 150000)
+
+  it('waits for the runtime handshake and stages tag-selected hosts instead of dropping the first contextual turn', async () => {
+    render(<ChatInput compact />)
+    await settle()
+    const picker = await openEntry('host')
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /^生产/ }))
+    clearManagedRuntimeRevision(SESSION_ID)
+    await submit('describe the selected servers')
+    await settle()
+    expect(userMessageFrames()).toHaveLength(0)
+    await act(async () => {
+      useChatStore.getState().handleServerMessage(SESSION_ID, { type: 'connected', sessionId: SESSION_ID, runtimeRevision: 3 })
+    })
+    await waitFor(() => expect(userMessageFrames()).toHaveLength(1))
+    const request = harness.stagedContextRequests.at(-1)!
+    expect(request.runtimeRevision).toBe(3)
+    expect(request.publicManifest.selection.directHostIds).toEqual([])
+    expect(request.publicManifest.hosts.map(host => host.id).sort()).toEqual([hostA.id, hostB.id].sort())
+    const model = JSON.parse(request.modelContext)
+    expect(model.hosts.map((host: { address: string }) => host.address).sort()).toEqual(['web-1.internal', 'web-2.internal'])
+    expect(request.publicManifest.containsSecrets).toBe(false)
+  })
+
+  it('waits for the matching runtime acknowledgement rather than a baseline or an older model', async () => {
+    render(<ChatInput compact />)
+    await settle()
+    const picker = await openEntry('host')
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /^生产/ }))
+    const selection = { providerId: null, modelId: 'current', effortLevel: 'high' as const }
+    act(() => {
+      useSessionRuntimeStore.getState().setSelection(SESSION_ID, selection)
+      useChatStore.getState().setSessionRuntime(SESSION_ID, selection)
+    })
+    await submit('wait for the selected runtime')
+    await act(async () => {
+      useChatStore.getState().handleServerMessage(SESSION_ID, { type: 'connected', sessionId: SESSION_ID, runtimeRevision: 2 })
+      useChatStore.getState().handleServerMessage(SESSION_ID, { type: 'runtime_config_applied', providerId: null, modelId: 'old-model', effortLevel: 'high', runtimeRevision: 3 })
+    })
+    expect(harness.stagedContextRequests).toHaveLength(0)
+    expect(userMessageFrames()).toHaveLength(0)
+    await act(async () => {
+      useChatStore.getState().handleServerMessage(SESSION_ID, { type: 'runtime_config_applied', ...selection, runtimeRevision: 4 })
+    })
+    await waitFor(() => expect(userMessageFrames()).toHaveLength(1))
+    expect(harness.stagedContextRequests).toHaveLength(1)
+    expect(harness.stagedContextRequests[0]!.runtimeRevision).toBe(4)
+  })
+
+  it.each(['stop', 'disconnect', 'runtime-change'] as const)('does not send a late staged context after %s', async action => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    harness.setStageClient({ stage: async () => {
+      await gate
+      return { ok: true as const, data: { ticketId: 'fixture-late-ticket', sidecarInstanceId: 'sidecar-test-instance', expiresAt: '2099-01-01T00:00:00.000Z' } }
+    } })
+    try {
+      render(<ChatInput compact />)
+      await settle()
+      const picker = await openEntry('host')
+      fireEvent.click(within(picker).getByRole('checkbox', { name: /^生产/ }))
+      await submit('cancel this contextual turn')
+      await waitFor(() => expect(harness.stagedContextRequests).toHaveLength(1))
+      act(() => {
+        if (action === 'stop') useChatStore.getState().stopGeneration(SESSION_ID)
+        else if (action === 'disconnect') useChatStore.getState().disconnectSession(SESSION_ID)
+        else useChatStore.getState().setSessionRuntime(SESSION_ID, { providerId: null, modelId: 'changed-fixture-model' })
+      })
+      await act(async () => { release(); await gate })
+      await settle()
+      expect(userMessageFrames()).toHaveLength(0)
+      if (action === 'runtime-change') {
+        await waitFor(() => expect(useChatStore.getState().sessions[SESSION_ID]?.messages.some(message =>
+          message.type === 'error' && message.code === 'RUNTIME_REVISION_MISMATCH')).toBe(true))
+      }
+    } finally {
+      release()
+      await settle()
+      harness.setStageClient(null)
+      useChatStore.getState().stopGeneration(SESSION_ID)
+      clearManagedRuntimeRevision(SESSION_ID)
+    }
+  })
 
   it('prepares one identical snapshot for the created-session, immediate and queued send points', async () => {
     // ── Send point 1: the first send of a newly created session (EmptySession).
