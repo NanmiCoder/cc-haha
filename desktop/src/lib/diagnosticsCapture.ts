@@ -2,6 +2,17 @@ import React from 'react'
 import { rawRecordDiagnosticEvent } from '../api/client'
 
 let installed = false
+const EVENT_LOOP_SAMPLE_MS = 1_000
+const EVENT_LOOP_STALL_MS = 500
+const EVENT_LOOP_REPORT_COOLDOWN_MS = 10_000
+
+type RendererPerformanceMonitorDependencies = {
+  now?: () => number
+  visible?: () => boolean
+  record?: typeof rawRecordDiagnosticEvent
+  setInterval?: typeof window.setInterval
+  clearInterval?: typeof window.clearInterval
+}
 
 export function installClientDiagnosticsCapture() {
   if (installed || typeof window === 'undefined') return
@@ -21,6 +32,55 @@ export function installClientDiagnosticsCapture() {
       reason: normalizeError(event.reason),
     })
   })
+
+  startRendererPerformanceMonitor()
+}
+
+/**
+ * A fetch that is slow while this timer remains punctual points at the server;
+ * a late timer with otherwise fast transport points at renderer/render work.
+ * Only delayed samples are persisted, with a cooldown, so normal operation has
+ * no diagnostics traffic and background-tab timer throttling is ignored.
+ */
+export function startRendererPerformanceMonitor(
+  dependencies: RendererPerformanceMonitorDependencies = {},
+): () => void {
+  const now = dependencies.now ?? (() => performance.now())
+  const visible = dependencies.visible ?? (() => document.visibilityState === 'visible')
+  const record = dependencies.record ?? rawRecordDiagnosticEvent
+  const schedule = dependencies.setInterval ?? window.setInterval.bind(window)
+  const cancel = dependencies.clearInterval ?? window.clearInterval.bind(window)
+  let expectedAt = now() + EVENT_LOOP_SAMPLE_MS
+  let lastReportedAt = Number.NEGATIVE_INFINITY
+  const timer = schedule(() => {
+    const sampledAt = now()
+    const lagMs = Math.max(0, sampledAt - expectedAt)
+    expectedAt = sampledAt + EVENT_LOOP_SAMPLE_MS
+    if (!visible()) return
+    if (
+      lagMs < EVENT_LOOP_STALL_MS ||
+      sampledAt - lastReportedAt < EVENT_LOOP_REPORT_COOLDOWN_MS
+    ) return
+    lastReportedAt = sampledAt
+    const memory = performance as Performance & {
+      memory?: { usedJSHeapSize?: number; totalJSHeapSize?: number }
+    }
+    const toMiB = (bytes: number | undefined) => typeof bytes === 'number'
+      ? Math.round(bytes / (1024 * 1024) * 10) / 10
+      : null
+    void record({
+      type: 'client_event_loop_stall',
+      severity: 'warn',
+      summary: `Renderer event loop was delayed by ${Math.round(lagMs * 10) / 10}ms`,
+      details: {
+        lagMs: Math.round(lagMs * 10) / 10,
+        usedJsHeapMiB: toMiB(memory.memory?.usedJSHeapSize),
+        totalJsHeapMiB: toMiB(memory.memory?.totalJSHeapSize),
+        hardwareConcurrency: navigator.hardwareConcurrency,
+      },
+    })
+  }, EVENT_LOOP_SAMPLE_MS)
+  return () => cancel(timer)
 }
 
 export function reportReactError(error: unknown, errorInfo: React.ErrorInfo) {

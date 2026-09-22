@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { formatDurationMs } from '../../lib/trace/formatters'
 import {
   formatCacheHitRate,
   formatCompactTokens,
@@ -20,10 +19,8 @@ type ContextCategory = {
  * rounding a cache hit up to 100%, withholding a speed with no API duration) stay in one place.
  */
 export type ContextUsageSessionStats = {
-  totalTokens: number
   cacheHitRate: number | null
   tokensPerSecond: number | null
-  apiDurationMs: number
   /** Pre-formatted by the server (unknown-model sessions included), displayed verbatim. */
   costDisplay: string
 }
@@ -52,13 +49,10 @@ export type ContextUsageDetailsProps = {
     loading: string
     unavailableDetail: string
     breakdown: string
-    sessionTotalTokens: string
     sessionCacheHit: string
     sessionSpeed: string
     sessionCost: string
-    sessionApiDuration: string
     sessionSpeedUnit: string
-    sessionScopeNote: string
   }
 }
 
@@ -67,37 +61,38 @@ function formatNumber(value: number) {
 }
 
 /**
- * The whole window as one thin stacked bar: each category keeps its server-assigned color, the
- * unfilled remainder is the free window. This is the compressed form of the breakdown — the
- * per-category numbers live behind the collapsible section below.
+ * One fill for the whole window, in the app's brand color, sized by how much of the window is
+ * used. Category colors cannot paint this: the CLI names them with terminal theme keys
+ * (`promptBorder`, `inactive`), which are not CSS colors, so a segment styled with one renders
+ * transparent and the track looks empty no matter how full the window is. The per-category
+ * split stays behind the breakdown toggle.
  */
-function SegmentedBar({
-  categories,
+function UsageMeter({
+  usedTokens,
   maxTokens,
+  label,
 }: {
-  categories: ContextCategory[]
+  usedTokens: number
   maxTokens: number
+  label: string
 }) {
-  if (maxTokens <= 0 || categories.length === 0) return null
+  if (maxTokens <= 0) return null
+  const percent = Math.max(0, Math.min(100, (usedTokens / maxTokens) * 100))
   return (
     <div
-      className="flex h-[6px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(percent)}
+      className="h-[6px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
       data-testid="context-segmented-bar"
     >
-      {categories.map((category) => {
-        const percent = Math.min(100, (category.tokens / maxTokens) * 100)
-        if (percent <= 0) return null
-        return (
-          <div
-            key={category.name}
-            title={`${category.name} ${formatNumber(category.tokens)}`}
-            style={{
-              width: `${percent}%`,
-              backgroundColor: category.color || 'var(--color-brand)',
-            }}
-          />
-        )
-      })}
+      <div
+        data-testid="context-usage-fill"
+        className="h-full rounded-full bg-[var(--color-brand)]"
+        style={{ width: `${percent}%` }}
+      />
     </div>
   )
 }
@@ -225,7 +220,7 @@ function ReadyBody({
       </div>
 
       <div className="mt-3">
-        <SegmentedBar categories={categories} maxTokens={maxTokens} />
+        <UsageMeter usedTokens={usedTokens} maxTokens={maxTokens} label={labels.used} />
       </div>
 
       {/* This timestamp describes the window composition, so it sits with the used/window figures
@@ -243,23 +238,7 @@ function ReadyBody({
       </div>
 
       {sessionStats && (
-        <>
-          <SessionStatGrid stats={sessionStats} labels={labels} density={density} />
-          <div className="mt-3 text-[11px] text-[var(--color-text-tertiary)]">
-            {labels.sessionTotalTokens}{' '}
-            <span className="font-mono text-[var(--color-text-secondary)]" data-testid="session-total-tokens" title={formatNumber(sessionStats.totalTokens)}>
-              {formatCompactTokens(sessionStats.totalTokens)}
-            </span>
-            {' · '}
-            {labels.sessionApiDuration}{' '}
-            <span className="font-mono text-[var(--color-text-secondary)]">
-              {formatDurationMs(sessionStats.apiDurationMs)}
-            </span>
-          </div>
-          {/* Subagent transcripts are separate files and are never folded in here; saying so beats
-              letting the number quietly disagree with the user's bill. */}
-          <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionScopeNote}</div>
-        </>
+        <SessionStatGrid stats={sessionStats} labels={labels} density={density} />
       )}
 
       {categories.length > 0 && (

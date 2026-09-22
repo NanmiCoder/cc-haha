@@ -41,10 +41,12 @@ function SessionRequestHeader({
   }, [viewModel])
 
   useEffect(() => {
-    // Clear first: without this, switching sessions keeps showing the previous
-    // session's system prompt until the new fetch resolves.
-    setHeader(null)
-    if (!sessionId || !firstCallId) return
+    if (!sessionId || !firstCallId) {
+      // Without this, switching to a session that has no call keeps showing the
+      // previous session's system prompt.
+      setHeader(null)
+      return
+    }
     let cancelled = false
     void fetchTraceCallDetail(sessionId, firstCallId, revisionKey).then((call) => {
       if (cancelled) return

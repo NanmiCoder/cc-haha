@@ -2325,7 +2325,7 @@ describe('Settings > Providers tab', () => {
       const baseUrlInput = within(dialog).getByRole('textbox', { name: /Base URL/i })
       expect(baseUrlInput).toHaveValue('https://open.bigmodel.cn/api/anthropic')
       expect(within(dialog).getByRole('button', { name: /Get API Key/i })).toBeInTheDocument()
-      expect(within(dialog).getByText('Mainland China promotion')).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Mainland China promotion' })).toBeInTheDocument()
 
       fireEvent.click(regionTrigger)
       fireEvent.click(within(dialog).getByRole('option', { name: /Global/ }))
@@ -2731,6 +2731,69 @@ describe('Settings > Providers tab', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
+  })
+
+  it('omits the session default model from a new provider settings JSON', async () => {
+    MOCK_GET_SETTINGS.mockResolvedValue({
+      model: 'grok-4.7',
+      modelContext: '1m',
+      futureSetting: true,
+      env: { EXISTING_ENV: '1' },
+    })
+    providerStoreState.createProvider = vi.fn().mockResolvedValue({
+      id: 'provider-new',
+      presetId: 'custom',
+      name: 'Custom',
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.example.com/anthropic',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'custom-main',
+        haiku: 'custom-main',
+        sonnet: 'custom-main',
+        opus: 'custom-main',
+      },
+    })
+    providerStoreState.presets = [
+      {
+        id: 'custom',
+        name: 'Custom',
+        baseUrl: 'https://api.example.com/anthropic',
+        apiFormat: 'anthropic',
+        defaultModels: {
+          main: 'custom-main',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+        needsApiKey: true,
+        websiteUrl: '',
+      },
+    ]
+
+    render(<Settings />)
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
+    const dialog = screen.getByRole('dialog')
+    const settingsTextarea = await waitFor(() => {
+      const textarea = dialog.querySelector('textarea')
+      expect(textarea?.value).toContain('"EXISTING_ENV"')
+      return textarea as HTMLTextAreaElement
+    })
+    const displayed = JSON.parse(settingsTextarea.value) as Record<string, unknown>
+    expect(displayed).not.toHaveProperty('model')
+    expect(displayed).not.toHaveProperty('modelContext')
+    expect(displayed).toMatchObject({ futureSetting: true })
+
+    fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-test' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
+
+    await waitFor(() => {
+      expect(MOCK_UPDATE_SETTINGS).toHaveBeenCalled()
+    })
+    const saved = MOCK_UPDATE_SETTINGS.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(saved).not.toHaveProperty('model')
+    expect(saved).not.toHaveProperty('modelContext')
+    expect(saved).toMatchObject({ futureSetting: true, env: expect.objectContaining({ EXISTING_ENV: '1' }) })
   })
 
   it('defaults Tool Search off and requires confirmation before persisting an explicit enable', async () => {

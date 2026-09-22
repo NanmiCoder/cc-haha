@@ -60,7 +60,57 @@ function request(params: Record<string, string>, method = 'GET') {
   return handleSessionsApi(new Request(url, { method }), url, ['api', 'sessions', 'project-history'])
 }
 
+function sidebarRequest(params: Record<string, string>) {
+  const url = new URL(`http://127.0.0.1/api/sessions?${new URLSearchParams(params)}`)
+  return handleSessionsApi(new Request(url), url, ['api', 'sessions'])
+}
+
 describe('logical project session history', () => {
+  it('hydrates only a bounded preview for every logical project', async () => {
+    const anotherRoot = path.join(configDir, 'another-project')
+    const rows = await Promise.all([
+      seed(0),
+      seed(1),
+      seed(2),
+      seed(3, { root: anotherRoot }),
+      seed(4, { root: anotherRoot }),
+      seed(5, { root: anotherRoot }),
+    ])
+    const service = new SessionService(gateway(rows, 'on'))
+    const internals = service as unknown as { hydrateIndexedSession: (...args: unknown[]) => Promise<unknown> }
+    const hydrate = spyOn(internals, 'hydrateIndexedSession')
+    try {
+      const preview = await service.listProjectPreviews(2)
+
+      expect(preview.sessions.map(session => session.id)).toEqual([
+        idFor(0), idFor(1), idFor(3), idFor(4),
+      ])
+      expect(preview.projects).toEqual([
+        { projectRoot, total: 3 },
+        { projectRoot: anotherRoot, total: 3 },
+      ])
+      expect(preview.total).toBe(6)
+      expect(hydrate).toHaveBeenCalledTimes(4)
+    } finally { hydrate.mockRestore() }
+  })
+
+  it('validates sidebar preview limits at the API boundary', async () => {
+    await seed(0)
+    const response = await sidebarRequest({ view: 'sidebar', perProjectLimit: '1' })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      sessions: [expect.objectContaining({ id: idFor(0) })],
+      projects: [{ projectRoot, total: 1 }],
+      total: 1,
+    })
+    for (const params of [
+      { view: 'unknown' },
+      { view: 'sidebar', perProjectLimit: '0' },
+      { view: 'sidebar', perProjectLimit: '2junk' },
+    ]) expect((await sidebarRequest(params)).status).toBe(400)
+  })
+
   it.each(['off', 'on', 'shadow'] as const)('groups root, external and removed worktree transcripts in %s mode', async (mode) => {
     const rows = [
       await seed(0),

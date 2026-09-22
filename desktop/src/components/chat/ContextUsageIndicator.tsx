@@ -430,13 +430,10 @@ export function ContextUsageIndicator({
     loading: t('contextIndicator.loading'),
     unavailableDetail: t('contextIndicator.unavailableDetail'),
     breakdown: t('contextIndicator.breakdown'),
-    sessionTotalTokens: t('contextIndicator.sessionTotalTokens'),
     sessionCacheHit: t('contextIndicator.sessionCacheHit'),
     sessionSpeed: t('contextIndicator.sessionSpeed'),
     sessionCost: t('contextIndicator.sessionCost'),
-    sessionApiDuration: t('contextIndicator.sessionApiDuration'),
     sessionSpeedUnit: t('contextIndicator.sessionSpeedUnit'),
-    sessionScopeNote: t('contextIndicator.sessionScopeNote'),
   }), [t])
 
   // Derived per render rather than memoized on `usage` alone: the session it belongs to lives in
@@ -449,10 +446,8 @@ export function ContextUsageIndicator({
     // empty block (or a 0 tok/s) would read as a measurement rather than an absence.
     if (metrics.totalTokens === 0) return null
     return {
-      totalTokens: metrics.totalTokens,
       cacheHitRate: metrics.cacheHitRate,
       tokensPerSecond: metrics.tokensPerSecond,
-      apiDurationMs: displayUsage.totalAPIDuration,
       costDisplay: displayUsage.costDisplay,
     }
   }, [displayUsage])

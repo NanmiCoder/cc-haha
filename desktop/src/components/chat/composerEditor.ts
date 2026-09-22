@@ -39,7 +39,7 @@ export const composerSchema = new Schema({
         icon: { default: null }, modelText: { default: null },
       },
       toDOM: (node): DOMOutputSpec => {
-        const kind = node.attrs.kind === 'skill' || node.attrs.kind === 'plugin' ? node.attrs.kind : undefined
+        const kind = node.attrs.kind === 'skill' || node.attrs.kind === 'plugin' || node.attrs.kind === 'session' ? node.attrs.kind : undefined
         const icon = safeMentionIcon(node.attrs.icon)
         const attrs: Record<string, string | number> = {
           class: `composer-mention${kind ? ` composer-mention--${kind}` : node.attrs.isDirectory ? ' composer-mention--directory' : ''}`,
@@ -55,7 +55,7 @@ export const composerSchema = new Schema({
         }
         const symbol: DOMOutputSpec = icon
           ? ['img', { class: 'composer-mention-brand-icon', src: `${import.meta.env.BASE_URL}${icon.slice(1)}`, alt: '', draggable: 'false' }]
-          : ['span', { class: 'material-symbols-outlined composer-mention-icon', 'aria-hidden': 'true' }, kind === 'plugin' ? 'extension' : kind === 'skill' ? 'deployed_code' : node.attrs.isDirectory ? 'folder' : 'draft']
+          : ['span', { class: 'material-symbols-outlined composer-mention-icon', 'aria-hidden': 'true' }, kind === 'session' ? 'chat' : kind === 'plugin' ? 'extension' : kind === 'skill' ? 'deployed_code' : node.attrs.isDirectory ? 'folder' : 'draft']
         return ['span', attrs, symbol, `@${node.attrs.label as string}`]
       },
       parseDOM: [
@@ -67,7 +67,7 @@ export const composerSchema = new Schema({
             label: dom.getAttribute('data-mention-label') ?? '',
             path: dom.getAttribute('data-mention-path') ?? '',
             isDirectory: dom.classList.contains('composer-mention--directory'),
-            kind: ['skill', 'plugin'].includes(dom.getAttribute('data-mention-kind') || '') ? dom.getAttribute('data-mention-kind') : null,
+            kind: ['skill', 'plugin', 'session'].includes(dom.getAttribute('data-mention-kind') || '') ? dom.getAttribute('data-mention-kind') : null,
             id: dom.getAttribute('data-mention-id'), description: dom.getAttribute('data-mention-description'),
             icon: safeMentionIcon(dom.getAttribute('data-mention-icon') || undefined) || null,
             modelText: dom.getAttribute('data-mention-model-text'),
@@ -163,7 +163,9 @@ export function serializeComposerDoc(doc: PMNode): string {
     if (index > 0) text += '\n'
     block.forEach((inline) => {
       if (inline.type.name === AT_MENTION_NODE) {
-        text += inline.attrs.kind === 'skill' || inline.attrs.kind === 'plugin'
+        text += inline.attrs.kind === 'session'
+          ? `@${inline.attrs.label}`
+          : inline.attrs.kind === 'skill' || inline.attrs.kind === 'plugin'
           ? (inline.attrs.modelText || `Use ${inline.attrs.kind} ${JSON.stringify(inline.attrs.label)} for this request.`)
           : `@"${inline.attrs.path as string}"`
       } else if (inline.isText) {
@@ -279,7 +281,7 @@ export function deleteAdjacentMentionAtom(direction: 'backward' | 'forward'): Co
 }
 
 function extensionMentionAttrs(attrs: Record<string, unknown>): Partial<ComposerMention> {
-  if (attrs.kind !== 'skill' && attrs.kind !== 'plugin') return {}
+  if (attrs.kind !== 'skill' && attrs.kind !== 'plugin' && attrs.kind !== 'session') return {}
   return { kind: attrs.kind, id: typeof attrs.id === 'string' ? attrs.id : undefined,
     description: typeof attrs.description === 'string' ? attrs.description : undefined,
     icon: safeMentionIcon(typeof attrs.icon === 'string' ? attrs.icon : undefined),

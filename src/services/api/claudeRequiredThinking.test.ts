@@ -161,6 +161,9 @@ function hangingToolResponse(model: string): Response {
   })
 }
 
+const PROGRESS_EVENT_DELAY_MS = 50
+const PROGRESS_IDLE_BUDGET_MS = PROGRESS_EVENT_DELAY_MS * 4
+
 function progressingToolResponse(model: string): Response {
   const events = [
     sseEvent('message_start', {
@@ -206,7 +209,7 @@ function progressingToolResponse(model: string): Response {
 
   return new Response(new ReadableStream({
     async pull(controller) {
-      if (nextEvent > 0) await Bun.sleep(10)
+      if (nextEvent > 0) await Bun.sleep(PROGRESS_EVENT_DELAY_MS)
       if (cancelled) return
       controller.enqueue(new TextEncoder().encode(events[nextEvent]))
       nextEvent += 1
@@ -707,7 +710,9 @@ test('allows a progressing tool input to outlive its inactivity budget', async (
       CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
       CLAUDE_STREAM_IDLE_TIMEOUT_MS: '1000',
       CLAUDE_STREAM_MAX_DURATION_MS: '1000',
-      CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: '40',
+      // Five JSON chunks plus the closing event outlive this idle budget,
+      // while individual gaps tolerate instrumentation/scheduler overhead.
+      CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: String(PROGRESS_IDLE_BUDGET_MS),
     },
   })
 

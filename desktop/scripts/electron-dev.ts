@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer, type ViteDevServer } from 'vite'
+import { resolveRendererEntry } from '../electron/services/rendererEntry'
 
 export const DEFAULT_RENDERER_URL = 'http://localhost:1420'
 export const LOCAL_NO_PROXY_ENTRIES = ['localhost', '127.0.0.1', '::1']
@@ -19,11 +20,16 @@ export function mergeNoProxy(existing: string | undefined, required = LOCAL_NO_P
 }
 
 export function createElectronDevEnv(env: NodeJS.ProcessEnv = process.env) {
-  const rendererUrl = env.ELECTRON_RENDERER_URL ?? DEFAULT_RENDERER_URL
+  const rendererUrl = resolveRendererEntry({
+    isPackaged: false,
+    appRoot: '',
+    env: { ELECTRON_RENDERER_URL: env.ELECTRON_RENDERER_URL?.trim() || DEFAULT_RENDERER_URL },
+  })
   const noProxy = mergeNoProxy(env.NO_PROXY ?? env.no_proxy)
   return {
     ...env,
     ELECTRON_RENDERER_URL: rendererUrl,
+    CC_HAHA_TRUSTED_RENDERER_ORIGIN: new URL(rendererUrl).origin,
     NO_PROXY: noProxy,
     no_proxy: noProxy,
   }

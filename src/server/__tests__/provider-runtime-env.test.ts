@@ -95,10 +95,10 @@ describe('providerRuntimeEnv', () => {
       CC_HAHA_IMAGE_PROVIDER_KIND: 'grok_oauth',
       CC_HAHA_IMAGE_PROVIDER_ID: 'grok-official',
       CC_HAHA_IMAGE_MODEL: 'grok-imagine-image-quality',
-      ANTHROPIC_MODEL: 'grok-4.6',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.6',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.6',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.6',
+      ANTHROPIC_MODEL: 'grok-4.7',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.7',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.7',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.7',
       DISABLE_AUTOUPDATER: '1',
     })
     expect(env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()

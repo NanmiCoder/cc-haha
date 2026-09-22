@@ -36,6 +36,23 @@ describe('sessionsApi', () => {
     expect(init).toMatchObject({ method: 'GET' })
   })
 
+  it('requests one bounded sidebar preview per project', async () => {
+    const response = {
+      sessions: [],
+      projects: [{ projectRoot: '/workspace/repo', total: 42 }],
+      total: 42,
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    expect(await sessionsApi.list({ view: 'sidebar', perProjectLimit: 6 })).toEqual(response)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:3456/api/sessions?view=sidebar&perProjectLimit=6',
+    )
+  })
+
   it('fetches one historical session summary without requesting its messages', async () => {
     const summary = {
       id: 'historical-session',

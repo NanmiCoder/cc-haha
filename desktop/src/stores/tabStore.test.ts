@@ -349,7 +349,7 @@ describe('tabStore', () => {
 
     useTabStore.getState().closeTab(historical.id)
     await useSessionStore.getState().fetchSessions()
-    expect(sessionsApi.list).toHaveBeenLastCalledWith({ limit: 400 })
+    expect(sessionsApi.list).toHaveBeenLastCalledWith({ view: 'sidebar', perProjectLimit: 6 })
     expect(useSessionStore.getState().sessions).toEqual([historical])
     useTabStore.getState().closeTab(traceId)
     await useSessionStore.getState().fetchSessions()
@@ -477,7 +477,7 @@ describe('tabStore', () => {
       await restoring
 
       expect(sessionsApi.list).toHaveBeenNthCalledWith(1, { limit: 200 })
-      expect(sessionsApi.list).toHaveBeenNthCalledWith(2, { limit: 400 })
+      expect(sessionsApi.list).toHaveBeenNthCalledWith(2, { view: 'sidebar', perProjectLimit: 6 })
       expect(useSessionStore.getState().sessions.find((session) => session.id === freshRecent.id))
         .toEqual(freshRecent)
       expect(useSessionRuntimeStore.getState().selections[freshRecent.id]).toEqual({

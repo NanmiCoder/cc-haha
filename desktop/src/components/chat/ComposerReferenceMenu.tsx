@@ -1,3 +1,6 @@
+import { sessionCollaborationApi, type SessionCandidate } from '@/api/sessionCollaboration'
+import { SessionReferenceDetails } from '@/components/chat/SessionReferenceDetails'
+import { useTabStore } from '@/stores/tabStore'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { ComposerSuggestionRow } from '@/components/chat/ComposerSuggestionRow'
@@ -11,7 +14,7 @@ import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
 
 type FileEntry = { name: string, path: string, isDirectory: boolean, relativePath?: string }
-type Row = { key: string, label: string, description: string, searchTerms?: string[], source?: string, mention?: NewComposerMention, file?: FileEntry, icon?: ReactNode, onSelect?: () => void }
+type Row = { key: string, label: string, description: string, searchTerms?: string[], contentMatch?: boolean, session?: SessionCandidate, shortId?: string, source?: string, mention?: NewComposerMention, file?: FileEntry, icon?: ReactNode, onSelect?: () => void }
 export type ComposerReferenceMenuHandle = { handleKeyDown(event: KeyboardEvent): void }
 type Props = {
   id: string
@@ -36,6 +39,24 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
   onSelect, onNavigate, onActiveChange,
 }, ref) {
   const t = useTranslation()
+  const activeSessionId = useTabStore(state => state.activeTabId)
+  const [sessionResult, setSessionResult] = useState<{ query: string, sessions: SessionCandidate[], error?: boolean } | null>(null)
+  useEffect(() => {
+    if (browseReferences) return
+    let active = true
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      void sessionCollaborationApi.list(filter, { signal: controller.signal }).then(data => {
+        if (active) setSessionResult({ query: filter, sessions: data.sessions })
+      }, () => {
+        if (active) setSessionResult({ query: filter, sessions: [], error: true })
+      })
+    }, 150)
+    return () => { active = false; clearTimeout(timer); controller.abort() }
+  }, [filter, browseReferences])
+  const sessionCandidates = !browseReferences && sessionResult?.query === filter ? sessionResult.sessions : []
+  const sessionLoading = !browseReferences && sessionResult?.query !== filter
+  const sessionError = !browseReferences && sessionResult?.query === filter && sessionResult.error
   const [manualPath, setManualPath] = useState<{ cwd: string, filter: string, path: string } | null>(null)
   const override = manualPath?.cwd === cwd && manualPath.filter === filter ? manualPath.path : undefined
   const queryKey = `${cwd}\0${filter}\0${override ?? ''}`
@@ -53,18 +74,23 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
   useEffect(() => {
     if (browseReferences || !filter.trim() && override === undefined) return
     let active = true
+    const controller = new AbortController()
     const base = (cwd || rootRef.current.path).replace(/[\\/]+$/, '')
     const path = override ?? (browsingDirectory && base ? `${base}/${directoryQuery.replace(/\/+$/, '')}` : base)
     const search = override || browsingDirectory ? '' : directoryQuery
-    const request = search ? filesystemApi.search(search, path) : filesystemApi.browse(path, { includeFiles: true })
-    void request.then(data => {
-      if (!active) return
-      if (!rootRef.current.path) rootRef.current = { cwd, path: data.currentPath }
-      setResult({ key: queryKey, entries: data.entries, current: data.currentPath, root: rootRef.current.path })
-    }, error => {
-      if (active) setResult({ key: queryKey, entries: [], current: path, root: base, error: error instanceof ApiError && error.status === 403 ? 'denied' : 'failed' })
-    })
-    return () => { active = false }
+    const run = () => {
+      const request = search ? filesystemApi.search(search, path, { signal: controller.signal }) : filesystemApi.browse(path, { includeFiles: true, signal: controller.signal })
+      void request.then(data => {
+        if (!active) return
+        if (!rootRef.current.path) rootRef.current = { cwd, path: data.currentPath }
+        setResult({ key: queryKey, entries: data.entries, current: data.currentPath, root: rootRef.current.path })
+      }, error => {
+        if (active) setResult({ key: queryKey, entries: [], current: path, root: base, error: error instanceof ApiError && error.status === 403 ? 'denied' : 'failed' })
+      })
+    }
+    const timer = search ? setTimeout(run, 150) : undefined
+    if (!search) run()
+    return () => { active = false; clearTimeout(timer); controller.abort() }
   }, [cwd, filter, override, queryKey, browseReferences, directoryQuery, browsingDirectory])
 
   const groups = useMemo(() => {
@@ -83,10 +109,15 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
     return [
       { kind: 'skills', label: t('chat.referenceSkills'), rows: matches.filter(item => item.kind === 'skill').map(referenceRow) },
       { kind: 'plugins', label: t('chat.referencePlugins'), rows: matches.filter(item => item.kind === 'plugin').map(referenceRow) },
+      { kind: 'sessions', label: t('chat.referenceSessions'), rows: sessionCandidates.filter(item => item.sessionId !== activeSessionId).map((item): Row => ({
+        key: `session:${item.sessionId}`, label: item.title || item.sessionId, description: `${item.cwd} · ${item.sessionId.slice(0, 8)}`, searchTerms: [item.sessionId, item.title, item.cwd], contentMatch: true, session: item,
+        shortId: sessionCandidates.some(other => other.sessionId !== item.sessionId && other.sessionId.slice(0, 8) === item.sessionId.slice(0, 8)) ? item.sessionId : item.sessionId.slice(0, 8),
+        mention: { kind: 'session' as const, id: item.sessionId, label: item.title || item.sessionId, description: item.cwd, path: '', isDirectory: false },
+      })) },
       { kind: 'files', label: t('chat.referenceFiles'), rows: files },
       { kind: 'actions', label: t('chat.references'), rows: actions.map(action => ({ ...action, description: action.description ?? '' })) as Row[] },
     ]
-  }, [references, currentResult, cwd, t, actions, browseReferences, browsingDirectory])
+  }, [references, currentResult, cwd, t, actions, browseReferences, browsingDirectory, sessionCandidates, activeSessionId, filter])
   const visibleGroups = isSearching
     ? [{ kind: 'results', label: t('chat.references'), rows: !browseReferences && (override || browsingDirectory)
       ? groups.find(group => group.kind === 'files')!.rows
@@ -130,7 +161,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
   let offset = 0
   return (
     <div className={embedded ? 'min-w-0' : `absolute bottom-full left-0 w-full z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)] `} onMouseDown={event => event.preventDefault()}>
-      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading} className="min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1.5">
+      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1.5">
         {visibleGroups.map(group => {
           const start = offset
           offset += group.rows.length
@@ -142,7 +173,8 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
               const Icon = referenceFallbackIcon(row.file ? (row.file.isDirectory ? 'directory' : 'file') : row.mention?.kind ?? 'skill')
               const sourceLabel = row.file ? null : skillSourceLabelKey(row.source)
               return <ComposerSuggestionRow key={row.key} id={getComposerReferenceOptionId(id, index)}
-                label={row.label} description={row.description} selected={activeIndex === index}
+                label={row.label} description={row.description}
+                details={row.session ? <SessionReferenceDetails session={row.session} shortId={row.shortId!} /> : undefined} selected={activeIndex === index}
                 onMouseEnter={() => highlight(row)} onClick={event => {
                   if ((event.target as Element).closest('[data-navigate-directory]')) navigate(row)
                   else select(row)
@@ -156,10 +188,11 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
             })}
           </div>
         })}
-        {loading || referencesLoading ? <div role="status" className="px-3 py-2 text-xs text-[var(--color-text-tertiary)]">{t('fileSearch.searching')}</div> : null}
+        {loading || referencesLoading || sessionLoading ? <div role="status" className="px-3 py-2 text-xs text-[var(--color-text-tertiary)]">{t('fileSearch.searching')}</div> : null}
         {currentResult?.error ? <div role="alert" className="px-3 py-2 text-xs text-[var(--color-error)]">{t(currentResult.error === 'denied' ? 'fileSearch.accessDenied' : 'fileSearch.loadFailed')}</div> : null}
+        {sessionError ? <div role="alert" className="px-3 py-2 text-xs text-[var(--color-error)]">{t('chat.sessionReferencesLoadFailed')}</div> : null}
         {referencesError ? <div role="alert" className="px-3 py-2 text-xs text-[var(--color-error)]">{t('chat.referencesLoadFailed')}</div> : null}
-        {!rows.length && !loading && !referencesLoading && !currentResult?.error && !referencesError ? <div className="px-3 py-3 text-xs text-[var(--color-text-tertiary)]">{t('chat.referencesEmpty')}</div> : null}
+        {!rows.length && !loading && !referencesLoading && !sessionLoading && !sessionError && !currentResult?.error && !referencesError ? <div className="px-3 py-3 text-xs text-[var(--color-text-tertiary)]">{t('chat.referencesEmpty')}</div> : null}
       </div>
       {!isSearching && !embedded ? <div className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.referenceSearchHint')}</div> : null}
       {!compact && !embedded ? <div className="flex items-center gap-2 border-t border-[var(--color-border)] px-4 py-2 text-[10px] text-[var(--color-text-tertiary)]"><kbd>↑↓</kbd><span>{t('fileSearch.navigate')}</span><kbd className="ml-2">Enter / Tab</kbd><span>{t('fileSearch.select')}</span><kbd className="ml-2">→</kbd><span>{t('fileSearch.open')}</span><kbd className="ml-2">Esc</kbd><span>{t('fileSearch.close')}</span></div> : null}

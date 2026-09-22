@@ -1,6 +1,6 @@
 import { classifyPreviewLink } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
-import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from './handlePreviewLink'
+import { isRootedLocalPath, localFileUrl, previewFsUrl } from './handlePreviewLink'
 import type { OpenWithContext } from './openWithItems'
 import { isWorkspacePreviewableFile } from './fileCapabilities'
 import { resolveAbsoluteOpenPath } from './systemFileOpen'
@@ -23,7 +23,7 @@ export function openWithContextForWorkspaceFile(
   // an absolute `relPath` — it lives outside the session workspace (e.g. another
   // drive). Such a file is served by the $HOME/registered-root /local-file route,
   // not the workdir-sandboxed /preview-fs route.
-  const outsideWorkspace = isAbsoluteLocalPath(relPath)
+  const outsideWorkspace = isRootedLocalPath(relPath)
   const inAppBrowserUrl = shouldOfferStaticHtmlPreview(relPath, { siblingFiles: opts.siblingFiles })
     ? outsideWorkspace
       ? localFileUrl(opts.serverBaseUrl, absolutePath)
@@ -53,7 +53,7 @@ export function openWithContextForHref(
     // Absolute paths may be outside the session workspace → serve via the
     // $HOME-sandboxed /local-file route; relative paths stay workspace-scoped.
     const absolutePath = resolveAbsoluteOpenPath(c.path, opts.workDir)
-    if (isAbsoluteLocalPath(c.path)) {
+    if (isRootedLocalPath(c.path)) {
       return { kind: 'file', absolutePath, inAppBrowserUrl: localFileUrl(opts.serverBaseUrl, c.path) }
     }
     if (shouldOfferStaticHtmlPreview(c.path)) {

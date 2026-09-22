@@ -713,7 +713,11 @@ describe('ContextUsageIndicator presentation', () => {
     // The category list is collapsed behind the breakdown toggle; the segmented bar is the
     // always-visible summary of the same data.
     expect(popover).not.toHaveTextContent('Messages')
-    expect(screen.getByTestId('context-segmented-bar')).toBeInTheDocument()
+    // 42,000 of 200,000 is 21% of the track, in the brand color — not an empty grey bar.
+    const fill = screen.getByTestId('context-usage-fill')
+    expect(fill).toHaveStyle({ width: '21%' })
+    expect(fill.className).toContain('bg-[var(--color-brand)]')
+    expect(screen.getByTestId('context-segmented-bar')).toHaveAttribute('aria-valuenow', '21')
     expect(document.body.contains(popover)).toBe(true)
     expect(screen.queryByTestId('context-usage-sheet')).not.toBeInTheDocument()
 
@@ -746,6 +750,38 @@ describe('ContextUsageIndicator presentation', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(popover).toHaveTextContent('Messages')
     expect(popover).toHaveTextContent('42,000')
+  })
+
+  it('fills the meter from used tokens, not from a category color', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue({
+      ...baseInspection,
+      context: {
+        ...baseInspection.context,
+        // What the CLI actually sends: a terminal theme key, which is not a CSS color.
+        categories: [{ name: 'Messages', tokens: 20_000, color: 'purple_FOR_SUBAGENTS_ONLY' }],
+        totalTokens: 172_787,
+        rawMaxTokens: 1_000_000,
+        percentage: 17,
+      },
+    })
+
+    render(
+      <ContextUsageIndicator
+        sessionId="session-1"
+        chatState="idle"
+        messageCount={1}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('17%')
+    })
+    fireEvent.click(screen.getByTestId('context-usage-indicator'))
+    await screen.findByTestId('context-usage-popover')
+
+    const fill = screen.getByTestId('context-usage-fill')
+    expect(fill).toHaveStyle({ width: '17.2787%' })
+    expect(fill).not.toHaveAttribute('style', expect.stringContaining('purple_FOR_SUBAGENTS_ONLY'))
   })
 
   it('uses the bottom sheet when the composer is compact (Workbench / narrow column)', async () => {
@@ -853,9 +889,8 @@ describe('ContextUsageIndicator session usage', () => {
 
     fireEvent.click(screen.getByTestId('context-usage-indicator'))
 
-    // 1000 uncached input + 2400 output. Cache hits stay in the hit-rate row, not the headline.
-    expect(await screen.findByTestId('session-total-tokens')).toHaveTextContent('3.4K')
-    expect(screen.getByTestId('session-cache-hit')).toHaveTextContent('90.0%')
+    // Cache reads stay in the hit-rate row; they are not a separate headline.
+    expect(await screen.findByTestId('session-cache-hit')).toHaveTextContent('90.0%')
     // 2400 output / 42s API time, including prefill — not the 12s decode span (200 tok/s).
     expect(screen.getByTestId('session-speed')).toHaveTextContent('57')
     expect(screen.getByTestId('session-speed')).toHaveTextContent('tok/s')
@@ -922,7 +957,9 @@ describe('ContextUsageIndicator session usage', () => {
 
     await screen.findByTestId('context-usage-popover')
     // An all-zero row would read as a measurement rather than an absence.
-    expect(screen.queryByTestId('session-total-tokens')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-speed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-cache-hit')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-cost')).not.toBeInTheDocument()
   })
 
   it('does not stack polls behind a request that has not answered yet', async () => {

@@ -3,11 +3,25 @@ import { open } from 'node:fs/promises'
 import { ApiError } from '../middleware/errorHandler.js'
 
 export const HISTORY_SCAN_BYTES = 16 * 1024 * 1024
+/** Scan ceiling for the full-history read. It may walk much further than a
+ * single page because its output budget is `HISTORY_FULL_BYTES`, but the I/O
+ * per request still needs a hard cap: one bounded read is a synchronous walk
+ * with no other yield point. */
+export const HISTORY_FULL_SCAN_BYTES = 64 * 1024 * 1024
 export const HISTORY_SEMANTIC_RECORD_BYTES = 8 * 1024 * 1024
 export const HISTORY_RECORD_BYTES = 1024 * 1024
 export const HISTORY_PAGE_BYTES = 256 * 1024
 export const HISTORY_PAGE_RECORDS = 200
 export const HISTORY_PAGE_ROWS = 500
+/** Single-request ceiling for the "load the whole transcript at once" path.
+ * The desktop timeline reads this in one shot so it never has to stitch pages
+ * together; past the budget the reader still returns the newest slice and
+ * reports `historyComplete: false` instead of failing with 413. */
+export const HISTORY_FULL_BYTES = 32 * 1024 * 1024
+/** Row ceiling for the full-history path. The byte budget is the real bound;
+ * this only stops pathological all-tiny-record transcripts from building a
+ * six-figure-entry array. */
+export const HISTORY_FULL_ROWS = 250_000
 
 type Cursor = { version: 1; dev: string; ino: string; size: number; mtime: string; offset: number; skipping: boolean; direction?: 'older' | 'newer'; fingerprints?: { prefix: string; tail: string; boundary: string } }
 export type HistoryPageInfo = {
@@ -79,7 +93,7 @@ function decodeCursor(value: string): Cursor {
 
 /** Produce a display preview without dropping a message's identity. Durable
  * replay and semantic state reducers always receive the original record. */
-function displayPreview(entry: Record<string, unknown>): Record<string, unknown> {
+export function displayPreview(entry: Record<string, unknown>): Record<string, unknown> {
   let truncated = false
   let remaining = 48 * 1024
   let nodes = 2048
@@ -110,8 +124,9 @@ function displayPreview(entry: Record<string, unknown>): Record<string, unknown>
   return truncated ? { ...result, bodyTruncated: true } : result
 }
 
-export async function readBoundedHistoryPage(filePath: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<{ entries: BoundedHistoryEntry[]; page: HistoryPageInfo }> {
+export async function readBoundedHistoryPage(filePath: string, options: { cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean } = {}): Promise<{ entries: BoundedHistoryEntry[]; page: HistoryPageInfo }> {
   if (options.limit !== undefined && (!Number.isFinite(options.limit) || options.limit < 1)) throw new ApiError(400, 'History limit must be a positive finite number', 'INVALID_HISTORY_LIMIT')
+  const full = options.full === true
   return withHistoryReadBudget(options.signal, async () => {
     const handle = await open(filePath, 'r')
     try {
@@ -152,11 +167,18 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
       let outputBytes = 0
       let renderedRows = 0
       const entries: BoundedHistoryEntry[] = []
-      const limit = Math.max(1, Math.min(HISTORY_PAGE_RECORDS, Math.floor(options.limit ?? HISTORY_PAGE_RECORDS)))
+      // The page path stops at the first UI screenful; the full path keeps
+      // walking to the head of the file, bounded by record/byte/row budgets
+      // instead of a page boundary. Rows default high because the byte budget
+      // is the real bound for ordinary transcripts.
+      const recordLimit = Math.max(1, Math.min(options.full ? Number.MAX_SAFE_INTEGER : HISTORY_PAGE_RECORDS, Math.floor(options.limit ?? (options.full ? HISTORY_FULL_ROWS : HISTORY_PAGE_RECORDS))))
+      const byteBudget = options.full ? HISTORY_FULL_BYTES : HISTORY_PAGE_BYTES
+      const rowBudget = options.full ? HISTORY_FULL_ROWS : HISTORY_PAGE_ROWS
+      const scanBudget = options.full ? HISTORY_FULL_SCAN_BYTES : HISTORY_SCAN_BYTES
       const load = async (): Promise<boolean> => {
         // Reserve enough I/O for post-read source anchors and both outgoing
         // boundary hashes; validation is part of the same request byte budget.
-        const capacity = Math.min(64 * 1024, HISTORY_SCAN_BYTES - 64 * 1024 - scannedBytes)
+        const capacity = Math.min(64 * 1024, scanBudget - 64 * 1024 - scannedBytes)
         if (capacity <= 0) return false
         const start = newer ? position : Math.max(0, position - capacity)
         const end = newer ? Math.min(cursor.size, position + capacity) : position
@@ -173,7 +195,7 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
         bufferStart = start; bufferEnd = end
         return true
       }
-      while ((newer ? position < cursor.size : position > 0) && entries.length < limit) {
+      while ((newer ? position < cursor.size : position > 0) && entries.length < recordLimit) {
         aborted(options.signal)
         const boundary = position
         let parts: Buffer[] = []
@@ -222,26 +244,19 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
         let entry: Record<string, unknown>
         try { entry = JSON.parse(raw.toString('utf8')) } catch { omitted++; continue }
         if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-        entry = displayPreview(entry)
-        let previewBytes = Buffer.byteLength(JSON.stringify(entry))
-        if (previewBytes > HISTORY_PAGE_BYTES) {
-          // Even an unusually broad structured body keeps its transcript row.
-          // The scalar envelope is enough to display an honest preview marker.
-          const message = entry.message as Record<string, unknown> | undefined
-          entry = { type: entry.type, uuid: entry.uuid, timestamp: entry.timestamp, parentUuid: entry.parentUuid,
-            parent_tool_use_id: entry.parent_tool_use_id, isSidechain: entry.isSidechain, bodyTruncated: true,
-            ...(message ? { message: { role: message.role, content: '[Message body exceeds preview budget]' } } : { content: '[Message body exceeds preview budget]' }) }
-          previewBytes = Buffer.byteLength(JSON.stringify(entry))
-          if (previewBytes > HISTORY_PAGE_BYTES) { omitted++; continue }
-        }
+        // Page whole records instead of shortening display fields. Image data,
+        // tool inputs and trailing reference envelopes must remain parseable.
+        // A record above the ordinary page budget owns its page; the reader's
+        // semantic record and scan limits still bound memory and I/O.
+        const entryBytes = Buffer.byteLength(JSON.stringify(entry))
         const content = (entry.message as { content?: unknown } | undefined)?.content
         // Each assistant block/tool result may become a separate UI row. Stop
         // before the complete record instead of clipping rows behind a cursor.
         const rowCost = Array.isArray(content) ? Math.max(1, content.length) : 1
-        if ((outputBytes + previewBytes > HISTORY_PAGE_BYTES || renderedRows + rowCost > HISTORY_PAGE_ROWS) && entries.length) { position = boundary; break }
+        if ((outputBytes + entryBytes > byteBudget || renderedRows + rowCost > rowBudget) && entries.length) { position = boundary; break }
         renderedRows += rowCost
         entries.push({ entry, byteStart: newer ? boundary : start, byteEnd: end })
-        outputBytes += previewBytes
+        outputBytes += entryBytes
         await new Promise<void>(resolve => setImmediate(resolve))
       }
       const after = await handle.stat({ bigint: true })

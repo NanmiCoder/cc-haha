@@ -1151,11 +1151,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         }
         applyToolSearchEnv(mergedEnv, apiFormat, toolSearchEnabled)
         applyDisableExperimentalBetasEnv(mergedEnv, disableExperimentalBetas)
-        const merged = {
+        const merged: Record<string, unknown> = {
           ...settings,
           skipWebFetchPreflight: settings.skipWebFetchPreflight ?? true,
           env: mergedEnv,
         }
+        // `model` / `modelContext` are the session's selected default, written by
+        // the model picker. They are not part of the provider being added, so
+        // showing them here makes a new provider look like it inherits Grok 4.7
+        // (or whatever was last selected) and saving would write that back.
+        delete merged.model
+        delete merged.modelContext
         setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)), null, 2))
       }).catch(() => {
         if (!cancelled && !settingsJsonUserEditedRef.current) {
@@ -1215,7 +1221,6 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     setTestResult(null)
   }
 
-  const isCustom = selectedPreset.id === 'custom'
   const requiresApiKey = selectedPreset.needsApiKey !== false
   const autoCompactWindowErrorKey = getAutoCompactWindowErrorKey(autoCompactWindow)
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
@@ -1570,6 +1575,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           const { providersApi } = await import('../../api/providers')
           const settings = writeCompatibilityJson(parsed, storedCompatibility)
           delete settings.requestCompatibility
+          // The editor never owns the session default model. updateSettings merges
+          // by replacing the whole object, so omitting these keys keeps the
+          // model picker's selection instead of clearing it.
+          delete settings.model
+          delete settings.modelContext
           await providersApi.updateSettings(settings)
         } catch {
           // JSON validation already prevents this
@@ -1790,7 +1800,20 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                 <span className="material-symbols-outlined text-[9px] opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5">arrow_outward</span>
               </button>
             )}
-            {promoText && <span className="text-[11px] leading-5 text-[var(--color-text-tertiary)]">{promoText}</span>}
+            {promoText && (
+              apiKeyUrl ? (
+                <button
+                  type="button"
+                  onClick={() => openExternalUrl(apiKeyUrl)}
+                  className="group inline-flex min-w-0 cursor-pointer items-start gap-1 text-left text-[11px] leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-brand)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+                >
+                  <span>{promoText}</span>
+                  <span aria-hidden="true" className="material-symbols-outlined mt-1 shrink-0 text-[10px] opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5">arrow_outward</span>
+                </button>
+              ) : (
+                <span className="text-[11px] leading-5 text-[var(--color-text-tertiary)]">{promoText}</span>
+              )
+            )}
           </div>
         )}
 
@@ -1878,8 +1901,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
 
         <Input label={t('settings.providers.notes')} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t('settings.providers.notesPlaceholder')} />
 
-        {/* API Format */}
-        {(isCustom || mode === 'edit') && !presetDrivesApiFormat ? (
+        {/* API Format — a preset only owns this field when it routes per model;
+            every other preset starts on its own format but stays switchable. */}
+        {!presetDrivesApiFormat ? (
           <div>
             <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.apiFormat')}</label>
             <Dropdown<ApiFormat>
@@ -1898,18 +1922,21 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
             {apiFormat !== 'anthropic' && (
               <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.proxyHint')}</p>
             )}
+            {/* The preset's own endpoint is still in the field above; a custom
+                preset brings none, so there is nothing to warn about. */}
+            {apiFormat !== selectedPreset.apiFormat && Boolean(selectedPreset.baseUrl) && (
+              <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.apiFormatOverrideHint')}</p>
+            )}
           </div>
-        ) : (presetDrivesApiFormat || apiFormat !== 'anthropic') ? (
+        ) : (
           <div>
             <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.apiFormat')}</label>
             <div className="text-xs text-[var(--color-text-tertiary)] px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] border border-[var(--color-border)]">
               {selectedApiFormatLabel}
             </div>
-            {presetDrivesApiFormat && (
-              <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.apiFormatPerModelHint')}</p>
-            )}
+            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.apiFormatPerModelHint')}</p>
           </div>
-        ) : null}
+        )}
 
         <ProviderRequestCompatibilityFields value={compatibility} apiFormat={apiFormat} onChange={handleCompatibilityChange} />
 

@@ -3,7 +3,7 @@
  *
  * 1. Managed memory (eg. /etc/claude-code/CLAUDE.md) - Global instructions for all users
  * 2. User memory (~/.claude/CLAUDE.md) - Private global instructions for all projects
- * 3. Project memory (CLAUDE.md, .claude/CLAUDE.md, and .claude/rules/*.md in project roots) - Instructions checked into the codebase
+ * 3. Project memory (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md fallback, and .claude/rules/*.md in project roots) - Instructions checked into the codebase
  * 4. Local memory (CLAUDE.local.md in project roots) - Private project-specific instructions
  *
  * Files are loaded in reverse order of priority, i.e. the latest files are highest priority
@@ -77,6 +77,7 @@ import { expandPath } from './path.js'
 import { pathInWorkingPath } from './permissions/filesystem.js'
 import { isSettingSourceEnabled } from './settings/constants.js'
 import { getInitialSettings } from './settings/settings.js'
+import { getInstructionFilesMode, type InstructionFilesMode } from './instructionFiles.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const teamMemPaths = feature('TEAMMEM')
@@ -787,12 +788,100 @@ export async function processMdRules({
   }
 }
 
+// Keep the walk shared by initial loading and AGENTS fallback detection. A nested
+// worktree must not inherit checked-in instructions from its main checkout.
+function getProjectInstructionDirectories(root: string) {
+  const dirs: { dir: string; skipProject: boolean }[] = []
+  const gitRoot = findGitRoot(root)
+  const canonicalRoot = findCanonicalGitRoot(root)
+  const nested = gitRoot !== null && canonicalRoot !== null &&
+    normalizePathForComparison(gitRoot) !== normalizePathForComparison(canonicalRoot) &&
+    pathInWorkingPath(gitRoot, canonicalRoot)
+  for (let dir = root; dir !== parse(dir).root; dir = dirname(dir)) {
+    dirs.push({
+      dir,
+      skipProject: Boolean(nested && pathInWorkingPath(dir, canonicalRoot!) &&
+        !pathInWorkingPath(dir, gitRoot!)),
+    })
+  }
+  return dirs.reverse()
+}
+
+async function hasClaudeInstructions(dir: string, skipProject = false, explicitProject = false): Promise<boolean> {
+  const candidates: [string, MemoryType][] = []
+  if (!skipProject && (explicitProject || isSettingSourceEnabled('projectSettings'))) {
+    candidates.push([join(dir, 'CLAUDE.md'), 'Project'], [join(dir, '.claude', 'CLAUDE.md'), 'Project'])
+  }
+  if (!explicitProject && isSettingSourceEnabled('localSettings')) {
+    candidates.push([join(dir, 'CLAUDE.local.md'), 'Local'])
+  }
+  for (const [file, type] of candidates) {
+    if ((await processMemoryFile(file, type, new Set(), false)).length > 0) return true
+  }
+  return false
+}
+
+// This is a project-wide decision, not a per-file fallback. User and managed
+// CLAUDE.md files, rules, and --add-dir files do not disable AGENTS.md.
+const canUseAgentsFallback = memoize(async (root: string): Promise<boolean> => {
+  for (const { dir, skipProject } of getProjectInstructionDirectories(root)) {
+    if (await hasClaudeInstructions(dir, skipProject)) return false
+  }
+  return true
+})
+
+async function processAgentsFiles(
+  dir: string,
+  processedPaths: Set<string>,
+  includeExternal: boolean,
+): Promise<MemoryFileInfo[]> {
+  const files: MemoryFileInfo[] = []
+  for (const name of ['AGENTS.md', join('.claude', 'AGENTS.md')]) {
+    files.push(...await processMemoryFile(join(dir, name), 'Project', processedPaths, includeExternal))
+  }
+  return files
+}
+
+// CLAUDE.md may already import (or symlink to) AGENTS.md. Path deduplication
+// happens in processMemoryFile; content deduplication also handles copied files.
+function deduplicateAgentsFiles(
+  files: MemoryFileInfo[],
+  existing: MemoryFileInfo[] = [],
+): MemoryFileInfo[] {
+  const byPath = new Map([...existing, ...files].map(file => [file.path, file]))
+  const fromAgents = (file: MemoryFileInfo) => {
+    const seen = new Set<string>()
+    while (file.parent && byPath.has(file.parent) && !seen.has(file.path)) {
+      seen.add(file.path)
+      file = byPath.get(file.parent)!
+    }
+    return file.type === 'Project' && basename(file.path) === 'AGENTS.md'
+  }
+  const contents = new Set([
+    ...existing.filter(file => file.type === 'Project' || file.type === 'Local'),
+    ...files.filter(file => !fromAgents(file) && (file.type === 'Project' || file.type === 'Local')),
+  ].map(file => file.content.trim()))
+  return files.filter(file => {
+    if (!fromAgents(file)) return true
+    const content = file.content.trim()
+    if (content && contents.has(content)) return false
+    if (content) contents.add(content)
+    return true
+  })
+}
+
+let cachedInstructionMode: InstructionFilesMode | undefined
+
 export const getMemoryFiles = memoize(
   async (forceIncludeExternal: boolean = false): Promise<MemoryFileInfo[]> => {
     const startTime = Date.now()
     logForDiagnosticsNoPII('info', 'memory_files_started')
 
-    const result: MemoryFileInfo[] = []
+    let result: MemoryFileInfo[] = []
+    const mode = getInstructionFilesMode()
+    const managedOnly = mode === 'managed-only'
+    const loadAgents = mode === 'claude-md-and-agents-md' ||
+      (mode === 'claude-md-or-agents-md' && await canUseAgentsFallback(getOriginalCwd()))
     const processedPaths = new Set<string>()
     const config = getCurrentProjectConfig()
     const includeExternal =
@@ -823,7 +912,7 @@ export const getMemoryFiles = memoize(
     )
 
     // Process User file (only if userSettings is enabled)
-    if (isSettingSourceEnabled('userSettings')) {
+    if (getInstructionFilesMode() !== 'managed-only' && isSettingSourceEnabled('userSettings')) {
       const userClaudeMd = getMemoryPath('User')
       result.push(
         ...(await processMemoryFile(
@@ -846,45 +935,10 @@ export const getMemoryFiles = memoize(
       )
     }
 
-    // Then process Project and Local files
-    const dirs: string[] = []
-    const originalCwd = getOriginalCwd()
-    let currentDir = originalCwd
-
-    while (currentDir !== parse(currentDir).root) {
-      dirs.push(currentDir)
-      currentDir = dirname(currentDir)
-    }
-
-    // When running from a git worktree nested inside its main repo (e.g.,
-    // .claude/worktrees/<name>/ from `claude -w`), the upward walk passes
-    // through both the worktree root and the main repo root. Both contain
-    // checked-in files like CLAUDE.md and .claude/rules/*.md, so the same
-    // content gets loaded twice. Skip Project-type (checked-in) files from
-    // directories above the worktree but within the main repo — the worktree
-    // already has its own checkout. CLAUDE.local.md is gitignored so it only
-    // exists in the main repo and is still loaded.
-    // See: https://github.com/anthropics/claude-code/issues/29599
-    const gitRoot = findGitRoot(originalCwd)
-    const canonicalRoot = findCanonicalGitRoot(originalCwd)
-    const isNestedWorktree =
-      gitRoot !== null &&
-      canonicalRoot !== null &&
-      normalizePathForComparison(gitRoot) !==
-        normalizePathForComparison(canonicalRoot) &&
-      pathInWorkingPath(gitRoot, canonicalRoot)
-
-    // Process from root downward to CWD
-    for (const dir of dirs.reverse()) {
-      // In a nested worktree, skip checked-in files from the main repo's
-      // working tree (dirs inside canonicalRoot but outside the worktree).
-      const skipProject =
-        isNestedWorktree &&
-        pathInWorkingPath(dir, canonicalRoot) &&
-        !pathInWorkingPath(dir, gitRoot)
-
+    // Process ancestors before descendants, preserving local worktree rules.
+    for (const { dir, skipProject } of getProjectInstructionDirectories(getOriginalCwd())) {
       // Try reading CLAUDE.md (Project) - only if projectSettings is enabled
-      if (isSettingSourceEnabled('projectSettings') && !skipProject) {
+      if (!managedOnly && isSettingSourceEnabled('projectSettings') && !skipProject) {
         const projectPath = join(dir, 'CLAUDE.md')
         result.push(
           ...(await processMemoryFile(
@@ -920,7 +974,7 @@ export const getMemoryFiles = memoize(
       }
 
       // Try reading CLAUDE.local.md (Local) - only if localSettings is enabled
-      if (isSettingSourceEnabled('localSettings')) {
+      if (getInstructionFilesMode() !== 'managed-only' && isSettingSourceEnabled('localSettings')) {
         const localPath = join(dir, 'CLAUDE.local.md')
         result.push(
           ...(await processMemoryFile(
@@ -931,13 +985,16 @@ export const getMemoryFiles = memoize(
           )),
         )
       }
+      if (!managedOnly && !skipProject && isSettingSourceEnabled('projectSettings') && loadAgents) {
+        result.push(...await processAgentsFiles(dir, processedPaths, includeExternal))
+      }
     }
 
     // Process CLAUDE.md from additional directories (--add-dir) if env var is enabled
     // This is controlled by CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD and defaults to off
     // Note: we don't check isSettingSourceEnabled('projectSettings') here because --add-dir
     // is an explicit user action and the SDK defaults settingSources to [] when not specified
-    if (isEnvTruthy(process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD)) {
+    if (!managedOnly && isEnvTruthy(process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD)) {
       const additionalDirs = getAdditionalDirectoriesForClaudeMd()
       for (const dir of additionalDirs) {
         // Try reading CLAUDE.md from the additional directory
@@ -973,6 +1030,11 @@ export const getMemoryFiles = memoize(
             conditionalRule: false,
           })),
         )
+        // Explicit add-dir discovery uses that directory's own fallback decision.
+        if (mode === 'claude-md-and-agents-md' ||
+          (mode === 'claude-md-or-agents-md' && !await hasClaudeInstructions(dir, false, true))) {
+          result.push(...await processAgentsFiles(dir, processedPaths, includeExternal))
+        }
       }
     }
 
@@ -1005,6 +1067,8 @@ export const getMemoryFiles = memoize(
         }
       }
     }
+
+    result = deduplicateAgentsFiles(result)
 
     const totalContentLength = result.reduce(
       (sum, f) => sum + f.content.length,
@@ -1072,6 +1136,14 @@ export const getMemoryFiles = memoize(
 
     return result
   },
+  (forceIncludeExternal = false) => {
+    const mode = getInstructionFilesMode()
+    if (cachedInstructionMode !== mode) {
+      cachedInstructionMode = mode
+      clearMemoryFileCaches()
+    }
+    return `${mode}:${forceIncludeExternal}`
+  },
 )
 
 function isInstructionsMemoryType(
@@ -1119,6 +1191,7 @@ function consumeNextEagerLoadReason(): InstructionsLoadReason | undefined {
 export function clearMemoryFileCaches(): void {
   // ?.cache because tests spyOn this, which replaces the memoize wrapper.
   getMemoryFiles.cache?.clear?.()
+  canUseAgentsFallback.cache.clear()
 }
 
 export function resetGetMemoryFilesCache(
@@ -1220,7 +1293,7 @@ export async function getManagedAndUserConditionalRules(
     )),
   )
 
-  if (isSettingSourceEnabled('userSettings')) {
+  if (getInstructionFilesMode() !== 'managed-only' && isSettingSourceEnabled('userSettings')) {
     // Process User conditional .claude/rules/*.md files
     const userClaudeRulesDir = getUserClaudeRulesDir()
     result.push(
@@ -1251,6 +1324,7 @@ export async function getMemoryFilesForNestedDirectory(
   targetPath: string,
   processedPaths: Set<string>,
 ): Promise<MemoryFileInfo[]> {
+  if (getInstructionFilesMode() === 'managed-only') return []
   const result: MemoryFileInfo[] = []
 
   // Process project memory files (CLAUDE.md and .claude/CLAUDE.md)
@@ -1276,12 +1350,14 @@ export async function getMemoryFilesForNestedDirectory(
   }
 
   // Process local memory file (CLAUDE.local.md)
-  if (isSettingSourceEnabled('localSettings')) {
+  if (getInstructionFilesMode() !== 'managed-only' && isSettingSourceEnabled('localSettings')) {
     const localPath = join(dir, 'CLAUDE.local.md')
     result.push(
       ...(await processMemoryFile(localPath, 'Local', processedPaths, false)),
     )
   }
+
+  if (!isSettingSourceEnabled('projectSettings')) return result
 
   const rulesDir = join(dir, '.claude', 'rules')
 
@@ -1314,7 +1390,15 @@ export async function getMemoryFilesForNestedDirectory(
     processedPaths.add(path)
   }
 
-  return result
+  const mode = getInstructionFilesMode()
+  if (isSettingSourceEnabled('projectSettings') &&
+    (mode === 'claude-md-and-agents-md' ||
+      (mode === 'claude-md-or-agents-md' &&
+        await canUseAgentsFallback(getOriginalCwd()) && !await hasClaudeInstructions(dir)))) {
+    result.push(...await processAgentsFiles(dir, processedPaths, false))
+  }
+
+  return deduplicateAgentsFiles(result, await getMemoryFiles())
 }
 
 /**
@@ -1331,6 +1415,7 @@ export async function getConditionalRulesForCwdLevelDirectory(
   targetPath: string,
   processedPaths: Set<string>,
 ): Promise<MemoryFileInfo[]> {
+  if (getInstructionFilesMode() === 'managed-only' || !isSettingSourceEnabled('projectSettings')) return []
   const rulesDir = join(dir, '.claude', 'rules')
   return processConditionedMdRules(
     targetPath,
@@ -1436,7 +1521,7 @@ export function isMemoryFilePath(filePath: string): boolean {
   const name = basename(filePath)
 
   // CLAUDE.md or CLAUDE.local.md anywhere
-  if (name === 'CLAUDE.md' || name === 'CLAUDE.local.md') {
+  if (name === 'CLAUDE.md' || name === 'CLAUDE.local.md' || name === 'AGENTS.md') {
     return true
   }
 

@@ -31,6 +31,9 @@ const GOAL_HOOK_MARKER = '<cc-haha-goal-hook>'
 const GOAL_HOOK_TIMEOUT_SECONDS = 45
 const RESERVED_GOAL_ARGS = new Set(['status', 'pause', 'resume', 'complete'])
 const goalsByThread = new Map<string, ThreadGoal>()
+// A running turn can still hold a transcript from before /goal clear.
+// Explicit session state must win over those stale transcript anchors.
+const clearedGoalThreads = new Set<string>()
 
 export function parseGoalCommand(args: string): ParsedGoalCommand {
   const trimmed = args.trim()
@@ -62,6 +65,7 @@ export function setThreadGoalHook(
   now = Date.now(),
 ): ThreadGoal {
   clearThreadGoalHook(context, threadId)
+  clearedGoalThreads.delete(threadId)
 
   const hook = createGoalPromptHook(objective)
   const goal: ThreadGoal = {
@@ -97,6 +101,7 @@ export function clearThreadGoalHook(
   context: Pick<ToolUseContext, 'setAppState'>,
   threadId: string,
 ): ThreadGoal | null {
+  clearedGoalThreads.add(threadId)
   const goal = goalsByThread.get(threadId) ?? null
   if (goal) {
     removeSessionHook(context.setAppState, threadId, 'Stop', goal.hook)
@@ -113,6 +118,7 @@ export function ensureThreadGoalHookFromTranscript(
 ): ThreadGoal | null {
   const current = goalsByThread.get(threadId)
   if (current) return current
+  if (clearedGoalThreads.has(threadId)) return null
 
   const restored = findActiveGoalObjective(messages)
   if (!restored) return null

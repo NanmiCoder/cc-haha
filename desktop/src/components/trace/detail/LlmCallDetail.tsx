@@ -44,7 +44,8 @@ export function LlmCallDetail({
     // second request; staleness is checked against the ref at resolve time.
     if (fetchKeyRef.current === key) return
     fetchKeyRef.current = key
-    setDetail(null)
+    // Keep the record on screen while a newer copy loads. Clearing it first
+    // drops the reader back to the truncated snapshot and resets their scroll.
     void fetchTraceCallDetail(sessionId, callId, revisionKey).then((full) => {
       if (fetchKeyRef.current !== key) return
       if (full) {

@@ -1,3 +1,4 @@
+import { consumeSessionMessage, isPendingSessionMessage } from './utils/sessionMessageInbox.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID } from 'crypto'
@@ -435,8 +436,17 @@ export class QueryEngine {
       messages: this.mutableMessages,
       uuid: options?.uuid,
       isMeta: options?.isMeta,
+      skipSlashCommands: isPendingSessionMessage(options?.uuid),
+      skipAttachments: isPendingSessionMessage(options?.uuid),
       querySource: 'sdk',
     })
+
+    const isSessionMessage = isPendingSessionMessage(options?.uuid)
+    if (isSessionMessage) {
+      for (const message of messagesFromUserInput) {
+        if (message.type === 'user') message.origin = { kind: 'channel', server: 'session-collaboration' }
+      }
+    }
 
     // Push new messages, including user input and any attachments
     this.mutableMessages.push(...messagesFromUserInput)
@@ -460,11 +470,12 @@ export class QueryEngine {
     // Transcript is still written (for post-hoc debugging); just not blocking.
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscript(messages)
-      if (isBareMode()) {
+      if (isBareMode() && !isSessionMessage) {
         void transcriptPromise
       } else {
         await transcriptPromise
         if (
+          isSessionMessage ||
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
           isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
         ) {
@@ -472,6 +483,8 @@ export class QueryEngine {
         }
       }
     }
+
+    if (isSessionMessage && options?.uuid) consumeSessionMessage(options.uuid)
 
     // Filter messages that should be acknowledged after transcript
     const replayableMessages = messagesFromUserInput.filter(
@@ -876,11 +889,24 @@ export class QueryEngine {
 
           break
         case 'attachment':
+          if (message.attachment.type === 'queued_command' && isPendingSessionMessage(message.attachment.source_uuid)) {
+            // Keep the stable delivery ID in the transcript index even when
+            // compaction removes this attachment from resumed context.
+            message.uuid = message.attachment.source_uuid!
+          }
           this.mutableMessages.push(message)
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            void recordTranscript(messages)
+            if (message.attachment.type === 'queued_command' && isPendingSessionMessage(message.attachment.source_uuid)) {
+              await recordTranscript(messages)
+              await flushSessionStorage()
+            } else {
+              void recordTranscript(messages)
+            }
+          }
+          if (message.attachment.type === 'queued_command' && message.attachment.source_uuid) {
+            consumeSessionMessage(message.attachment.source_uuid)
           }
 
           // Extract structured output from StructuredOutput tool calls

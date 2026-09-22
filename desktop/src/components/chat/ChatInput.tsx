@@ -1,3 +1,4 @@
+import { getSessionReferences } from '@/lib/composerMentions'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -815,6 +816,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     // Inline @-mentions travel as the `@"absolute path"` text the CLI already
     // parses. Serialized from the live document — only the doc knows which
     // `@label` is a pill and which is literal text the user typed.
+    const sessionReferences = getSessionReferences(input, mentions)
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     const contentForModel = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
     const displayContent = text || (
@@ -900,12 +902,14 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     if (!isMemberSession && targetChatState !== 'idle') {
       queueUserMessage(targetSessionId, {
         content: contentForModel,
+        sessionReferences,
         attachments: [...uploadAttachmentPayload, ...workspaceAttachmentPayload],
         displayContent,
         displayAttachments: visibleAttachmentPayload,
       })
     } else {
       sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
+        sessionReferences,
         displayContent,
         displayAttachments: visibleAttachmentPayload,
       })
@@ -1419,7 +1423,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
                 rootRef={composerContainerRef}
                 value={input}
                 mentions={mentions}
-                onMentionClick={setReferenceDetail}
+                onMentionClick={mention => {
+                  if (mention.kind === 'session' && mention.id) useTabStore.getState().openTab(mention.id, mention.label)
+                  else setReferenceDetail(mention)
+                }}
                 onChange={handleComposerChange}
                 onKeyDown={handleComposerKeyDown}
                 onPaste={handleComposerPaste}
@@ -1450,7 +1457,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
               rootRef={composerContainerRef}
               value={input}
               mentions={mentions}
-              onMentionClick={setReferenceDetail}
+              onMentionClick={mention => {
+                  if (mention.kind === 'session' && mention.id) useTabStore.getState().openTab(mention.id, mention.label)
+                  else setReferenceDetail(mention)
+                }}
               onChange={handleComposerChange}
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}

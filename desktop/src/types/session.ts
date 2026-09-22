@@ -44,6 +44,9 @@ export type MessageUsage = {
 }
 
 export type MessageEntry = {
+  sessionReferences?: Array<{ sessionId: string }>
+  /** Present when this user-position message was delivered from another session. */
+  collaboration?: { sourceSessionId: string; messageId?: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown

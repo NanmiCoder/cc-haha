@@ -40,6 +40,7 @@ export async function readHistoryContexts(options: {
   sourceVersion: string
   offsets: number[]
   signal?: AbortSignal
+  includeUnownedSidechains?: boolean
   classify: (entry: Record<string, unknown>) => { notification: boolean; reset: boolean; agentToolId?: string }
 }): Promise<{ contexts: Map<number, Context>; scannedBytes: number }> {
   if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError')
@@ -71,7 +72,7 @@ export async function readHistoryContexts(options: {
       }
       const directory = await mkdtemp(join(tmpdir(), 'claude-history-context-'))
       const database = new Database(join(directory, 'context.sqlite'))
-      database.exec('PRAGMA journal_mode=OFF; PRAGMA cache_size=-512; PRAGMA temp_store=FILE; CREATE TABLE parents (id TEXT PRIMARY KEY, chain TEXT); CREATE TABLE context (offset INTEGER PRIMARY KEY, owner TEXT, suppressed INTEGER)')
+      database.exec('PRAGMA journal_mode=OFF; PRAGMA cache_size=-512; PRAGMA temp_store=FILE; CREATE TABLE parents (id TEXT PRIMARY KEY, chain TEXT); CREATE TABLE context (offset INTEGER PRIMARY KEY, owner TEXT, suppressed INTEGER, unowned_sidechain INTEGER)')
       state = { database, directory, identity, size: 0, mtime: '', offset: 0, suppressed: false }
       cache.set(options.filePath, state)
     }
@@ -80,7 +81,7 @@ export async function readHistoryContexts(options: {
     if (state.size >= targetSize) return
     const getParent = state.database.query('SELECT chain FROM parents WHERE id = ?')
     const saveParent = state.database.query('INSERT OR REPLACE INTO parents VALUES (?, ?)')
-    const saveContext = state.database.query('INSERT OR REPLACE INTO context VALUES (?, ?, ?)')
+    const saveContext = state.database.query('INSERT OR REPLACE INTO context VALUES (?, ?, ?, ?)')
     const originalOffset = state.offset
     let suppressed = state.suppressed
     let completeSuppression = suppressed
@@ -96,8 +97,9 @@ export async function readHistoryContexts(options: {
         if (typeof entry.uuid === 'string') saveParent.run(entry.uuid, chain ?? null)
         if (classification.notification) suppressed = true
         else if (classification.reset) suppressed = false
-        // Unknown sidechain ancestry is never promoted into the root transcript.
-        saveContext.run(offset, owner ?? null, suppressed !== false || (entry.isSidechain === true && !owner) ? 1 : 0)
+        // Keep root-only ownership filtering separate from notification state:
+        // a dedicated child transcript legitimately lacks its parent's Agent call.
+        saveContext.run(offset, owner ?? null, suppressed !== false ? 1 : 0, entry.isSidechain === true && !owner ? 1 : 0)
         if (completeLine) completeSuppression = suppressed
       }, signal, { startOffset: originalOffset, endOffset: targetSize, maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES, onSkipped: () => { suppressed = null; completeSuppression = null } })
       if (fingerprint !== await sourceAnchors(options.filePath, targetSize, signal)) throw new ApiError(409, 'History was rewritten during context scan', 'HISTORY_CHANGED')
@@ -154,12 +156,12 @@ export async function readHistoryContexts(options: {
     })
   }
   const state = cache.get(options.filePath)!
-  const query = state.database.query('SELECT owner, suppressed FROM context WHERE offset = ?')
+  const query = state.database.query('SELECT owner, suppressed, unowned_sidechain FROM context WHERE offset = ?')
   const contexts = new Map<number, Context>()
   for (const offset of options.offsets) {
-    const row = query.get(offset) as { owner: string | null; suppressed: number } | null
+    const row = query.get(offset) as { owner: string | null; suppressed: number; unowned_sidechain: number } | null
     if (!row) throw new ApiError(409, 'History context is unavailable; reload the page', 'HISTORY_CHANGED')
-    contexts.set(offset, { owner: row.owner ?? undefined, suppressed: row.suppressed === 1 })
+    contexts.set(offset, { owner: row.owner ?? undefined, suppressed: row.suppressed === 1 || (!options.includeUnownedSidechains && row.unowned_sidechain === 1) })
   }
   return { contexts, scannedBytes }
 }

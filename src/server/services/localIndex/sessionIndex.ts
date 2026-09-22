@@ -1,4 +1,4 @@
-import type { LocalIndexDatabase } from './database.js'
+import type { LocalIndexDatabase, LocalIndexReadOperation } from './database.js'
 import { createActivityIndex, type ActivityIndex } from './activityIndex.js'
 import type {
   ClaudeCodeStats,
@@ -57,6 +57,8 @@ export type SessionEntryLocatorPage = {
 }
 
 export interface SessionIndexReader {
+  getSessionSuggestionMetadata?(sessionIds: string[]): IndexedSessionRow[] | null
+  searchSessionMetadata?(query: string, options?: { limit?: number; offset?: number }): SessionIndexPage | null
   listSessions(options?: {
     project?: string
     limit?: number
@@ -78,6 +80,7 @@ export interface LocalIndexGateway extends SessionIndexReader {
   isActivityScopeReady?(): boolean
   getActivityStats?(range: StatsDateRange, now?: Date): ClaudeCodeStats | null
   rebuild(): Promise<LocalIndexStatus>
+  updateSessionTitle?(sessionId: string, title: string): boolean
   getSessionEntryLocators?(
     transcriptPath: string,
     entryTypes?: string[],
@@ -115,6 +118,7 @@ export interface SessionIndex extends SessionIndexReader, ActivityIndex {
   countSources(): number
   getProjectionSeed(path: string): TranscriptProjection | null
   getBackfillState(scope: string): PersistedBackfillState | null
+  updateSessionTitle?(sessionId: string, title: string): boolean
   getSessionEntryLocators(
     transcriptPath: string,
     entryTypes?: string[],
@@ -179,6 +183,46 @@ type SessionEntryRow = {
 function boundedInteger(value: number | undefined, fallback: number): number {
   if (!Number.isFinite(value)) return fallback
   return Math.max(0, Math.trunc(value!))
+}
+
+/** A picker query must not scan an unbounded session table synchronously.
+ * Past this many rows the page is a lower bound: exact matches already seen
+ * stay ranked first, and the caller reports the total as incomplete. */
+const UNICODE_METADATA_SCAN_ROWS = 4096
+
+function searchUnicodeSessionMetadata(operation: LocalIndexReadOperation, needle: string, limit: number, offset: number): SessionIndexPage {
+  const rank = (row: SessionRow): number => {
+    const names = [row.title.toLowerCase(), row.session_id.toLowerCase()]
+    if (![...names, row.work_dir?.toLowerCase() ?? '', row.project_path.toLowerCase()].some(value => value.includes(needle))) return -1
+    return names.includes(needle) ? 3 : names.some(value => value.startsWith(needle)) ? 2 : names.some(value => value.includes(needle)) ? 1 : 0
+  }
+  const scan = (visit: (row: SessionRow) => boolean) => {
+    let last: SessionRow | undefined
+    let scanned = 0
+    while (scanned < UNICODE_METADATA_SCAN_ROWS) {
+      const rows = operation.all<SessionRow>(`
+        SELECT * FROM sessions
+        ${last ? 'WHERE modified_at_ms < ? OR (modified_at_ms = ? AND session_id > ?) OR (modified_at_ms = ? AND session_id = ? AND transcript_path > ?)' : ''}
+        ORDER BY modified_at_ms DESC, session_id ASC, transcript_path ASC LIMIT 256
+      `, ...(last ? [last.modified_at_ms, last.modified_at_ms, last.session_id, last.modified_at_ms, last.session_id, last.transcript_path] : []))
+      for (const row of rows) {
+        if (!visit(row)) return
+        if (++scanned >= UNICODE_METADATA_SCAN_ROWS) return
+      }
+      if (rows.length < 256) return
+      last = rows[rows.length - 1]
+    }
+  }
+  // One pass. The scan cap bounds how many matches can be retained, so the
+  // page can be sliced after ranking instead of scanning the table twice.
+  const buckets: SessionRow[][] = [[], [], [], []]
+  scan(row => {
+    const value = rank(row)
+    if (value >= 0) buckets[value]!.push(row)
+    return true
+  })
+  const ordered = [3, 2, 1, 0].flatMap(value => buckets[value]!)
+  return { sessions: ordered.slice(offset, offset + limit).map(sessionFromRow), total: ordered.length }
 }
 
 function sessionFromRow(row: SessionRow): IndexedSessionRow {
@@ -300,6 +344,57 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
       })
     },
 
+    getSessionSuggestionMetadata(sessionIds): IndexedSessionRow[] {
+      const ids = [...new Set(sessionIds)].slice(0, 100)
+      if (!ids.length) return []
+      return database.read(operation => operation.all<SessionRow>(`
+        SELECT transcript_path, session_id, project_path, title, created_at,
+          modified_at, message_count, work_dir, permission_mode,
+          runtime_provider_id, runtime_provider_present, runtime_model_id,
+          effort_level, repository_json, worktree_session_json
+        FROM sessions WHERE session_id IN (${ids.map(() => '?').join(',')})
+        ORDER BY modified_at_ms DESC, session_id ASC, transcript_path ASC
+        LIMIT 100
+      `, ...ids).map(sessionFromRow))
+    },
+
+    searchSessionMetadata(query, options): SessionIndexPage {
+      const needle = query.trim().toLowerCase()
+      const limit = Math.min(100, Math.max(1, boundedInteger(options?.limit, 30)))
+      const offset = boundedInteger(options?.offset, 0)
+      return database.read(operation => {
+        // Bun SQLite's built-in lower() only folds ASCII. Keep common English
+        // and uncased scripts on SQL, and scan metadata in bounded batches when
+        // matching non-ASCII letters needs the same Unicode folding as JS.
+        if (Array.from(needle).some(char => char.codePointAt(0)! > 127 && char.toLowerCase() !== char.toUpperCase())) {
+          return searchUnicodeSessionMetadata(operation, needle, limit, offset)
+        }
+        // These Unicode capitals lowercase into ASCII (or an ASCII prefix),
+        // so even an ASCII query must consider them on the fast path.
+        const lower = (column: string) => `replace(replace(lower(${column}), 'K', 'k'), 'İ', 'i̇')`
+        const title = lower('title')
+        const sessionId = lower('session_id')
+        const where = `instr(${title}, ?) > 0 OR instr(${sessionId}, ?) > 0 OR instr(${lower("coalesce(work_dir, '')")}, ?) > 0 OR instr(${lower('project_path')}, ?) > 0`
+        const total = operation.get<{ total: number }>(`SELECT COUNT(*) AS total FROM sessions WHERE ${where}`, needle, needle, needle, needle)?.total ?? 0
+        const rows = operation.all<SessionRow>(`
+          SELECT transcript_path, session_id, project_path, title, created_at,
+            modified_at, message_count, work_dir, permission_mode,
+            runtime_provider_id, runtime_provider_present, runtime_model_id,
+            effort_level, repository_json, worktree_session_json
+          FROM sessions WHERE ${where}
+          ORDER BY CASE
+            WHEN ? = '' THEN 0
+            WHEN ${title} = ? OR ${sessionId} = ? THEN 3
+            WHEN instr(${title}, ?) = 1 OR instr(${sessionId}, ?) = 1 THEN 2
+            WHEN instr(${title}, ?) > 0 OR instr(${sessionId}, ?) > 0 THEN 1
+            ELSE 0 END DESC,
+            modified_at_ms DESC, session_id ASC, transcript_path ASC
+          LIMIT ? OFFSET ?
+        `, needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, limit, offset)
+        return { sessions: rows.map(sessionFromRow), total }
+      })
+    },
+
     findSessionFiles(sessionId): SessionFileMatch[] {
       return database.read(operation => operation.all<{
         transcript_path: string
@@ -331,6 +426,14 @@ export function createSessionIndex(database: LocalIndexDatabase): SessionIndex {
         `, sessionId)
         return row ? sessionFromRow(row) : null
       })
+    },
+
+    updateSessionTitle(sessionId, title): boolean {
+      return database.write(operation => operation.run(
+        'UPDATE sessions SET title = ? WHERE session_id = ?',
+        title,
+        sessionId,
+      ).changes > 0)
     },
 
     findSearchCandidates(filters): IndexedSessionSearchCandidate[] {

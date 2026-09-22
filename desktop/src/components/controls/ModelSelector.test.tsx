@@ -1240,8 +1240,8 @@ describe('ModelSelector', () => {
 
   it('replaces a stale Grok runtime model with the current official default', async () => {
     const grokModels: ModelInfo[] = [{
-      id: 'grok-4.6',
-      name: 'Grok 4.6',
+      id: 'grok-4.7',
+      name: 'Grok 4.7',
       description: "SpaceXAI's latest frontier model",
       context: '500000',
       defaultReasoningEffort: 'high',
@@ -1272,11 +1272,11 @@ describe('ModelSelector', () => {
     render(<ModelSelector runtimeKey="session-stale-grok" />)
 
     expect(screen.queryByText('grok-build')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Grok 4.6, Grok Official' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Grok 4.7, Grok Official' })).toBeInTheDocument()
     await waitFor(() => {
       expect(useSessionRuntimeStore.getState().selections['session-stale-grok']).toEqual({
         providerId: 'grok-official',
-        modelId: 'grok-4.6',
+        modelId: 'grok-4.7',
         effortLevel: 'high',
       })
     })

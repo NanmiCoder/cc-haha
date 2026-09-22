@@ -16,6 +16,7 @@ import { execFileNoThrow } from './utils/execFileNoThrow.js'
 import { getBranch, getDefaultBranch, getIsGit, gitExe } from './utils/git.js'
 import { shouldIncludeGitInstructions } from './utils/gitSettings.js'
 import { logError } from './utils/log.js'
+import { getInstructionFilesMode, type InstructionFilesMode } from './utils/instructionFiles.js'
 
 const MAX_STATUS_CHARS = 2000
 
@@ -152,6 +153,8 @@ export const getSystemContext = memoize(
 /**
  * This context is prepended to each conversation, and cached for the duration of the conversation.
  */
+let cachedUserContextMode: InstructionFilesMode | undefined
+
 export const getUserContext = memoize(
   async (): Promise<{
     [k: string]: string
@@ -185,5 +188,15 @@ export const getUserContext = memoize(
       ...(claudeMd && { claudeMd }),
       currentDate: `Today's date is ${getLocalISODate()}.`,
     }
+  },
+  () => {
+    const mode = getInstructionFilesMode()
+    if (mode !== cachedUserContextMode) {
+      // Keep only the current mode so returning to an earlier mode also
+      // refreshes the classifier's cached instruction content.
+      getUserContext.cache.clear?.()
+      cachedUserContextMode = mode
+    }
+    return mode
   },
 )

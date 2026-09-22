@@ -88,6 +88,47 @@ async function sourceHash(path: string): Promise<string> {
 }
 
 describe('session projector', () => {
+  it('persists an immediate title patch without waiting for transcript reprojection', async () => {
+    const root = await createTempDir('projector-title-patch')
+    const databasePath = join(root, 'index.sqlite')
+    const placeholder = await createCandidate({
+      root,
+      projectPath: '-repo-placeholder',
+      sessionId: 'titled-child',
+      content: line(user('Initial child title', '2026-01-01T00:00:00Z')),
+    })
+    const moved = await createCandidate({
+      root,
+      projectPath: '-repo-worktree',
+      sessionId: 'titled-child',
+      content: line(user('Initial child title', '2026-01-01T00:00:01Z')),
+    })
+    const database = openLocalIndexDatabase({ path: databasePath })
+    const index = createSessionIndex(database)
+    try {
+      const projector = createSessionProjector({ database, index, scope: root })
+      expect((await projector.projectSource(placeholder)).kind).toBe('indexed')
+      expect((await projector.projectSource(moved)).kind).toBe('indexed')
+      await appendFile(moved.path, line({
+        type: 'custom-title',
+        customTitle: '最终子会话标题',
+      }))
+
+      expect(index.updateSessionTitle?.(moved.sessionId, '最终子会话标题')).toBe(true)
+    } finally {
+      database.close()
+    }
+
+    const restarted = openLocalIndexDatabase({ path: databasePath })
+    try {
+      const sessions = createSessionIndex(restarted).listSessions().sessions
+      expect(sessions).toHaveLength(2)
+      expect(sessions.every(session => session.title === '最终子会话标题')).toBe(true)
+    } finally {
+      restarted.close()
+    }
+  })
+
   it('rejects oversized records before concatenation and preserves the canonical file', async () => {
     const root = await createTempDir('projector-record-budget')
     const candidate = await createCandidate({ root, projectPath: '-repo', sessionId: 'large', content: line(user('x'.repeat(MAX_PROJECTION_RECORD_BYTES + 1), '2026-01-01T00:00:00Z')) })

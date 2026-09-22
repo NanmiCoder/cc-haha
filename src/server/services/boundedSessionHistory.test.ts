@@ -2,13 +2,44 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile, appendFile, open, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, HISTORY_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
+import sharp from 'sharp'
+import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
 
 let directory: string
 let file: string
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'history-budget-test-')); file = join(directory, 'session.jsonl') })
 afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 const row = (id: string, text = id) => JSON.stringify({ type: 'assistant', uuid: id, message: { role: 'assistant', content: [{ type: 'text', text }] } }) + '\n'
+
+describe('bounded history full read', () => {
+  test('returns every ordinary record in one response without a cursor walk', async () => {
+    await writeFile(file, Array.from({ length: 180 }, (_, index) => row(String(index), 'x'.repeat(8 * 1024))).join(''))
+    const result = await readBoundedHistoryPage(file, { full: true })
+    expect(result.entries.map(item => item.entry.uuid)).toEqual(Array.from({ length: 180 }, (_, index) => String(index)))
+    expect(result.page.historyComplete).toBe(true)
+    expect(result.page.nextCursor).toBeNull()
+    expect(result.page.scannedBytes).toBeLessThanOrEqual(HISTORY_FULL_SCAN_BYTES)
+  })
+
+  test('stops at the byte budget but keeps a forward cursor instead of failing', async () => {
+    await writeFile(file, Array.from({ length: 40 }, (_, index) => row(String(index), 'x'.repeat(1024 * 1024))).join(''))
+    const result = await readBoundedHistoryPage(file, { full: true })
+    expect(result.entries.length).toBeGreaterThan(0)
+    expect(result.entries.length).toBeLessThan(40)
+    expect(result.page.historyComplete).toBe(false)
+    expect(result.page.nextCursor).not.toBeNull()
+    // The newest slice is retained; the walk stopped at the budget, not the head.
+    expect(result.entries.at(-1)!.entry.uuid).toBe('39')
+  })
+
+  test('honors the row limit while leaving a continuation cursor', async () => {
+    await writeFile(file, Array.from({ length: 12 }, (_, index) => row(String(index))).join(''))
+    const result = await readBoundedHistoryPage(file, { full: true, limit: 4 })
+    expect(result.entries.map(item => item.entry.uuid)).toEqual(['8', '9', '10', '11'])
+    expect(result.page.historyComplete).toBe(false)
+    expect(result.page.nextCursor).not.toBeNull()
+  })
+})
 
 describe('bounded history pages', () => {
   test('reads a bounded tail and pages every ordinary large record without loss', async () => {
@@ -69,19 +100,68 @@ describe('bounded history pages', () => {
     expect(earlier.page.historyComplete).toBe(false)
   })
 
-  test('reads small pages on demand and preserves a large tool result as a bounded identified preview', async () => {
-    const huge = JSON.stringify({ type: 'user', uuid: 'large-result', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'bash-1', is_error: false, content: 'x'.repeat(4 * 1024 * 1024) }] } }) + '\n'
-    await writeFile(file, huge + Array.from({ length: 158 }, (_, index) => row(String(index))).join(''))
+  test('returns a large tool result intact on its own page and traverses both directions', async () => {
+    const entry = { type: 'user', uuid: 'large-result', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'bash-1', is_error: false, content: 'x'.repeat(4 * 1024 * 1024) }] } }
+    await writeFile(file, row('before') + JSON.stringify(entry) + '\n' + Array.from({ length: 158 }, (_, index) => row(String(index))).join(''))
     const tiny = await readBoundedHistoryPage(file, { limit: 3 })
     expect(tiny.page.scannedBytes).toBeLessThanOrEqual(96 * 1024)
-    const all = await readBoundedHistoryPage(file)
-    expect(all.entries).toHaveLength(159)
-    expect(all.page.nextCursor).toBeNull()
-    expect(all.page.omittedOversizedEntries).toBe(0)
-    expect(all.page.contentTruncated).toBe(true)
-    expect(all.page.historyComplete).toBe(false)
-    expect(all.entries[0]!.entry).toMatchObject({ uuid: 'large-result', bodyTruncated: true, message: { content: [{ type: 'tool_result', tool_use_id: 'bash-1', is_error: false }] } })
-    expect(Buffer.byteLength(JSON.stringify(all.entries.map(item => item.entry)))).toBeLessThan(HISTORY_PAGE_BYTES)
+    const latest = await readBoundedHistoryPage(file)
+    expect(latest.entries).toHaveLength(158)
+    expect(Buffer.byteLength(JSON.stringify(latest.entries.map(item => item.entry)))).toBeLessThan(HISTORY_PAGE_BYTES)
+    const large = await readBoundedHistoryPage(file, { cursor: latest.page.nextCursor! })
+    expect(large.entries.map(item => item.entry)).toEqual([entry])
+    expect(large.page.omittedOversizedEntries).toBe(0)
+    expect(large.page.contentTruncated).toBeUndefined()
+    expect(large.page.scannedBytes).toBeLessThanOrEqual(HISTORY_SCAN_BYTES)
+    const oldest = await readBoundedHistoryPage(file, { cursor: large.page.nextCursor! })
+    expect(oldest.entries.map(item => item.entry.uuid)).toEqual(['before'])
+    const forward = await readBoundedHistoryPage(file, { cursor: oldest.page.previousCursor! })
+    expect(forward.entries.map(item => item.entry)).toEqual([entry])
+    const newer = await readBoundedHistoryPage(file, { cursor: forward.page.previousCursor! })
+    expect(newer.entries.map(item => item.entry)).toEqual(latest.entries.map(item => item.entry))
+    expect(newer.page.previousCursor).toBeNull()
+  })
+
+  test('preserves a real PNG byte-for-byte instead of slicing its base64 display body', async () => {
+    const pixels = Buffer.alloc(128 * 128 * 3)
+    let seed = 12345
+    for (let index = 0; index < pixels.length; index++) {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      pixels[index] = seed & 255
+    }
+    const png = await sharp(pixels, { raw: { width: 128, height: 128, channels: 3 } }).png().toBuffer()
+    const data = png.toString('base64')
+    expect(data.length).toBeGreaterThan(16 * 1024)
+    const entry = { type: 'user', uuid: 'image', message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] } }
+    await writeFile(file, JSON.stringify(entry) + '\n')
+    const result = await readBoundedHistoryPage(file)
+    expect(result.entries[0]!.entry).toEqual(entry)
+    const image = (result.entries[0]!.entry.message as typeof entry.message).content[0]!
+    expect(Buffer.from(image.source.data, 'base64')).toEqual(png)
+    expect((await sharp(Buffer.from(image.source.data, 'base64')).metadata()).width).toBe(128)
+    expect(result.page.historyComplete).toBe(true)
+  })
+
+  test('admits a complete record at the semantic limit and skips larger records with reachable neighbors', async () => {
+    const envelope = Buffer.byteLength(row('boundary', '')) - 1
+    const accepted = row('boundary', 'x'.repeat(HISTORY_SEMANTIC_RECORD_BYTES - envelope))
+    expect(Buffer.byteLength(accepted) - 1).toBe(HISTORY_SEMANTIC_RECORD_BYTES)
+    await writeFile(file, row('before') + accepted + row('oversized', 'x'.repeat(HISTORY_SEMANTIC_RECORD_BYTES)) + row('after'))
+    let cursor: string | undefined
+    const entries: Record<string, unknown>[] = []
+    let omissions = 0
+    do {
+      const result = await readBoundedHistoryPage(file, { cursor })
+      expect(result.page.scannedBytes).toBeLessThanOrEqual(HISTORY_SCAN_BYTES)
+      omissions += result.page.omittedOversizedEntries
+      entries.unshift(...result.entries.map(item => item.entry))
+      cursor = result.page.nextCursor ?? undefined
+    } while (cursor)
+    expect(entries.map(entry => entry.uuid)).toEqual(['before', 'boundary', 'after'])
+    expect(entries[1]).toEqual(JSON.parse(accepted))
+    expect(omissions).toBe(1)
   })
 
   test('forward continuation crosses giant records and 64KiB boundaries without losing adjacent messages', async () => {
@@ -107,15 +187,15 @@ describe('bounded history pages', () => {
     expect(ids).toEqual(['after', 'last'])
   })
 
-  test('preserves tool identities after earlier content exhausts the display text budget', async () => {
+  test('preserves structured tool inputs after large preceding content', async () => {
     await writeFile(file, JSON.stringify({ type: 'assistant', uuid: 'many-tools', message: { role: 'assistant', content: [
       ...Array.from({ length: 4 }, () => ({ type: 'text', text: 'x'.repeat(32 * 1024) })),
       { type: 'tool_use', id: 'last-tool', name: 'Bash', input: { command: 'echo okay' } },
     ] } }) + '\n')
     const result = await readBoundedHistoryPage(file)
     const content = (result.entries[0]!.entry.message as { content: unknown[] }).content
-    expect(content.at(-1)).toMatchObject({ type: 'tool_use', id: 'last-tool', name: 'Bash' })
-    expect(result.page.contentTruncated).toBe(true)
+    expect(content.at(-1)).toEqual({ type: 'tool_use', id: 'last-tool', name: 'Bash', input: { command: 'echo okay' } })
+    expect(result.page.contentTruncated).toBeUndefined()
   })
 
   test('rejects an in-place rewrite that grows instead of mixing replacement records into the old snapshot', async () => {
@@ -146,6 +226,19 @@ describe('bounded history pages', () => {
     expect([...older.entries, ...first.entries].map(item => item.entry.uuid)).toEqual(Array.from({ length: 200 }, (_, index) => String(index)))
     const newer = await readBoundedHistoryPage(file, { cursor: older.page.previousCursor! })
     expect(newer.entries.map(item => item.entry.uuid)).toEqual(first.entries.map(item => item.entry.uuid))
+  })
+
+  test('keeps an indivisible record above the row target intact on its own page', async () => {
+    const entry = { type: 'assistant', uuid: 'many-blocks', message: { role: 'assistant', content: Array.from({ length: HISTORY_PAGE_ROWS + 1 }, (_, index) => ({ type: 'tool_use', id: `tool-${index}`, name: 'Read', input: { file_path: `/fixture/${index}.txt` } })) } }
+    await writeFile(file, row('before') + JSON.stringify(entry) + '\n' + row('after'))
+    const latest = await readBoundedHistoryPage(file)
+    expect(latest.entries.map(item => item.entry.uuid)).toEqual(['after'])
+    const middle = await readBoundedHistoryPage(file, { cursor: latest.page.nextCursor! })
+    expect(middle.entries.map(item => item.entry)).toEqual([entry])
+    const oldest = await readBoundedHistoryPage(file, { cursor: middle.page.nextCursor! })
+    expect(oldest.entries.map(item => item.entry.uuid)).toEqual(['before'])
+    const forward = await readBoundedHistoryPage(file, { cursor: oldest.page.previousCursor! })
+    expect(forward.entries.map(item => item.entry)).toEqual([entry])
   })
 
   test('snapshot cursors tolerate appends but reject replacement and malformed cursors', async () => {

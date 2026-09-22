@@ -732,10 +732,10 @@ describe('ProviderService', () => {
           apiFormat: 'openai_chat',
           runtimeKind: 'grok_oauth',
           models: {
-            main: 'grok-4.6',
-            haiku: 'grok-4.6',
-            sonnet: 'grok-4.6',
-            opus: 'grok-4.6',
+            main: 'grok-4.7',
+            haiku: 'grok-4.7',
+            sonnet: 'grok-4.7',
+            opus: 'grok-4.7',
           },
         })
 
@@ -749,10 +749,10 @@ describe('ProviderService', () => {
         expect(env.GROK_OAUTH_FILE).toBe(
           path.join(tmpDir, 'cc-haha', 'grok-oauth.json'),
         )
-        expect(env.ANTHROPIC_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('grok-4.6')
+        expect(env.ANTHROPIC_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('grok-4.7')
         expect(env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
         expect(env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
       })

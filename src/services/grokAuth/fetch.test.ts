@@ -9,6 +9,11 @@ import {
 } from './fetch.js'
 import { GROK_OAUTH_FILE_ENV_KEY } from './storage.js'
 import { GROK_OAUTH_TOKEN_ENDPOINT } from './client.js'
+import {
+  GROK_MODEL_CATALOG,
+  setGrokRuntimeModelCatalog,
+  type GrokModelCatalogEntry,
+} from './models.js'
 import { isRetryableStreamTransportError } from '../api/withRetry.js'
 
 describe('Grok Responses fetch adapter', () => {
@@ -27,6 +32,7 @@ describe('Grok Responses fetch adapter', () => {
   })
 
   afterEach(async () => {
+    setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
     if (original === undefined) delete process.env[GROK_OAUTH_FILE_ENV_KEY]
     else process.env[GROK_OAUTH_FILE_ENV_KEY] = original
     await fs.rm(tmpDir, { recursive: true, force: true })
@@ -81,12 +87,15 @@ describe('Grok Responses fetch adapter', () => {
   })
 
   test('drops Claude reasoning effort for Grok models that reject it', async () => {
+    setGrokRuntimeModelCatalog([
+      liveModel('grok-4.8', { supportsReasoningEffort: false }),
+    ])
     let upstreamBody: Record<string, unknown> | undefined
     const fetchOverride: typeof fetch = async (_input, init) => {
       upstreamBody = JSON.parse(String(init?.body))
       return new Response([
         'event: response.completed',
-        'data: {"response":{"id":"resp_no_effort","object":"response","created_at":1,"model":"grok-composer-2.5-fast","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
+        'data: {"response":{"id":"resp_no_effort","object":"response","created_at":1,"model":"grok-4.8","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
         '',
       ].join('\n'), { headers: { 'Content-Type': 'text/event-stream' } })
     }
@@ -94,7 +103,7 @@ describe('Grok Responses fetch adapter', () => {
     const response = await buildGrokFetch(fetchOverride, 'test')(
       'https://api.anthropic.com/v1/messages',
       { method: 'POST', body: JSON.stringify({
-        model: 'grok-composer-2.5-fast',
+        model: 'grok-4.8',
         max_tokens: 64,
         output_config: { effort: 'max' },
         messages: [{ role: 'user', content: 'hello' }],
@@ -103,6 +112,72 @@ describe('Grok Responses fetch adapter', () => {
 
     expect(response.status).toBe(200)
     expect(upstreamBody?.reasoning).toBeUndefined()
+  })
+
+  test('honors the effort set the live catalog declares for a model this build predates', async () => {
+    // Regression: `resolveGrokReasoningEffort` used to read only the bundled
+    // catalog, so the live feed's per-model capability declaration was ignored
+    // for every model newer than this build.
+    setGrokRuntimeModelCatalog([
+      liveModel('grok-4.8', {
+        supportsReasoningEffort: true,
+        reasoningEffort: 'high',
+        reasoningEfforts: ['high', 'medium', 'low'],
+      }),
+    ])
+    let upstreamBody: Record<string, unknown> | undefined
+    const fetchOverride: typeof fetch = async (_input, init) => {
+      upstreamBody = JSON.parse(String(init?.body))
+      return new Response([
+        'event: response.completed',
+        'data: {"response":{"id":"resp_live_effort","object":"response","created_at":1,"model":"grok-4.8","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
+        '',
+      ].join('\n'), { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+
+    const response = await buildGrokFetch(fetchOverride, 'test')(
+      'https://api.anthropic.com/v1/messages',
+      { method: 'POST', body: JSON.stringify({
+        model: 'grok-4.8',
+        max_tokens: 64,
+        output_config: { effort: 'xhigh' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }) },
+    )
+
+    expect(response.status).toBe(200)
+    // xhigh is not in the live set, so it must clamp to the declared default
+    // rather than being forwarded or dropped.
+    expect(upstreamBody?.reasoning).toEqual({ effort: 'high' })
+  })
+
+  test('forwards the selected effort for a model neither catalog describes', async () => {
+    // The old fallback returned undefined here, and the transform reads that as
+    // "the model rejects effort" and deletes the whole reasoning block — so a
+    // model launched after this build ran at the upstream default no matter what
+    // the user selected.
+    let upstreamBody: Record<string, unknown> | undefined
+    const fetchOverride: typeof fetch = async (_input, init) => {
+      upstreamBody = JSON.parse(String(init?.body))
+      return new Response([
+        'event: response.completed',
+        'data: {"response":{"id":"resp_unknown_effort","object":"response","created_at":1,"model":"grok-4.9-preview","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
+        '',
+      ].join('\n'), { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+
+    const response = await buildGrokFetch(fetchOverride, 'test')(
+      'https://api.anthropic.com/v1/messages',
+      { method: 'POST', body: JSON.stringify({
+        model: 'grok-4.9-preview',
+        max_tokens: 64,
+        output_config: { effort: 'xhigh' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(upstreamBody?.reasoning).toEqual({ effort: 'xhigh' })
   })
 
   test('routes remotely discovered model IDs without silently replacing them', async () => {
@@ -377,3 +452,17 @@ describe('Grok Responses fetch adapter', () => {
     expect(calls).toBe(1)
   })
 })
+
+/** A `/v1/models` row as the CLI proxy advertises it. */
+function liveModel(
+  value: string,
+  overrides: Partial<GrokModelCatalogEntry>,
+): GrokModelCatalogEntry {
+  return {
+    value,
+    label: value,
+    description: '',
+    contextWindow: 500_000,
+    ...overrides,
+  }
+}

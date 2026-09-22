@@ -1,3 +1,4 @@
+import { useTabStore } from '@/stores/tabStore'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -204,4 +205,27 @@ describe('UserMessage bare-URL linkify', () => {
     expect(bubbleOf(container).textContent).toBe('Review the auth diff.')
     expect(container.firstElementChild?.className).toContain('justify-end')
   })
+})
+
+it('opens the exact referenced conversation from a source chip', () => {
+  const open = vi.spyOn(useTabStore.getState(), 'openTab')
+  render(<UserMessage content="Use @Review" sessionReferences={[{ sessionId: 'prior' }]} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Open session prior' }))
+  expect(open).toHaveBeenCalledWith('prior', 'prior')
+  open.mockRestore()
+})
+
+it('labels a collaboration delivery with its source session above a normal user bubble', () => {
+  const open = vi.spyOn(useTabStore.getState(), 'openTab')
+  const { container } = render(
+    <UserMessage content="只读发现：#1335 未复现" collaboration={{ sourceSessionId: 'root-1', messageId: 'm-1' }} />,
+  )
+
+  const label = screen.getByRole('button', { name: 'Sent by root-1 from another session' })
+  fireEvent.click(label)
+  expect(open).toHaveBeenCalledWith('root-1', 'root-1')
+  // Codex parity: the payload stays an ordinary right-aligned user bubble, not a panel row.
+  expect(container.firstElementChild?.className).toContain('justify-end')
+  expect(bubbleOf(container).textContent).toBe('只读发现：#1335 未复现')
+  open.mockRestore()
 })

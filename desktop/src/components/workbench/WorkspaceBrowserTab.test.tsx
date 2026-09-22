@@ -154,6 +154,18 @@ function deferredCreate() {
 }
 
 describe('lifecycle readiness', () => {
+  it('navigates home-relative HTML from the address bar through local-file', async () => {
+    const tab = openBrowserTab()
+    render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    const address = screen.getByTestId('workspace-browser-address')
+    await waitFor(() => expect(address).toBeEnabled())
+    fireEvent.change(address, { target: { value: '~/Desktop/checklist.html' } })
+    fireEvent.submit(address.closest('form')!)
+    expect(host.navigate).toHaveBeenCalledWith(
+      tab.browserTabId, expect.stringMatching(/\/local-file\/~\/Desktop\/checklist\.html$/),
+    )
+  })
+
   it('focuses a newly created empty address bar once its native page is ready', async () => {
     const tab = openBrowserTab(null)
     const create = deferredCreate()

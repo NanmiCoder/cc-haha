@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod/v4'
+import { sessionMessageInputSchema } from '../../utils/sessionMessageInbox.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import {
   AccountInfoSchema,
@@ -626,6 +627,7 @@ export const SDKControlElicitationResponseSchema = lazySchema(() =>
 
 export const SDKControlRequestInnerSchema = lazySchema(() =>
   z.union([
+    sessionMessageInputSchema,
     SDKControlInterruptRequestSchema(),
     SDKControlPermissionRequestSchema(),
     SDKControlInitializeRequestSchema(),
@@ -717,8 +719,22 @@ export const SDKUpdateEnvironmentVariablesMessageSchema = lazySchema(() =>
 // Aggregate Message Types
 // ============================================================================
 
+export const SDKSessionMessageReceiptSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('system'),
+    subtype: z.literal('session_message_receipt'),
+    message_id: z.string(),
+    source_uuid: z.string(),
+    status: z.literal('consumed'),
+    duplicate: z.boolean(),
+    session_id: z.string(),
+    uuid: z.string(),
+  }),
+)
+
 export const StdoutMessageSchema = lazySchema(() =>
   z.union([
+    SDKSessionMessageReceiptSchema(),
     SDKMessageSchema(),
     SDKStreamlinedTextMessageSchema(),
     SDKStreamlinedToolUseSummaryMessageSchema(),

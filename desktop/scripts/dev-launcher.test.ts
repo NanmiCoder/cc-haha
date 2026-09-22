@@ -26,6 +26,7 @@ describe('desktop dev launcher environment', () => {
     })
 
     expect(env.ELECTRON_RENDERER_URL).toBe(DEFAULT_RENDERER_URL)
+    expect(env.CC_HAHA_TRUSTED_RENDERER_ORIGIN).toBe(DEFAULT_RENDERER_URL)
     expect(env.NO_PROXY).toBe('example.com,localhost,127.0.0.1,::1')
     expect(env.no_proxy).toBe(env.NO_PROXY)
   })
@@ -39,6 +40,15 @@ describe('desktop dev launcher environment', () => {
     expect(env.ELECTRON_RENDERER_URL).toBe('http://localhost:1777')
     expect(env.NO_PROXY).toBe('localhost,127.0.0.1,::1')
     expect(env.no_proxy).toBe(env.NO_PROXY)
+  })
+
+  it('derives the exact trusted origin from the validated renderer URL', () => {
+    const env = createElectronDevEnv({
+      ELECTRON_RENDERER_URL: ' http://localhost:1777/app?dev=1 ',
+      CC_HAHA_TRUSTED_RENDERER_ORIGIN: 'https://untrusted.example',
+    })
+    expect(env.CC_HAHA_TRUSTED_RENDERER_ORIGIN).toBe('http://localhost:1777')
+    expect(() => createElectronDevEnv({ ELECTRON_RENDERER_URL: 'https://untrusted.example' })).toThrow('Refusing non-local')
   })
 
   it('deduplicates no_proxy entries', () => {

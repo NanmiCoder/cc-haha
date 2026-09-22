@@ -1,4 +1,5 @@
 import { getDesktopHost } from '../lib/desktopHost'
+import { createDiagnosticRateLimiter } from '../lib/diagnosticRateLimit'
 import { isPublicAccessRuntime } from '../lib/publicAccessRuntime'
 
 const ENV_BASE_URL =
@@ -16,6 +17,20 @@ let desktopServerRecovery: Promise<string> | null = null
 const DIAGNOSTICS_PATH = '/api/diagnostics/events'
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 const DIAGNOSTICS_REQUEST_TIMEOUT_MS = 5_000
+const SLOW_REQUEST_DIAGNOSTIC_MS = 2_000
+const LARGE_RESPONSE_DIAGNOSTIC_CHARS = 8 * 1024 * 1024
+const API_ANOMALY_DIAGNOSTIC_COOLDOWN_MS = 10_000
+const shouldReportApiAnomaly = createDiagnosticRateLimiter(API_ANOMALY_DIAGNOSTIC_COOLDOWN_MS)
+
+type RequestTiming = {
+  startedAt: number
+  attempts: number
+  fetchMs: number
+  recoveryMs: number
+  responseReadMs: number
+  responseChars: number
+  recovered: boolean
+}
 
 function getErrorMessage(status: number, body: unknown) {
   if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string') {
@@ -126,6 +141,15 @@ export type ApiRequestOptions = {
 
 async function request<T>(method: string, path: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
   const headers = buildHeaders()
+  const timing: RequestTiming = {
+    startedAt: monotonicNow(),
+    attempts: 0,
+    fetchMs: 0,
+    recoveryMs: 0,
+    responseReadMs: 0,
+    responseChars: 0,
+    recovered: false,
+  }
 
   const controller = new AbortController()
   const timeoutMs = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS
@@ -138,12 +162,20 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   if (options?.signal?.aborted) abortFromCaller()
   else options?.signal?.addEventListener('abort', abortFromCaller, { once: true })
   try {
-    const fetchOnce = () => fetch(`${baseUrl}${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    })
+    const fetchOnce = async () => {
+      timing.attempts += 1
+      const fetchStartedAt = monotonicNow()
+      try {
+        return await fetch(`${baseUrl}${path}`, {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        })
+      } finally {
+        timing.fetchMs += monotonicNow() - fetchStartedAt
+      }
+    }
     let res: Response
     try {
       res = await fetchOnce()
@@ -152,11 +184,18 @@ async function request<T>(method: string, path: string, body?: unknown, options?
         method !== 'GET' ||
         timedOut ||
         options?.signal?.aborted ||
-        !(error instanceof TypeError) ||
-        !await recoverDesktopServerUrl()
+        !(error instanceof TypeError)
       ) {
         throw error
       }
+      const recoveryStartedAt = monotonicNow()
+      // Recovery may include a sidecar restart. Measure
+      // it separately from the retried HTTP request so diagnostics can tell a
+      // slow handler from a slow Electron-host recovery.
+      const recovered = await recoverDesktopServerUrl()
+      timing.recoveryMs += monotonicNow() - recoveryStartedAt
+      if (!recovered) throw error
+      timing.recovered = true
       res = await fetchOnce()
     }
     if (!res.ok) {
@@ -164,12 +203,20 @@ async function request<T>(method: string, path: string, body?: unknown, options?
       throw new ApiError(res.status, errorBody)
     }
 
-    if (res.status === 204) return undefined as T
-    return await readJsonBody<T>(res)
+    if (res.status === 204) {
+      reportSlowApiRequest(method, path, res, timing)
+      return undefined as T
+    }
+    const responseReadStartedAt = monotonicNow()
+    const parsed = await readJsonBody<T>(res)
+    timing.responseReadMs += monotonicNow() - responseReadStartedAt
+    timing.responseChars = parsed.readChars
+    reportSlowApiRequest(method, path, res, timing)
+    return parsed.value
   } catch (err) {
     if (timedOut) {
       const timeoutError = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
-      reportApiFailure(method, path, timeoutError)
+      reportApiFailure(method, path, timeoutError, timing, timeoutMs)
       throw timeoutError
     }
     if (options?.signal?.aborted) {
@@ -177,7 +224,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
         ? options.signal.reason
         : new DOMException('The operation was aborted', 'AbortError')
     }
-    reportApiFailure(method, path, err)
+    reportApiFailure(method, path, err, timing, timeoutMs)
     throw err
   } finally {
     clearTimeout(timeout)
@@ -185,7 +232,75 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   }
 }
 
-async function readJsonBody<T>(res: Response): Promise<T> {
+function monotonicNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function roundedMs(value: number): number {
+  return Math.round(Math.max(0, value) * 10) / 10
+}
+
+function requestTimingDetails(timing: RequestTiming, timeoutMs?: number) {
+  return {
+    durationMs: roundedMs(monotonicNow() - timing.startedAt),
+    fetchMs: roundedMs(timing.fetchMs),
+    responseReadMs: roundedMs(timing.responseReadMs),
+    responseChars: timing.responseChars,
+    recoveryMs: roundedMs(timing.recoveryMs),
+    attempts: timing.attempts,
+    recovered: timing.recovered,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  }
+}
+
+function responseTimingDetails(response: Response) {
+  const declaredBytes = Number.parseInt(response.headers.get('content-length') ?? '', 10)
+  const serverTiming = response.headers.get('server-timing')
+  const serverAppDuration = serverTiming?.match(/(?:^|,)\s*app;dur=([0-9]+(?:\.[0-9]+)?)/i)?.[1]
+  return {
+    status: response.status,
+    requestId: response.headers.get('x-request-id'),
+    serverTiming,
+    serverAppMs: serverAppDuration === undefined ? null : Number(serverAppDuration),
+    declaredBytes: Number.isFinite(declaredBytes) && declaredBytes >= 0 ? declaredBytes : null,
+  }
+}
+
+function reportSlowApiRequest(
+  method: string,
+  path: string,
+  response: Response,
+  timing: RequestTiming,
+) {
+  if (path.startsWith('/api/diagnostics')) return
+  const route = path.split('?', 1)[0]!
+  const details = {
+    method,
+    path,
+    route,
+    ...requestTimingDetails(timing),
+    ...responseTimingDetails(response),
+  }
+  const slow = details.durationMs >= SLOW_REQUEST_DIAGNOSTIC_MS
+  const large = details.responseChars >= LARGE_RESPONSE_DIAGNOSTIC_CHARS
+  if (!slow && !large) return
+  const diagnosticType = slow ? 'client_api_request_slow' : 'client_api_response_large'
+  const decision = shouldReportApiAnomaly(`${diagnosticType}:${method}:${route}`)
+  if (!decision.report) return
+  void rawRecordDiagnosticEvent({
+    type: diagnosticType,
+    severity: 'warn',
+    summary: slow
+      ? `${method} ${path} took ${details.durationMs}ms`
+      : `${method} ${path} returned ${details.responseChars} characters`,
+    details: {
+      ...details,
+      suppressedSinceLast: decision.suppressedSinceLast,
+    },
+  })
+}
+
+async function readJsonBody<T>(res: Response): Promise<{ value: T; readChars: number }> {
   const contentType = res.headers.get('content-type')
   const declaredLength = Number.parseInt(res.headers.get('content-length') ?? '', 10)
   const declaredBytes = Number.isFinite(declaredLength) && declaredLength > 0
@@ -205,7 +320,7 @@ async function readJsonBody<T>(res: Response): Promise<T> {
 
   const text = await res.text()
   try {
-    return JSON.parse(text) as T
+    return { value: JSON.parse(text) as T, readChars: text.length }
   } catch {
     // A truncated or empty body has no status to report: the request itself
     // succeeded, so the byte counts are the only usable evidence.
@@ -236,14 +351,23 @@ async function recoverDesktopServerUrl(): Promise<boolean> {
   return true
 }
 
-function reportApiFailure(method: string, path: string, error: unknown) {
+function reportApiFailure(
+  method: string,
+  path: string,
+  error: unknown,
+  timing: RequestTiming,
+  timeoutMs: number,
+) {
   if (path.startsWith('/api/diagnostics')) return
+  const route = path.split('?', 1)[0]!
 
   const details: Record<string, unknown> = {
     method,
     path,
+    route,
     errorName: error instanceof Error ? error.name : typeof error,
     message: sanitizeDiagnosticValue(error instanceof Error ? error.message : String(error)),
+    ...requestTimingDetails(timing, timeoutMs),
   }
 
   if (error instanceof ApiError) {
@@ -257,6 +381,12 @@ function reportApiFailure(method: string, path: string, error: unknown) {
     details.contentType = error.contentType
     details.emptyBody = error.emptyBody
   }
+
+  const decision = shouldReportApiAnomaly(
+    `client_api_request_failed:${method}:${route}:${details.errorName}:${details.status ?? 'transport'}`,
+  )
+  if (!decision.report) return
+  details.suppressedSinceLast = decision.suppressedSinceLast
 
   void rawRecordDiagnosticEvent({
     type: 'client_api_request_failed',

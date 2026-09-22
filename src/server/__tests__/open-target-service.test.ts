@@ -152,12 +152,65 @@ describe('openTargetService', () => {
       .toBe('/api/open-targets/icons/vscode')
   })
 
+  it.each(['/Applications/Zed.app', join(homedir(), 'Applications', 'Zed.app')])(
+    'detects Zed installed at %s and opens projects and files through the app bundle',
+    async (appPath) => {
+      const dir = await makeDir('cc-haha zed-')
+      const file = join(dir, 'hello world.txt')
+      await writeFile(file, 'fixture')
+      const state = createService('darwin', { paths: { [appPath]: true } })
+      try {
+        expect((await state.service.listTargets()).targets).toContainEqual({
+          id: 'zed', kind: 'ide', label: 'Zed', icon: 'zed',
+          iconUrl: '/api/open-targets/icons/zed', platform: 'darwin',
+        })
+        await state.service.openTarget({ targetId: 'zed', path: dir })
+        await state.service.openTarget({ targetId: 'zed', path: file })
+        expect(state.launched).toEqual([
+          { command: 'open', args: ['-a', appPath, dir] },
+          { command: 'open', args: ['-a', appPath, file] },
+        ])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.each(['zed', 'zeditor'])('detects and launches Linux Zed using %s', async (command) => {
+    const dir = await makeDir('cc-haha zed-')
+    const state = createService('linux', { commands: { [command]: true } })
+    try {
+      expect((await state.service.listTargets()).targets.map((target) => target.id)).toEqual(['zed'])
+      await state.service.openTarget({ targetId: 'zed', path: dir })
+      expect(state.launched).toEqual([{ command, args: [dir] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects and launches the resolved Windows Zed executable', async () => {
+    const dir = await makeDir('cc-haha zed-')
+    const executablePath = 'C:/fixture/Zed/zed.exe'
+    const state = createService('win32', {
+      commandPaths: { 'zed.exe': executablePath },
+      paths: { [executablePath]: true },
+    })
+    try {
+      expect((await state.service.listTargets()).targets.map((target) => target.id)).toEqual(['zed', 'explorer'])
+      await state.service.openTarget({ targetId: 'zed', path: dir })
+      expect(state.launched).toEqual([{ command: executablePath, args: [dir] }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not treat macOS command shims as installed IDEs without the app bundle', async () => {
     const { service } = createService('darwin', {
       commands: {
         code: true,
         goland: true,
         pycharm: true,
+        zed: true,
       },
     })
 

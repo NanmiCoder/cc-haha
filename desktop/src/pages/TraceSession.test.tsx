@@ -544,7 +544,9 @@ describe('TraceSession', () => {
       expect(sessionsApi.getTrace).toHaveBeenCalledTimes(4)
       expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(2)
       expect(screen.getByText('claude-sonnet-4-5 x2')).toBeInTheDocument()
-      expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(1)
+      // The new span is a sibling. The call the reader has open did not change,
+      // so its detail must not be refetched.
+      expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1)
       const detail = within(screen.getByTestId('trace-detail'))
       expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
     } finally {
@@ -692,7 +694,66 @@ describe('TraceSession', () => {
     expect(diagnosis.getByText('Model call failed')).toBeInTheDocument()
   })
 
-  it('refetches a terminal call detail when the trace revision token changes', async () => {
+  it('keeps an open call detail stable when only a sibling span changes', async () => {
+    let resolveUpdatedRevision: ((revision: TraceSessionRevision) => void) | undefined
+    const updatedRevision = new Promise<TraceSessionRevision>((resolve) => {
+      resolveUpdatedRevision = resolve
+    })
+    const siblingCall = makeCall({
+      id: 'call-2',
+      startedAt: '2026-06-09T10:00:07.000Z',
+      completedAt: '2026-06-09T10:00:08.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: { 'content-type': 'application/json' },
+        body: {
+          contentType: 'json',
+          bytes: 12,
+          sha256: 'd'.repeat(64),
+          preview: '{"model":"claude-sonnet-4-5"}',
+          truncated: true,
+        },
+      },
+    })
+    vi.mocked(tracesApi.getRevision)
+      .mockResolvedValueOnce({
+        sessionId: SESSION_ID,
+        revision: 1,
+        revisionToken: 'epoch-a:1',
+        changed: true,
+        reset: false,
+      })
+      .mockReturnValue(updatedRevision)
+    vi.mocked(sessionsApi.getTrace)
+      .mockResolvedValueOnce(baseTrace)
+      .mockResolvedValue({
+        ...baseTrace,
+        summary: { ...baseTrace.summary, apiCalls: 2 },
+        calls: [...baseTrace.calls, siblingCall],
+      })
+
+    await renderReady(20)
+    fireEvent.click(within(screen.getByTestId('trace-tree')).getAllByText('claude-sonnet-4-5')[0]!)
+    expect(await screen.findByText('Hi from the full record')).toBeInTheDocument()
+    const callsBeforeSibling = vi.mocked(sessionsApi.getTraceCall).mock.calls.length
+
+    resolveUpdatedRevision?.({
+      sessionId: SESSION_ID,
+      revision: 2,
+      revisionToken: 'epoch-a:2',
+      changed: true,
+      reset: false,
+    })
+
+    await waitFor(() => expect(sessionsApi.getTrace).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(within(screen.getByTestId('trace-tree')).getAllByText('claude-sonnet-4-5')).toHaveLength(2))
+    expect(screen.getByText('Hi from the full record')).toBeInTheDocument()
+    expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(callsBeforeSibling)
+    expect(screen.queryByText('Legacy truncated record; the semantic view is unavailable. See Raw below.')).not.toBeInTheDocument()
+  })
+
+  it('refetches a terminal call detail when that call content changes', async () => {
     let resolveUpdatedRevision: ((revision: TraceSessionRevision) => void) | undefined
     const updatedRevision = new Promise<TraceSessionRevision>((resolve) => {
       resolveUpdatedRevision = resolve
@@ -741,6 +802,7 @@ describe('TraceSession', () => {
       () => expect(screen.getByText('Hi from the full record')).toBeInTheDocument(),
       { timeout: 5_000 },
     )
+    const callsBeforeUpdate = vi.mocked(sessionsApi.getTraceCall).mock.calls.length
 
     resolveUpdatedRevision?.({
       sessionId: SESSION_ID,
@@ -751,7 +813,7 @@ describe('TraceSession', () => {
     })
 
     await waitFor(
-      () => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(2),
+      () => expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(callsBeforeUpdate),
       { timeout: 5_000 },
     )
     expect(await screen.findByText('Updated full record')).toBeInTheDocument()

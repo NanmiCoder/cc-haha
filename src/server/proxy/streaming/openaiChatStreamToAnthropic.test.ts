@@ -134,3 +134,10 @@ describe('Chat stream protocol boundaries', () => {
     expect(cancelled).toBe(true)
   })
 })
+
+test('nested prompt cache survives zero direct cache creation in streaming usage (#1327)', async () => {
+  const usage = { prompt_tokens: 149293, completion_tokens: 551, cache_creation_input_tokens: 0, prompt_tokens_details: { cached_tokens: 147840 } }
+  const events = await collect(chunk({ content: 'Done' }) + chunk({}, 'stop')
+    + `data: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`)
+  expect(events.find(e => e.type === 'message_delta').usage).toMatchObject({ input_tokens: 1453, output_tokens: 551, cache_read_input_tokens: 147840 })
+})

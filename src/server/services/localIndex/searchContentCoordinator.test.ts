@@ -175,16 +175,21 @@ describe('search content coordinator', () => {
 
     await coordinator.start()
     expect(coordinator.search('sqlite')).toBeNull()
+    expect(coordinator.suggestSessions('sqlite')).toBeNull()
     await waitForStatus(coordinator.getStatus, 'ready')
     expect(coordinator.search('sqlite')?.sessions[0]).toMatchObject({
       ownerSessionId: 'owner-session',
       matchCount: 1,
     })
 
+    expect(coordinator.suggestSessions('sqlite')?.sessions[0]?.ownerSessionId).toBe('owner-session')
+    expect(coordinator.suggestSessions('sqlite', { signal: AbortSignal.abort() })).toBeNull()
+
     await mkdir(join(nested, '..'), { recursive: true })
     await writeFile(nested, userLine('nested workflow needle', 'nested-message'))
     watcherOptions?.onDirty?.()
     expect(coordinator.search('needle')).toBeNull()
+    expect(coordinator.suggestSessions('needle')).toBeNull()
     await watcherOptions?.onBatch({ paths: [nested], fullSweep: false } satisfies ReconciliationBatch)
     await waitForStatus(coordinator.getStatus, 'ready')
 

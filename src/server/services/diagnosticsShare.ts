@@ -41,19 +41,48 @@ const CONTENT_BEARING_KEYS = new Set([
 ])
 
 const SAFE_SCALAR_KEYS = new Set([
+  'activeatfinish',
+  'activerequests',
+  'arraybuffersmib',
+  'attempts',
   'code',
+  'concurrentatstart',
+  'cpusystemms',
+  'cpuuserms',
+  'declaredbytes',
+  'declaredresponsebytes',
+  'durationms',
   'errorcategory',
   'errorcode',
+  'fetchms',
+  'externalmib',
+  'hardwareconcurrency',
+  'heapusedmib',
   'is_error',
   'isapierrormessage',
   'iserror',
+  'lagms',
+  'method',
   'name',
+  'recovered',
+  'recoveryms',
+  'requestid',
+  'route',
+  'responsechars',
+  'responsereadms',
+  'rssmib',
   'sdkType'.toLowerCase(),
+  'serverappms',
   'status',
   'subtype',
+  'suppressedsincelast',
+  'timeoutms',
+  'totaljsheapmib',
+  'usedjsheapmib',
 ])
 
 const SAFE_METADATA_VALUE_RE = /^[a-z0-9][a-z0-9_.:/ -]{0,127}$/i
+const SAFE_API_ROUTE_RE = /^\/api(?:\/[a-z0-9_.:-]{1,64}){1,8}$/i
 const MAX_SHARED_IDENTIFIER_LENGTH = 256
 const MAX_SHARED_METADATA_LENGTH = 512
 const URL_RE = /https?:\/\/[^\s<>"')\]}]+/gi
@@ -227,7 +256,9 @@ function projectDetails(
       continue
     }
     if (SAFE_SCALAR_KEYS.has(normalizedKey) && isScalar(entry)) {
-      projected[key] = projectSafeMetadataScalar(entry)
+      projected[key] = normalizedKey === 'route' && typeof entry === 'string'
+        ? projectSafeApiRoute(entry)
+        : projectSafeMetadataScalar(entry)
       continue
     }
     omittedFields.push(entryPath)
@@ -267,6 +298,20 @@ function projectSafeMetadataScalar(value: string | number | boolean | null): str
   if (typeof value !== 'string') return value
   const sanitized = sanitizeSharedString(value, MAX_SHARED_METADATA_LENGTH)
   return SAFE_METADATA_VALUE_RE.test(sanitized) ? sanitized : '[REDACTED]'
+}
+
+function projectSafeApiRoute(value: string): string {
+  if (!SAFE_API_ROUTE_RE.test(value)) return '[REDACTED]'
+  return value
+    .split('/')
+    .map((segment) => {
+      if (
+        /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment) ||
+        /^(?:call|toolu)_[a-z0-9_-]{12,}$/i.test(segment)
+      ) return ':id'
+      return redactSecrets(segment) === segment ? segment : ':redacted'
+    })
+    .join('/')
 }
 
 function sanitizeSharedString(value: string, maxLength = MAX_SHARED_METADATA_LENGTH): string {

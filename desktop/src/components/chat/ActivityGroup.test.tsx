@@ -59,6 +59,15 @@ describe('ActivityGroup', () => {
     timestamp: 2_000,
   })
 
+  it('keeps stable tool anchors when an expanded group gains older steps', () => {
+    const steps: ActivityStep[] = [{ kind: 'tool', toolCall: bashCall }]
+    const props = { steps, resultMap: new Map(), childToolCallsByParent: new Map(), isStreaming: true, isLive: true }
+    const view = render(<ActivityGroup {...props} />)
+    expect(view.container.querySelector('[data-chat-anchor-id="use-bash"]')).not.toBeNull()
+    view.rerender(<ActivityGroup {...props} steps={[{ kind: 'tool', toolCall: readCall }, ...steps]} />)
+    expect(view.container.querySelector('[data-chat-anchor-id="use-bash"]')).not.toBeNull()
+  })
+
   it('plays open while live, then folds itself into a counted summary', () => {
     const steps: ActivityStep[] = [
       thinkingStep('think-1', '- Locate the five call sites first.\nThen patch each file.', 500),

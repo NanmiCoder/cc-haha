@@ -12,6 +12,24 @@ const row = (id: string, fields: object = {}) => JSON.stringify({ uuid: id, ...f
 const version = async (filePath = file) => { const info = await stat(filePath, { bigint: true }); return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}` }
 const classify = (entry: Record<string, unknown>) => ({ notification: entry.notification === true, reset: entry.reset === true, agentToolId: typeof entry.agent === 'string' ? entry.agent : undefined })
 
+test('subagent visibility keeps unowned sidechains without bypassing cached notification suppression', async () => {
+  const entries = [
+    row('user', { isSidechain: true, reset: true }),
+    row('notice', { isSidechain: true, notification: true }),
+    row('hidden', { isSidechain: true, parentUuid: 'notice' }),
+    row('next', { isSidechain: true, reset: true }),
+  ]
+  await writeFile(file, entries.join('\n') + '\n')
+  const offsets = entries.map((_, index) => Buffer.byteLength(entries.slice(0, index).map(value => value + '\n').join('')))
+  const options = { filePath: file, sourceVersion: await version(), offsets, classify }
+  const root = await readHistoryContexts(options)
+  expect([...root.contexts.values()].map(context => context.suppressed)).toEqual([true, true, true, true])
+  const child = await readHistoryContexts({ ...options, includeUnownedSidechains: true })
+  expect(child.scannedBytes).toBe(0)
+  expect([...child.contexts.values()].map(context => context.suppressed)).toEqual([false, true, true, false])
+  expect([...((await readHistoryContexts(options)).contexts.values())].every(context => context.suppressed)).toBe(true)
+})
+
 test('indexes EOF records and resumes at their boundary when a newline and new records are appended', async () => {
   const first = row('notification', { notification: true }) + '\n'
   const partial = row('user', { reset: true })
