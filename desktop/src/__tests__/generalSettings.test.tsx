@@ -3010,6 +3010,7 @@ describe('Settings > Providers tab', () => {
       expect(providerStoreState.createProvider).toHaveBeenCalledWith(expect.objectContaining({
         model1mSupport: {
           main: true,
+          fable: false,
           haiku: false,
           sonnet: true,
           opus: false,
@@ -3028,6 +3029,82 @@ describe('Settings > Providers tab', () => {
         CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: '{"claude-sonnet-4-6":1000000}',
       }),
     }))
+  })
+
+  it('persists the Fable slot to its own env var with its own 1M marker', async () => {
+    providerStoreState.createProvider = vi.fn().mockResolvedValue({
+      id: 'provider-fable',
+      presetId: 'custom',
+      name: 'Custom',
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.example.com/anthropic',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'claude-sonnet-4-6',
+        fable: 'claude-fable-5',
+        haiku: 'claude-sonnet-4-6',
+        sonnet: 'claude-sonnet-4-6',
+        opus: 'claude-sonnet-4-6',
+      },
+      model1mSupport: {
+        main: false,
+        fable: true,
+        haiku: false,
+        sonnet: false,
+        opus: false,
+      },
+    })
+    providerStoreState.presets = [
+      {
+        id: 'custom',
+        name: 'Custom',
+        baseUrl: 'https://api.example.com/anthropic',
+        apiFormat: 'anthropic',
+        // Fable must be settable from the form, not only by hand-editing
+        // settings.json or importing a cc-switch profile.
+        defaultModels: {
+          main: 'claude-sonnet-4-6',
+          fable: 'claude-fable-5',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+        needsApiKey: true,
+        websiteUrl: '',
+      },
+    ]
+
+    render(<Settings />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    const dialog = screen.getByRole('dialog')
+    await waitFor(() => {
+      const settingsTextarea = dialog.querySelector('textarea')
+      expect(settingsTextarea?.value).toContain('"ANTHROPIC_MODEL"')
+    })
+    fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-test' } })
+
+    // The slot is editable from the form rather than being carried invisibly.
+    // Queried by label because the input only takes the `combobox` role once a
+    // model list has been fetched.
+    const fableInput = within(dialog).getByLabelText(/Fable Model/i)
+    expect(fableInput).toHaveValue('claude-fable-5')
+    // Fable is the one slot that does not fall back to the main model, so it
+    // must not advertise "Same as main" the way the tier slots do.
+    expect(fableInput).toHaveAttribute('placeholder', 'Leave blank to let Claude Code choose')
+    expect(within(dialog).getByLabelText(/Haiku Model/i))
+      .toHaveAttribute('placeholder', 'Same as main')
+
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /1M support: fable/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+
+    await waitFor(() => {
+      expect(MOCK_UPDATE_SETTINGS).toHaveBeenCalledWith(expect.objectContaining({
+        env: expect.objectContaining({
+          ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5[1m]',
+        }),
+      }))
+    })
   })
 
   it('hides the API key by default and reveals it from the eye button', () => {
@@ -3157,7 +3234,7 @@ describe('Settings > Providers tab', () => {
       })
     })
     expect(await within(dialog).findByText(/Model list loaded \(2\)/i)).toBeInTheDocument()
-    expect(within(dialog).getAllByRole('button', { name: /from the fetched list/i })).toHaveLength(4)
+    expect(within(dialog).getAllByRole('button', { name: /from the fetched list/i })).toHaveLength(5)
 
     // The picker supplements the field; a model id that is not on the list must
     // still be typeable. Queried by role because the picker's own accessible

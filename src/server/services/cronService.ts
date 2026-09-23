@@ -41,6 +41,30 @@ type TasksFile = {
 
 const TASKS_FILE_WRITE_ATTEMPTS = 2
 
+/**
+ * 每个任务文件一条互斥队列（模块级，跨实例共享）。
+ * 调度器会在同一分钟并发启动多个任务（各自调用 updateLastFired），
+ * API 的增删改也可能与调度器写入交错；无互斥时后完成的写回会覆盖
+ * 先完成的修改（执行时间丢失、创建不落盘、已删除任务复活）。
+ * 注意 API 层（scheduled-tasks.ts）与调度器（cronScheduler.ts）持有
+ * 不同的 CronService 实例，因此队列必须按文件路径共享而非挂在实例上。
+ */
+const mutationQueues = new Map<string, Promise<unknown>>()
+
+/** 在指定文件的互斥队列中执行变更操作，保留其原始结果/错误。 */
+function runExclusive<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const previous = mutationQueues.get(filePath) ?? Promise.resolve()
+  const result = previous.then(operation)
+  mutationQueues.set(
+    filePath,
+    result.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
+  return result
+}
+
 export class CronService {
   /** 任务文件路径 */
   private getTasksFilePath(): string {
@@ -70,57 +94,65 @@ export class CronService {
       throw ApiError.badRequest('Fields "cron" and "prompt" are required')
     }
 
-    const data = await this.readTasksFile()
-    const newTask: CronTask = {
-      ...task,
-      permissionMode: 'bypassPermissions',
-      id: crypto.randomBytes(4).toString('hex'),
-      createdAt: Date.now(),
-    }
-    data.tasks.push(newTask)
-    await this.writeTasksFile(data)
-    return newTask
+    return runExclusive(this.getTasksFilePath(), async () => {
+      const data = await this.readTasksFile()
+      const newTask: CronTask = {
+        ...task,
+        permissionMode: 'bypassPermissions',
+        id: crypto.randomBytes(4).toString('hex'),
+        createdAt: Date.now(),
+      }
+      data.tasks.push(newTask)
+      await this.writeTasksFile(data)
+      return newTask
+    })
   }
 
   /** 更新已有任务 */
   async updateTask(id: string, updates: Partial<CronTask>): Promise<CronTask> {
-    const data = await this.readTasksFile()
-    const index = data.tasks.findIndex((t) => t.id === id)
-    if (index === -1) {
-      throw ApiError.notFound(`Task not found: ${id}`)
-    }
+    return runExclusive(this.getTasksFilePath(), async () => {
+      const data = await this.readTasksFile()
+      const index = data.tasks.findIndex((t) => t.id === id)
+      if (index === -1) {
+        throw ApiError.notFound(`Task not found: ${id}`)
+      }
 
-    // 不允许修改 id 和 createdAt
-    const { id: _id, createdAt: _ca, ...safeUpdates } = updates
-    data.tasks[index] = {
-      ...data.tasks[index],
-      ...safeUpdates,
-      permissionMode: 'bypassPermissions',
-    }
-    await this.writeTasksFile(data)
-    return data.tasks[index]
+      // 不允许修改 id 和 createdAt
+      const { id: _id, createdAt: _ca, ...safeUpdates } = updates
+      data.tasks[index] = {
+        ...data.tasks[index],
+        ...safeUpdates,
+        permissionMode: 'bypassPermissions',
+      }
+      await this.writeTasksFile(data)
+      return data.tasks[index]
+    })
   }
 
   /** 删除任务 */
   async deleteTask(id: string): Promise<void> {
-    const data = await this.readTasksFile()
-    const index = data.tasks.findIndex((t) => t.id === id)
-    if (index === -1) {
-      throw ApiError.notFound(`Task not found: ${id}`)
-    }
-    data.tasks.splice(index, 1)
-    await this.writeTasksFile(data)
+    return runExclusive(this.getTasksFilePath(), async () => {
+      const data = await this.readTasksFile()
+      const index = data.tasks.findIndex((t) => t.id === id)
+      if (index === -1) {
+        throw ApiError.notFound(`Task not found: ${id}`)
+      }
+      data.tasks.splice(index, 1)
+      await this.writeTasksFile(data)
+    })
   }
 
   /** 更新任务的最后执行时间 */
   async updateLastFired(taskId: string, timestamp: string): Promise<void> {
-    const data = await this.readTasksFile()
-    const index = data.tasks.findIndex((t) => t.id === taskId)
-    if (index === -1) {
-      return // Task may have been deleted; silently ignore
-    }
-    data.tasks[index].lastFiredAt = timestamp
-    await this.writeTasksFile(data)
+    return runExclusive(this.getTasksFilePath(), async () => {
+      const data = await this.readTasksFile()
+      const index = data.tasks.findIndex((t) => t.id === taskId)
+      if (index === -1) {
+        return // Task may have been deleted; silently ignore
+      }
+      data.tasks[index].lastFiredAt = timestamp
+      await this.writeTasksFile(data)
+    })
   }
 
   // ---------------------------------------------------------------------------
@@ -166,10 +198,11 @@ export class CronService {
         lastError = err as Error
         await fs.unlink(tmpFile).catch(() => {})
 
-        if (
-          (err as NodeJS.ErrnoException).code !== 'ENOENT' ||
-          attempt === TASKS_FILE_WRITE_ATTEMPTS - 1
-        ) {
+        // EPERM: Windows 上与其他进程同时 rename 到同一目标可能瞬时失败，
+        // 与 ENOENT 一样属于可重试的瞬时错误。
+        const code = (err as NodeJS.ErrnoException).code
+        const retryable = code === 'ENOENT' || code === 'EPERM'
+        if (!retryable || attempt === TASKS_FILE_WRITE_ATTEMPTS - 1) {
           break
         }
       }

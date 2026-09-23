@@ -269,7 +269,15 @@ function carryForwardArchivedMembers(
     const identity = memberArchiveIdentity(historicalMember)
     historicalIdentities.add(identity)
     const currentMember = currentByIdentity.get(identity)
-    if (currentMember) return { ...historicalMember, ...currentMember }
+    if (currentMember) {
+      return {
+        ...historicalMember,
+        ...currentMember,
+        ...(currentMember.model === undefined && historicalMember.model !== undefined
+          ? { model: historicalMember.model }
+          : {}),
+      }
+    }
     return {
       ...historicalMember,
       status: historicalMember.status === 'failed'
@@ -1515,7 +1523,7 @@ export class TeamService {
       agentId: m.agentId,
       name: m.name,
       agentType: m.agentType,
-      model: m.model,
+      ...(m.model ? { model: m.model } : {}),
       color: m.color,
       backendType: m.backendType,
       status: this.deriveStatus(m.isActive),

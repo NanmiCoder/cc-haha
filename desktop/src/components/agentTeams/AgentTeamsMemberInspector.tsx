@@ -10,6 +10,7 @@ import {
   getWorkbenchTaskState,
   inferTaskOwner,
   parseWorkbenchMessageBody,
+  resolveMemberModel,
   resolveTeamMemberIdentity,
   taskOwnedByMember,
   type MemberWorkState,
@@ -297,6 +298,8 @@ export function AgentTeamsMemberInspector({
   const workState = snapshot.deletedAt
     ? 'exited'
     : getMemberWorkState(member, { isLead, leadIsStreaming })
+  const leadMember = snapshot.team.members.find(candidate => candidate.agentId === snapshot.team.leadAgentId)
+  const model = resolveMemberModel(member, isLead ? undefined : leadMember?.model)
   const taskHistory = useMemo(
     () => deriveTaskHistory(snapshots, selectedIndex, snapshot, member),
     [member, selectedIndex, snapshot, snapshots],
@@ -395,6 +398,26 @@ export function AgentTeamsMemberInspector({
               {t('agentTeams.inspector.messages')}
             </dt>
             <dd className="mt-0.5 font-extrabold tabular-nums">{messages.length}</dd>
+          </div>
+          {/* Model spans the full width: a model id plus an "inherited from" prefix
+              does not fit a third of the drawer, and truncating it would cut the
+              model name itself — the one part that matters. */}
+          <div className="col-span-3 min-w-0">
+            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              {t('agentTeams.model.label')}
+            </dt>
+            <dd
+              className="mt-0.5 truncate font-extrabold"
+              title={model?.full}
+              data-testid="agent-teams-member-model"
+              data-model-inherited={model?.inherited ? 'true' : 'false'}
+            >
+              {model === undefined
+                ? t('agentTeams.model.unknown')
+                : model.inherited
+                  ? t('agentTeams.model.inheritFromLead', { model: model.full })
+                  : model.full}
+            </dd>
           </div>
         </dl>
       </header>

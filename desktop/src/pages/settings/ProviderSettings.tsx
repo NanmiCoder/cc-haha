@@ -7,7 +7,7 @@ import aruhubLogo from '../../../../docs/images/sponsors/aruhub-logo.png'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useUIStore } from '../../stores/uiStore'
-import { useTranslation } from '../../i18n'
+import { useTranslation, type TranslationKey } from '../../i18n'
 import { Modal } from '@/components/ui/Modal'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
@@ -58,6 +58,15 @@ type ProviderListItem =
   | { id: typeof OPENAI_OFFICIAL_PROVIDER_ID; kind: 'openai-official' }
   | { id: typeof GROK_OFFICIAL_PROVIDER_ID; kind: 'grok-official' }
   | { id: string; kind: 'saved'; provider: SavedProvider }
+
+/** Row labels for the model-mapping form, in `MODEL_SLOTS` order. */
+const MODEL_SLOT_LABEL_KEYS: Record<ModelSlot, TranslationKey> = {
+  main: 'settings.providers.mainModel',
+  fable: 'settings.providers.fableModel',
+  haiku: 'settings.providers.haikuModel',
+  sonnet: 'settings.providers.sonnetModel',
+  opus: 'settings.providers.opusModel',
+}
 
 function defaultProviderOrder(providers: SavedProvider[]): string[] {
   return [
@@ -562,6 +571,7 @@ const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
 const DISABLE_EXPERIMENTAL_BETAS_ENV_KEY = 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'
 const DEFAULT_MODEL_1M_SUPPORT: Model1mSupport = {
   main: false,
+  fable: false,
   haiku: false,
   sonnet: false,
   opus: false,
@@ -699,6 +709,7 @@ function getInitialModel1mSupport(
 ): Model1mSupport {
   return {
     main: provider?.model1mSupport?.main === true || hasModel1mMarker(models.main),
+    fable: provider?.model1mSupport?.fable === true || (models.fable ? hasModel1mMarker(models.fable) : false),
     haiku: provider?.model1mSupport?.haiku === true || hasModel1mMarker(models.haiku),
     sonnet: provider?.model1mSupport?.sonnet === true || hasModel1mMarker(models.sonnet),
     opus: provider?.model1mSupport?.opus === true || hasModel1mMarker(models.opus),
@@ -716,7 +727,7 @@ function applyModel1mSupportMapping(
 ): ModelMapping {
   return {
     main: applyModel1mSupport(models.main, model1mSupport.main),
-    ...(models.fable ? { fable: stripModel1mMarker(models.fable) } : {}),
+    ...(models.fable ? { fable: applyModel1mSupport(models.fable, model1mSupport.fable) } : {}),
     haiku: applyModel1mSupport(models.haiku, model1mSupport.haiku),
     sonnet: applyModel1mSupport(models.sonnet, model1mSupport.sonnet),
     opus: applyModel1mSupport(models.opus, model1mSupport.opus),
@@ -1856,23 +1867,26 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           )}
           <div className={browserMode ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "grid grid-cols-2 gap-2"}>
             {MODEL_SLOTS.map((slot) => {
-              const labelKey = slot === 'main'
-                ? 'settings.providers.mainModel'
-                : slot === 'haiku'
-                  ? 'settings.providers.haikuModel'
-                  : slot === 'sonnet'
-                    ? 'settings.providers.sonnetModel'
-                    : 'settings.providers.opusModel'
-              const label = t(labelKey)
+              const label = t(MODEL_SLOT_LABEL_KEYS[slot])
               const pickLabel = t('settings.providers.fetchModelsPick', { label })
               return (
                 <div key={slot} className="min-w-0">
                   <ModelIdCombobox
                     label={label}
                     required={slot === 'main'}
-                    value={models[slot]}
+                    value={models[slot] ?? ''}
                     onChange={(value) => handleModelChange(slot, value)}
-                    placeholder={slot === 'main' ? t('settings.providers.modelIdPlaceholder') : t('settings.providers.sameAsMain')}
+                    placeholder={
+                      // Fable is the one slot that does not fall back to the
+                      // main model: an empty value leaves the choice to the
+                      // runtime, which resolves it to the provider's Opus-tier
+                      // model (third-party) or a real Fable model (official).
+                      slot === 'main'
+                        ? t('settings.providers.modelIdPlaceholder')
+                        : slot === 'fable'
+                          ? t('settings.providers.fableModelPlaceholder')
+                          : t('settings.providers.sameAsMain')
+                    }
                     groups={modelPickerGroups}
                     pickerLabel={pickLabel}
                     noMatchesLabel={t('model.noMatches')}
@@ -2167,6 +2181,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                       const mergedModels = { ...prev, ...newModels }
                       const nextModel1mSupport = {
                         main: hasModel1mMarker(mergedModels.main),
+                        fable: mergedModels.fable ? hasModel1mMarker(mergedModels.fable) : false,
                         haiku: hasModel1mMarker(mergedModels.haiku),
                         sonnet: hasModel1mMarker(mergedModels.sonnet),
                         opus: hasModel1mMarker(mergedModels.opus),

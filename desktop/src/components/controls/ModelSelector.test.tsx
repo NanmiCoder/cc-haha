@@ -79,7 +79,7 @@ describe('ModelSelector', () => {
         id: 'provider-1m', presetId: 'custom', name: 'Provider 1M',
         apiFormat: 'anthropic', apiKey: 'fixture', baseUrl: 'http://127.0.0.1:9999',
         models: { main: 'main-model', haiku: 'haiku-model', sonnet: 'sonnet-model', opus: 'opus-model' },
-        model1mSupport: { main: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
+        model1mSupport: { main: enabled, fable: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
       }],
     })
     const runtimeChange = vi.fn()

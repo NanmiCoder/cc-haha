@@ -624,6 +624,7 @@ function stripModel1mMarkers(models: ModelMapping): ModelMapping {
 function readModel1mSupport(models: ModelMapping): Model1mSupport {
   return {
     main: hasModel1mMarker(models.main),
+    fable: models.fable ? hasModel1mMarker(models.fable) : false,
     haiku: hasModel1mMarker(models.haiku),
     sonnet: hasModel1mMarker(models.sonnet),
     opus: hasModel1mMarker(models.opus),

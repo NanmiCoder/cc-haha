@@ -1192,6 +1192,44 @@ describe('TabBar', () => {
     expect(runningLabel.parentElement?.className).not.toMatch(/\bgap-/)
   })
 
+  it('confines native no-drag geometry to visible tabs through scrolling and resizing', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'hit-1', title: 'Hit one', type: 'session', status: 'idle' },
+        { sessionId: 'hit-2', title: 'Hit two', type: 'session', status: 'idle' },
+      ],
+      activeTabId: null,
+    })
+    await act(async () => { render(<TabBar />) })
+    const strip = screen.getByTestId('tab-bar-scroll-region')
+    const items = strip.querySelectorAll<HTMLElement>('.tab-strip-item')
+    let viewport = 600
+    let position = 0
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, get: () => viewport })
+    Object.defineProperty(strip, 'scrollLeft', { configurable: true, get: () => position })
+    items.forEach((item, index) => {
+      Object.defineProperty(item, 'offsetLeft', { configurable: true, get: () => index * 142 })
+      Object.defineProperty(item, 'offsetWidth', { configurable: true, get: () => 140 })
+    })
+    fireStripResize()
+    const hitRegion = screen.getByTestId('tab-bar-hit-region')
+    expect(hitRegion).toHaveStyle({ width: '282px' })
+    expect(strip).not.toContainElement(hitRegion)
+    expect(hitRegion).toHaveClass('pointer-events-none', 'top-[6px]')
+    viewport = 200
+    fireStripResize()
+    expect(hitRegion).toHaveStyle({ width: '200px' })
+    position = 82
+    fireEvent.scroll(strip)
+    expect(hitRegion).toHaveStyle({ width: '200px' })
+    position = 0
+    viewport = 600
+    fireStripResize()
+    expect(hitRegion).toHaveStyle({ width: '282px' })
+  })
+
   it('scrolls by a fraction of the visible strip rather than a fixed tab width', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')

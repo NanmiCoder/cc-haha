@@ -7,6 +7,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ProviderService } from '../services/providerService.js'
+import { readActiveProviderManagedEnv } from '../services/providerRuntimeEnv.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
 import {
@@ -421,6 +422,40 @@ describe('ProviderService', () => {
       expect(runtimeEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-4-5')
       expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('claude-sonnet-4-6[1m]')
       expect(runtimeEnv.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('claude-opus-4-7[1m]')
+    })
+
+    test('preserves a Fable-only 1M setting after saving and reloading a provider', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        models: {
+          main: 'claude-sonnet-4-6',
+          fable: 'claude-opus-4-7',
+          haiku: 'claude-haiku-4-5',
+          sonnet: 'claude-sonnet-4-6',
+          opus: 'claude-opus-4-7',
+        },
+        model1mSupport: {
+          main: false,
+          fable: true,
+          haiku: false,
+          sonnet: false,
+          opus: false,
+        },
+      }))
+
+      const initiallySaved = await readProvidersConfig()
+      const initialProvider = (initiallySaved.providers as Array<{ model1mSupport?: { fable?: boolean } }>)[0]
+      expect(initialProvider.model1mSupport?.fable).toBe(true)
+      await svc.activateProvider(provider.id)
+
+      const saved = await readProvidersConfig()
+      const savedProvider = (saved.providers as Array<{ model1mSupport?: { fable?: boolean } }>)[0]
+      expect(savedProvider.model1mSupport?.fable).toBe(true)
+
+      const reloaded = await new ProviderService().getProvider(provider.id)
+      expect(reloaded.model1mSupport?.fable).toBe(true)
+      expect(readActiveProviderManagedEnv(tmpDir)?.ANTHROPIC_DEFAULT_FABLE_MODEL)
+        .toBe('claude-opus-4-7[1m]')
     })
 
     test('DeepSeek preset follows the global thinking toggle instead of forcing disabled thinking', async () => {

@@ -99,6 +99,7 @@ function galleryTeam(
     agentId: string,
     role: string,
     status: TeamDetail['members'][number]['status'],
+    model?: string,
   ): TeamDetail['members'][number] => ({
     agentId,
     name: agentId,
@@ -108,6 +109,7 @@ function galleryTeam(
     currentTask: activeTaskByMember[agentId],
     color: AGENT_TEAMS_GALLERY_COLORS[agentId],
     sessionId: `gallery-${agentId}`,
+    ...(model ? { model } : {}),
   })
 
   return {
@@ -117,11 +119,11 @@ function galleryTeam(
     leadSessionId: AGENT_TEAMS_GALLERY_SESSION_ID,
     createdAt,
     members: [
-      member('team-lead', '队长', 'running'),
-      member('backend-dev', '后端实现', 'running'),
-      member('frontend-dev', '前端实现', 'running'),
-      member('ui-reviewer', 'UI 走查', 'running'),
-      member('code-reviewer', '代码审查', 'running'),
+      member('team-lead', '队长', 'running', 'claude-opus-4-8'),
+      member('backend-dev', '后端实现', 'running', 'claude-sonnet-5'),
+      member('frontend-dev', '前端实现', 'running', 'claude-sonnet-5'),
+      member('ui-reviewer', 'UI 走查', 'running', 'claude-haiku-4-5'),
+      member('code-reviewer', '代码审查', 'running', 'qwen3.7-plus[1m]'),
       member('test-runner', '测试验证', 'running'),
     ],
   }

@@ -37,14 +37,14 @@ vi.mock('../hooks/useMobileViewport', () => ({
 }))
 
 vi.mock('../components/chat/MessageList', () => ({
-  MessageList: ({ compact }: { compact?: boolean }) => (
-    <div data-testid="message-list" data-compact={compact ? 'true' : 'false'} />
+  MessageList: ({ compact, sessionId }: { compact?: boolean; sessionId?: string }) => (
+    <div data-testid="message-list" data-compact={compact ? 'true' : 'false'} data-session-id={sessionId} />
   ),
 }))
 
 vi.mock('../components/chat/ChatInput', () => ({
-  ChatInput: ({ compact, variant }: { compact?: boolean; variant?: string }) => (
-    <div data-testid="chat-input" data-compact={compact ? 'true' : 'false'} data-variant={variant} />
+  ChatInput: ({ compact, variant, sessionId, visible }: { compact?: boolean; variant?: string; sessionId?: string; visible?: boolean }) => (
+    <div data-testid="chat-input" data-compact={compact ? 'true' : 'false'} data-variant={variant} data-session-id={sessionId} data-visible={visible ? 'true' : 'false'} />
   ),
 }))
 
@@ -141,6 +141,55 @@ afterEach(() => {
 })
 
 describe('ActiveSession task polling', () => {
+  it('keeps the same message list bound to its session while settings is selected', () => {
+    const sessionId = 'retained-session'
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Retained Session',
+        createdAt: '2026-05-07T00:00:00.000Z',
+        modifiedAt: '2026-05-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+    })
+    useTabStore.setState({
+      tabs: [
+        { sessionId, title: 'Retained Session', type: 'session', status: 'idle' },
+        { sessionId: '__settings__', title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          messages: [{ id: 'existing', type: 'assistant_text', content: 'ready', timestamp: 1 }],
+          historyStatus: 'ready',
+          historyHydrated: true,
+        },
+      },
+    })
+
+    const { rerender } = render(<ActiveSession sessionId={sessionId} active />)
+    const messageList = screen.getByTestId('message-list')
+    const chatInput = screen.getByTestId('chat-input')
+
+    act(() => useTabStore.getState().setActiveTab('__settings__'))
+    rerender(<ActiveSession sessionId={sessionId} active={false} />)
+
+    expect(screen.getByTestId('message-list')).toBe(messageList)
+    expect(screen.getByTestId('chat-input')).toBe(chatInput)
+    expect(messageList).toHaveAttribute('data-session-id', sessionId)
+    expect(chatInput).toHaveAttribute('data-session-id', sessionId)
+    expect(chatInput).toHaveAttribute('data-visible', 'false')
+    expect(useChatStore.getState().sessions['__settings__']).toBeUndefined()
+  })
+
   it('shows cleaned worktrees as retained history and uses the source project for tools', () => {
     const sessionId = 'cleaned-worktree-session'
     useSettingsStore.setState({ locale: 'en' })

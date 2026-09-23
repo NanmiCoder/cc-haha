@@ -1800,6 +1800,19 @@ button, input, textarea, select, a, [role="button"] {
   -webkit-app-region: no-drag;
 }
 
+/* Scrolled-out tabs must not subtract native drag regions from the sidebar.
+   Reset every descendant, including buttons covered by the global rules.
+   The stationary sibling below supplies the visible no-drag rectangle. */
+.tab-strip-scroll .tab-bar-interactive,
+.tab-strip-scroll .tab-bar-interactive * {
+  app-region: initial;
+  -webkit-app-region: initial;
+}
+.tab-strip-hit-region {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
 /* Chrome's hairline between two neighbouring idle tabs — the thing that keeps
    a row of untitled sessions from reading as one continuous smear.
    It belongs to the *gap*, not to either tab, so it has to vanish the moment

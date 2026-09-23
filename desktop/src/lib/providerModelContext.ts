@@ -2,7 +2,7 @@
 
 import type { Model1mSupport } from '../types/provider'
 
-export const MODEL_SLOTS = ['main', 'haiku', 'sonnet', 'opus'] as const
+export const MODEL_SLOTS = ['main', 'fable', 'haiku', 'sonnet', 'opus'] as const
 export type ModelSlot = typeof MODEL_SLOTS[number]
 export type ModelContextInputs = Record<ModelSlot, string>
 

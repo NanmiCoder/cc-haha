@@ -144,7 +144,7 @@ describe('provider 1M runtime selection', () => {
     id: 'provider', name: 'Provider', presetId: 'custom', apiKey: 'fixture',
     baseUrl: 'http://127.0.0.1:9999', apiFormat: 'anthropic',
     models: { main: ' main-model ', haiku: 'fast-model', sonnet: 'balanced-model', opus: 'large-model' },
-    model1mSupport: { main: true, haiku: false, sonnet: true, opus: false },
+    model1mSupport: { main: true, fable: false, haiku: false, sonnet: true, opus: false },
   }
 
   it('materializes the active provider main slot by id and by legacy name', () => {

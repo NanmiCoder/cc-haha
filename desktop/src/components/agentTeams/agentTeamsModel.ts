@@ -111,6 +111,69 @@ export function getMemberAvatarKey(member: TeamMember, isLead = false): MemberAv
   return WORKER_AVATARS[stableHash(member.agentId) % WORKER_AVATARS.length]!.key
 }
 
+/**
+ * Short family label for a model id or alias, used by compact UI chips.
+ * 'claude-opus-4-8' -> 'opus', 'eu.anthropic.claude-sonnet-5' -> 'sonnet',
+ * 'sonnet' -> 'sonnet'. Unrecognized values are returned trimmed and unchanged
+ * rather than being forced into a family.
+ *
+ * A trailing context-window tag (`[1m]`) is a routing detail, not part of the
+ * name a reader recognises, so it is dropped before matching.
+ */
+export function shortModelLabel(model: string): string {
+  const untagged = model.trim().replace(/\[[^\]]*\]$/, '').trim()
+  // A value that was nothing but a tag keeps its original form rather than
+  // collapsing to an empty label.
+  const trimmed = untagged || model.trim()
+  if (!trimmed) return trimmed
+  const lowered = trimmed.toLowerCase()
+  if (lowered.includes('opus')) return 'opus'
+  if (lowered.includes('sonnet')) return 'sonnet'
+  if (lowered.includes('haiku')) return 'haiku'
+  if (lowered.includes('fable')) return 'fable'
+  return trimmed
+}
+
+export type MemberModelDisplay = {
+  /** Short chip label, e.g. 'opus'. */
+  label: string
+  /** Full model id or alias, used for the hover tooltip. */
+  full: string
+  /** True when the member runs on the lead's model rather than one of its own. */
+  inherited: boolean
+}
+
+/**
+ * Model display for one member. Returns undefined when nothing is known, so
+ * callers render no chip instead of an empty or 'undefined' label.
+ *
+ * `leadModel` is the lead member's model. Callers pass undefined for the lead
+ * itself; a lead without an explicit model therefore renders no chip.
+ */
+export function resolveMemberModel(
+  member: TeamMember,
+  leadModel?: string,
+): MemberModelDisplay | undefined {
+  const memberModelRaw = member.model
+  const memberModel = typeof memberModelRaw === 'string' ? memberModelRaw.trim() : ''
+  if (memberModel && memberModel.toLowerCase() !== 'inherit') {
+    return {
+      label: shortModelLabel(memberModel),
+      full: memberModel,
+      inherited: false,
+    }
+  }
+  const resolvedLead = typeof leadModel === 'string' ? leadModel.trim() : ''
+  if (resolvedLead) {
+    return {
+      label: shortModelLabel(resolvedLead),
+      full: resolvedLead,
+      inherited: true,
+    }
+  }
+  return undefined
+}
+
 function identityAliases(value: string): string[] {
   const normalized = value.trim().toLowerCase()
   const short = normalized.split('@')[0] ?? normalized
@@ -153,7 +216,13 @@ export function snapshotWithHistoricalMembers(
         }
       }
       const [currentMember] = remaining.splice(currentIndex, 1)
-      return { ...historicalMember, ...currentMember! }
+      const merged = { ...historicalMember, ...currentMember! }
+      // A later frame can land with `model: undefined`, which would clobber a
+      // model already learned from an earlier snapshot. Restore the historical
+      // model when the incoming member has no model of its own.
+      const currentModel = currentMember?.model
+      const hasCurrentModel = typeof currentModel === 'string' && currentModel.trim() !== ''
+      return hasCurrentModel ? merged : { ...merged, model: historicalMember.model }
     })
     members.push(...remaining)
   }

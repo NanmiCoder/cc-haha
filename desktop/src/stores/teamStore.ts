@@ -144,6 +144,7 @@ function toTeamMember(raw: Record<string, unknown>): TeamMember {
     currentTask: raw.currentTask as string | undefined,
     color: raw.color as AgentColor | undefined,
     sessionId: raw.sessionId as string | undefined,
+    model: typeof raw.model === 'string' ? raw.model : undefined,
   }
 }
 

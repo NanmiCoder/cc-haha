@@ -9,8 +9,10 @@ import {
   inferTaskOwner,
   layoutWorkbenchTasks,
   parseWorkbenchMessageBody,
+  resolveMemberModel,
   resolveTeamMemberIdentity,
   runningTaskForMember,
+  shortModelLabel,
   snapshotWithHistoricalMembers,
   taskOwnedByMember,
   WORKBENCH_TASK_WIDTH,
@@ -440,5 +442,105 @@ describe('Agent Teams workbench model', () => {
     // Two messages inside one snapshot used to render an identical `T+0`.
     expect(first).not.toBe(second)
     expect(formatWorkbenchMessageTime('not-a-date')).toBe('')
+  })
+})
+
+describe('Agent Teams member model display', () => {
+  const worker: TeamMember = {
+    agentId: 'builder@team-a',
+    name: 'builder',
+    role: 'Frontend',
+    status: 'running',
+  }
+
+  function memberSnapshot(generatedAt: string, members: TeamMember[]): TeamWorkbenchSnapshot {
+    return {
+      version: generatedAt,
+      generatedAt,
+      team: {
+        name: 'team-a',
+        leadAgentId: 'lead@team-a',
+        leadSessionId: 'session-a',
+        members,
+      },
+      tasks: [],
+      messages: [],
+    }
+  }
+
+  it('shortens a full model id to its family and passes unknown ids through', () => {
+    expect(shortModelLabel('claude-opus-4-8')).toBe('opus')
+    expect(shortModelLabel('eu.anthropic.claude-sonnet-5')).toBe('sonnet')
+    expect(shortModelLabel('claude-haiku-4-5')).toBe('haiku')
+    expect(shortModelLabel('claude-fable-5')).toBe('fable')
+    expect(shortModelLabel('sonnet')).toBe('sonnet')
+    // An unknown family is preserved rather than forced into a known one.
+    expect(shortModelLabel('gpt-5')).toBe('gpt-5')
+  })
+
+  it('keeps the full id for the tooltip while the chip shows the short family', () => {
+    expect(resolveMemberModel({ ...worker, model: 'claude-opus-4-8' }))
+      .toEqual({ label: 'opus', full: 'claude-opus-4-8', inherited: false })
+  })
+
+  it('trims the stored id so no padding leaks into the label or the tooltip', () => {
+    expect(resolveMemberModel({ ...worker, model: '  claude-opus-4-8  ' }))
+      .toEqual({ label: 'opus', full: 'claude-opus-4-8', inherited: false })
+  })
+
+  it('drops the context-window tag from the chip while the tooltip keeps it', () => {
+    // `[1m]` is a routing detail, and leaving it on made the chip wide enough to
+    // squeeze the member name out of the card.
+    expect(shortModelLabel('qwen3.7-plus[1m]')).toBe('qwen3.7-plus')
+    expect(shortModelLabel('claude-opus-4-8[1m]')).toBe('opus')
+    expect(resolveMemberModel({ ...worker, model: 'qwen3.7-plus[1m]' }))
+      .toEqual({ label: 'qwen3.7-plus', full: 'qwen3.7-plus[1m]', inherited: false })
+    // A value that is nothing but a tag must not collapse to an empty label.
+    expect(shortModelLabel('[1m]')).toBe('[1m]')
+  })
+
+  it('marks a member with no model of its own as inheriting the lead model', () => {
+    expect(resolveMemberModel({ ...worker }, 'claude-sonnet-5'))
+      .toEqual({ label: 'sonnet', full: 'claude-sonnet-5', inherited: true })
+  })
+
+  it('treats an explicit inherit alias as inheritance, not as a model name', () => {
+    expect(resolveMemberModel({ ...worker, model: 'inherit' }, 'claude-opus-4-8'))
+      .toEqual({ label: 'opus', full: 'claude-opus-4-8', inherited: true })
+    expect(resolveMemberModel({ ...worker, model: 'INHERIT' }, 'claude-opus-4-8'))
+      .toEqual({ label: 'opus', full: 'claude-opus-4-8', inherited: true })
+  })
+
+  it('returns undefined when nothing is known, so callers render no empty label', () => {
+    expect(resolveMemberModel({ ...worker })).toBeUndefined()
+    expect(resolveMemberModel({ ...worker, model: '' })).toBeUndefined()
+    expect(resolveMemberModel({ ...worker, model: '   ' })).toBeUndefined()
+    expect(resolveMemberModel({ ...worker, model: 'inherit' })).toBeUndefined()
+    // A blank lead model must not be promoted into an inherited label either.
+    expect(resolveMemberModel({ ...worker }, '   ')).toBeUndefined()
+  })
+
+  it('keeps a model learned from an earlier frame when a later frame omits it', () => {
+    const earlier = memberSnapshot('2026-08-08T07:00:00.000Z', [
+      { ...worker, model: 'claude-opus-4-8' },
+    ])
+    const later = memberSnapshot('2026-08-08T07:05:00.000Z', [{ ...worker }])
+
+    const merged = snapshotWithHistoricalMembers([earlier, later], 1)
+
+    expect(merged?.team.members[0]?.model).toBe('claude-opus-4-8')
+  })
+
+  it('lets a later frame update the model when it actually carries one', () => {
+    const earlier = memberSnapshot('2026-08-08T07:00:00.000Z', [
+      { ...worker, model: 'claude-opus-4-8' },
+    ])
+    const later = memberSnapshot('2026-08-08T07:05:00.000Z', [
+      { ...worker, model: 'claude-haiku-4-5' },
+    ])
+
+    const merged = snapshotWithHistoricalMembers([earlier, later], 1)
+
+    expect(merged?.team.members[0]?.model).toBe('claude-haiku-4-5')
   })
 })

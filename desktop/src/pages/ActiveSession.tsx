@@ -316,11 +316,12 @@ function TerminalResizeHandle() {
   )
 }
 
-export function ActiveSession() {
+export function ActiveSession({ sessionId, active = true }: { sessionId?: string; active?: boolean } = {}) {
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const workbenchPanelRef = useRef<HTMLElement>(null)
-  const activeTabId = useTabStore((s) => s.activeTabId)
-  const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === s.activeTabId)?.type ?? null)
+  const selectedTabId = useTabStore((s) => s.activeTabId)
+  const activeTabId = sessionId ?? selectedTabId
+  const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.type ?? null)
   const sessions = useSessionStore((s) => s.sessions)
   const connectToSession = useChatStore((s) => s.connectToSession)
   const stopBackgroundTask = useChatStore((s) => s.stopBackgroundTask)
@@ -408,12 +409,12 @@ export function ActiveSession() {
 
   // Subscribed once for the app, not per task: the owner of each event is
   // resolved from the page id, so a background task's pages keep reporting.
-  useWorkspaceBrowserEventBridge(!isMobileLayout)
-  useWorkspaceFocusReturn(workspaceEnabled ? activeTabId : null)
+  useWorkspaceBrowserEventBridge(active && !isMobileLayout)
+  useWorkspaceFocusReturn(active && workspaceEnabled ? activeTabId : null)
   useWorkspaceShortcuts({
     sessionId: activeTabId,
     cwd: getSessionTerminalCwd(session) ?? '',
-    enabled: workspaceEnabled,
+    enabled: active && workspaceEnabled,
   })
 
   useEffect(() => {
@@ -877,7 +878,7 @@ export function ActiveSession() {
                   {historyError}
                 </div>
               ) : (
-                <MessageList compact={showRightPanel} mobileLayout={isMobileLayout} />
+                <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} />
               )}
             </>
           )}
@@ -897,6 +898,8 @@ export function ActiveSession() {
           ) : null}
 
           <ChatInput
+            sessionId={activeTabId ?? undefined}
+            visible={active}
             variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
             compact={showRightPanel}
           />

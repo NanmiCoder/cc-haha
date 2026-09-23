@@ -174,6 +174,119 @@ describe('CronService', () => {
       renameSpy.mockRestore()
     }
   })
+
+  it('should retry the atomic write when rename returns EPERM', async () => {
+    const originalRename = fs.rename
+    let renameCalls = 0
+
+    const renameSpy = spyOn(fs, 'rename')
+    renameSpy.mockImplementation(async (...args) => {
+      renameCalls += 1
+
+      if (renameCalls === 1) {
+        const error = new Error(
+          'EPERM: operation not permitted, rename tmp -> scheduled_tasks.json',
+        ) as NodeJS.ErrnoException
+        error.code = 'EPERM'
+        throw error
+      }
+
+      return originalRename(...args)
+    })
+
+    try {
+      const task = await service.createTask({
+        cron: '0 9 * * *',
+        prompt: 'Retry rename on EPERM',
+      })
+
+      const tasks = await service.listTasks()
+      expect(task.id).toBeDefined()
+      expect(tasks).toHaveLength(1)
+      expect(tasks[0]?.prompt).toBe('Retry rename on EPERM')
+      expect(renameCalls).toBe(2)
+    } finally {
+      renameSpy.mockRestore()
+    }
+  })
+
+  it('should keep both updates when updateLastFired races across tasks', async () => {
+    // 复现调度器同一分钟并发触发多个任务：每个任务各自调用 updateLastFired
+    const first = await service.createTask({
+      cron: '* * * * *',
+      prompt: 'first',
+    })
+    const second = await service.createTask({
+      cron: '* * * * *',
+      prompt: 'second',
+    })
+
+    await Promise.all([
+      service.updateLastFired(first.id, '2026-01-01T00:00:00.000Z'),
+      service.updateLastFired(second.id, '2026-01-01T00:00:00.000Z'),
+    ])
+
+    const tasks = await service.listTasks()
+    const firstTask = tasks.find((t) => t.id === first.id)
+    const secondTask = tasks.find((t) => t.id === second.id)
+    expect(firstTask?.lastFiredAt).toBe('2026-01-01T00:00:00.000Z')
+    expect(secondTask?.lastFiredAt).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('should persist a task created while updateLastFired is in flight', async () => {
+    const existing = await service.createTask({
+      cron: '* * * * *',
+      prompt: 'existing',
+    })
+
+    const [, created] = await Promise.all([
+      service.updateLastFired(existing.id, '2026-01-01T00:00:00.000Z'),
+      service.createTask({ cron: '* * * * *', prompt: 'racing create' }),
+    ])
+
+    const tasks = await service.listTasks()
+    expect(tasks.some((t) => t.id === created.id)).toBe(true)
+  })
+
+  it('should serialize mutations across separate service instances', async () => {
+    // API 层与调度器持有不同的 CronService 实例，但写同一个文件
+    const apiInstance = new CronService()
+    const schedulerInstance = new CronService()
+
+    const existing = await apiInstance.createTask({
+      cron: '* * * * *',
+      prompt: 'existing',
+    })
+
+    const [, created] = await Promise.all([
+      schedulerInstance.updateLastFired(
+        existing.id,
+        '2026-01-01T00:00:00.000Z',
+      ),
+      apiInstance.createTask({ cron: '* * * * *', prompt: 'racing create' }),
+    ])
+
+    const tasks = await apiInstance.listTasks()
+    expect(tasks.some((t) => t.id === created.id)).toBe(true)
+    expect(
+      tasks.find((t) => t.id === existing.id)?.lastFiredAt,
+    ).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('should not resurrect a deleted task when updateLastFired races the delete', async () => {
+    const doomed = await service.createTask({
+      cron: '* * * * *',
+      prompt: 'doomed',
+    })
+
+    await Promise.all([
+      service.deleteTask(doomed.id),
+      service.updateLastFired(doomed.id, '2026-01-01T00:00:00.000Z'),
+    ])
+
+    const tasks = await service.listTasks()
+    expect(tasks).toHaveLength(0)
+  })
 })
 
 // ─── SearchService tests ────────────────────────────────────────────────────

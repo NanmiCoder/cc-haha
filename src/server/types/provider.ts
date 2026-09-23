@@ -55,6 +55,9 @@ export const ModelMappingSchema = z.object({
 
 export const Model1mSupportSchema = z.object({
   main: z.boolean(),
+  // Defaulted rather than required: providers saved before the Fable slot
+  // existed carry no `fable` key, and a required field would reject them.
+  fable: z.boolean().default(false),
   haiku: z.boolean(),
   sonnet: z.boolean(),
   opus: z.boolean(),

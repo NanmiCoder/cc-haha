@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTabStore } from '../../stores/tabStore'
 import { EmptySession } from '../../pages/EmptySession'
 import { ActiveSession } from '../../pages/ActiveSession'
@@ -17,6 +17,18 @@ export function ContentRouter() {
   const tabs = useTabStore((s) => s.tabs)
   const activeTabType = tabs.find((t) => t.sessionId === activeTabId)?.type
   const terminalTabs = tabs.filter((tab) => tab.type === 'terminal')
+  const activeSessionId = activeTabType === 'session' ? activeTabId : null
+  const [lastSessionId, setLastSessionId] = useState<string | null>(activeSessionId)
+  const retainedSessionId = activeSessionId ?? (
+    tabs.some((tab) => tab.sessionId === lastSessionId && tab.type === 'session')
+      ? lastSessionId
+      : null
+  )
+
+  useEffect(() => {
+    if (activeSessionId) setLastSessionId(activeSessionId)
+    else if (lastSessionId && !retainedSessionId) setLastSessionId(null)
+  }, [activeSessionId, lastSessionId, retainedSessionId])
 
   useEffect(() => {
     if (activeTabType !== 'workbench') return
@@ -79,12 +91,24 @@ export function ContentRouter() {
     page = teamTab?.teamLeadSessionId
       ? <AgentTeamsWorkbenchTab tabId={activeTabId} leadSessionId={teamTab.teamLeadSessionId} />
       : <EmptySession />
-  } else if (activeTabType !== 'terminal') {
-    page = <ActiveSession />
+  } else if (activeTabType !== 'terminal' && activeTabType !== 'session') {
+    page = <EmptySession />
   }
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
+      {retainedSessionId && (
+        <div
+          aria-hidden={!activeSessionId}
+          {...(activeSessionId ? {} : { inert: '' })}
+          data-testid="session-tab-panel"
+          className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
+            activeSessionId ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0'
+          }`}
+        >
+          <ActiveSession sessionId={retainedSessionId} active={Boolean(activeSessionId)} />
+        </div>
+      )}
       {page && (
         <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden">
           {page}

@@ -21,6 +21,7 @@ export type ModelMapping = {
 
 export type Model1mSupport = {
   main: boolean
+  fable: boolean
   haiku: boolean
   sonnet: boolean
   opus: boolean

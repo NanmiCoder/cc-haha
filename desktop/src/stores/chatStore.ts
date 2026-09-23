@@ -2838,6 +2838,12 @@ function shouldPrewarmSession(sessionId: string): boolean {
 }
 
 export const useChatStore = create<ChatStore>((setState, get) => {
+  let lastViewedSessionId: string | null = null
+  useTabStore.subscribe((tabState, previousTabState) => {
+    if (tabState.activeTabId === previousTabState.activeTabId) return
+    const previousTab = previousTabState.tabs.find(tab => tab.sessionId === previousTabState.activeTabId)
+    if (previousTab?.type === 'session') lastViewedSessionId = previousTab.sessionId
+  })
   const set = (update: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => {
     setState((previous) => {
       const patch = typeof update === 'function' ? update(previous) : update
@@ -2863,6 +2869,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const tabState = useTabStore.getState()
       const activeTab = tabState.tabs.find(tab => tab.sessionId === tabState.activeTabId)
       const activeIds = new Set([tabState.activeTabId, activeTab?.sourceSessionId, activeTab?.workbenchSessionId, activeTab?.teamLeadSessionId])
+      // Keep the chat the user just left warm while a non-chat page is open.
+      // Other idle tabs remain eligible, and closing this tab releases it.
+      if (activeTab?.type !== 'session' && tabState.tabs.some(tab => tab.type === 'session' && tab.sessionId === lastViewedSessionId)) {
+        activeIds.add(lastViewedSessionId)
+      }
       const cacheSizes = new Map(Object.entries(sessions).map(([id, session]) => [id, historyCacheBytes(session)]))
       let retainedBytes = [...cacheSizes.values()].reduce((total, bytes) => total + bytes, 0)
       if (retainedBytes > CHAT_HISTORY_CACHE_BYTES) {

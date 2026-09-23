@@ -170,4 +170,53 @@ describe('AgentTeamsMemberInspector', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onOpenExecution).toHaveBeenCalledTimes(1)
   })
+
+  it('reports the model a teammate runs on, and flags one that inherits the lead', () => {
+    const lead: TeamMember = {
+      agentId: 'lead@team-a',
+      name: 'lead',
+      role: 'Lead',
+      status: 'running',
+      model: 'claude-opus-4-8',
+    }
+    const base = snapshot('2026-08-08T07:00:00.000Z', 'pending')
+    const withLead: TeamWorkbenchSnapshot = {
+      ...base,
+      team: { ...base.team, members: [lead, builder, reviewer] },
+    }
+    const renderMember = (member: TeamMember) => render(
+      <AgentTeamsMemberInspector
+        snapshots={[withLead]}
+        selectedIndex={0}
+        snapshot={withLead}
+        member={member}
+        isLead={false}
+        leadIsStreaming={false}
+        onBack={vi.fn()}
+        onClose={vi.fn()}
+        onOpenExecution={vi.fn()}
+      />,
+    )
+
+    // A teammate with its own model shows the full id, not the short family.
+    const own = renderMember({ ...builder, model: 'claude-haiku-4-5' })
+    const ownCell = screen.getByTestId('agent-teams-member-model')
+    expect(ownCell.textContent).toBe('claude-haiku-4-5')
+    expect(ownCell.getAttribute('data-model-inherited')).toBe('false')
+    own.unmount()
+
+    // One with no model of its own names where the model comes from.
+    renderMember({ ...builder })
+    const inheritedCell = screen.getByTestId('agent-teams-member-model')
+    expect(inheritedCell.textContent).toBe('Inherit from lead · claude-opus-4-8')
+    expect(inheritedCell.getAttribute('data-model-inherited')).toBe('true')
+  })
+
+  it('never leaves the model cell blank when nothing is known', () => {
+    renderInspector()
+
+    const cell = screen.getByTestId('agent-teams-member-model')
+    expect(cell.textContent).toBe('Unknown')
+    expect(cell.textContent).not.toContain('undefined')
+  })
 })

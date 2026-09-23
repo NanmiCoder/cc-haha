@@ -79,6 +79,8 @@ type Attachment = ComposerAttachment
 type ChatInputProps = {
   variant?: 'default' | 'hero'
   compact?: boolean
+  sessionId?: string
+  visible?: boolean
 }
 
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
@@ -136,7 +138,7 @@ function insertComposerTokenAtRange(value: string, start: number, end: number, t
   }
 }
 
-export function ChatInput({ variant = 'default', compact = false }: ChatInputProps) {
+export function ChatInput({ variant = 'default', compact = false, sessionId, visible = true }: ChatInputProps) {
   const t = useTranslation()
   const isMobileComposer = useMobileViewport() && !isDesktopRuntime()
   // The shell, not the panel inside it: the panel's own `max-w` changes with
@@ -206,9 +208,10 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     sendQueuedUserMessage,
     setPreparingTurn,
   } = useChatStore()
-  const activeTabId = useTabStore((s) => s.activeTabId)
+  const selectedTabId = useTabStore((s) => s.activeTabId)
+  const activeTabId = sessionId ?? selectedTabId
   const activeTabType = useTabStore((s) =>
-    s.tabs.find((tab) => tab.sessionId === s.activeTabId)?.type,
+    s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.type,
   )
   const sessionState = useChatStore((s) => activeTabId ? s.sessions[activeTabId] : undefined)
   const repositoryLaunchDraft = sessionState?.repositoryLaunchDraft
@@ -408,8 +411,14 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
   }, [mentions])
 
   useEffect(() => {
-    composerRef.current?.focus()
-  }, [isActive])
+    if (visible) composerRef.current?.focus()
+  }, [isActive, visible])
+
+  useEffect(() => {
+    if (visible) return
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && panelRef.current?.contains(focused)) focused.blur()
+  }, [visible])
 
   useEffect(() => {
     if (!composerPrefill || !activeTabId) return
@@ -439,7 +448,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     setAtCursorPos(-1)
 
     requestAnimationFrame(() => {
-      composerRef.current?.focus()
+      if (visible) composerRef.current?.focus()
       if (composerPrefill.mode !== 'append') {
         composerRef.current?.setSelectionOffsets(composerPrefill.text.length)
       }
@@ -451,6 +460,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     composerPrefill,
     setComposerAttachments,
     setComposerInput,
+    visible,
   ])
 
   useEffect(() => {
@@ -473,7 +483,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     clearComposerInsertion(activeTabId, composerInsertion.nonce)
 
     requestAnimationFrame(() => {
-      composerRef.current?.focus()
+      if (visible) composerRef.current?.focus()
       composerRef.current?.setSelectionOffsets(next.cursorPos)
     })
   }, [
@@ -481,6 +491,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     addWorkspaceReference,
     clearComposerInsertion,
     composerInsertion,
+    visible,
     isMemberSession,
     setComposerInput,
   ])

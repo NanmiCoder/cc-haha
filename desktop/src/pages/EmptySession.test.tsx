@@ -838,7 +838,7 @@ describe('EmptySession', () => {
           sonnet: 'MiniMax-M3',
           opus: 'MiniMax-M3',
         },
-        model1mSupport: { main: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
+        model1mSupport: { main: enabled, fable: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
         toolSearchEnabled: true,
       }],
       activeId: 'provider-minimax',

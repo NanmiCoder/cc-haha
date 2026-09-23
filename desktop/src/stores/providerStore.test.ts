@@ -152,7 +152,7 @@ describe('providerStore runtime refresh', () => {
   })
 
   it.each([true, false])('refreshes saved model capabilities for idle, disconnected and draft selections (1m=%s)', async (enabled) => {
-    const provider = makeProvider({ model1mSupport: { main: enabled, haiku: false, sonnet: false, opus: enabled } })
+    const provider = makeProvider({ model1mSupport: { main: enabled, fable: false, haiku: false, sonnet: false, opus: enabled } })
     providersApiMock.update.mockResolvedValue({ provider })
     providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
     chatStoreState.sessions = {
@@ -197,7 +197,7 @@ describe('providerStore runtime refresh', () => {
   })
 
   it('reconciles restored selections when provider capabilities arrive after connection', async () => {
-    const provider = makeProvider({ model1mSupport: { main: true, haiku: false, sonnet: false, opus: false } })
+    const provider = makeProvider({ model1mSupport: { main: true, fable: false, haiku: false, sonnet: false, opus: false } })
     providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
     chatStoreState.sessions = { restored: { connectionState: 'connected', chatState: 'idle' } }
     runtimeStoreState.selections = { restored: { providerId: provider.id, modelId: 'model-main' } }

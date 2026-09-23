@@ -176,11 +176,12 @@ function normalizeModel1mSupport(
   if (!model1mSupport) return undefined
   const normalized = {
     main: model1mSupport.main === true,
+    fable: model1mSupport.fable === true,
     haiku: model1mSupport.haiku === true,
     sonnet: model1mSupport.sonnet === true,
     opus: model1mSupport.opus === true,
   }
-  return MODEL_SLOTS.some((slot) => normalized[slot]) ? normalized : undefined
+  return Object.values(normalized).some(Boolean) ? normalized : undefined
 }
 
 export function normalizeImageGeneration(
@@ -209,7 +210,9 @@ function applyModel1mSupportMapping(
 ): SavedProvider['models'] {
   return {
     main: applyModel1mSupport(models.main, model1mSupport?.main),
-    ...(models.fable ? { fable: models.fable.trim() } : {}),
+    ...(models.fable !== undefined
+      ? { fable: applyModel1mSupport(models.fable, model1mSupport?.fable) }
+      : {}),
     haiku: applyModel1mSupport(models.haiku, model1mSupport?.haiku),
     sonnet: applyModel1mSupport(models.sonnet, model1mSupport?.sonnet),
     opus: applyModel1mSupport(models.opus, model1mSupport?.opus),

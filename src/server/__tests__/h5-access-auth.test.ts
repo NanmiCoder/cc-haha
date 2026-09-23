@@ -302,6 +302,23 @@ describe('remote H5 auth and CORS integration', () => {
     }
   })
 
+  test('rejects loopback preflight when no renderer origin is trusted', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'fixture-desktop-token'
+    await restartRemoteServer()
+
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:1420',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+      },
+    })
+
+    expect(response.status).toBe(403)
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
   test('serves the packaged H5 shell and static assets from the remote server', async () => {
     const shellResponse = await fetch(`${baseUrl}/`)
     expect(shellResponse.status).toBe(200)

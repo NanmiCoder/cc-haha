@@ -377,6 +377,8 @@ export function startServer(port = PORT, host = HOST) {
         })
         const h5AccessControlBlocked = isH5AccessControlRequest(req, url, h5RequestContext)
 
+        // The configured dev renderer's preflight is classified as local-trusted.
+        // All other browser origins still pass through these capability gates.
         if (h5AccessControlBlocked) {
           return isLocalCredentialOnlyPath(url.pathname)
             ? localCredentialRejectedResponse()

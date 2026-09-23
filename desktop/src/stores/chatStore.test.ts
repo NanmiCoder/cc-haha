@@ -3,6 +3,7 @@ import type { AgentTaskNotification, UIMessage } from '../types/chat'
 import type { MessageEntry, SessionListItem } from '../types/session'
 import type { SessionHistoryPage } from '../api/sessions'
 import type { SavedProvider } from '../types/provider'
+import type { Tab } from './tabStore'
 import {
   buildMainSessionActivityModel,
   buildSessionActivityModel,
@@ -36,6 +37,7 @@ const {
   connectionStateHandlers,
   sendSubagentMessageMock,
   tabStoreSnapshot,
+  tabStoreListeners,
   providerStoreSnapshot,
 } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -76,7 +78,8 @@ const {
   },
   connectionStateHandlers: new Map<string, (state: 'connecting' | 'connected' | 'reconnecting' | 'disconnected') => void>(),
   sendSubagentMessageMock: vi.fn(async () => ({ ok: true })),
-  tabStoreSnapshot: { tabs: [] as Array<Record<string, unknown>> },
+  tabStoreSnapshot: { tabs: [] as Tab[], activeTabId: null as string | null },
+  tabStoreListeners: new Set<(state: any, previous: any) => void>(),
   providerStoreSnapshot: { providers: [] as SavedProvider[], activeId: null as string | null },
 }))
 
@@ -136,9 +139,14 @@ vi.mock('./tabStore', () => ({
   useTabStore: {
     getState: () => ({
       tabs: tabStoreSnapshot.tabs,
+      activeTabId: tabStoreSnapshot.activeTabId,
       updateTabStatus: updateTabStatusMock,
       updateTabTitle: updateTabTitleMock,
     }),
+    subscribe: (listener: (state: any, previous: any) => void) => {
+      tabStoreListeners.add(listener)
+      return () => tabStoreListeners.delete(listener)
+    },
   },
 }))
 
@@ -5265,7 +5273,7 @@ describe('chatStore history mapping', () => {
       id: 'provider-1', presetId: 'custom', name: 'DeepSeek', apiKey: 'fixture',
       baseUrl: 'http://127.0.0.1:1', apiFormat: 'anthropic',
       models: { main: model, haiku: '', sonnet: '', opus: '' },
-      model1mSupport: { main: enabled, haiku: false, sonnet: false, opus: false },
+      model1mSupport: { main: enabled, fable: false, haiku: false, sonnet: false, opus: false },
     }]
     const staleSelection = { providerId: 'provider-1', modelId: `${model}${enabled ? '' : '[1m]'}`, effortLevel: 'high' as const }
     const expectedSelection = { ...staleSelection, modelId: `${model}${enabled ? '[1m]' : ''}` }
@@ -5290,7 +5298,7 @@ describe('chatStore history mapping', () => {
       id: 'provider-1', presetId: 'custom', name: 'DeepSeek', apiKey: 'fixture',
       baseUrl: 'http://127.0.0.1:1', apiFormat: 'anthropic',
       models: { main: 'deepseek-v4.1', haiku: '', sonnet: '', opus: '' },
-      model1mSupport: { main: true, haiku: false, sonnet: false, opus: false },
+      model1mSupport: { main: true, fable: false, haiku: false, sonnet: false, opus: false },
     }]
     useChatStore.getState().sendMessage(TEST_SESSION_ID, 'continue')
     expect(sendMock.mock.calls.slice(0, 2)).toEqual([
@@ -14792,7 +14800,9 @@ describe('chatStore history mapping', () => {
     const subagentSessionId = '__subagent__parent-session__tool-agent-1'
     tabStoreSnapshot.tabs = [{
       sessionId: subagentSessionId,
+      title: 'Subagent',
       type: 'subagent',
+      status: 'idle',
       sourceSessionId: 'parent-session',
       subagentToolUseId: 'tool-agent-1',
       subagentTaskId: 'agent-1',
@@ -15873,9 +15883,11 @@ describe('chatStore inactive complete-page retention', () => {
     const { readFileSync } = await import('node:fs')
     imageData = `data:image/png;base64,${readFileSync('src/assets/pets/action-sheet-guide.zh.png').toString('base64')}`
     const { useTabStore } = await import('./tabStore')
+    tabStoreSnapshot.tabs = []
+    tabStoreSnapshot.activeTabId = null
     const tabState = useTabStore.getState()
     activeSessionId = 'image-cache-0'
-    const spy = vi.spyOn(useTabStore, 'getState').mockImplementation(() => ({ ...tabState, activeTabId: activeSessionId }))
+    const spy = vi.spyOn(useTabStore, 'getState').mockImplementation(() => ({ ...tabState, tabs: tabStoreSnapshot.tabs, activeTabId: activeSessionId }))
     restoreTabState = () => spy.mockRestore()
     getMemberBySessionIdMock.mockReturnValue(null)
     vi.mocked(sessionsApi.getFullHistory).mockReset()
@@ -15885,7 +15897,45 @@ describe('chatStore inactive complete-page retention', () => {
 
   afterEach(() => {
     restoreTabState()
+    tabStoreSnapshot.tabs = []
+    tabStoreSnapshot.activeTabId = null
     useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  it('keeps the last open chat history when a settings or other page takes focus', () => {
+    const sessions = imageSessions()
+    const recentId = 'image-cache-4'
+    for (const [id, session] of Object.entries(sessions)) {
+      useChatStore.getState().markHistoryRowsDurable(id, session.messages)
+    }
+    const sessionTab: Tab = { sessionId: recentId, type: 'session', title: 'Recent', status: 'idle' }
+    const settingsTab: Tab = { sessionId: '__settings__', type: 'settings', title: 'Settings', status: 'idle' }
+    const marketTab: Tab = { sessionId: '__market__', type: 'market', title: 'Market', status: 'idle' }
+    const previous = { tabs: [sessionTab], activeTabId: recentId }
+    const settings = { tabs: [sessionTab, settingsTab], activeTabId: settingsTab.sessionId }
+    tabStoreSnapshot.tabs = settings.tabs
+    activeSessionId = settings.activeTabId
+    for (const listener of tabStoreListeners) listener(settings, previous)
+
+    useChatStore.getState().applyBoundedUpdate(() => ({ sessions }))
+    expect(useChatStore.getState().sessions[recentId]!.messages).toHaveLength(1)
+    expect(useChatStore.getState().sessions['image-cache-0']!.messages).toHaveLength(0)
+
+    const market = { tabs: [...settings.tabs, marketTab], activeTabId: marketTab.sessionId }
+    tabStoreSnapshot.tabs = market.tabs
+    activeSessionId = market.activeTabId
+    for (const listener of tabStoreListeners) listener(market, settings)
+    useChatStore.getState().applyBoundedUpdate(state => ({ sessions: { ...state.sessions } }))
+    expect(useChatStore.getState().sessions[recentId]!.messages).toHaveLength(1)
+
+    const closed = { tabs: [settingsTab, marketTab], activeTabId: marketTab.sessionId }
+    tabStoreSnapshot.tabs = closed.tabs
+    for (const listener of tabStoreListeners) listener(closed, market)
+    for (const [id, session] of Object.entries(sessions)) {
+      useChatStore.getState().markHistoryRowsDurable(id, session.messages)
+    }
+    useChatStore.getState().applyBoundedUpdate(() => ({ sessions }))
+    expect(useChatStore.getState().sessions[recentId]!.messages).toHaveLength(0)
   })
 
   it('keeps live rows intact while an idle-tab eviction would drop durable pages', () => {

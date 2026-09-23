@@ -25,6 +25,7 @@ export type TeamMember = {
   currentTask?: string
   color?: AgentColor
   sessionId?: string
+  model?: string
 }
 
 export type TeamDetail = {
