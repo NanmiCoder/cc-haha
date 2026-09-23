@@ -106,6 +106,15 @@ export const OPENAI_CODEX_MODEL_CATALOG: OpenAIModelCatalogEntry[] = [
     contextWindow: OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW,
   },
   {
+    value: 'gpt-5.3-codex-spark',
+    label: 'GPT-5.3-Codex-Spark',
+    description: 'Ultra-fast coding model',
+    descriptionForModel: 'GPT-5.3-Codex-Spark - ultra-fast coding model',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    contextWindow: OPENAI_CODEX_SPARK_EFFECTIVE_CONTEXT_WINDOW,
+  },
+  {
     value: 'gpt-5.4',
     label: 'GPT-5.4',
     description: 'Strong general-purpose model',
@@ -284,10 +293,7 @@ export function getOpenAICodexContextWindowForModel(
     return OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW
   }
 
-  if (
-    normalized === 'gpt-5.4' ||
-    normalized === 'gpt-5.4-pro'
-  ) {
+  if (normalized === 'gpt-5.4' || normalized === 'gpt-5.4-pro') {
     return OPENAI_CODEX_LARGE_EFFECTIVE_CONTEXT_WINDOW
   }
 

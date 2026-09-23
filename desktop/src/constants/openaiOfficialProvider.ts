@@ -37,11 +37,27 @@ export const OPENAI_OFFICIAL_MODELS: ModelInfo[] = [
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
+    id: 'gpt-6-astra',
+    name: 'GPT-6 Astra',
+    description: 'Frontier model for complex reasoning and agentic work',
+    context: '997500',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'gpt-5.3-codex',
     name: 'GPT-5.3 Codex',
     description: 'Best for coding and agentic work',
     context: '',
     defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'gpt-5.3-codex-spark',
+    name: 'GPT-5.3-Codex-Spark',
+    description: 'Ultra-fast coding model',
+    context: '121600',
+    defaultReasoningEffort: 'high',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
   },
   {

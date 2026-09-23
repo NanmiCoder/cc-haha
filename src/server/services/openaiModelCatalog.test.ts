@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -78,6 +78,45 @@ describe('desktop OpenAI model catalog credentials', () => {
     expect(await getDesktopOpenAICodexModelCatalog({ fetchOverride, forceRefresh: true }))
       .toEqual(OPENAI_CODEX_MODEL_CATALOG)
     expect(requests).toHaveLength(2)
+  })
+
+  test('does not wait for a token refresh on the startup path', async () => {
+    await saveAccount('account-a')
+    let finishRefresh!: (value: null) => void
+    const refresh = spyOn(hahaOpenAIOAuthService, 'ensureFreshTokens')
+      .mockImplementation(() => new Promise(resolve => { finishRefresh = resolve }))
+    try {
+      expect(await getDesktopOpenAICodexModelCatalog()).toEqual(OPENAI_CODEX_MODEL_CATALOG)
+      expect(refresh).toHaveBeenCalledTimes(1)
+    } finally {
+      refresh.mockRestore()
+      finishRefresh?.(null)
+      clearOpenAICodexModelCatalogCache()
+    }
+  })
+
+  test('does not refresh credentials when the account catalog is cached', async () => {
+    await saveAccount('account-a')
+    const fetchOverride: typeof fetch = async () => Response.json({
+      models: [{ slug: 'cached-account-model', visibility: 'list' }],
+    })
+    const cached = await getDesktopOpenAICodexModelCatalog({ fetchOverride, forceRefresh: true })
+    const refresh = spyOn(hahaOpenAIOAuthService, 'ensureFreshTokens')
+    try {
+      expect(await getDesktopOpenAICodexModelCatalog({ fetchOverride })).toEqual(cached)
+      expect(refresh).not.toHaveBeenCalled()
+    } finally {
+      refresh.mockRestore()
+    }
+  })
+
+  test('propagates an explicitly requested refresh error instead of reporting fallback as fresh', async () => {
+    await saveAccount('account-a')
+    await expect(getDesktopOpenAICodexModelCatalog({
+      forceRefresh: true,
+      throwOnForceRefreshError: true,
+      fetchOverride: async () => new Response('unavailable', { status: 503 }),
+    })).rejects.toThrow('HTTP 503')
   })
 
   test('unreadable desktop tokens fall back without consulting CLI credentials', async () => {
