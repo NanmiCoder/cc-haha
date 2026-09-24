@@ -9,6 +9,7 @@ import {
   getTranscriptPathForSession,
   loadTranscriptFile,
   readAgentMetadata,
+  recordContentReplacementDurably,
   recordTranscript,
   resetProjectForTesting,
   writeAgentMetadata,
@@ -261,5 +262,63 @@ describe('sessionStorage flush', () => {
 
     const content = await fs.readFile(transcriptPath, 'utf-8')
     expect(content).toContain('"customTitle":"late enqueue"')
+  })
+
+  it('waits for a content replacement to be appended', async () => {
+    const sessionId = 'aaaaaaaa-1111-4111-8111-111111111111'
+    switchSession(sessionId as SessionId)
+    resetProjectForTesting()
+    await recordTranscript([{
+      type: 'user',
+      uuid: 'bbbbbbbb-2222-4222-8222-222222222222',
+      message: { role: 'user', content: 'materialize transcript' },
+    } as never])
+    await flushSessionStorage()
+
+    await recordContentReplacementDurably([
+      {
+        kind: 'tool-result',
+        toolUseId: 'read-1',
+        replacement: '[Large tool result content cleared]',
+      },
+    ])
+
+    const transcript = await fs.readFile(
+      getTranscriptPathForSession(sessionId),
+      'utf-8',
+    )
+    expect(transcript).toContain('"toolUseId":"read-1"')
+  })
+
+  it('rejects a durable replacement when the transcript identity changes', async () => {
+    const sessionId = 'cccccccc-3333-4333-8333-333333333333'
+    switchSession(sessionId as SessionId)
+    resetProjectForTesting()
+    await recordTranscript([{
+      type: 'user',
+      uuid: 'dddddddd-4444-4444-8444-444444444444',
+      message: { role: 'user', content: 'materialize transcript' },
+    } as never])
+    await flushSessionStorage()
+
+    const transcriptPath = getTranscriptPathForSession(sessionId)
+    const replacementResult = recordContentReplacementDurably([
+      {
+        kind: 'tool-result',
+        toolUseId: 'read-discarded',
+        replacement: '[Large tool result content cleared]',
+      },
+    ]).then(
+      () => undefined,
+      error => error as Error,
+    )
+    await fs.rename(transcriptPath, `${transcriptPath}.replaced`)
+    await fs.writeFile(transcriptPath, '')
+    await flushSessionStorage()
+
+    expect(await replacementResult).toBeInstanceOf(Error)
+    expect(await fs.readFile(transcriptPath, 'utf-8')).not.toContain(
+      'read-discarded',
+    )
   })
 })
