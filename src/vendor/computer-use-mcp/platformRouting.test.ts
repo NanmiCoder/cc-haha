@@ -213,7 +213,9 @@ function makeWindowsAdapter(calls: string[]): ComputerUseHostAdapter {
     },
     async drag() {},
     async moveMouse() {},
-    async scroll() {},
+    async scroll(x: number, y: number, dx: number, dy: number) {
+      calls.push(`scroll:${x},${y},${dx},${dy}`)
+    },
     async getFrontmostApp() {
       calls.push('getFrontmostApp')
       return {
@@ -662,6 +664,36 @@ describe('Computer Use platform routing', () => {
       expect(calls).toContain('type:ok')
       expect(calls).not.toContain('type:o')
       expect(calls).not.toContain('type:k')
+
+      // scroll_direction must reach the executor as native wheel units, where a
+      // positive dy scrolls UP (MOUSEEVENTF_WHEEL). "down" therefore has to be
+      // the negative delta; the inverse mapping made the tool scroll backwards.
+      expect(
+        (
+          await connection.client.callTool({
+            name: 'scroll',
+            arguments: {
+              coordinate: [10, 20],
+              scroll_direction: 'down',
+              scroll_amount: 3,
+            },
+          })
+        ).isError,
+      ).toBeFalsy()
+      expect(calls).toContain('scroll:10,20,0,-3')
+      expect(
+        (
+          await connection.client.callTool({
+            name: 'scroll',
+            arguments: {
+              coordinate: [10, 20],
+              scroll_direction: 'up',
+              scroll_amount: 3,
+            },
+          })
+        ).isError,
+      ).toBeFalsy()
+      expect(calls).toContain('scroll:10,20,0,3')
 
       const blockedKey = await connection.client.callTool({
         name: 'key',
