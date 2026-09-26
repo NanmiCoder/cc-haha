@@ -2250,9 +2250,12 @@ async function handleScroll(
   if (amount > 100) {
     return errorResult("scroll_amount exceeds maximum of 100", "bad_args");
   }
-  // up → dy = -amount; down → dy = +amount; left → dx = -amount; right → dx = +amount.
+  // Executor deltas are platform-native wheel units: positive dy scrolls up and
+  // positive dx scrolls right — the same protocol the macOS helper speaks. The
+  // old mapping sent "down" a positive dy, which MOUSEEVENTF_WHEEL reads as a
+  // wheel rotation away from the user, so vertical scrolling came out inverted.
   const dx = dir === "left" ? -amount : dir === "right" ? amount : 0;
-  const dy = dir === "up" ? -amount : dir === "down" ? amount : 0;
+  const dy = dir === "up" ? amount : dir === "down" ? -amount : 0;
 
   const gate = await runInputActionGates(adapter, overrides, subGates);
   if (gate) return gate;
