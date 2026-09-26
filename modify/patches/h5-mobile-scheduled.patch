@@ -1,0 +1,29 @@
+diff --git a/desktop/src/components/layout/Sidebar.test.tsx b/desktop/src/components/layout/Sidebar.test.tsx
+index 5ec9ff57..43b06079 100644
+--- a/desktop/src/components/layout/Sidebar.test.tsx
++++ b/desktop/src/components/layout/Sidebar.test.tsx
+@@ -2176,8 +2176,9 @@ describe('Sidebar', () => {
+ 
+     render(<Sidebar isMobile onRequestClose={onRequestClose} />)
+ 
+-    expect(screen.queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
+-    expect(screen.queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
++    // market + scheduled are intentionally exposed on mobile (H5 access)
++    expect(screen.getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
++    expect(screen.getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+     expect(useTabStore.getState().activeTabId).toBe('__settings__')
+diff --git a/desktop/src/pages/ScheduledTasks.tsx b/desktop/src/pages/ScheduledTasks.tsx
+index 78bbd8df..d2b7dc85 100644
+--- a/desktop/src/pages/ScheduledTasks.tsx
++++ b/desktop/src/pages/ScheduledTasks.tsx
+@@ -21,7 +21,7 @@ export function ScheduledTasks() {
+ 
+   return (
+     <div className="flex-1 overflow-y-auto">
+-      <div className="animate-screen-pop mx-auto max-w-[1180px] px-11 pb-12 pt-8">
++      <div className="animate-screen-pop mx-auto max-w-[1180px] px-4 pb-12 pt-8 lg:px-11">
+         {/* Header */}
+         <div className="flex items-start justify-between gap-4">
+           <div className="min-w-0">

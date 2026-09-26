@@ -35,6 +35,13 @@ export type H5AccessSettings = {
    * background and shows the result on reconnect. null = built-in 30s default.
    */
   disconnectGraceSeconds: number | null
+  /**
+   * Whether browser H5 access requires the Bearer H5 token. Default false:
+   * every source can access H5 capability paths tokenless (0.0.0.0/0). When
+   * true, public-network sources must carry the token; loopback and
+   * private-network (RFC1918 / IPv6 ULA) sources are always exempt.
+   */
+  requireToken: boolean
 }
 
 export type H5AccessEnableResult = {
@@ -73,6 +80,7 @@ const DEFAULT_STORED_SETTINGS: StoredH5AccessSettings = {
   publicBaseUrl: null,
   fixedPort: null,
   disconnectGraceSeconds: null,
+  requireToken: false,
 }
 
 const TOKEN_HASH_RE = /^[a-f0-9]{64}$/
@@ -101,6 +109,7 @@ function toPublicSettings(settings: StoredH5AccessSettings): H5AccessSettings {
     allowedOrigins: settings.allowedOrigins,
     fixedPort: settings.fixedPort,
     disconnectGraceSeconds: settings.disconnectGraceSeconds,
+    requireToken: settings.requireToken,
     publicBaseUrl: resolveEffectiveH5PublicBaseUrl({
       enabled: settings.enabled,
       storedPublicBaseUrl: settings.publicBaseUrl,
@@ -597,6 +606,9 @@ function normalizeStoredSettings(value: unknown): StoredH5AccessSettings {
     publicBaseUrl,
     fixedPort: normalizeFixedPort(value.fixedPort),
     disconnectGraceSeconds: normalizeDisconnectGraceSeconds(value.disconnectGraceSeconds),
+    // Default-false (tokenless) to match DEFAULT_STORED_SETTINGS; an explicit
+    // true is honored as stored.
+    requireToken: value.requireToken === true,
   }
 }
 
@@ -691,7 +703,9 @@ export class H5AccessService {
     publicBaseUrl?: string | null
     fixedPort?: number | null
     disconnectGraceSeconds?: number | null
+    requireToken?: boolean
   }): Promise<H5AccessSettings> {
+
     return this.managedSettingsService.updateSettings(async (current) => {
       const h5Access = normalizeStoredSettings(current.h5Access)
       let nextPublicBaseUrl: string | null
@@ -743,6 +757,9 @@ export class H5AccessService {
         publicBaseUrl: nextPublicBaseUrl,
         fixedPort: nextFixedPort,
         disconnectGraceSeconds: nextDisconnectGraceSeconds,
+        requireToken: input.requireToken === undefined
+          ? h5Access.requireToken
+          : input.requireToken,
       }
 
       return {

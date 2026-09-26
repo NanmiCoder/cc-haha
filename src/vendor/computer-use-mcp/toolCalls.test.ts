@@ -18,9 +18,7 @@ import {
   resetMouseButtonHeld,
 } from './toolCalls.js'
 import { bindSessionContext } from './mcpServer.js'
-import type { ComputerUseSessionContext } from './types.js'
 import { buildComputerUseTools } from './tools.js'
-import { bindSessionContext } from './mcpServer.js'
 import { COMPUTER_USE_INSTRUCTIONS } from './instructions.js'
 import { isSystemKeyCombo } from './keyBlocklist.js'
 import type {

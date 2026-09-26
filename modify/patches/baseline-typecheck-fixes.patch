@@ -1,0 +1,41 @@
+diff --git a/src/server/index.ts b/src/server/index.ts
+index f651066c..f3cac3b2 100644
+--- a/src/server/index.ts
++++ b/src/server/index.ts
+@@ -301,7 +301,12 @@ export function startServer(port = PORT, host = HOST) {
+     serverPort: () => serverPort,
+   })
+   publicAccessServers.add(publicAccess)
+-  let server: ReturnType<typeof Bun.serve<WebSocketData>>
++  // Named so `serverFetch` can annotate its handle parameter without writing
++  // `typeof server` inside a parameter that itself shadows `server` — that
++  // self-reference made the annotation unresolvable (TS2502) and silently cost
++  // every `server.upgrade` / `server.requestIP` call in the handler its types.
++  type ServerHandle = ReturnType<typeof Bun.serve<WebSocketData>>
++  let server: ServerHandle
+ 
+   // Open SQLite before the first REST request. Discovery still runs in the
+   // background; without this, getPublicStatus() reports `off` and the sidebar
+@@ -314,7 +319,7 @@ export function startServer(port = PORT, host = HOST) {
+     // routing. A request over that socket carries no peer address, which H5 auth
+     // treats as a public (non-LAN) source — used by integration tests to exercise
+     // the "remote browser needs the H5 token" path without a real public IP.
+-    const serverFetch = async (req: Request, server: typeof server): Promise<Response> => {
++    const serverFetch = async (req: Request, server: ServerHandle): Promise<Response> => {
+         const url = new URL(req.url)
+         if (isPublicAccessControlPath(url.pathname)) return publicAccess.control(req)
+ 
+diff --git a/src/vendor/computer-use-mcp/toolCalls.test.ts b/src/vendor/computer-use-mcp/toolCalls.test.ts
+index 8b6d584f..1c45133b 100644
+--- a/src/vendor/computer-use-mcp/toolCalls.test.ts
++++ b/src/vendor/computer-use-mcp/toolCalls.test.ts
+@@ -18,9 +18,7 @@ import {
+   resetMouseButtonHeld,
+ } from './toolCalls.js'
+ import { bindSessionContext } from './mcpServer.js'
+-import type { ComputerUseSessionContext } from './types.js'
+ import { buildComputerUseTools } from './tools.js'
+-import { bindSessionContext } from './mcpServer.js'
+ import { COMPUTER_USE_INSTRUCTIONS } from './instructions.js'
+ import { isSystemKeyCombo } from './keyBlocklist.js'
+ import type {

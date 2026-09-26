@@ -1,0 +1,895 @@
+diff --git a/desktop/src/components/chat/TpsIndicator.test.tsx b/desktop/src/components/chat/TpsIndicator.test.tsx
+new file mode 100644
+index 00000000..769d6e6c
+--- /dev/null
++++ b/desktop/src/components/chat/TpsIndicator.test.tsx
+@@ -0,0 +1,85 @@
++import { cleanup, render } from '@testing-library/react'
++import '@testing-library/jest-dom'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++import { TpsMeter } from '@/lib/tpsMeter'
++import * as chatStore from '@/stores/chatStore'
++import { TpsIndicator } from './TpsIndicator'
++
++// Drive the real meters with a fake clock so the sliding windows behave
++// deterministically, and stub only the store lookups.
++let now = 1_000_000
++const ownMeter = new TpsMeter(1500, 500)
++const subMeter = new TpsMeter(1500, 500)
++
++function pump(meter: TpsMeter, n = 10): void {
++  for (let i = 0; i < n; i++) {
++    now += 100
++    meter.push('x'.repeat(6))
++  }
++}
++
++beforeEach(() => {
++  now = 1_000_000
++  ownMeter.reset()
++  subMeter.reset()
++  vi.spyOn(performance, 'now').mockImplementation(() => now)
++  vi.spyOn(chatStore, 'getSessionTpsMeter').mockReturnValue(ownMeter)
++  vi.spyOn(chatStore, 'getSubordinateTpsMeters').mockReturnValue([subMeter])
++})
++
++afterEach(() => {
++  cleanup()
++  vi.restoreAllMocks()
++})
++
++it('shows the aggregated total with a Σn badge while a subagent is emitting', async () => {
++  pump(ownMeter)
++  pump(subMeter)
++
++  const { container } = render(<TpsIndicator sessionId="main" />)
++  // The mount effect runs tick() synchronously, so the indicator has a reading.
++  const indicator = container.querySelector('[data-testid="tps-indicator"]')
++  expect(indicator).not.toBeNull()
++
++
++  // Σ badge appears because the subagent meter is live in the window.
++  expect(container.querySelector('[data-testid="tps-subagent-badge"]')).toHaveTextContent('Σ1')
++  // Number rendered, and it is the combined total (> a single stream).
++  const numberText = indicator!.textContent?.replace(/TPS|t\/s|Σ1/g, '').trim() ?? ''
++  const shown = Number(numberText)
++  expect(shown).toBeGreaterThan(0)
++})
++
++it('drops the Σ badge once the subagent stops (its held speed must not inflate the total)', async () => {
++  pump(subMeter)
++  // Subagent finishes; drain its 1500ms window.
++  now += 10_000
++  pump(ownMeter)
++
++  const { container } = render(<TpsIndicator sessionId="main" />)
++  expect(container.querySelector('[data-testid="tps-indicator"]')).not.toBeNull()
++  expect(container.querySelector('[data-testid="tps-subagent-badge"]')).toBeNull()
++
++})
++
++it('caps the displayed value at 4 digits (9999)', () => {
++  // Pump both meters hard so the aggregate total far exceeds 9999
++  // (≈1140 tok/sample × 15 live samples / 1.5s window ≈ 11k per meter).
++  for (let i = 0; i < 20; i++) {
++    now += 100
++    subMeter.push('x'.repeat(4000))
++    ownMeter.push('x'.repeat(4000))
++  }
++  const { container } = render(<TpsIndicator sessionId="main" />)
++  const indicator = container.querySelector('[data-testid="tps-indicator"]')!
++  const numberText = indicator.textContent?.replace(/TPS|t\/s|Σ\d+/g, '').trim() ?? ''
++  expect(Number(numberText)).toBe(9999)
++})
++
++it('stays hidden before anything has streamed', () => {
++  const { container } = render(<TpsIndicator sessionId="main" />)
++  expect(container.querySelector('[data-testid="tps-indicator"]')).toBeNull()
++})
++
++
++
+diff --git a/desktop/src/components/chat/TpsIndicator.tsx b/desktop/src/components/chat/TpsIndicator.tsx
+new file mode 100644
+index 00000000..1cb33cc0
+--- /dev/null
++++ b/desktop/src/components/chat/TpsIndicator.tsx
+@@ -0,0 +1,142 @@
++import { useEffect, useState } from 'react'
++import { getSessionTpsMeter, getSubordinateTpsMeters } from '../../stores/chatStore'
++import { aggregateMeterReadings, isTpsEnabled } from '../../lib/tpsMeter'
++import { useTranslation } from '../../i18n'
++
++/**
++ * Real-time decode-speed (TPS) indicator.
++ *
++ * Lifecycle:
++ *  - Before this session has ever streamed (no input/decoded tokens yet) →
++ *    hidden.
++ *  - After the first streamed chunk it stays visible for the rest of the
++ *    session. While decoding, value() is the live window speed and updates
++ *    every poll; when decoding pauses it holds the last speed.
++ *  - If no new data arrives for HIDE_AFTER_IDLE_MS (5 min) it hides again.
++ *
++ * This session's own decode is aggregated with its subagents/team-members so
++ * the main view shows the team-wide total; a "Σn" badge appears while at least
++ * one subagent is actively emitting (see aggregateMeterReadings).
++ *
++ * Rendered as plain text `TPS {n}t/s` (no pill background) — the chat header
++ * stacks it under the cost badge in a two-line block. Coloring: <27 red, <53
++ * orange, <80 green, >=80 purple. Polled at POLL_MS (≈5-6 Hz). Meter is
++ * per-session (see getSessionTpsMeter), so parallel sessions each show their
++ * own decode speed.
++ */
++
++const POLL_MS = 180
++const LOW_TIER = 27
++const MED_TIER = 53
++const HIGH_TIER = 80
++const HIDE_AFTER_IDLE_MS = 5 * 60 * 1000
++// 显示口径：数值最多 4 位（用户要求 "TPS XXt/s" 最多四位数）。聚合/保持值
++// 偶可超 4 位（子代理汇聚或移动端批量突发），封顶显示避免撑破固定栏宽。
++const MAX_DISPLAY_TPS = 9999
++
++type TpsTier = 'red' | 'orange' | 'green' | 'purple'
++
++/** Display integer, capped at 4 digits (see MAX_DISPLAY_TPS). */
++function formatTps(tps: number): string {
++  const rounded = Math.round(tps)
++  return String(Math.min(rounded, MAX_DISPLAY_TPS))
++}
++
++function tierFor(tps: number): TpsTier {
++  if (tps < LOW_TIER) return 'red'
++  if (tps < MED_TIER) return 'orange'
++  if (tps < HIGH_TIER) return 'green'
++  return 'purple'
++}
++
++const TIER_STYLE: Record<TpsTier, { color: string }> = {
++  red: { color: 'var(--color-error)' },
++  orange: { color: '#f59e0b' },
++  green: { color: 'var(--color-success)' },
++  purple: { color: '#a855f7' },
++}
++
++export function TpsIndicator({ sessionId, vertical = false }: { sessionId: string; vertical?: boolean }) {
++  const t = useTranslation()
++  const [tps, setTps] = useState(0)
++  const [visible, setVisible] = useState(false)
++  const [activeSubs, setActiveSubs] = useState(0)
++
++  // Master switch: when disabled the indicator renders nothing and never polls
++  // the meter (the meter itself is also not fed in the content_delta path).
++  if (!isTpsEnabled()) return null
++
++  useEffect(() => {
++    const meter = getSessionTpsMeter(sessionId)
++    const tick = () => {
++      // Own session + its subagent/team-member meters, folded into one
++      // team-wide reading (visibility/idle-hide judged across the whole group).
++      const { visible: shown, tps: value, activeSubs: subs } = aggregateMeterReadings(
++        meter,
++        getSubordinateTpsMeters(sessionId),
++        performance.now(),
++        HIDE_AFTER_IDLE_MS,
++      )
++      if (!shown) {
++        setVisible(false)
++        return
++      }
++      setActiveSubs(subs)
++      // A near-zero read at a stream boundary (text↔thinking↔tool) is not a
++      // real decode speed — hold the previous reading instead of flashing 0.
++      setTps((prev) => {
++        if (value < 0.5) return prev > 0.5 ? prev : value
++        // opt23 §11.27: 指数平滑（新值 30% + 上次 70%）抑制移动端突发导致
++        // 的 TPS 忽高忽低；首次读取直接采用。
++        return prev > 0.5 ? prev * 0.7 + value * 0.3 : value
++      })
++      setVisible(true)
++    }
++    tick()
++    const timer = setInterval(tick, POLL_MS)
++    return () => clearInterval(timer)
++  }, [sessionId])
++
++  if (!visible) return null
++  const tier = tierFor(tps)
++  const style = TIER_STYLE[tier]
++  const title = activeSubs > 0
++    ? t('chat.tpsAggregateTitle', { count: String(activeSubs) })
++    : t('chat.tpsSpeedTitle')
++
++  if (vertical) {
++    return (
++      <span
++        data-testid="tps-indicator"
++        className="inline-flex shrink-0 flex-col items-center justify-center font-mono text-[10px] font-semibold leading-none tabular-nums"
++        style={{ color: style.color }}
++        title={title}
++      >
++        <span className="inline-block text-center leading-none">
++          TPS {formatTps(tps)}t/s
++        </span>
++        {activeSubs > 0 ? (
++          <span data-testid="tps-subagent-badge" className="mt-0.5 leading-none">
++            Σ{activeSubs}
++          </span>
++        ) : null}
++      </span>
++    )
++  }
++
++  return (
++    <span
++      data-testid="tps-indicator"
++      className="inline-flex shrink-0 items-center font-mono text-[10px] font-semibold leading-tight tabular-nums"
++      style={{ color: style.color }}
++      title={title}
++    >
++      <span className="inline-block">TPS {formatTps(tps)}t/s</span>
++      {activeSubs > 0 ? (
++        <span data-testid="tps-subagent-badge" className="ml-1">
++          Σ{activeSubs}
++        </span>
++      ) : null}
++    </span>
++  )
++}
+diff --git a/desktop/src/components/layout/AppShell.test.tsx b/desktop/src/components/layout/AppShell.test.tsx
+index a4699c9e..08c80fa8 100644
+--- a/desktop/src/components/layout/AppShell.test.tsx
++++ b/desktop/src/components/layout/AppShell.test.tsx
+@@ -84,6 +84,12 @@ vi.mock('../../stores/chatStore', () => ({
+       connectToSession: mocks.connectToSession,
+     }),
+   },
++  getSessionTpsMeter: () => ({
++    hasStreamed: () => false,
++    lastDataTime: () => 0,
++    value: () => 0,
++  }),
++  getSubordinateTpsMeters: () => [],
+ }))
+ 
+ vi.mock('../../hooks/useKeyboardShortcuts', () => ({
+diff --git a/desktop/src/components/layout/AppShell.tsx b/desktop/src/components/layout/AppShell.tsx
+index c8613d06..154eaaf1 100644
+--- a/desktop/src/components/layout/AppShell.tsx
++++ b/desktop/src/components/layout/AppShell.tsx
+@@ -428,10 +428,16 @@ export function AppShell() {
+             ) : null}
+             {isActiveChatTab ? (
+               <div className="flex shrink-0 items-center gap-1">
+-                {activeTabId ? <TpsIndicator sessionId={activeTabId} vertical /> : null}
+-                {activeTabId ? (
+-                  <SessionCostBadge sessionId={activeTabId} active={activeTab?.status === 'running'} compact />
+-                ) : null}
++                <div className="flex h-[36px] shrink-0 flex-col items-end justify-center gap-0.5">
++                  <div className="flex h-[15px] items-center">
++                    {activeTabId ? (
++                      <SessionCostBadge sessionId={activeTabId} active={activeTab?.status === 'running'} compact />
++                    ) : null}
++                  </div>
++                  <div className="flex h-[13px] items-center">
++                    {activeTabId ? <TpsIndicator sessionId={activeTabId} vertical /> : null}
++                  </div>
++                </div>
+                 <IconButton
+                   data-testid="session-manual-refresh-mobile"
+                   icon={refreshingSession ? 'progress_activity' : 'refresh'}
+diff --git a/desktop/src/lib/tpsMeter.test.ts b/desktop/src/lib/tpsMeter.test.ts
+new file mode 100644
+index 00000000..df6ab774
+--- /dev/null
++++ b/desktop/src/lib/tpsMeter.test.ts
+@@ -0,0 +1,195 @@
++import { describe, expect, it, vi, afterEach } from 'vitest'
++import { TpsMeter, aggregateMeterReadings, estimateTokens } from './tpsMeter'
++
++describe('TpsMeter fallback', () => {
++  afterEach(() => vi.restoreAllMocks())
++
++  it('holds the turn-ending speed after the stream pauses', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const meter = new TpsMeter(1500, 2000)
++    expect(meter.hasStreamed()).toBe(false)
++    expect(meter.value()).toBe(0)
++
++    // Stream ~60 tokens over ~1 second.
++    for (let i = 0; i < 10; i++) {
++      now += 100
++      meter.push('x'.repeat(6))
++    }
++    expect(estimateTokens('x'.repeat(6))).toBeGreaterThan(0)
++    expect(meter.hasStreamed()).toBe(true)
++
++    const live = meter.value()
++    expect(live).toBeGreaterThan(0)
++
++    // Simulate turn end: no more pushes, window drains (advance 10s).
++    now += 10_000
++    const held = meter.value()
++    // Fallback should still be > 0 (not dropped to 0).
++    expect(held).toBeGreaterThan(0)
++  })
++
++  it('does not collapse to 0 on a sparse boundary sample', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const meter = new TpsMeter(1500, 2000)
++    // Steady stream first so the fallback has a meaningful speed.
++    for (let i = 0; i < 20; i++) {
++      now += 50
++      meter.push('x'.repeat(6))
++    }
++    const baseline = meter.value()
++    expect(baseline).toBeGreaterThan(0)
++
++    // Stream boundary: a single tiny fragment lands (e.g. tool-input start),
++    // then the window prunes the old bulk samples.
++    now += 1600 // evict previous samples from the 1500ms window
++    meter.push('{')
++    // Only one ~1-token sample in the window now.
++    const boundary = meter.value()
++    // Must NOT read ~0: hold the smoothed fallback instead.
++    expect(boundary).toBeGreaterThan(0.5)
++  })
++
++  it('skips the last 0.35s when computing the fallback average', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const meter = new TpsMeter(1500, 2000)
++    // Steady decode: 6 chars (≈1.7 tokens) every 100ms over 2s.
++    for (let i = 0; i < 20; i++) {
++      now += 100
++      meter.push('x'.repeat(6))
++    }
++    const steady = meter.value()
++    expect(steady).toBeGreaterThan(0)
++
++    // Simulate a stream-switch burn: a long silent gap (0.6s) with no samples.
++    now += 600
++    // value() with an empty live window must fall back to a non-zero average
++    // rather than 0 — the switch overhead is absorbed by the skip window.
++    const heldAfterGap = meter.value()
++    expect(heldAfterGap).toBeGreaterThan(0)
++  })
++
++  it('estimates tokens: CJK 1:1, full-width punctuation counted, ASCII 1:3.5, whitespace free', () => {
++    // 4 CJK chars + 1 full-width comma → 5 tokens.
++    expect(estimateTokens('你好世界，')).toBeCloseTo(5, 5)
++    // 7 ASCII chars → 2 tokens (7 / 3.5).
++    expect(estimateTokens('abcdefg')).toBeCloseTo(2, 5)
++    // Whitespace and newlines carry no tokens of their own.
++    expect(estimateTokens('a b\nc')).toBeCloseTo(3 / 3.5, 5)
++    // Empty / whitespace-only input never over-counts.
++    expect(estimateTokens('')).toBe(0)
++    expect(estimateTokens('   \n\t')).toBe(0)
++  })
++})
++
++describe('aggregateMeterReadings', () => {
++  afterEach(() => vi.restoreAllMocks())
++
++  // Push a steady ~60 tok/s stream into `meter` while advancing the fake clock.
++  function pump(meter: TpsMeter, nowRef: { t: number }, n = 10): void {
++    for (let i = 0; i < n; i++) {
++      nowRef.t += 100
++      meter.push('x'.repeat(6))
++    }
++  }
++
++  it('reports the own meter without re-adding subordinate speed, and counts active subs', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const own = new TpsMeter(1500, 500)
++    const sub = new TpsMeter(1500, 500)
++    const ref = { t: now }
++    pump(own, ref)
++    pump(sub, ref) // both still inside the 1500ms window → both live
++
++    const r = aggregateMeterReadings(own, [sub], now, 5 * 60 * 1000)
++    expect(r.visible).toBe(true)
++    expect(r.activeSubs).toBe(1)
++    // The parent meter already carries the subagent's relayed tokens
++    // (chatStore ingestSubagentTps), so the subordinate meter is a count
++    // source only — adding its speed would double the reported rate.
++    const single = aggregateMeterReadings(own, [], now, 5 * 60 * 1000)
++    expect(r.tps).toBeCloseTo(single.tps, 5)
++  })
++
++  it('stays hidden when only a subordinate has streamed', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const own = new TpsMeter(1500, 500)
++    const sub = new TpsMeter(1500, 500)
++    const ref = { t: now }
++    pump(sub, ref)
++
++    // Nothing is folded into the displayed meter yet, so there is no rate to
++    // show — masking it is better than flashing a number the user cannot trace.
++    const r = aggregateMeterReadings(own, [sub], now, 5 * 60 * 1000)
++    expect(r.visible).toBe(false)
++    expect(r.tps).toBe(0)
++  })
++
++  it('excludes a subagent whose window has drained (finished, held value must not leak)', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const own = new TpsMeter(1500, 500)
++    const sub = new TpsMeter(1500, 500)
++    const ref = { t: now }
++    pump(sub, ref)
++
++    // Sub stops; advance 10s so its 1500ms window drains (held speed stays
++    // non-zero via its own fallback, but it is no longer "live").
++    now += 10_000
++    pump(own, ref) // own is freshly emitting
++
++    const r = aggregateMeterReadings(own, [sub], now, 5 * 60 * 1000)
++    expect(r.visible).toBe(true)
++    expect(r.activeSubs).toBe(0)
++    // Must equal own-only (no inflated contribution from the drained sub).
++    const single = aggregateMeterReadings(own, [], now, 5 * 60 * 1000)
++    expect(r.tps).toBeCloseTo(single.tps, 5)
++  })
++
++  it('is unchanged for a lone main session (no subordinates)', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const own = new TpsMeter(1500, 500)
++    const ref = { t: now }
++    pump(own, ref)
++
++    // Live: aggregate === own live value, activeSubs 0.
++    let r = aggregateMeterReadings(own, [], now, 5 * 60 * 1000)
++    expect(r.visible).toBe(true)
++    expect(r.activeSubs).toBe(0)
++    expect(r.tps).toBeCloseTo(own.value(), 5)
++
++    // After the window drains, aggregate falls back to own held speed.
++    now += 10_000
++    r = aggregateMeterReadings(own, [], now, 5 * 60 * 1000)
++    expect(r.visible).toBe(true)
++    expect(r.tps).toBeCloseTo(own.value(), 5)
++  })
++
++  it('stays hidden before anything has streamed, and hides after the 5-min idle', () => {
++    let now = 1_000_000
++    vi.spyOn(performance, 'now').mockImplementation(() => now)
++
++    const own = new TpsMeter(1500, 500)
++    expect(aggregateMeterReadings(own, [], now, 5 * 60 * 1000).visible).toBe(false)
++
++    const ref = { t: now }
++    pump(own, ref)
++    expect(aggregateMeterReadings(own, [], now, 5 * 60 * 1000).visible).toBe(true)
++
++    // 5-min idle: even though the window is drained, nothing new arrived.
++    now += 6 * 60 * 1000
++    expect(aggregateMeterReadings(own, [], now, 5 * 60 * 1000).visible).toBe(false)
++  })
++})
+diff --git a/desktop/src/lib/tpsMeter.ts b/desktop/src/lib/tpsMeter.ts
+new file mode 100644
+index 00000000..236b083e
+--- /dev/null
++++ b/desktop/src/lib/tpsMeter.ts
+@@ -0,0 +1,241 @@
++/**
++ * Real-time decode-speed (TPS) meter.
++ *
++ * Tracks output token throughput from the assistant's live text stream. The
++ * frontend receives content_delta chunks (arbitrary sizes — the engine may
++ * emit 1, 3, 5 or N tokens per chunk), so the meter accumulates characters
++ * into a sliding window and derives characters/second, which is displayed as
++ * an approximate token/s. Window smoothing adapts to any emission granularity.
++ *
++ * Session lifecycle:
++ *  - hasStreamed() is true once any chunk arrived; the UI stays visible.
++ *  - While decoding, value() returns the live window speed.
++ *  - When decoding pauses / a turn ends, value() falls back to the average
++ *    speed over the last FALLBACK_WINDOW_MS (0.5s) of streamed data — i.e. the
++ *    speed at which the turn actually ended — so the indicator holds the
++ *    turn-ending speed instead of dropping to 0 (or disappearing) the moment
++ *    the engine stops emitting.
++ *
++ * Char→token heuristic calibrated for the local vLLM engines (Qwen / DeepSeek
++ * tokenizers): CJK chars and full-width punctuation ≈ 1 token each, ASCII ≈ 1
++ * token per 3.5 chars. Whitespace is not counted — tokenizers fold it into
++ * neighbouring tokens, so counting it inflates the estimate.
++ */
++
++const WINDOW_MS = 1500
++// Held value = average speed over the 0.5s immediately before the stream's last
++// emitted chunk, i.e. the speed at which the turn ended.
++const FALLBACK_WINDOW_MS = 500
++// Denominator floor for the live-window speed (ms). Mobile ws/event loops can
++// batch many content_delta chunks so the intra-window span collapses to near-zero
++// and total/span would read in the hundreds/thousands. A small floor (NOT the full
++// 1.5s window) keeps that burst suppression while letting a turn's *opening* read
++// the real speed quickly — the old 1.5s floor spread a fresh turn's first seconds
++// across the whole window and systematically under-read the start. The UI's 30/70
++// exponential smoothing then damps any residual spike from a genuine batch.
++const BURST_FLOOR_MS = 400
++const CJK_RE = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af\u3000-\u303f\uff00-\uffef]/
++const WHITESPACE_RE = /\s/
++const NON_CJK_TOKEN_WEIGHT = 1 / 3.5
++// A live-window speed below this many tokens/second is treated as a stream
++// boundary (text ↔ thinking ↔ tool-input switch), not real slow decoding: the
++// just-flushed window holds only a couple of sparse samples whose rate would
++// otherwise collapse toward 0. We hold the smoothed fallback instead.
++const SPARSE_SPEED_THRESHOLD = 5
++// Tail skip when computing the held average. 0: the user wants the speed over
++// the 0.5s slice *immediately before* the last chunk, including the final
++// moments — so nothing is skipped.
++const FALLBACK_SKIP_MS = 0
++
++/**
++ * Master switch for the TPS indicator. Set to false to disable the meter
++ * (no sampling in the content_delta path and no UI) while keeping the code in
++ * place — used to isolate whether the indicator interacts with tool calls.
++ */
++const TPS_ENABLED = true
++
++export function isTpsEnabled(): boolean {
++  return TPS_ENABLED
++}
++
++export class TpsMeter {
++  private samples: Array<{ t: number; chars: number }> = []
++  private windowMs: number
++  private fallbackWindowMs: number
++  private everStreamed = false
++  private lastPushAt = 0
++  private fallbackTps = 0
++
++  constructor(windowMs = WINDOW_MS, fallbackWindowMs = FALLBACK_WINDOW_MS) {
++    this.windowMs = windowMs
++    this.fallbackWindowMs = fallbackWindowMs
++  }
++
++  /** Feed a streamed text chunk. */
++  push(text: string): void {
++    if (!text) return
++    const now = performance.now()
++    this.samples.push({ t: now, chars: estimateTokens(text) })
++    this.everStreamed = true
++    this.lastPushAt = now
++    this.fallbackTps = this.computeFallbackTps(now)
++  }
++
++  /** True once this session has ever received streamed text. */
++  hasStreamed(): boolean {
++    return this.everStreamed
++  }
++
++  /**
++   * True while the sliding window still holds fresh samples — i.e. this
++   * stream is actively emitting right now. Once the window drains, a
++   * finished session's held turn-ending speed must not keep feeding the
++   * aggregate (see aggregateMeterReadings).
++   */
++  hasLiveSamples(): boolean {
++    this.prune()
++    return this.samples.length > 0
++  }
++
++  /** Epoch ms of the most recent streamed chunk (0 if never). */
++  lastDataTime(): number {
++    return this.lastPushAt
++  }
++
++  /**
++   * Tokens/second within the sliding window. While decoding steadily this is
++   * the live window speed; when the engine pauses or switches streams
++   * (text → thinking → tool input) the just-flushed window can hold only a
++   * couple of sparse samples whose instantaneous rate would collapse toward 0.
++   * In that case fall back to the average over the last FALLBACK_WINDOW_MS so
++   * the indicator holds a sensible speed instead of flashing 0 between turns.
++   */
++  value(): number {
++    this.prune()
++    if (this.samples.length === 0) return this.fallbackTps
++    const total = this.samples.reduce((sum, s) => sum + s.chars, 0)
++    const first = this.samples[0]!
++    const last = this.samples[this.samples.length - 1]!
++    const span = (last.t - first.t) / 1000
++    // Burst guard (opt23 §11.27): on mobile a batched ws delivery can collapse the
++    // intra-window span to near-zero, so a small floor (BURST_FLOOR_MS) prevents
++    // total/span from reading in the hundreds. Using the full window here instead
++    // would also under-read a turn's opening — see BURST_FLOOR_MS.
++    const elapsed = Math.max(span, BURST_FLOOR_MS / 1000)
++    const result = total / elapsed
++    // Boundary guard: a window whose live speed is below the sparse threshold
++    // is a stream switch, not slow decoding — hold the smoothed fallback and
++    // do NOT let the sparse rate overwrite it.
++    if (result < SPARSE_SPEED_THRESHOLD) return this.fallbackTps
++    // The held (fallback) value is owned exclusively by push(): it is the
++    // average over the 0.5s before the last emitted chunk. Refreshing it here
++    // would let the shrinking, span-floored tail window (≤400ms) overwrite the
++    // requested turn-ending speed while the live window drains.
++    return result
++  }
++
++  /** Raw character count in the window (for diagnostics). */
++  chars(): number {
++    this.prune()
++    return this.samples.reduce((sum, s) => sum + s.chars, 0)
++  }
++
++  reset(): void {
++    this.samples = []
++    this.everStreamed = false
++    this.lastPushAt = 0
++    this.fallbackTps = 0
++  }
++
++  private computeFallbackTps(now: number): number {
++    // Average token rate over the last fallbackWindowMs (0.5s) of streamed
++    // data — the speed at which the turn ended. FALLBACK_SKIP_MS trims the
++    // newest slice (0 by default).
++    const windowEnd = now - FALLBACK_SKIP_MS
++    const windowStart = windowEnd - this.fallbackWindowMs
++    let total = 0
++    let firstT: number | null = null
++    let lastT: number | null = null
++    for (let i = this.samples.length - 1; i >= 0; i--) {
++      const s = this.samples[i]!
++      if (s.t < windowStart) break
++      if (s.t > windowEnd) continue
++      total += s.chars
++      if (lastT === null) lastT = s.t
++      firstT = s.t
++    }
++    if (firstT === null || lastT === null) return 0
++    const span = (lastT - firstT) / 1000
++    if (span < 0.05) return total / (this.fallbackWindowMs / 1000)
++    return total / span
++  }
++
++  private prune(): void {
++    const cutoff = performance.now() - this.windowMs
++    while (this.samples.length > 0 && this.samples[0]!.t < cutoff) {
++      this.samples.shift()
++    }
++  }
++}
++
++/**
++ * Aggregate reading for a session's TPS indicator. `tps` is the team-wide
++ * decode speed; `activeSubs` is the count of subagents currently emitting.
++ */
++export type TpsAggregate = {
++  visible: boolean
++  tps: number
++  /** Subagent meters with fresh samples in the window (emitting right now). */
++  activeSubs: number
++}
++
++/**
++ * Build the session's reading from its own meter, using the subordinate
++ * (subagent/team-member) meters only to count who is emitting right now.
++ *
++ *  - `own` already carries every subagent's relayed decode text (chatStore
++ *    folds it in per frame, see ingestSubagentTps), so the summed value is
++ *    just `own.value()`. The subordinate meters must NOT be added on top: they
++ *    hold the same tokens and would double the reported rate.
++ *  - While nothing is decoding the reading falls back to the own session's
++ *    held speed — identical to the pre-aggregation single-session behavior,
++ *    so a lone main session is unaffected.
++ *  - Visibility / the 5-min idle hide rule considers the newest data from
++ *    the whole group, so a busy subagent keeps the main indicator alive.
++ */
++export function aggregateMeterReadings(
++  own: TpsMeter,
++  subordinates: TpsMeter[],
++  now: number,
++  hideAfterIdleMs: number,
++): TpsAggregate {
++  const everStreamed = own.hasStreamed() || subordinates.some((m) => m.hasStreamed())
++  if (!everStreamed) return { visible: false, tps: 0, activeSubs: 0 }
++
++  let lastData = own.lastDataTime()
++  for (const m of subordinates) {
++    if (m.lastDataTime() > lastData) lastData = m.lastDataTime()
++  }
++  if (lastData > 0 && now - lastData > hideAfterIdleMs) {
++    return { visible: false, tps: 0, activeSubs: 0 }
++  }
++
++  if (!own.hasStreamed()) {
++    // Only a subordinate ever streamed: nothing is folded into the displayed
++    // meter, so there is no honest rate to show yet.
++    return { visible: false, tps: 0, activeSubs: 0 }
++  }
++  const activeSubs = subordinates.filter((m) => m.hasLiveSamples()).length
++  return { visible: true, tps: own.value(), activeSubs }
++}
++
++export function estimateTokens(text: string): number {
++  let cjk = 0
++  let nonCjk = 0
++  for (const ch of text) {
++    if (WHITESPACE_RE.test(ch)) continue
++    if (CJK_RE.test(ch)) cjk += 1
++    else nonCjk += 1
++  }
++  return cjk + nonCjk * NON_CJK_TOKEN_WEIGHT
++}
+diff --git a/desktop/src/pages/ActiveSession.tsx b/desktop/src/pages/ActiveSession.tsx
+index 26d5ffbc..282ce912 100644
+--- a/desktop/src/pages/ActiveSession.tsx
++++ b/desktop/src/pages/ActiveSession.tsx
+@@ -904,8 +904,15 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
+                   metadata={headerMetadata}
+                   actions={
+                     <>
+-                      {activeTabId ? <TpsIndicator sessionId={activeTabId} /> : null}
+-                      {activeTabId ? <SessionCostBadge sessionId={activeTabId} active={chatState !== 'idle'} /> : null}
++                      {/* 两行块：上=会话费用，下=TPS（固定占位，缺一项时另一行居中对齐）。 */}
++                      <div className="flex h-[42px] shrink-0 flex-col items-end justify-center gap-0.5">
++                        <div className="flex h-[16px] items-center">
++                          {activeTabId ? <SessionCostBadge sessionId={activeTabId} active={chatState !== 'idle'} /> : null}
++                        </div>
++                        <div className="flex h-[14px] items-center">
++                          {activeTabId ? <TpsIndicator sessionId={activeTabId} /> : null}
++                        </div>
++                      </div>
+                       <Button
+                         variant="ghost"
+                         size="sm"
+diff --git a/desktop/src/stores/chatStore.ts b/desktop/src/stores/chatStore.ts
+index efe6950d..0c766302 100644
+--- a/desktop/src/stores/chatStore.ts
++++ b/desktop/src/stores/chatStore.ts
+@@ -19,6 +19,7 @@ import { randomSpinnerVerb } from '../config/spinnerVerbs'
+ import { notifyDesktop } from '../lib/desktopNotifications'
+ import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
+ import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
++import { TpsMeter, isTpsEnabled } from '../lib/tpsMeter'
+ import { t } from '../i18n'
+ import {
+   VISUAL_SELECTION_BATCH_PROMPT_HEADER,
+@@ -1006,6 +1007,66 @@ function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
+   return changed ? stoppedMessages : messages
+ }
+ 
++// Real-time decode-speed (TPS) meters, one per session so parallel sessions
++// each track their own output throughput without cross-talk.
++const tpsMeterBySession = new Map<string, TpsMeter>()
++
++export function getSessionTpsMeter(sessionId: string): TpsMeter {
++  let meter = tpsMeterBySession.get(sessionId)
++  if (!meter) {
++    meter = new TpsMeter()
++    tpsMeterBySession.set(sessionId, meter)
++  }
++  return meter
++}
++
++/**
++ * Meters of the sessions a parent session owns — subagent runs and
++ * team-member runs are synthetic sessions whose `sourceSessionId` points at
++ * the session that launched them. Returned so the parent's TPS indicator can
++ * show the team-wide total (see aggregateMeterReadings).
++ */
++export function getSubordinateTpsMeters(sessionId: string): TpsMeter[] {
++  const meters: TpsMeter[] = []
++  for (const tab of useTabStore.getState().tabs) {
++    if (tab.sessionId === sessionId) continue
++    if (tab.type !== 'subagent' && tab.type !== 'team-member') continue
++    if (tab.sourceSessionId !== sessionId) continue
++    const meter = tpsMeterBySession.get(tab.sessionId)
++    if (meter?.hasStreamed()) meters.push(meter)
++  }
++  return meters
++}
++
++/**
++ * Fold a subagent's relayed decode text into its parent session's meter.
++ *
++ * Runs on the parent socket for every agent_run_event, whether or not that
++ * run's page is open, so the main indicator reports the team-wide decode speed
++ * (the reference implementation in the older cc-haha tree did the same, via a
++ * dedicated `subagent_tps` frame relayed by the sidecar). Only the meter is
++ * touched — the text never reaches streamingText, so subagent prose cannot
++ * leak into the main conversation.
++ *
++ * Whole-block `thinking` hand-overs (complete === true) are skipped: their
++ * fragments already arrived as deltas, so counting both would double the
++ * subagent's token rate in the sliding window.
++ */
++function ingestSubagentTps(
++  parentSessionId: string,
++  event: Extract<ServerMessage, { type: 'agent_run_event' }>['event'],
++): void {
++  if (!isTpsEnabled()) return
++  if (event.type === 'content_delta') {
++    if (event.text) getSessionTpsMeter(parentSessionId).push(event.text)
++    if (event.toolInput) getSessionTpsMeter(parentSessionId).push(event.toolInput)
++    return
++  }
++  if (event.type === 'thinking' && event.complete !== true && event.text) {
++    getSessionTpsMeter(parentSessionId).push(event.text)
++  }
++}
++
+ // Streaming throttle for content_delta. Buffers must be per-session because
+ // multiple desktop tabs can stream at the same time.
+ const pendingDeltaBySession = new Map<string, string>()
+@@ -1029,8 +1090,12 @@ function appendPendingDelta(sessionId: string, text: string): void {
+     sessionId,
+     `${pendingDeltaBySession.get(sessionId) ?? ''}${text}`,
+   )
++  if (isTpsEnabled()) {
++    getSessionTpsMeter(sessionId).push(text)
++  }
+ }
+ 
++
+ function clearPendingDelta(sessionId: string): void {
+   const flushTimer = flushTimerBySession.get(sessionId)
+   if (flushTimer) {
+@@ -1056,6 +1121,11 @@ function appendPendingToolInputDelta(sessionId: string, text: string): void {
+     sessionId,
+     `${pendingToolInputDeltaBySession.get(sessionId) ?? ''}${text}`,
+   )
++  // Feed streaming tool inputs (Write/Edit/… argument JSON) into the TPS meter
++  // so the decode-speed reflects all output tokens, not just assistant text.
++  if (isTpsEnabled()) {
++    getSessionTpsMeter(sessionId).push(text)
++  }
+ }
+ 
+ function clearPendingToolInputDelta(sessionId: string): void {
+@@ -3199,6 +3269,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+     clearPendingToolInputDelta(sessionId)
+     clearPendingTaskToolUseIds(sessionId)
+     clearPendingToolParentUseIds(sessionId)
++    tpsMeterBySession.delete(sessionId)
+     advanceHistoryLifecycle(sessionId)
+     wsManager.disconnect(sessionId)
+     set((s) => {
+@@ -4496,6 +4567,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+ 
+   handleServerMessage: (sessionId, msg) => {
+     if (msg.type === 'agent_run_event') {
++      // Feed the parent's TPS meter with the subagent's relayed decode text
++      // before routing it. A run page's own meter only exists while that page
++      // is open (registerAgentRunSession is called from SubagentRunPage), and
++      // while it is closed the frames below are buffered instead of applied —
++      // so without this the main indicator would ignore subagent output. The
++      // text is meter-only and never rendered into the main conversation.
++      ingestSubagentTps(sessionId, msg.event)
+       if (!dispatchAgentRunEvent(sessionId, msg)) {
+         bufferAgentRunEvent(sessionId, msg)
+       }
+@@ -5126,7 +5204,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+             streamingResponseChars: s.streamingResponseChars + msg.text.length,
+           }
+         })
+-        if (!skippedThinkingBlock) ensureElapsedTimer()
++        if (!skippedThinkingBlock) {
++          // thinking 流式片段同样是 decode 输出 token，必须喂 TPS 米表：不喂的话
++          // thinking 全程零采样，米表窗口排空后 UI 会冻结在正文结束前的旧速度上
++          // （稀疏边界守卫只保旧值不刷新）。skippedThinkingBlock 的整块重放
++          // （流式累积内容与 complete 块逐字相同）已在上层判重，不喂避免重复计数。
++          if (isTpsEnabled()) {
++            getSessionTpsMeter(sessionId).push(msg.text)
++          }
++          ensureElapsedTimer()
++        }
+         break
+       }
+ 

@@ -70,6 +70,7 @@ describe('/api/h5-access', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     expect(body.diagnostics).toBeDefined()
     expect(body.diagnostics?.storedHostStaleness).toBe('unset')
@@ -164,6 +165,7 @@ describe('/api/h5-access', () => {
         publicBaseUrl: null,
         fixedPort: null,
         disconnectGraceSeconds: null,
+        requireToken: false,
       },
     })
 
@@ -199,6 +201,7 @@ describe('/api/h5-access', () => {
         publicBaseUrl: 'https://public.example.com/app',
         fixedPort: 28670,
         disconnectGraceSeconds: null,
+        requireToken: false,
       },
     })
   })

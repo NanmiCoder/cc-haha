@@ -369,6 +369,54 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().shouldPrompt).toBe(true)
   })
 
+  it('skips manual checks while disableUpdates is on', async () => {
+    check.mockResolvedValue({
+      version: '0.2.0',
+      body: 'Notes',
+      download: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    })
+
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    useSettingsStore.setState({ disableUpdates: true })
+    const { useUpdateStore } = await import('./updateStore')
+
+    const result = await useUpdateStore.getState().checkForUpdates()
+
+    expect(result).toBeNull()
+    expect(check).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().status).toBe('idle')
+    useSettingsStore.setState({ disableUpdates: false })
+  })
+
+  it('does not run the startup check from initialize while disableUpdates is on', async () => {
+    vi.useFakeTimers()
+    try {
+      check.mockResolvedValue({
+        version: '0.2.0',
+        body: 'Notes',
+        download: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      })
+
+      vi.resetModules()
+      const { useSettingsStore } = await import('./settingsStore')
+      useSettingsStore.setState({ disableUpdates: true })
+      const { useUpdateStore } = await import('./updateStore')
+
+      await useUpdateStore.getState().initialize()
+      // The startup check is deferred 5s; advance past it and assert nothing fired.
+      await vi.advanceTimersByTimeAsync(6_000)
+
+      expect(check).not.toHaveBeenCalled()
+      expect(useUpdateStore.getState().status).toBe('idle')
+      useSettingsStore.setState({ disableUpdates: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not download again when the pending update is already downloaded', async () => {
     const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
       onEvent?.({ event: 'Started', data: { contentLength: 100 } })

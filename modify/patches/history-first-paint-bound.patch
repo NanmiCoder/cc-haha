@@ -1,0 +1,114 @@
+diff --git a/desktop/src/api/sessions.test.ts b/desktop/src/api/sessions.test.ts
+index 7e674d28..90af5bc4 100644
+--- a/desktop/src/api/sessions.test.ts
++++ b/desktop/src/api/sessions.test.ts
+@@ -349,6 +349,33 @@ describe('full session history assembly', () => {
+     expect(fetchMock).toHaveBeenCalledTimes(2)
+   })
+ 
++  it('bounds the walk and hands the rest back through nextCursor', async () => {
++    // An endless transcript: every continuation offers another cursor. The walk
++    // must still terminate and leave the remainder reachable through the
++    // existing "load more" path, rather than stitching until the request times
++    // out — which is how a large session previously failed to open at all.
++    let oldest = 0
++    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
++      if (String(url).includes('mode=full')) return response(page('newest', 'cursor-0'))
++      oldest += 1
++      return response(page(`older-${oldest}`, `cursor-${oldest}`))
++    })
++
++    const result = await sessionsApi.getFullHistory('fixture')
++    const resultPage = result.page
++    if (!resultPage) throw new Error('expected page metadata')
++
++    expect(resultPage.hasMore).toBe(true)
++    expect(resultPage.nextCursor).toBeTruthy()
++    expect(resultPage.historyComplete).toBe(false)
++    // Bounded: it stopped instead of walking the whole (endless) transcript.
++    expect(result.messages.length).toBeGreaterThan(1)
++    expect(result.messages.length).toBeLessThan(100)
++    // The cursor still points at the oldest page actually retrieved.
++    expect(resultPage.nextCursor).toBe(`cursor-${oldest}`)
++    expect(fetchMock).toHaveBeenCalledTimes(oldest + 1)
++  })
++
+   it('rejects a failed continuation without exposing its successfully loaded tail', async () => {
+     vi.spyOn(globalThis, 'fetch')
+       .mockResolvedValueOnce(response(page('new', 'older')))
+diff --git a/desktop/src/api/sessions.ts b/desktop/src/api/sessions.ts
+index 8d7ee9a7..7c0ba3f3 100644
+--- a/desktop/src/api/sessions.ts
++++ b/desktop/src/api/sessions.ts
+@@ -1,5 +1,16 @@
+ import { api, type ApiRequestOptions } from './client'
+ import type { SlashCommandOption } from '../types/slashCommand'
++
++/**
++ * Bounds on the first history paint. The timeline renders nothing until the
++ * whole stitch resolves, so a deep transcript must not hold it hostage: past
++ * either bound the walk stops and returns what it has, leaving `nextCursor`
++ * for the user-driven "load more" path. 40 pages is well clear of any ordinary
++ * session (which fits in the single `mode=full` response and never enters the
++ * loop at all).
++ */
++const HISTORY_STITCH_MAX_PAGES = 40
++const HISTORY_STITCH_DEADLINE_MS = 12_000
+ import type { AgentTaskNotification } from '../types/chat'
+ import type { LocalIndexStatus, SessionListItem, MessageEntry } from '../types/session'
+ import type { PermissionMode } from '../types/settings'
+@@ -443,6 +454,12 @@ export const sessionsApi = {
+ 
+   // The timeline receives one assembled transcript. Ordinary sessions fit in
+   // `mode=full`; larger sessions continue within the server's request budgets.
++  //
++  // A deep transcript is walked one page per request and nothing renders until
++  // this resolves, so the walk is bounded and the remaining `nextCursor` is
++  // handed back for the existing "load more" affordance to continue. Stitching
++  // without a bound is what made a large session appear never to open: the
++  // client was still on page N long after the reader had given up on it.
+   async getFullHistory(sessionId: string, options?: ApiRequestOptions): Promise<SessionHistoryPage> {
+     const newest = await api.get<SessionHistoryPage>(`/api/sessions/${sessionId}/messages?mode=full`, options)
+     if (!newest.page?.nextCursor) return newest
+@@ -455,9 +472,19 @@ export const sessionsApi = {
+     let omitted = newest.page.omittedOversizedEntries
+     let truncated = Boolean(newest.page.contentTruncated)
+     let scannedBytes = newest.page.scannedBytes
++    const startedAt = Date.now()
+     while (cursor) {
+       if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError')
+       if (seen.has(cursor)) throw new Error('Session history cursor did not advance')
++      // Stop well before the request timeout. `hasMore` below stays true and
++      // `nextCursor` is preserved, which is exactly the state the timeline
++      // already interprets as "history is windowed — offer to load more".
++      if (
++        pages.length >= HISTORY_STITCH_MAX_PAGES ||
++        Date.now() - startedAt >= HISTORY_STITCH_DEADLINE_MS
++      ) {
++        break
++      }
+       seen.add(cursor)
+       const query: URLSearchParams = new URLSearchParams({ cursor })
+       const older: SessionHistoryPage = await api.get<SessionHistoryPage>(`/api/sessions/${sessionId}/messages?${query}`, options)
+@@ -472,14 +499,18 @@ export const sessionsApi = {
+       cursor = older.page.nextCursor
+     }
+     pages.reverse()
++    // `cursor === null` means the walk reached the head of the transcript, in
++    // which case every field below matches the previous unconditional-`null`
++    // behaviour — early exit is the only new path.
++    const exhausted = cursor === null
+     return {
+       messages: pages.flatMap(page => page.messages),
+       taskNotifications: pages.flatMap(page => page.taskNotifications ?? []),
+       page: {
+         ...newest.page,
+-        nextCursor: null,
+-        hasMore: false,
+-        historyComplete: omitted === 0 && !truncated && !newest.page.previousCursor,
++        nextCursor: cursor,
++        hasMore: !exhausted,
++        historyComplete: exhausted && omitted === 0 && !truncated && !newest.page.previousCursor,
+         contentTruncated: truncated,
+         omittedOversizedEntries: omitted,
+         scannedBytes,

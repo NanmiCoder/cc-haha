@@ -195,6 +195,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
   initialize: async () => {
     if (!getUpdateHost()) return
+    // "Disable updates" suppresses the startup check entirely.
+    if (useSettingsStore.getState().disableUpdates) return
     if (!startupCheckPromise) {
       startupCheckPromise = (async () => {
         await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -210,6 +212,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   checkForUpdates: async ({ silent = false, autoDownload = true } = {}) => {
     const host = getUpdateHost()
     if (!host) return null
+    // While "disable updates" is on, neither startup nor manual checks run.
+    if (useSettingsStore.getState().disableUpdates) return null
     if (downloadPromise && get().status === 'downloading' && pendingUpdate) return pendingUpdate
     clearRelaunchWatchdog()
 

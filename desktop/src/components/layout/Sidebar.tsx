@@ -15,6 +15,7 @@ import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
 import { ProjectEditorModal, type ProjectEditorSubmission } from './ProjectEditorModal'
 import { SidebarTaskList } from './SidebarTaskList'
+import { ExportConversationDialog } from '../ExportConversationDialog'
 import { SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT } from '../../lib/sessionListPagination'
 import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
 import {
@@ -147,6 +148,7 @@ export function Sidebar({
   ))
   const ensureOpenTargets = useOpenTargetStore((s) => s.ensureTargets)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [exportTarget, setExportTarget] = useState<{ id: string; title: string } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
   const [projectHeaderSubmenu, setProjectHeaderSubmenu] = useState<{ type: 'organize' | 'sort'; x: number; y: number } | null>(null)
@@ -1038,36 +1040,32 @@ export function Sidebar({
         >
           {t('sidebar.newSession')}
         </NavItem>
-        {!isMobile && (
-          <NavItem
-            active={activeTabId === SCHEDULED_TAB_ID}
-            collapsed={!expanded}
-            label={t('sidebar.scheduled')}
-            touchFriendly={isMobile}
-            onClick={() => {
-              useTabStore.getState().openTab(SCHEDULED_TAB_ID, t('sidebar.scheduled'), 'scheduled')
-              closeMobileDrawer()
-            }}
-            icon={<ClockIcon />}
-          >
-            {t('sidebar.scheduled')}
-          </NavItem>
-        )}
-        {!isMobile && (
-          <NavItem
-            active={activeTabId === MARKET_TAB_ID || activeTabId === CONNECTORS_TAB_ID}
-            collapsed={!expanded}
-            label={t('sidebar.extensions')}
-            touchFriendly={isMobile}
-            onClick={() => {
-              useTabStore.getState().openTab(MARKET_TAB_ID, t('sidebar.extensions'), 'market')
-              closeMobileDrawer()
-            }}
-            icon={<StorefrontIcon />}
-          >
-            {t('sidebar.extensions')}
-          </NavItem>
-        )}
+        <NavItem
+          active={activeTabId === SCHEDULED_TAB_ID}
+          collapsed={!expanded}
+          label={t('sidebar.scheduled')}
+          touchFriendly={isMobile}
+          onClick={() => {
+            useTabStore.getState().openTab(SCHEDULED_TAB_ID, t('sidebar.scheduled'), 'scheduled')
+            closeMobileDrawer()
+          }}
+          icon={<ClockIcon />}
+        >
+          {t('sidebar.scheduled')}
+        </NavItem>
+        <NavItem
+          active={activeTabId === MARKET_TAB_ID || activeTabId === CONNECTORS_TAB_ID}
+          collapsed={!expanded}
+          label={t('sidebar.extensions')}
+          touchFriendly={isMobile}
+          onClick={() => {
+            useTabStore.getState().openTab(MARKET_TAB_ID, t('sidebar.extensions'), 'market')
+            closeMobileDrawer()
+          }}
+          icon={<StorefrontIcon />}
+        >
+          {t('sidebar.extensions')}
+        </NavItem>
 
       </div>
 
@@ -1494,12 +1492,31 @@ export function Sidebar({
             {t('common.rename')}
           </button>
           <button
+            onClick={() => {
+              const session = sessions.find((s) => s.id === contextMenu.id)
+              setExportTarget({ id: contextMenu.id, title: session?.title || '' })
+              setContextMenu(null)
+            }}
+            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+          >
+            {t('session.export.title')}
+          </button>
+          <button
             onClick={() => handleDelete(contextMenu.id)}
             className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
           >
             {t('common.delete')}
           </button>
         </div>
+      )}
+
+      {exportTarget && (
+        <ExportConversationDialog
+          sessionId={exportTarget.id}
+          sessionTitle={exportTarget.title}
+          open={true}
+          onClose={() => setExportTarget(null)}
+        />
       )}
 
       {projectContextMenu && (() => {

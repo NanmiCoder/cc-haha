@@ -34,6 +34,14 @@ const STATUS_LABEL_KEYS: Record<TerminalStatus, TranslationKey> = {
   unavailable: 'settings.terminal.status.unavailable',
 }
 
+// crypto.randomUUID is only defined in secure contexts (https / localhost).
+// H5 reached over a LAN IP (http://192.168.x.x:port) is a non-secure context,
+// where the call would throw — mirror McpSettings' createId fallback.
+function createTerminalRequestId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 function findScrollableAncestor(element: HTMLElement, deltaY: number): HTMLElement | null {
   let parent = element.parentElement
   while (parent) {
@@ -197,7 +205,7 @@ export function TerminalSettings({
     const host = hostRef.current
     if (!host) return Promise.resolve()
 
-    const requestId = crypto.randomUUID()
+    const requestId = createTerminalRequestId()
     let exitedDuringStart = false
     const startToken = runtime.startToken + 1
     runtime.startToken = startToken

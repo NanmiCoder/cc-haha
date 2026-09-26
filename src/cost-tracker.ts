@@ -14,6 +14,7 @@ import {
   getTotalCacheReadInputTokens,
   getTotalCostUSD,
   getTotalDecodeDuration,
+  getTotalTimedOutputTokens,
   getTotalDuration,
   getTotalInputTokens,
   getTotalLinesAdded,
@@ -79,6 +80,10 @@ export type SessionUsageSnapshot = {
   // no streamed response reported a decode span (non-streaming fallback, aborted turn).
   totalDecodeDuration: number
   totalTtftDuration: number
+  // Output tokens of the calls `totalDecodeDuration` covers. Generation speed is this over that
+  // span: `totalOutputTokens` also counts calls that reported no span (a non-streamed fallback,
+  // a truncated stream), and pairing it with the partial span reads as a rate nobody saw.
+  totalTimedOutputTokens: number
   totalDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -108,6 +113,7 @@ type StoredCostState = {
   totalAPIDurationWithoutRetries: number
   totalDecodeDuration: number
   totalTtftDuration: number
+  totalTimedOutputTokens?: number
   totalToolDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -152,6 +158,7 @@ export function getStoredSessionCosts(
       projectConfig.lastAPIDurationWithoutRetries ?? 0,
     totalDecodeDuration: projectConfig.lastDecodeDuration ?? 0,
     totalTtftDuration: projectConfig.lastTtftDuration ?? 0,
+    totalTimedOutputTokens: projectConfig.lastTimedOutputTokens ?? 0,
     totalToolDuration: projectConfig.lastToolDuration ?? 0,
     totalLinesAdded: projectConfig.lastLinesAdded ?? 0,
     totalLinesRemoved: projectConfig.lastLinesRemoved ?? 0,
@@ -186,6 +193,7 @@ export function saveCurrentSessionCosts(fpsMetrics?: FpsMetrics): void {
     lastAPIDurationWithoutRetries: getTotalAPIDurationWithoutRetries(),
     lastDecodeDuration: getTotalDecodeDuration(),
     lastTtftDuration: getTotalTtftDuration(),
+    lastTimedOutputTokens: getTotalTimedOutputTokens(),
     lastToolDuration: getTotalToolDuration(),
     lastDuration: getTotalDuration(),
     lastLinesAdded: getTotalLinesAdded(),
@@ -291,6 +299,7 @@ export function getSessionUsageSnapshot(): SessionUsageSnapshot {
     totalAPIDuration: getTotalAPIDuration(),
     totalDecodeDuration: getTotalDecodeDuration(),
     totalTtftDuration: getTotalTtftDuration(),
+    totalTimedOutputTokens: getTotalTimedOutputTokens(),
     totalDuration: getTotalDuration(),
     totalLinesAdded: getTotalLinesAdded(),
     totalLinesRemoved: getTotalLinesRemoved(),

@@ -29,7 +29,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
     : { kind: 'file' as const, absolutePath, previewable: false }
   const actions = buildOpenWithMenuItems(context, targets, {
     sessionId: sessionId ?? '', t: (key, vars) => t(key as TranslationKey, vars),
-  }).filter((item) => item.icon === 'copy' || item.id === 'in-app' || item.id === 'preview')
+  }).filter((item) => item.icon === 'copy' || item.id === 'in-app' || item.id === 'preview' || item.id === 'download')
   // Previewing again inside an already-open file has no effect. HTML browser
   // and clipboard actions remain available because they have distinct results.
   const usefulActions = actions.filter((item) =>

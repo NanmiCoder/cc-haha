@@ -1042,6 +1042,7 @@ describe('settingsStore workflow keyword persistence', () => {
             publicBaseUrl: null,
             fixedPort: null,
             disconnectGraceSeconds: null,
+            requireToken: false,
           },
         }),
         enable: vi.fn(),
@@ -1618,6 +1619,7 @@ describe('settingsStore H5 access behavior', () => {
         publicBaseUrl: 'https://prev.example/app',
         fixedPort: null,
         disconnectGraceSeconds: null,
+        requireToken: false,
       },
     })
 
@@ -1631,6 +1633,7 @@ describe('settingsStore H5 access behavior', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
   })
@@ -1674,6 +1677,7 @@ describe('settingsStore H5 access behavior', () => {
         publicBaseUrl: 'https://prev.example/app',
         fixedPort: null,
         disconnectGraceSeconds: null,
+        requireToken: false,
       },
     })
 
@@ -1687,6 +1691,7 @@ describe('settingsStore H5 access behavior', () => {
       publicBaseUrl: 'https://prev.example/app',
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     expect(useSettingsStore.getState().h5AccessError).toBe('H5 unavailable')
   })
@@ -1725,6 +1730,7 @@ describe('settingsStore H5 access behavior', () => {
             publicBaseUrl: null,
             fixedPort: null,
             disconnectGraceSeconds: null,
+            requireToken: false,
           },
           token: 'raw-enable-token',
         }),
@@ -1737,6 +1743,7 @@ describe('settingsStore H5 access behavior', () => {
             publicBaseUrl: null,
             fixedPort: null,
             disconnectGraceSeconds: null,
+            requireToken: false,
           },
         }),
         regenerate: vi.fn().mockResolvedValue({
@@ -1748,6 +1755,7 @@ describe('settingsStore H5 access behavior', () => {
             publicBaseUrl: 'https://phone.example/app',
             fixedPort: null,
             disconnectGraceSeconds: null,
+            requireToken: false,
           },
           token: 'raw-regenerated-token',
         }),
@@ -1766,6 +1774,7 @@ describe('settingsStore H5 access behavior', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
 
     await expect(useSettingsStore.getState().regenerateH5AccessToken()).resolves.toBe('raw-regenerated-token')
@@ -1777,6 +1786,7 @@ describe('settingsStore H5 access behavior', () => {
       publicBaseUrl: 'https://phone.example/app',
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
 
     // Disable keeps the token so a later re-enable restores paired devices.
@@ -1789,6 +1799,7 @@ describe('settingsStore H5 access behavior', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     expect(useSettingsStore.getState().h5AccessError).toBeNull()
     expect('h5AccessGeneratedToken' in useSettingsStore.getState()).toBe(false)

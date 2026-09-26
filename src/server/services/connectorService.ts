@@ -49,7 +49,10 @@ export class ConnectorService {
   }
 
   private installedDefinition(def: ConnectorDefinition, record: ConnectorRecord): ConnectorDefinition {
-    const legacyVersion = record.installation && basename(record.installation.directory).match(/^(.+)-(?:darwin|win32)-(?:arm64|x64)$/)?.[1]
+    // Runtime dirs are named `<version>-<platform>-<arch>`. Match the platform
+    // as a generic token (not just darwin/win32) so legacy installs on any
+    // supported platform still resolve their version instead of falling back.
+    const legacyVersion = record.installation && basename(record.installation.directory).match(/^(.+)-[a-z]+-(?:arm64|x64)$/)?.[1]
     const version = record.installedVersion ?? legacyVersion ?? def.version
     if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) {
       throw new Error('Invalid installed connector version')

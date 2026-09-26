@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { isolateModelDefaultsEnv } from '../../testUtils/modelEnv.js'
 import { sanitizeModelName } from '../commitAttribution.js'
 import { getContextWindowForModel, getModelMaxOutputTokens } from '../context.js'
 import {
@@ -20,6 +21,8 @@ import {
   isNonCustomOpusModel,
   parseUserSpecifiedModel,
 } from './model.js'
+
+isolateModelDefaultsEnv()
 
 describe('Opus 5.5 official runtime contract', () => {
   test('registers a distinct identity without rewriting explicitly pinned models', () => {

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, appendFile, open, rename } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
+import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, boundToolUseResultPreview, TOOL_USE_RESULT_STRING_LIMIT, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
 
 let directory: string
 let file: string
@@ -280,5 +280,42 @@ describe('bounded history pages', () => {
     await Promise.all(active)
     expect(await Promise.all(queued)).toEqual(Array(7).fill('ok'))
     expect(await replacement).toBe('replacement')
+  })
+})
+
+describe('toolUseResult transport projection', () => {
+  test('clips oversized strings and keeps every key and container type', () => {
+    const originalFile = 'x'.repeat(500_000)
+    const result = boundToolUseResultPreview({
+      filePath: '/tmp/big.js',
+      originalFile,
+      structuredPatch: [{ lines: ['+one'] }],
+      replaceAll: false,
+    }) as Record<string, unknown>
+
+    // FileEdit's schema requires a string, and the CLI renderer calls
+    // `.split('\n')` on it unguarded — a null/undefined here would blank the
+    // result entirely.
+    expect(typeof result.originalFile).toBe('string')
+    expect((result.originalFile as string).length).toBeLessThan(originalFile.length)
+    expect((result.originalFile as string)).toStartWith('x'.repeat(TOOL_USE_RESULT_STRING_LIMIT))
+    // Diff rendering and turn stats read these; they must survive intact.
+    expect(result.filePath).toBe('/tmp/big.js')
+    expect(result.structuredPatch).toEqual([{ lines: ['+one'] }])
+    expect(result.replaceAll).toBe(false)
+  })
+
+  test('leaves ordinary results byte-identical', () => {
+    const small = { filePath: '/tmp/a.txt', originalFile: 'tiny\n', replaceAll: false }
+    expect(boundToolUseResultPreview(small)).toEqual(small)
+  })
+
+  test('does not flag truncation, so historyComplete cannot flip', () => {
+    const result = boundToolUseResultPreview({
+      originalFile: 'y'.repeat(200_000),
+    }) as Record<string, unknown>
+    // A truncated *body* marks the transcript incomplete; this is a transport
+    // clip of a display-only field, so it must stay silent.
+    expect(result.bodyTruncated).toBeUndefined()
   })
 })

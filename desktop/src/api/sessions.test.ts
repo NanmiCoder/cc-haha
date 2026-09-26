@@ -349,6 +349,33 @@ describe('full session history assembly', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('bounds the walk and hands the rest back through nextCursor', async () => {
+    // An endless transcript: every continuation offers another cursor. The walk
+    // must still terminate and leave the remainder reachable through the
+    // existing "load more" path, rather than stitching until the request times
+    // out — which is how a large session previously failed to open at all.
+    let oldest = 0
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+      if (String(url).includes('mode=full')) return response(page('newest', 'cursor-0'))
+      oldest += 1
+      return response(page(`older-${oldest}`, `cursor-${oldest}`))
+    })
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    const resultPage = result.page
+    if (!resultPage) throw new Error('expected page metadata')
+
+    expect(resultPage.hasMore).toBe(true)
+    expect(resultPage.nextCursor).toBeTruthy()
+    expect(resultPage.historyComplete).toBe(false)
+    // Bounded: it stopped instead of walking the whole (endless) transcript.
+    expect(result.messages.length).toBeGreaterThan(1)
+    expect(result.messages.length).toBeLessThan(100)
+    // The cursor still points at the oldest page actually retrieved.
+    expect(resultPage.nextCursor).toBe(`cursor-${oldest}`)
+    expect(fetchMock).toHaveBeenCalledTimes(oldest + 1)
+  })
+
   it('rejects a failed continuation without exposing its successfully loaded tail', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(response(page('new', 'older')))

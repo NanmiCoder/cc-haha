@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import type { TranslationKey } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
+import { estimateTokens } from '../../lib/tpsMeter'
+import { extractTextContent } from '../../lib/traceViewModel'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -205,28 +207,113 @@ export function hasUnresolvedToolCalls(
 }
 
 /**
- * Wall-clock span of the whole run: first step start to last result. Same
- * transcript-timestamp caveat as {@link toolCallDurationMs} — it is the span the
- * user waited, not billed execution time.
+ * Combined "work time" of the whole run: the sum of every settled segment —
+ * each thinking block's recorded generation span plus each tool call's
+ * execution span — rather than the wall-clock span from first step to last
+ * result. The span overcounted: it includes the idle gaps between steps, and a
+ * run that ends in thought never had an "end" at all, so its time was not
+ * shown. Summing segments counts exactly what the run worked, which is what
+ * "thinking + tools time" means. Thinking blocks without a recorded duration
+ * (older transcripts) contribute nothing; a run with no measurable segment at
+ * all returns undefined, so the header prints no number instead of `0s`.
  */
 export function activityDurationMs(
   steps: ActivityStep[],
   resultMap: Map<string, ToolResult>,
 ): number | undefined {
-  let start = Number.POSITIVE_INFINITY
-  let end = Number.NEGATIVE_INFINITY
+  let total = 0
+  let measured = false
 
   for (const step of steps) {
-    const startedAt = step.kind === 'thinking' ? step.message.timestamp : step.toolCall.timestamp
-    if (Number.isFinite(startedAt)) start = Math.min(start, startedAt)
-    if (step.kind === 'tool') {
-      const result = resultMap.get(step.toolCall.toolUseId)
-      if (result && Number.isFinite(result.timestamp)) end = Math.max(end, result.timestamp)
+    if (step.kind === 'thinking') {
+      const durationMs = step.message.thinkingDurationMs
+      if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
+        total += durationMs
+        measured = true
+      }
+      continue
+    }
+    const result = resultMap.get(step.toolCall.toolUseId)
+    const durationMs = toolCallDurationMs(step.toolCall, result)
+    if (typeof durationMs === 'number') {
+      total += durationMs
+      measured = true
     }
   }
 
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined
-  return end - start
+  return measured ? total : undefined
+}
+
+/** Estimated tokens a run spent: thought content plus the tool results it pulled in. */
+export type ActivityTokenUsage = {
+  thinkingTokens: number
+  toolTokens: number
+  /** True when the thought side is an estimate (no real API thinking-token count
+   *  was returned). Drives the label: estimated → `thought + tool`, real → one total. */
+  thinkingIsEstimated: boolean
+}
+
+/**
+ * Token usage of a whole activity run. The model does not return a dedicated
+ * thinking-token count, so the thought side is estimated from content (the same
+ * CJK/ASCII heuristic the per-thought badge and the TPS meter use) and the tool
+ * side from the text of each result — the content that actually entered the
+ * context. A run that produced neither shows `0 + 0` only if it had steps at all;
+ * an empty run returns all zeros with `thinkingIsEstimated` true and the caller
+ * decides whether that warrants a label.
+ */
+export function activityTokenUsage(
+  steps: ActivityStep[],
+  resultMap: Map<string, ToolResult>,
+): ActivityTokenUsage {
+  let thinkingTokens = 0
+  let toolTokens = 0
+  let thinkingIsEstimated = true
+
+  for (const step of steps) {
+    if (step.kind === 'thinking') {
+      if (step.message.content.trim().length > 0) {
+        thinkingTokens += estimateTokens(step.message.content)
+      }
+      continue
+    }
+    const result = resultMap.get(step.toolCall.toolUseId)
+    if (result && typeof result.content !== 'undefined') {
+      toolTokens += estimateTokens(extractTextContent(result.content))
+    }
+  }
+
+  return { thinkingTokens, toolTokens, thinkingIsEstimated }
+}
+
+/**
+ * The run's token label parts. Estimated thought → two numbers (thought, then
+ * tool); a real thought count → one combined total, because then the number is
+ * what the API billed rather than two different measurement methods glued
+ * together.
+ *
+ * Returned as parts rather than a joined string so the separator can be laid
+ * out with CSS: the label renders in a monospace font, where a literal space is
+ * a full character cell and cannot be tightened to an in-between width.
+ */
+export function activityTokenParts(usage: ActivityTokenUsage): string[] {
+  if (!usage.thinkingIsEstimated) {
+    return [formatActivityTokens(usage.thinkingTokens + usage.toolTokens)]
+  }
+  return [
+    formatActivityTokens(usage.thinkingTokens),
+    formatActivityTokens(usage.toolTokens),
+  ]
+}
+
+/** Plain-string form of {@link activityTokenParts}, for tests and fallbacks. */
+export function activityTokenLabel(usage: ActivityTokenUsage): string {
+  return activityTokenParts(usage).join(' + ')
+}
+
+/** Token count as `xx.xxk`, two decimals (`0.80k`, `12.50k`). */
+export function formatActivityTokens(tokens: number): string {
+  return `${(tokens / 1000).toFixed(2)}k`
 }
 
 export function activityStepToolCalls(steps: ActivityStep[]): ToolCall[] {

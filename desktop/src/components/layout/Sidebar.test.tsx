@@ -2176,8 +2176,9 @@ describe('Sidebar', () => {
 
     render(<Sidebar isMobile onRequestClose={onRequestClose} />)
 
-    expect(screen.queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
+    // market + scheduled are intentionally exposed on mobile (H5 access)
+    expect(screen.getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
     expect(useTabStore.getState().activeTabId).toBe('__settings__')

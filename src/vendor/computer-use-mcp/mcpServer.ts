@@ -104,16 +104,16 @@ function mergePermissionResponse(
 export function buildPlatformComputerUseTools(
   caps: {
     screenshotFiltering: "native" | "none";
-    platform: "darwin" | "win32";
+    platform: "darwin" | "win32" | "linux";
     teachMode?: boolean;
   },
   coordinateMode: CoordinateMode,
   installedAppNames?: string[],
 ): Tool[] {
-  return caps.platform === "win32"
-    ? buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
-    : buildComputerUseTools(caps, coordinateMode, installedAppNames)
-      .filter(tool => tool.name === 'js' || tool.name === 'js_reset');
+  return caps.platform === "darwin"
+    ? buildComputerUseTools(caps, coordinateMode, installedAppNames)
+      .filter(tool => tool.name === 'js' || tool.name === 'js_reset')
+    : buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
 }
 
 /**
@@ -187,7 +187,8 @@ export function bindSessionContext(
   // Everything below — dispatch, lock deferral, stale-mouse cleanup — has to
   // come from the SAME module, or a Windows session would defer the lock by
   // the semantic face's rules while dispatching through the pixel one.
-  const legacyPixelFace = adapter.executor.capabilities.platform === "win32";
+  const legacyPixelFace =
+    adapter.executor.capabilities.platform !== "darwin";
   const dispatchToolCall = legacyPixelFace
     ? legacyHandleToolCall
     : handleToolCall;

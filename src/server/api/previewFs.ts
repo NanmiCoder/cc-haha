@@ -179,10 +179,12 @@ export async function handlePreviewFs(
     return new Response('forbidden', { status: 403 })
   }
 
-  return servePreviewFsFile(canonicalTarget, url.pathname, reqHeaders)
+  const download = url.searchParams.get('download') === '1'
+  return servePreviewFsFile(canonicalTarget, url.pathname, reqHeaders, download)
 }
 
 function previewHtmlBasePath(pathname: string): string {
+
   const slash = pathname.lastIndexOf('/')
   if (slash < 0) return '/'
   return pathname.slice(0, slash + 1)
@@ -218,11 +220,15 @@ async function servePreviewFsFile(
   target: string,
   requestPathname: string,
   reqHeaders?: Headers,
+  download = false,
 ): Promise<Response> {
   const ext = path.extname(target).toLowerCase()
   const isHtml = ext === '.html' || ext === '.htm'
-  if (!isHtml) {
-    return serveFileWithRange(target, reqHeaders)
+  const downloadHeaders = download ? downloadHeadersFor(target) : undefined
+  if (!isHtml || download) {
+    // For downloads we skip the HTML base-rewrite transform entirely — the
+    // browser wants the raw file bytes, not the preview-transformed version.
+    return serveFileWithRange(target, reqHeaders, downloadHeaders)
   }
   if (reqHeaders?.has('range')) {
     return serveFileWithRange(target, reqHeaders, {
@@ -336,4 +342,19 @@ export async function serveFileWithRange(
       ...responseHeaders,
     },
   })
+}
+
+/**
+ * Build the `Content-Disposition: attachment` headers for a download response.
+ * The RFC5987 `filename*` form carries unicode/space names (browsers use it
+ * over the ASCII `filename` fallback); the fallback strips non-ASCII so the
+ * plain header never breaks on raw unicode.
+ */
+export function downloadHeadersFor(target: string): Record<string, string> {
+  const fileName = path.basename(target)
+  const fallback = fileName.replace(/[^\x20-\x7E]/g, '_')
+  const encoded = encodeURIComponent(fileName).replace(/'/g, '%27')
+  return {
+    'Content-Disposition': `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`,
+  }
 }

@@ -5,6 +5,13 @@ export type TurnCompletion = {
   completedAt: number
   /** 用户提示词发出到该轮结束的耗时；起止时间不可信时缺省。 */
   durationMs?: number
+  /**
+   * 这一轮里各次 API 调用自报的输出 token 合计（`usage.output_tokens`，按
+   * `usageKey` 去重）。一轮可能有多轮「模型调用→工具→再调用」，故是求和而非
+   * 单次值。全部调用都没自报数量时缺省 —— 老 transcript、以及不返回 usage 的
+   * provider 都属于这种情况，此时不显示，而不是显示一个 0。
+   */
+  outputTokens?: number
 }
 
 /**
@@ -19,6 +26,30 @@ type OpenTurn = {
   lastAssistantTextId: string | null
   /** 最后一条助手文本之后是否还有实质内容（有的话这轮不是以回复收尾的）。 */
   hasWorkAfterLastReply: boolean
+  outputTokens: number
+  /** 有任意一次调用自报了数量，才让 `outputTokens` 参与展示。 */
+  hasReportedUsage: boolean
+  /** 已计入的 API 调用标识，防止同一次调用被重复累加。 */
+  countedUsageKeys: Set<string>
+}
+
+/**
+ * 一行消息上可用的调用自报用量。只有助手侧的行会带 `usage`（一次调用的全部内容
+ * 块都重复同一份），且数量为 0 或缺失时视为「没自报」，返回 null。
+ */
+function responseUsage(message: UIMessage): { outputTokens: number; key?: string } | null {
+  if (
+    message.type !== 'assistant_text' &&
+    message.type !== 'thinking' &&
+    message.type !== 'tool_use'
+  ) {
+    return null
+  }
+  const outputTokens = message.usage?.output_tokens
+  if (typeof outputTokens !== 'number' || !Number.isFinite(outputTokens) || outputTokens <= 0) {
+    return null
+  }
+  return { outputTokens, ...(message.usageKey ? { key: message.usageKey } : {}) }
 }
 
 function isTurnStart(message: UIMessage): boolean {
@@ -65,6 +96,9 @@ export function buildTurnCompletionByMessageId(
         completedAt: startedAt,
         lastAssistantTextId: null,
         hasWorkAfterLastReply: false,
+        outputTokens: 0,
+        hasReportedUsage: false,
+        countedUsageKeys: new Set<string>(),
       }
       turns.push(current)
       continue
@@ -73,6 +107,16 @@ export function buildTurnCompletionByMessageId(
     // 首条用户提示词之前的消息不属于任何一轮，没有起点也就没有耗时。
     if (!current) continue
     if (isTrailingCard(message)) continue
+
+    // 用量就在这次遍历里顺带累加（这一轮的所有调用都在同一段消息区间内），
+    // 不额外扫一遍。同一次调用的十来行重复携带同一份 usage，靠 usageKey 去重；
+    // 没有 key 的行照计，与 `summarizeTokenUsageFromHistory` 的口径一致。
+    const usage = responseUsage(message)
+    if (usage && (!usage.key || !current.countedUsageKeys.has(usage.key))) {
+      if (usage.key) current.countedUsageKeys.add(usage.key)
+      current.outputTokens += usage.outputTokens
+      current.hasReportedUsage = true
+    }
 
     if (Number.isFinite(message.timestamp)) {
       current.completedAt = Number.isFinite(current.completedAt)
@@ -98,6 +142,7 @@ export function buildTurnCompletionByMessageId(
     completions.set(turn.lastAssistantTextId, {
       completedAt: turn.completedAt,
       ...(plausible ? { durationMs } : {}),
+      ...(turn.hasReportedUsage ? { outputTokens: turn.outputTokens } : {}),
     })
   })
 

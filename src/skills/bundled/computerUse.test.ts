@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
+import { isolateModelDefaultsEnv } from '../../testUtils/modelEnv.js'
 import { getBundledSkills } from '../bundledSkills.js'
 import { buildPlatformComputerUseTools } from '../../vendor/computer-use-mcp/mcpServer.js'
 import {
@@ -7,6 +8,8 @@ import {
   getComputerUseToolAllowlist,
   registerComputerUseSkill,
 } from './computerUse.js'
+
+isolateModelDefaultsEnv()
 
 /**
  * Asserting on prose is unusual, but this prose is load-bearing twice over: it
@@ -80,6 +83,17 @@ describe('computer-use skill content', () => {
   })
 })
 
+// Mirror the platform resolution in computerUse.ts: win32 and linux both use
+// the Windows-facing skill copy (linux runs the Windows-compatible pixel tool
+// surface), darwin uses the Mac copy.
+const testPlatform =
+  process.platform === 'win32'
+    ? 'win32'
+    : process.platform === 'linux'
+      ? 'linux'
+      : 'darwin'
+const testIsWindows = testPlatform !== 'darwin'
+
 describe('computer-use skill registration', () => {
   test('front-loads task semantics and still says when NOT to use it', () => {
     registerComputerUseSkill()
@@ -90,7 +104,7 @@ describe('computer-use skill registration', () => {
     // first words must carry what this is FOR.
     expect(
       skill!.description.startsWith(
-        process.platform === 'win32'
+        testIsWindows
           ? "Operate apps on the user's Windows desktop"
           : "Operate apps on the user's Mac",
       ),
@@ -104,14 +118,13 @@ describe('computer-use skill registration', () => {
   test('binds exactly the Computer Use tools advertised on this platform', () => {
     registerComputerUseSkill()
     const skill = getBundledSkills().find(s => s.name === 'computer-use')
-    const platform = process.platform === 'win32' ? 'win32' : 'darwin'
-    expect(skill!.allowedTools).toEqual(getComputerUseToolAllowlist(platform))
+    expect(skill!.allowedTools).toEqual(getComputerUseToolAllowlist(testPlatform))
     expect(skill!.allowedTools).toEqual(buildPlatformComputerUseTools({
-      platform,
-      screenshotFiltering: platform === 'win32' ? 'none' : 'native',
+      platform: testPlatform,
+      screenshotFiltering: testIsWindows ? 'none' : 'native',
     }, 'pixels').map(tool => `mcp__computer-use__${tool.name}`))
     expect(skill!.allowedTools).toContain(
-      process.platform === 'win32'
+      testIsWindows
         ? 'mcp__computer-use__screenshot'
         : 'mcp__computer-use__js',
     )

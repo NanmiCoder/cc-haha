@@ -73,7 +73,9 @@ async function writeClipboardViaPbcopy(text: string): Promise<void> {
 }
 
 async function readClipboard(): Promise<string> {
-  if (process.platform === 'win32') {
+  // macOS uses the native pbpaste helper; Windows and Linux drive the Python
+  // helper, which wraps pyperclip (xclip/xsel under the hood on X11).
+  if (process.platform !== 'darwin') {
     return callHelper<string>('read_clipboard', {})
   }
 
@@ -81,7 +83,7 @@ async function readClipboard(): Promise<string> {
 }
 
 async function writeClipboard(text: string): Promise<void> {
-  if (process.platform === 'win32') {
+  if (process.platform !== 'darwin') {
     await callHelper('write_clipboard', { text })
     return
   }
@@ -333,7 +335,7 @@ export function createCliExecutor(opts: {
 }): ComputerExecutor {
   if (!isComputerUseSupportedPlatform()) {
     throw new Error(
-      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS and Windows.`,
+      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS, Windows and Linux.`,
     )
   }
 

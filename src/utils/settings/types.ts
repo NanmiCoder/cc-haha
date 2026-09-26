@@ -750,6 +750,26 @@ export const SettingsSchema = lazySchema(() =>
           'When false, thinking is disabled. When absent or true, thinking is ' +
             'enabled automatically for supported models.',
         ),
+      sendThinkingHistory: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, the previous turn\'s assistant thinking / ' +
+            'redacted_thinking blocks are sent back to the backend API as ' +
+            'context. When absent or false (default) they are stripped from ' +
+            'API requests to save tokens; local session history always ' +
+            'preserves them.',
+        ),
+      vccCompactBackend: z
+        .enum(['algorithm', 'llm'])
+        .optional()
+        .describe(
+          'Which engine compacts the conversation when context runs low. ' +
+            '"algorithm" (default) uses the pi-vcc algorithmic compactor — ' +
+            'a transcript-preserving structured summary with no LLM call. ' +
+            '"llm" uses the original LLM summary step. Read live at each ' +
+            'compaction, so switching mid-session takes effect immediately.',
+        ),
       effortLevel: z
         .enum(
           process.env.USER_TYPE === 'ant'

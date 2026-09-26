@@ -64,6 +64,13 @@ type StreamState = {
   // (some providers send finish_reason and usage in separate chunks)
   heldMessageDelta: SseEvent | null
   finishReason: string | null
+
+  /**
+   * Reports the real token count of each streamed chunk, when the engine sends
+   * `token_ids` (vLLM-family `return_token_ids`). Purely a side channel for the
+   * desktop's TPS meter — it never affects the Anthropic stream below.
+   */
+  onTokenIds?: (count: number) => void
 }
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -72,8 +79,9 @@ function formatSse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
-function createState(model: string): StreamState {
+function createState(model: string, onTokenIds?: (count: number) => void): StreamState {
   return {
+    ...(onTokenIds ? { onTokenIds } : {}),
     queue: [],
     currentBlockType: 'text',
     currentBlockIndex: -1,
@@ -98,10 +106,11 @@ function createState(model: string): StreamState {
 export function openaiChatStreamToAnthropic(
   upstream: ReadableStream<Uint8Array>,
   model: string,
+  options: { onTokenIds?: (count: number) => void } = {},
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const state = createState(model)
+  const state = createState(model, options.onTokenIds)
   const reader = upstream.getReader()
   let cancelled = false
 
@@ -376,6 +385,10 @@ function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
   // Update model from first chunk
   state.model = chunk.model || state.model
   ensureMessageStart(state, chunk.id)
+
+  // Real per-chunk token counts, when the engine reports them. Counted before
+  // the finish-reason guard so the last chunk's ids still land.
+  if (choice.token_ids?.length) state.onTokenIds?.(choice.token_ids.length)
 
   const delta = (choice.delta || {}) as DeltaEx
   if (state.finishReason) {

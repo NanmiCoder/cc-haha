@@ -1,5 +1,6 @@
 import { classifyPreviewLink } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
+import { getServerBaseUrl } from './desktopRuntime'
 
 export type PreviewLinkReveal = { line: number; column?: number }
 
@@ -60,8 +61,26 @@ export function localFileUrl(base: string, absPath: string): string {
   return `${base.replace(/\/$/, '')}/local-file${encoded}`
 }
 
+/**
+ * Download a file through the local server's `/local-file/<abs-path>?download=1`
+ * route, which streams it with an RFC 5987 `Content-Disposition: attachment`
+ * header. A temporary anchor is used rather than `fetch` so the browser
+ * downloads the binary as-is (no need to buffer the whole file or guess a
+ * `Blob` MIME type) and the server's attachment header drives the saved name.
+ */
+export function downloadLocalFile(absolutePath: string): void {
+  const url = `${localFileUrl(getServerBaseUrl(), absolutePath)}?download=1`
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
 /** Returns true if handled (caller should preventDefault). */
 export function handlePreviewLink(href: string, deps: PreviewLinkDeps): boolean {
+
   const cls = classifyPreviewLink(href)
   const reveal: PreviewLinkReveal | undefined = cls.line
     ? { line: cls.line, ...(cls.column ? { column: cls.column } : {}) }

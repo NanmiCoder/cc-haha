@@ -182,3 +182,88 @@ describe('buildTurnCompletionByMessageId', () => {
     expect(completions.size).toBe(0)
   })
 })
+
+describe('buildTurnCompletionByMessageId — turn token usage', () => {
+  function withUsage(
+    id: string,
+    offsetMs: number,
+    outputTokens: number,
+    usageKey?: string,
+  ): UIMessage {
+    return {
+      id,
+      type: 'assistant_text',
+      content: `reply ${id}`,
+      timestamp: T0 + offsetMs,
+      usage: { output_tokens: outputTokens },
+      ...(usageKey ? { usageKey } : {}),
+    }
+  }
+
+  it('totals every API call the turn made, not just its last one', () => {
+    // A turn is model call → tool → model call: the footer's number has to be
+    // what the whole turn spent, so it sums both replies' reported output.
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      withUsage('a1', 5 * SECOND, 400, 'msg_1\0req_1'),
+      toolResult('r1', 8 * SECOND),
+      withUsage('a2', 12 * SECOND, 600, 'msg_2\0req_2'),
+    ])
+
+    expect(completions.get('a2')?.outputTokens).toBe(1000)
+  })
+
+  it('counts one API call once even though the transcript repeats it on every row', () => {
+    // One reply is persisted as a dozen lines (one per content block) that each
+    // repeat the whole `usage` object; summing per row is the 2.2x inflation the
+    // transcript readers already dedupe on `usageKey`.
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      { id: 't1', type: 'thinking', content: 'thinking', timestamp: T0 + 2 * SECOND, usage: { output_tokens: 250 }, usageKey: 'msg_1\0req_1' },
+      withUsage('a1', 5 * SECOND, 250, 'msg_1\0req_1'),
+      withUsage('a2', 7 * SECOND, 250, 'msg_1\0req_1'),
+    ])
+
+    expect(completions.get('a2')?.outputTokens).toBe(250)
+  })
+
+  it('counts rows that carry no usage key, matching the transcript readers', () => {
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      withUsage('a1', 2 * SECOND, 100),
+      withUsage('a2', 4 * SECOND, 100),
+    ])
+
+    expect(completions.get('a2')?.outputTokens).toBe(200)
+  })
+
+  it('keeps each turn to its own calls', () => {
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      withUsage('a1', 3 * SECOND, 500, 'msg_1\0req_1'),
+      user('u2', 60 * SECOND),
+      withUsage('a2', 65 * SECOND, 700, 'msg_2\0req_2'),
+    ])
+
+    expect(completions.get('a1')?.outputTokens).toBe(500)
+    expect(completions.get('a2')?.outputTokens).toBe(700)
+  })
+
+  it('leaves the total off when no call reported one', () => {
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      assistant('a1', 3 * SECOND),
+    ])
+
+    expect(completions.get('a1')).not.toHaveProperty('outputTokens')
+  })
+
+  it('treats a reported zero as no measurement rather than printing 0.00k', () => {
+    const completions = buildTurnCompletionByMessageId([
+      user('u1', 0),
+      withUsage('a1', 3 * SECOND, 0, 'msg_1\0req_1'),
+    ])
+
+    expect(completions.get('a1')).not.toHaveProperty('outputTokens')
+  })
+})

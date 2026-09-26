@@ -1,7 +1,7 @@
 import * as path from 'node:path'
 import { expandTilde } from '../../utils/permissions/pathValidation.js'
 import { isAllowedFilesystemPath } from './filesystem.js'
-import { serveFileWithRange } from './previewFs.js'
+import { serveFileWithRange, downloadHeadersFor, contentTypeForPath } from './previewFs.js'
 import { canonicalizeExistingFilesystemPath } from '../services/filesystemPathSecurity.js'
 import { normalizeDriveRootPathForPlatform } from '../services/windowsDrivePath.js'
 
@@ -102,5 +102,56 @@ export async function handleLocalFile(
     return new Response('forbidden', { status: 403 })
   }
 
+  // `?info=1` returns lightweight file metadata (no content read) so the
+  // download card can show the file name + size without streaming the body.
+  if (url.searchParams.get('info') === '1') {
+    try {
+      const stat = await Bun.file(canonicalPath).stat()
+      return Response.json({
+        name: path.basename(canonicalPath),
+        size: stat.size,
+        mime: contentTypeForPath(canonicalPath),
+      })
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+  }
+
+  // `?download=1` turns the in-app preview into a real download: add
+  // Content-Disposition: attachment with an RFC5987-encoded filename so
+  // unicode/space names survive browsers.
+  if (url.searchParams.get('download') === '1') {
+    return serveFileWithRange(canonicalPath, reqHeaders, downloadHeadersFor(canonicalPath))
+  }
+
   return serveFileWithRange(canonicalPath, reqHeaders)
+}
+
+/**
+ * Batch size metadata for many absolute paths at once (download cards fetch
+ * all missing sizes in one request instead of one request per file). Each
+ * path is gated by the same $HOME sandbox as the single-file route; paths
+ * that fail canonicalization or the allow-list are silently skipped.
+ */
+export async function handleBatchLocalFileInfo(body: unknown): Promise<Response> {
+  const rawPaths = (body as { paths?: unknown } | null)?.paths
+  const paths = Array.isArray(rawPaths) ? rawPaths.filter((p): p is string => typeof p === 'string') : []
+  const files: Record<string, { name: string; size: number; mime: string }> = {}
+  for (const filePath of paths) {
+    const resolved = path.resolve(normalizeDriveRootPathForPlatform(filePath))
+    const canonicalPath = await canonicalizeExistingFilesystemPath(resolved)
+    if (!canonicalPath) continue
+    if (!isAllowedFilesystemPath(canonicalPath)) continue
+    try {
+      const stat = await Bun.file(canonicalPath).stat()
+      files[filePath] = {
+        name: path.basename(canonicalPath),
+        size: stat.size,
+        mime: contentTypeForPath(canonicalPath),
+      }
+    } catch {
+      // unreadable file — skip, the card shows '--'
+    }
+  }
+  return Response.json({ files })
 }

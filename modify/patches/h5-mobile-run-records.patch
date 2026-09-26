@@ -1,0 +1,75 @@
+diff --git a/desktop/src/components/layout/AppShell.test.tsx b/desktop/src/components/layout/AppShell.test.tsx
+index 08c80fa8..fcc24e2d 100644
+--- a/desktop/src/components/layout/AppShell.test.tsx
++++ b/desktop/src/components/layout/AppShell.test.tsx
+@@ -607,6 +607,45 @@ describe('AppShell boot flow', () => {
+     expect(mocks.getDesktopUiPreferences).toHaveBeenCalledTimes(1)
+   })
+ 
++  it('keeps a subagent run tab active in mobile H5 mode', async () => {
++    mocks.isMobile = true
++    mocks.tabState.activeTabId = '__subagent__s1__tool-x'
++    mocks.tabState.tabs = [
++      { sessionId: 's1', title: 'Chat', type: 'session', status: 'idle' },
++      { sessionId: '__subagent__s1__tool-x', title: 'Agent', type: 'subagent', status: 'running' },
++    ]
++
++    render(<AppShell />)
++
++    await screen.findByText('content loaded')
++
++    // The mobile guard used to treat only chat/settings/market/scheduled as
++    // valid destinations, so opening a run record bounced the phone straight
++    // back to the chat tab and the run could never be viewed on H5.
++    await waitFor(() => {
++      expect(mocks.setActiveTab).not.toHaveBeenCalled()
++    })
++  })
++
++  it('still returns mobile off a tab that has no mobile destination', async () => {
++    mocks.isMobile = true
++    mocks.tabState.activeTabId = 't1'
++    mocks.tabState.tabs = [
++      { sessionId: 's1', title: 'Chat', type: 'session', status: 'idle' },
++      { sessionId: 't1', title: 'Terminal', type: 'terminal', status: 'idle' },
++    ]
++
++    render(<AppShell />)
++
++    await screen.findByText('content loaded')
++
++    // Guard against widening the allowlist too far: a tab the phone cannot
++    // render must still fall back to a chat tab.
++    await waitFor(() => {
++      expect(mocks.setActiveTab).toHaveBeenCalledWith('s1')
++    })
++  })
++
+   it('renders a mobile drawer toggle and backdrop in browser H5 mode', async () => {
+     mocks.isMobile = true
+ 
+diff --git a/desktop/src/components/layout/AppShell.tsx b/desktop/src/components/layout/AppShell.tsx
+index b0b9b726..eaf9a104 100644
+--- a/desktop/src/components/layout/AppShell.tsx
++++ b/desktop/src/components/layout/AppShell.tsx
+@@ -272,7 +272,19 @@ export function AppShell() {
+ 
+   useEffect(() => {
+     if (!ready || !isMobileShell) return
+-    if (isChatTab(activeTab) || activeTab?.type === 'settings' || activeTab?.type === 'market' || activeTab?.type === 'scheduled' || (!activeTab && !activeTabId)) return
++    if (
++      isChatTab(activeTab) ||
++      activeTab?.type === 'settings' ||
++      activeTab?.type === 'market' ||
++      activeTab?.type === 'scheduled' ||
++      // Run records count as mobile destinations: ContentRouter renders the
++      // subagent/teammate run pages and both have a mobile layout. Leaving them
++      // out of this list bounced the phone straight back to the chat tab, so a
++      // run opened from the transcript could never be viewed on H5.
++      activeTab?.type === 'subagent' ||
++      activeTab?.type === 'team-member' ||
++      (!activeTab && !activeTabId)
++    ) return
+     const nextChatTab = tabs.find(isChatTab)
+     if (nextChatTab) {
+       setActiveTab(nextChatTab.sessionId)

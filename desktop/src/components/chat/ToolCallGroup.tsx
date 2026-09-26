@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useState } from 'react'
 import { BookMarked, ChevronDown, ChevronRight, CircleCheck, Settings } from 'lucide-react'
 import { ToolCallBlock, type ToolCallChrome } from './ToolCallBlock'
+import { TurnDownloadCard } from './DownloadReferencesCard'
 import { ActivityGroup } from './ActivityGroup'
 import { ThinkingBlock } from './ThinkingBlock'
 import {
@@ -151,41 +152,49 @@ export const ToolCallGroup = memo(function ToolCallGroup({
           isStreaming={isStreaming}
         />
         {regularSteps.length > 0 ? (
-          <ToolCallGroupContent
-            sessionId={sessionId}
-            onOpenAgentRun={onOpenAgentRun}
-            resolveAgentActivityTarget={resolveAgentActivityTarget}
-            steps={regularSteps}
-            resultMap={resultMap}
-            childToolCallsByParent={childToolCallsByParent}
-            agentTaskNotifications={agentTaskNotifications}
-            agentTaskStatuses={agentTaskStatuses}
-            activeThinkingId={activeThinkingId}
-            showOpenRun={showOpenRun}
-            isStreaming={isStreaming}
-            disclosureKey={disclosureKey}
-          />
+          <>
+            <ToolCallGroupContent
+              sessionId={sessionId}
+              onOpenAgentRun={onOpenAgentRun}
+              resolveAgentActivityTarget={resolveAgentActivityTarget}
+              steps={regularSteps}
+              resultMap={resultMap}
+              childToolCallsByParent={childToolCallsByParent}
+              agentTaskNotifications={agentTaskNotifications}
+              agentTaskStatuses={agentTaskStatuses}
+              activeThinkingId={activeThinkingId}
+              showOpenRun={showOpenRun}
+              isStreaming={isStreaming}
+              disclosureKey={disclosureKey}
+            />
+            <TurnDownloadCard
+              toolCalls={toolCalls.filter((toolCall) => !isMemoryToolCall(toolCall))}
+            />
+          </>
         ) : null}
       </div>
     )
   }
 
   return (
-    <ToolCallGroupContent
-      sessionId={sessionId}
-      onOpenAgentRun={onOpenAgentRun}
-      resolveAgentActivityTarget={resolveAgentActivityTarget}
-      steps={resolvedSteps}
-      resultMap={resultMap}
-      childToolCallsByParent={childToolCallsByParent}
-      agentTaskNotifications={agentTaskNotifications}
-      agentTaskStatuses={agentTaskStatuses}
-      activeThinkingId={activeThinkingId}
-      showOpenRun={showOpenRun}
-      isStreaming={isStreaming}
-      isLive={isLive}
-      disclosureKey={disclosureKey}
-    />
+    <>
+      <ToolCallGroupContent
+        sessionId={sessionId}
+        onOpenAgentRun={onOpenAgentRun}
+        resolveAgentActivityTarget={resolveAgentActivityTarget}
+        steps={resolvedSteps}
+        resultMap={resultMap}
+        childToolCallsByParent={childToolCallsByParent}
+        agentTaskNotifications={agentTaskNotifications}
+        agentTaskStatuses={agentTaskStatuses}
+        activeThinkingId={activeThinkingId}
+        showOpenRun={showOpenRun}
+        isStreaming={isStreaming}
+        isLive={isLive}
+        disclosureKey={disclosureKey}
+      />
+      <TurnDownloadCard toolCalls={toolCalls} />
+    </>
   )
 })
 

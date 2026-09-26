@@ -1,0 +1,1758 @@
+diff --git a/desktop/src/api/computerUse.ts b/desktop/src/api/computerUse.ts
+index 74b487a5..a6b64f62 100644
+--- a/desktop/src/api/computerUse.ts
++++ b/desktop/src/api/computerUse.ts
+@@ -74,7 +74,7 @@ export function __resetAppIconCacheForTests(): void {
+ export type ComputerUseStatus = {
+   platform: string
+   supported: boolean
+-  engine: 'macos-native' | 'windows-compat' | 'unsupported'
++  engine: 'macos-native' | 'windows-compat' | 'linux-x11' | 'unsupported'
+   systemVersion: string | null
+   arch: string
+   /**
+diff --git a/desktop/src/components/computer-use/ComputerUseEnableDialog.tsx b/desktop/src/components/computer-use/ComputerUseEnableDialog.tsx
+index 4c2b693f..89d28fcf 100644
+--- a/desktop/src/components/computer-use/ComputerUseEnableDialog.tsx
++++ b/desktop/src/components/computer-use/ComputerUseEnableDialog.tsx
+@@ -4,7 +4,7 @@ import { ActionDialog } from '@/components/ui/ActionDialog'
+ type Props = {
+   open: boolean
+   loading?: boolean
+-  platform: 'darwin' | 'win32'
++  platform: 'darwin' | 'win32' | 'linux'
+   onClose: () => void
+   onConfirm: () => void | Promise<void>
+ }
+diff --git a/desktop/src/pages/ComputerUseSettings.tsx b/desktop/src/pages/ComputerUseSettings.tsx
+index de02c9d0..c33f5c3a 100644
+--- a/desktop/src/pages/ComputerUseSettings.tsx
++++ b/desktop/src/pages/ComputerUseSettings.tsx
+@@ -12,6 +12,7 @@ type CheckState = 'loading' | 'ready' | 'error'
+ const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
+   darwin: 'https://www.python.org/downloads/macos/',
+   win32: 'https://www.python.org/downloads/windows/',
++  linux: 'https://www.python.org/downloads/linux/',
+ }
+ 
+ function StatusIcon({ ok }: { ok: boolean | null }) {
+@@ -268,7 +269,7 @@ export function ComputerUseSettings() {
+     <ComputerUseEnableDialog
+       open={enableConfirmOpen}
+       loading={enableSaving}
+-      platform={status?.platform === 'darwin' ? 'darwin' : 'win32'}
++      platform={status?.platform === 'darwin' ? 'darwin' : status?.platform === 'linux' ? 'linux' : 'win32'}
+       onClose={() => setEnableConfirmOpen(false)}
+       onConfirm={confirmComputerUseEnabled}
+     />
+@@ -372,10 +373,11 @@ export function ComputerUseSettings() {
+     )
+   }
+ 
+-  // The Python compatibility page is Windows-only. Missing or future engine
+-  // values (for example during a rolling sidecar/UI upgrade) fail closed on
+-  // the native page instead of resurrecting the retired macOS setup screen.
+-  if (status.engine !== 'windows-compat') {
++  // The Python compatibility page is for the Python-backed platforms
++  // (Windows and Linux). Missing or future engine values (for example during
++  // a rolling sidecar/UI upgrade) fail closed on the native page instead of
++  // resurrecting the retired macOS setup screen.
++  if (status.engine !== 'windows-compat' && status.engine !== 'linux-x11') {
+     return (
+       <div className="max-w-2xl space-y-5">
+         <ErrorState
+diff --git a/runtime/linux_helper.py b/runtime/linux_helper.py
+new file mode 100644
+index 00000000..8fe5436b
+--- /dev/null
++++ b/runtime/linux_helper.py
+@@ -0,0 +1,1050 @@
++#!/usr/bin/env python3
++"""Linux (X11) Computer Use helper.
++
++Uses mss / pyautogui / python-xlib / psutil / pyperclip to provide, on Linux
++X11 desktops, the JSON command protocol the native macOS `cu-helper` daemon
++and the Windows `win_helper.py` speak. This is the sole Python implementation
++of that protocol on Linux.
++
++Linux shares the mouse and keyboard with the user (there is no per-pid event
++posting like macOS `CGEvent.postToPid`), and `pyautogui` reports success
++unconditionally. So, mirroring the Windows helper, two delivery guards refuse
++to send input when delivery is already known to be impossible:
++
++  * `ensure_point_on_screen` refuses off-screen coordinates.
++  * `ensure_target_window_reachable` refuses when the named app has no
++    on-screen window to receive input.
++
++`ForegroundLease` is intentionally simplified here: X11 has no low-level
++global input hook as easy as the Windows WH_MOUSE_LL/WH_KEYBOARD_LL pair, so
++the lease records the mutating command and foreground state but does not run a
++physical-input monitor. The machine-readable error codes (user_interference /
++target_window_offscreen / point_outside_display) are preserved so the caller's
++retry policy is unchanged.
++
++XWayland note: on XWayland sessions synthetic X input mostly works but window
++state queries are less reliable; the guards fail open in that case.
++"""
++from __future__ import annotations
++
++import argparse
++import base64
++import json
++import os
++import subprocess
++import sys
++import time
++from io import BytesIO
++from pathlib import Path
++from typing import Any
++
++os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
++os.environ.setdefault("PYAUTOGUI_HIDE_SUPPORT_PROMPT", "1")
++
++import mss  # noqa: E402
++from PIL import Image  # noqa: E402
++
++# The desktop app decodes helper stdout as UTF-8. Force UTF-8 at process start
++# so JSON responses stay stable regardless of the user's system locale.
++if hasattr(sys.stdout, "reconfigure"):
++    sys.stdout.reconfigure(encoding="utf-8", errors="strict")
++if hasattr(sys.stderr, "reconfigure"):
++    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
++
++import pyautogui  # noqa: E402
++
++pyautogui.FAILSAFE = False
++pyautogui.PAUSE = 0
++
++DESKTOP_HOST_BUNDLE_ID = "com.claude-code-haha.desktop"
++
++# ---------------------------------------------------------------------------
++# Key mapping — Linux uses 'command' for the Super key
++# ---------------------------------------------------------------------------
++KEY_MAP = {
++    "a": "a", "b": "b", "c": "c", "d": "d", "e": "e",
++    "f": "f", "g": "g", "h": "h", "i": "i", "j": "j",
++    "k": "k", "l": "l", "m": "m", "n": "n", "o": "o",
++    "p": "p", "q": "q", "r": "r", "s": "s", "t": "t",
++    "u": "u", "v": "v", "w": "w", "x": "x", "y": "y",
++    "z": "z",
++    "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
++    "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
++    # Modifier keys — map macOS names to pyautogui equivalents
++    "cmd": "command",
++    "command": "command",
++    "meta": "command",
++    "super": "command",
++    "win": "command",
++    "ctrl": "ctrl",
++    "control": "ctrl",
++    "shift": "shift",
++    "alt": "alt",
++    "option": "alt",
++    "opt": "alt",
++    "fn": "fn",
++    # Navigation / editing
++    "escape": "esc",
++    "esc": "esc",
++    "enter": "enter",
++    "return": "enter",
++    "tab": "tab",
++    "space": "space",
++    "backspace": "backspace",
++    "delete": "delete",
++    "forwarddelete": "delete",
++    "up": "up",
++    "down": "down",
++    "left": "left",
++    "right": "right",
++    "home": "home",
++    "end": "end",
++    "pageup": "pageup",
++    "pagedown": "pagedown",
++    "capslock": "capslock",
++    "insert": "insert",
++    # Function keys
++    "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4",
++    "f5": "f5", "f6": "f6", "f7": "f7", "f8": "f8",
++    "f9": "f9", "f10": "f10", "f11": "f11", "f12": "f12",
++    # Symbols
++    "-": "-", "=": "=", "[": "[", "]": "]", "\\": "\\",
++    ";": ";", "'": "'", ",": ",", ".": ".", "/": "/", "`": "`",
++}
++
++
++def normalize_key(name: str) -> str:
++    key = name.strip().lower()
++    if key not in KEY_MAP:
++        raise ValueError(f"Unsupported key: {name}")
++    return KEY_MAP[key]
++
++
++# ---------------------------------------------------------------------------
++# JSON output helpers
++# ---------------------------------------------------------------------------
++
++def json_output(payload: dict[str, Any]) -> None:
++    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
++    sys.stdout.write("\n")
++    sys.stdout.flush()
++
++
++def error_output(message: str, code: str = "runtime_error") -> None:
++    json_output({"ok": False, "error": {"code": code, "message": message}})
++
++
++def bool_env(name: str, default: bool = False) -> bool:
++    value = os.environ.get(name)
++    if value is None:
++        return default
++    return value not in {"0", "false", "False", ""}
++
++
++# ---------------------------------------------------------------------------
++# X11 helpers (python-xlib) — lazily opened
++# ---------------------------------------------------------------------------
++
++def _display():
++    from Xlib.display import Display
++    return Display(os.environ.get("DISPLAY", ":0"))
++
++
++def _read_property_value(drawable: Any, atom_name: str, property_type: int, length: int):
++    """Read a typed X property value (python-xlib get_property takes 4 args).
++
++    The drawable's display back-ref is a `_BaseDisplay` proxy without
++    `intern_atom`, so atom lookup goes through `get_atom` instead.
++    """
++    disp = drawable.display
++    prop = drawable.get_property(disp.get_atom(atom_name), property_type, 0, length)
++    if prop is None or not prop.value:
++        return None
++    return prop.value[0]
++
++def _window_pid(window: Any) -> int | None:
++    from Xlib import Xatom
++    try:
++        value = _read_property_value(window, "_NET_WM_PID", Xatom.CARDINAL, 1)
++        if value is not None:
++            return int(value)
++    except Exception:
++        pass
++    return None
++
++
++def _app_info_from_wm_class(window: Any) -> dict[str, str] | None:
++    """Fallback app identity from WM_CLASS when no _NET_WM_PID is published.
++
++    Many X11 toolkits (GTK/Nautilus, several browsers) never set the PID
++    atom, so the instance/class pair is the only stable owner signal left.
++    """
++    try:
++        cls = window.get_wm_class()
++    except Exception:
++        return None
++    if not cls:
++        return None
++    instance, app_class = cls[0], cls[1] if len(cls) > 1 else cls[0]
++    name = app_class or instance or window.get_wm_name() or ""
++    if not name:
++        return None
++    stem = name
++    if stem.casefold() == "claude code haha":
++        bundle_id = DESKTOP_HOST_BUNDLE_ID
++    else:
++        bundle_id = stem
++    return {"bundleId": bundle_id, "displayName": name}
++
++
++def _app_info_from_pid(pid: int | None) -> dict[str, str] | None:
++    if not pid:
++        return None
++    try:
++        import psutil
++        proc = psutil.Process(pid)
++        exe = proc.exe() or ""
++        name = proc.name() or ""
++        stem = Path(exe).stem if exe else Path(name).stem
++        if stem.casefold() == "claude code haha":
++            bundle_id = DESKTOP_HOST_BUNDLE_ID
++        else:
++            bundle_id = stem
++        return {"bundleId": bundle_id, "displayName": name}
++    except Exception:
++        return None
++
++
++def _app_info_for_window(window: Any) -> dict[str, str] | None:
++    """Resolve the owning app, walking up to the top-level owner if needed.
++
++    Prefers the _NET_WM_PID + psutil route (real process identity). When that
++    yields nothing, falls back to WM_CLASS so GTK/Nautilus-style windows that
++    publish no PID atom still report an owning app.
++    """
++    w = window
++    for _ in range(12):
++        info = _app_info_from_pid(_window_pid(w))
++        if info:
++            return info
++        try:
++            parent = w.get_wm_parent()
++        except Exception:
++            parent = None
++        if not parent:
++            break
++        w = parent
++    return _app_info_from_wm_class(w)
++
++def _is_iconic(window: Any) -> bool | None:
++    """True if minimized, False if normal, None if state is unreadable."""
++    try:
++        st = window.get_wm_state()
++        if st:
++            return int(st[0]) == 4  # Iconic
++    except Exception:
++        pass
++    return None
++
++
++def _top_level_windows() -> list[dict[str, Any]]:
++    """Visible top-level windows with app info and geometry."""
++    out: list[dict[str, Any]] = []
++    try:
++        d = _display()
++        root = d.screen().root
++        children = root.query_tree().children
++    except Exception:
++        return out
++    for w in children:
++        try:
++            if w.get_wm_name() is None:
++                continue  # skip non-application windows (panels, cursors, ...)
++            geom = w.get_geometry()
++            if geom.width <= 0 or geom.height <= 0:
++                continue
++            out.append({
++                "window": w,
++                "app": _app_info_for_window(w),
++                "iconic": _is_iconic(w),
++                "geom": {
++                    "x": geom.x,
++                    "y": geom.y,
++                    "width": geom.width,
++                    "height": geom.height,
++                },
++            })
++        except Exception:
++            continue
++    return out
++
++
++def list_windows() -> list[dict[str, Any]]:
++    """List visible on-screen windows with their bounds."""
++    results: list[dict[str, Any]] = []
++    for w in _top_level_windows():
++        try:
++            title = w["window"].get_wm_name() or ""
++        except Exception:
++            title = ""
++        results.append({
++            "title": title,
++            "bounds": w["geom"],
++            "ownerName": w["app"]["displayName"] if w["app"] else "",
++            "bundleId": w["app"]["bundleId"] if w["app"] else "",
++            "iconic": w["iconic"],
++        })
++    return results
++
++
++# ---------------------------------------------------------------------------
++# Display / Monitor helpers (mss)
++# ---------------------------------------------------------------------------
++
++def get_displays() -> list[dict[str, Any]]:
++    """Enumerate monitors via mss. Scale factor is 1.0 (X11 is physical px)."""
++    displays: list[dict[str, Any]] = []
++    try:
++        with mss.mss() as sct:
++            monitors = sct.monitors
++    except Exception:
++        return displays
++    # monitors[0] is the combined virtual screen; [1:] are the real ones.
++    for idx, m in enumerate(monitors[1:]):
++        name = f"Display {idx + 1}"
++        displays.append({
++            "id": idx,
++            "displayId": idx,
++            "width": m["width"],
++            "height": m["height"],
++            "scaleFactor": 1.0,
++            "originX": m["left"],
++            "originY": m["top"],
++            "isPrimary": idx == 0,
++            "name": name,
++            "label": name,
++        })
++    return displays
++
++
++def choose_display(display_id: int | None) -> dict[str, Any]:
++    displays = get_displays()
++    if not displays:
++        raise RuntimeError("No active displays found")
++    if display_id is None:
++        for display in displays:
++            if display["isPrimary"]:
++                return display
++        return displays[0]
++    for display in displays:
++        if display["displayId"] == display_id or display["id"] == display_id:
++            return display
++    raise RuntimeError(f"Unknown display: {display_id}")
++
++
++# ---------------------------------------------------------------------------
++# Screen capture (mss)
++# ---------------------------------------------------------------------------
++
++def capture_display(display_id: int | None, resize: tuple[int, int] | None = None) -> dict[str, Any]:
++    display = choose_display(display_id)
++    monitor = {
++        "left": display["originX"],
++        "top": display["originY"],
++        "width": display["width"],
++        "height": display["height"],
++    }
++    with mss.mss() as sct:
++        raw = sct.grab(monitor)
++        image = Image.frombytes("RGB", raw.size, raw.rgb)
++    if resize:
++        image = image.resize(resize, Image.Resampling.LANCZOS)
++    buffer = BytesIO()
++    image.save(buffer, format="JPEG", quality=75, optimize=True)
++    base64_data = base64.b64encode(buffer.getvalue()).decode("ascii")
++    return {
++        "base64": base64_data,
++        "width": image.width,
++        "height": image.height,
++        "displayWidth": display["width"],
++        "displayHeight": display["height"],
++        "displayId": display["displayId"],
++        "originX": display["originX"],
++        "originY": display["originY"],
++        "display": display,
++    }
++
++
++def capture_region(region: dict[str, int], resize: tuple[int, int] | None = None) -> dict[str, Any]:
++    with mss.mss() as sct:
++        raw = sct.grab(region)
++        image = Image.frombytes("RGB", raw.size, raw.rgb)
++    if resize:
++        image = image.resize(resize, Image.Resampling.LANCZOS)
++    buffer = BytesIO()
++    image.save(buffer, format="JPEG", quality=75, optimize=True)
++    base64_data = base64.b64encode(buffer.getvalue()).decode("ascii")
++    return {"base64": base64_data, "width": image.width, "height": image.height}
++
++
++# ---------------------------------------------------------------------------
++# Application enumeration (XDG .desktop + psutil + X11)
++# ---------------------------------------------------------------------------
++
++def _desktop_files() -> list[Path]:
++    candidates: list[Path] = []
++    roots = [
++        Path.home() / ".local" / "share" / "applications",
++        Path("/usr/local/share/applications"),
++        Path("/usr/share/applications"),
++    ]
++    for root in roots:
++        try:
++            if root.is_dir():
++                candidates.extend(sorted(root.glob("*.desktop")))
++        except Exception:
++            continue
++    return candidates
++
++
++def _desktop_entry(path: Path) -> dict[str, str] | None:
++    """Minimal INI read of a .desktop file: Name, Exec, path."""
++    try:
++        text = path.read_text(encoding="utf-8", errors="replace")
++    except Exception:
++        return None
++    name = ""
++    exe = ""
++    for line in text.splitlines():
++        line = line.strip()
++        if line.startswith("Name="):
++            name = line[len("Name="):]
++        elif line.startswith("Exec="):
++            exe = line[len("Exec="):]
++    if not name:
++        name = path.stem
++    return {"name": name, "exec": exe.strip(), "path": str(path)}
++
++
++def installed_apps() -> list[dict[str, Any]]:
++    """List XDG .desktop applications."""
++    results: dict[str, dict[str, Any]] = {}
++    for path in _desktop_files():
++        entry = _desktop_entry(path)
++        if not entry:
++            continue
++        bundle_id = path.stem
++        if bundle_id not in results:
++            results[bundle_id] = {
++                "bundleId": bundle_id,
++                "displayName": entry["name"],
++                "path": entry["path"],
++            }
++    return sorted(results.values(), key=lambda item: item["displayName"].lower())
++
++
++def running_apps() -> list[dict[str, Any]]:
++    """List running GUI applications (apps owning top-level windows)."""
++    seen: dict[str, dict[str, str]] = {}
++    for w in _top_level_windows():
++        app = w["app"]
++        if not app:
++            continue
++        seen[app["bundleId"]] = {
++            "bundleId": app["bundleId"],
++            "displayName": app["displayName"],
++        }
++    return sorted(seen.values(), key=lambda item: item["displayName"].lower())
++
++
++def app_display_name(bundle_id: str) -> str | None:
++    """Find display name for a given bundleId (desktop stem or exe stem)."""
++    for w in _top_level_windows():
++        app = w["app"]
++        if app and app["bundleId"].lower() == bundle_id.lower():
++            return app["displayName"]
++    entry = _desktop_entry(Path(f"{bundle_id}.desktop"))
++    if entry:
++        return entry["name"]
++    return None
++
++
++def _windows_for_bundle(bundle_id: str) -> list[Any]:
++    """Every top-level window whose app bundle matches; None if no windows."""
++    wanted = bundle_id.strip().lower()
++    if not wanted:
++        return []
++    handles = [
++        w["window"] for w in _top_level_windows()
++        if w["app"] and w["app"]["bundleId"].lower() == wanted
++    ]
++    return handles
++
++
++def _foreground_existing_app(bundle_id: str) -> bool:
++    """Bring the frontmost matching visible window forward if one exists."""
++    wanted = bundle_id.casefold()
++    matches = [
++        w["window"] for w in _top_level_windows()
++        if w["app"] and w["app"]["bundleId"].casefold() == wanted
++        and w["iconic"] is not True
++    ]
++    if not matches:
++        return False
++    try:
++        d = _display()
++        window = matches[0]
++        if window.get_wm_state() and int(window.get_wm_state()[0]) == 4:
++            window.map()
++        window.configure(window_properties={"stack_mode": 1})  # above
++        window.raise_window()
++        try:
++            window.input_focus(2)  # PointerRoot-ish; force activate
++        except Exception:
++            pass
++        d.sync()
++        return True
++    except Exception:
++        return False
++
++
++def _net_active_window():
++    """EWMH _NET_ACTIVE_WINDOW on the root — more stable than input focus."""
++    from Xlib import Xatom
++    try:
++        d = _display()
++        root = d.screen().root
++        value = _read_property_value(root, "_NET_ACTIVE_WINDOW", Xatom.WINDOW, 1)
++        if value is not None:
++            return d.create_resource_object("window", int(value))
++    except Exception:
++        pass
++    return None
++
++
++def frontmost_app() -> dict[str, str] | None:
++    """Get the currently focused (foreground) application.
++
++    Prefers the EWMH _NET_ACTIVE_WINDOW hint (composers publish it reliably);
++    falls back to the raw input-focus event, which can legitimately be
++    PointerRoot/None on some desktops.
++    """
++    try:
++        d = _display()
++        window = _net_active_window()
++        if window is None:
++            event = d.get_input_focus()
++            data = getattr(event, "data", None) or {}
++            window = data.get("focus")
++        if window is None or str(window).lower() in {"0x0", "pointerroot", "none"}:
++            return None
++        return _app_info_for_window(window)
++    except Exception:
++        return None
++
++
++def app_under_point(x: int, y: int) -> dict[str, str] | None:
++    """Find the app whose window is under the given screen coordinate."""
++    try:
++        d = _display()
++        root = d.screen().root
++        window = root.childwindow(x, y)
++        if window:
++            info = _app_info_for_window(window)
++            if info:
++                return info
++    except Exception:
++        pass
++    return frontmost_app()
++
++
++def find_window_displays(bundle_ids: list[str]) -> list[dict[str, Any]]:
++    """For each bundleId, find which display(s) its windows are on."""
++    if not bundle_ids:
++        return []
++    displays = get_displays()
++    windows = _top_level_windows()
++    result = []
++    for bundle_id in bundle_ids:
++        want = bundle_id.lower()
++        display_ids: set[int] = set()
++        for w in windows:
++            app = w["app"]
++            if not app or app["bundleId"].lower() != want:
++                continue
++            wx, wy = w["geom"]["x"], w["geom"]["y"]
++            ww, wh = w["geom"]["width"], w["geom"]["height"]
++            for display in displays:
++                dx, dy = display["originX"], display["originY"]
++                dw, dh = display["width"], display["height"]
++                if wx < dx + dw and wx + ww > dx and wy < dy + dh and wy + wh > dy:
++                    display_ids.add(int(display["displayId"]))
++        result.append({"bundleId": bundle_id, "displayIds": sorted(display_ids)})
++    return result
++
++
++def open_app(bundle_id: str) -> None:
++    """Open an application by its bundleId (desktop stem or executable name)."""
++    if _foreground_existing_app(bundle_id):
++        return
++
++    # Find the Exec line from a matching .desktop file.
++    for path in _desktop_files():
++        if path.stem.lower() == bundle_id.lower():
++            entry = _desktop_entry(path)
++            if entry and entry["exec"]:
++                # Strip field codes like %u/%f/%k — run the bare command.
++                cmd = entry["exec"].split("%")[0].strip()
++                if cmd:
++                    try:
++                        subprocess.Popen(
++                            cmd,
++                            shell=True,
++                            stdout=subprocess.DEVNULL,
++                            stderr=subprocess.DEVNULL,
++                        )
++                        return
++                    except Exception:
++                        pass
++
++    # Fallback: try to run it directly by name.
++    try:
++        subprocess.Popen(
++            [bundle_id],
++            shell=True,
++            stdout=subprocess.DEVNULL,
++            stderr=subprocess.DEVNULL,
++        )
++    except Exception:
++        raise RuntimeError(f"App not found for identifier: {bundle_id}")
++
++
++# ---------------------------------------------------------------------------
++# Clipboard (pyperclip — requires xclip or xsel on Linux)
++# ---------------------------------------------------------------------------
++
++def read_clipboard() -> str:
++    import pyperclip
++    try:
++        return pyperclip.paste() or ""
++    except Exception:
++        return ""
++
++
++def write_clipboard(text: str) -> None:
++    import pyperclip
++    pyperclip.copy(text)
++
++
++def paste_clipboard() -> None:
++    pyautogui.hotkey("ctrl", "v")
++
++
++# ---------------------------------------------------------------------------
++# Input guards — refuse rather than report a lie
++# ---------------------------------------------------------------------------
++
++class UserInterference(RuntimeError):
++    """The user touched the physical mouse or keyboard during an action."""
++
++    def __init__(self, message: str, code: str = "user_interference") -> None:
++        super().__init__(message)
++        self.code = code
++
++
++class InputMonitorUnavailable(RuntimeError):
++    """The (simplified) foreground monitor is unavailable."""
++
++    def __init__(self, message: str, code: str = "user_interference_result_unknown") -> None:
++        super().__init__(message)
++        self.code = code
++
++
++class InputInjectionFailed(RuntimeError):
++    """The injected input could not be sent."""
++
++    def __init__(self, message: str, code: str = "input_injection_failed") -> None:
++        super().__init__(message)
++        self.code = code
++
++
++class DeliveryRefused(RuntimeError):
++    def __init__(self, message: str, code: str) -> None:
++        super().__init__(message)
++        self.code = code
++
++
++class ForegroundLease:
++    """Simplified Linux lease.
++
++    X11 lacks the low-level global input hook the Windows helper uses, so this
++    records the mutating command and the foreground app before/after, but does
++    not monitor physical input. It keeps the same interface (acquire /
++    mark_started / finalize / close) so the dispatcher reads identically.
++    """
++
++    def __init__(self, command: str) -> None:
++        self.command = command
++        self._closed = False
++
++    def acquire(self) -> None:
++        pass
++
++    def mark_started(self) -> None:
++        pass
++
++    def finalize(self) -> None:
++        pass
++
++    def close(self) -> None:
++        self._closed = True
++
++
++def _virtual_screen_rect() -> tuple[int, int, int, int] | None:
++    """(left, top, right, bottom) across all monitors, or None if unavailable."""
++    try:
++        displays = get_displays()
++        if not displays:
++            return None
++        left = min(d["originX"] for d in displays)
++        top = min(d["originY"] for d in displays)
++        right = max(d["originX"] + d["width"] for d in displays)
++        bottom = max(d["originY"] + d["height"] for d in displays)
++        if right - left <= 0 or bottom - top <= 0:
++            return None
++        return (left, top, right, bottom)
++    except Exception:
++        return None
++
++
++def ensure_point_on_screen(x: int, y: int) -> None:
++    """Refuse coordinates outside every monitor (fails open if unreadable)."""
++    rect = _virtual_screen_rect()
++    if rect is None:
++        return
++    left, top, right, bottom = rect
++    if left <= x < right and top <= y < bottom:
++        return
++    raise DeliveryRefused(
++        f"The point ({x}, {y}) is outside every display "
++        f"(virtual screen is {left},{top} to {right},{bottom}), so the action "
++        "was not sent. Take a screenshot to get current coordinates.",
++        code="point_outside_display",
++    )
++
++
++def ensure_target_window_reachable(bundle_id: str | None) -> None:
++    """Refuse when the named app's windows are all minimized/hidden.
++
++    Fails open when the app owns no top-level windows at all — that is a
++    different failure (wrong app name, app not running) which the caller's own
++    resolution step reports with a better message.
++    """
++    if not bundle_id:
++        return
++    windows = [
++        w for w in _top_level_windows()
++        if w["app"] and w["app"]["bundleId"].lower() == bundle_id.lower()
++    ]
++    if not windows:
++        return
++    if all(w["iconic"] is True for w in windows):
++        raise DeliveryRefused(
++            "The target app has no window that input can reach — it is "
++            "minimized. The action was NOT sent. Restore the window and try "
++            "again.",
++            code="target_window_offscreen",
++        )
++
++
++# ---------------------------------------------------------------------------
++# Input actions (pyautogui — X11)
++# ---------------------------------------------------------------------------
++
++def _move_cursor_to(x: int, y: int, animate: bool = True) -> None:
++    duration = 0.15 if animate else 0.0
++    pyautogui.moveTo(x, y, duration=duration)
++
++
++def click(
++    x: int,
++    y: int,
++    button: str,
++    count: int,
++    modifiers: list[str] | None,
++    animate: bool = True,
++) -> None:
++    buttons = {"left": "left", "right": "right", "middle": "middle"}
++    if button not in buttons:
++        raise ValueError(f"Unsupported mouse button: {button}")
++    normalized = [normalize_key(m) for m in (modifiers or [])]
++    _move_cursor_to(x, y, animate)
++    for key in normalized:
++        pyautogui.keyDown(key)
++    try:
++        pyautogui.click(x, y, button=buttons[button], clicks=max(1, count))
++    finally:
++        for key in reversed(normalized):
++            pyautogui.keyUp(key)
++
++
++def scroll(
++    x: int,
++    y: int,
++    delta_x: int,
++    delta_y: int,
++    animate: bool = True,
++) -> None:
++    _move_cursor_to(x, y, animate)
++    if delta_y:
++        pyautogui.scroll(int(delta_y))
++    if delta_x:
++        try:
++            pyautogui.hscroll(int(delta_x))
++        except Exception:
++            pass
++
++
++def key_action(sequence: str, repeat: int = 1) -> None:
++    parts = [normalize_key(part) for part in sequence.split("+") if part.strip()]
++    for _ in range(max(1, repeat)):
++        if len(parts) == 1:
++            pyautogui.press(parts[0])
++        else:
++            pyautogui.hotkey(*parts)
++        time.sleep(0.01)
++
++
++def hold_keys(keys: list[str], duration_ms: int) -> None:
++    normalized = [normalize_key(k) for k in keys]
++    for key in normalized:
++        pyautogui.keyDown(key)
++    try:
++        time.sleep(max(duration_ms, 0) / 1000)
++    finally:
++        for key in reversed(normalized):
++            pyautogui.keyUp(key)
++
++
++def type_text(text: str) -> None:
++    # One process, one lease per complete type action (mirrors the Windows
++    # helper). Newline and tab remain real key presses; everything else is
++    # written one character at a time so Unicode survives.
++    index = 0
++    while index < len(text):
++        character = text[index]
++        if character in {"\r", "\n", "\t"}:
++            if character == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
++                index += 1
++            pyautogui.press("tab" if character == "\t" else "enter")
++        else:
++            pyautogui.write(character, interval=0.025)
++        index += 1
++
++
++# ---------------------------------------------------------------------------
++# Main dispatcher — the command protocol the Windows helper also speaks
++# ---------------------------------------------------------------------------
++
++MUTATING_COMMANDS = frozenset({
++    "click", "drag", "move_mouse", "scroll",
++    "mouse_down", "mouse_up",
++    "key", "hold_key", "type",
++    "paste_clipboard",
++})
++
++COORDINATE_COMMANDS = frozenset({"click", "drag", "move_mouse", "scroll"})
++
++
++def _coordinate_of(command: str, payload: dict[str, Any]) -> tuple[int, int] | None:
++    if command not in COORDINATE_COMMANDS:
++        return None
++    if command == "drag":
++        target = payload.get("to") or {}
++        if "x" in target and "y" in target:
++            return int(target["x"]), int(target["y"])
++        return None
++    if "x" in payload and "y" in payload:
++        return int(payload["x"]), int(payload["y"])
++    return None
++
++
++def _finish(lease: "ForegroundLease | None", result: Any) -> int:
++    if lease is not None:
++        lease.finalize()
++        lease.close()
++    json_output({"ok": True, "result": result})
++    return 0
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("command")
++    parser.add_argument("--payload", default="{}")
++    args = parser.parse_args()
++    payload = json.loads(args.payload)
++
++    lease: ForegroundLease | None = None
++
++    try:
++        command = args.command
++
++        if command in MUTATING_COMMANDS:
++            point = _coordinate_of(command, payload)
++            if point is not None:
++                ensure_point_on_screen(point[0], point[1])
++            ensure_target_window_reachable(
++                payload.get("bundleId") or payload.get("app")
++            )
++            lease = ForegroundLease(command)
++            lease.acquire()
++            lease.mark_started()
++        if command == "check_permissions":
++            json_output({"ok": True, "result": check_permissions()})
++            return 0
++        if command == "list_displays":
++            json_output({"ok": True, "result": get_displays()})
++            return 0
++        if command == "get_display_size":
++            json_output({"ok": True, "result": choose_display(payload.get("displayId"))})
++            return 0
++        if command == "screenshot":
++            resize = None
++            if payload.get("targetWidth") and payload.get("targetHeight"):
++                resize = (int(payload["targetWidth"]), int(payload["targetHeight"]))
++            result = capture_display(payload.get("displayId"), resize)
++            json_output({"ok": True, "result": result})
++            return 0
++        if command == "resolve_prepare_capture":
++            resize = None
++            if payload.get("targetWidth") and payload.get("targetHeight"):
++                resize = (int(payload["targetWidth"]), int(payload["targetHeight"]))
++            result = capture_display(payload.get("preferredDisplayId"), resize)
++            result["hidden"] = []
++            result["resolvedDisplayId"] = result["displayId"]
++            json_output({"ok": True, "result": result})
++            return 0
++        if command == "zoom":
++            resize = None
++            if payload.get("targetWidth") and payload.get("targetHeight"):
++                resize = (int(payload["targetWidth"]), int(payload["targetHeight"]))
++            region = {
++                "left": int(payload["x"]),
++                "top": int(payload["y"]),
++                "width": int(payload["width"]),
++                "height": int(payload["height"]),
++            }
++            json_output({"ok": True, "result": capture_region(region, resize)})
++            return 0
++        if command == "prepare_for_action":
++            json_output({"ok": True, "result": []})
++            return 0
++        if command == "preview_hide_set":
++            json_output({"ok": True, "result": []})
++            return 0
++        if command == "find_window_displays":
++            json_output({"ok": True, "result": find_window_displays(list(payload.get("bundleIds") or []))})
++            return 0
++        if command == "key":
++            key_action(str(payload["keySequence"]), int(payload.get("repeat") or 1))
++            return _finish(lease, True)
++        if command == "hold_key":
++            hold_keys(list(payload.get("keyNames") or []), int(payload.get("durationMs") or 0))
++            return _finish(lease, True)
++        if command == "type":
++            type_text(str(payload.get("text") or ""))
++            return _finish(lease, True)
++        if command == "click":
++            click(int(payload["x"]), int(payload["y"]), str(payload.get("button") or "left"), int(payload.get("count") or 1), payload.get("modifiers"), bool(payload.get("animate", True)))
++            return _finish(lease, True)
++        if command == "drag":
++            from_point = payload.get("from")
++            if from_point is None:
++                current = pyautogui.position()
++                start_x, start_y = int(current.x), int(current.y)
++            else:
++                start_x = int(from_point["x"])
++                start_y = int(from_point["y"])
++            target_x = int(payload["to"]["x"])
++            target_y = int(payload["to"]["y"])
++            animate = bool(payload.get("animate", True))
++            _move_cursor_to(start_x, start_y, animate)
++            pyautogui.mouseDown()
++            _move_cursor_to(target_x, target_y, animate)
++            pyautogui.mouseUp()
++            return _finish(lease, True)
++        if command == "move_mouse":
++            _move_cursor_to(int(payload["x"]), int(payload["y"]), bool(payload.get("animate", True)))
++            return _finish(lease, True)
++        if command == "scroll":
++            scroll(int(payload["x"]), int(payload["y"]), int(payload.get("deltaX") or 0), int(payload.get("deltaY") or 0), bool(payload.get("animate", True)))
++            return _finish(lease, True)
++        if command == "mouse_down":
++            pyautogui.mouseDown()
++            return _finish(lease, True)
++        if command == "mouse_up":
++            pyautogui.mouseUp()
++            return _finish(lease, True)
++        if command == "cursor_position":
++            x, y = pyautogui.position()
++            json_output({"ok": True, "result": {"x": int(x), "y": int(y)}})
++            return 0
++        if command == "frontmost_app":
++            json_output({"ok": True, "result": frontmost_app()})
++            return 0
++        if command == "app_under_point":
++            json_output({"ok": True, "result": app_under_point(int(payload["x"]), int(payload["y"]))})
++            return 0
++        if command == "list_installed_apps":
++            json_output({"ok": True, "result": installed_apps()})
++            return 0
++        if command == "list_running_apps":
++            json_output({"ok": True, "result": running_apps()})
++            return 0
++        if command == "open_app":
++            open_app(str(payload["bundleId"]))
++            json_output({"ok": True, "result": True})
++            return 0
++        if command == "read_clipboard":
++            json_output({"ok": True, "result": read_clipboard()})
++            return 0
++        if command == "write_clipboard":
++            write_clipboard(str(payload.get("text") or ""))
++            json_output({"ok": True, "result": True})
++            return 0
++        if command == "paste_clipboard":
++            paste_clipboard()
++            return _finish(lease, True)
++        error_output(f"Unknown command: {command}", code="bad_command")
++        return 2
++    except (
++        UserInterference,
++        DeliveryRefused,
++        InputMonitorUnavailable,
++        InputInjectionFailed,
++    ) as exc:
++        error_output(str(exc), code=exc.code)
++        return 1
++    except Exception as exc:
++        error_output(str(exc))
++        return 1
++    finally:
++        if lease is not None:
++            try:
++                lease.close()
++            except (UserInterference, InputMonitorUnavailable):
++                pass
++
++
++def check_permissions() -> dict[str, bool | None]:
++    """Linux does not require explicit accessibility/screen-recording
++    permissions like macOS TCC. Always report as granted."""
++    return {
++        "accessibility": True,
++        "screenRecording": True,
++    }
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
+diff --git a/runtime/requirements-linux.txt b/runtime/requirements-linux.txt
+new file mode 100644
+index 00000000..8dfec8b4
+--- /dev/null
++++ b/runtime/requirements-linux.txt
+@@ -0,0 +1,6 @@
++mss>=9.0.2,<10
++Pillow>=11.3.0,<12
++pyautogui>=0.9.54
++python-xlib>=0.33
++psutil>=5.9.0
++pyperclip>=1.8.2
+diff --git a/src/server/__tests__/computer-use-api.test.ts b/src/server/__tests__/computer-use-api.test.ts
+index 4fb96470..0c4658df 100644
+--- a/src/server/__tests__/computer-use-api.test.ts
++++ b/src/server/__tests__/computer-use-api.test.ts
+@@ -367,12 +367,17 @@ describe('Computer Use platform capability', () => {
+     })
+   })
+ 
+-  it('routes Windows to compatibility and rejects unsupported platforms', async () => {
++  it('routes Windows and Linux to compatibility and rejects unsupported platforms', async () => {
+     const { resolveComputerUseCapability } = await importComputerUseApi()
+ 
+     expect(resolveComputerUseCapability('win32', null, false).engine)
+       .toBe('windows-compat')
+     expect(resolveComputerUseCapability('linux', null, false)).toMatchObject({
++      supported: true,
++      engine: 'linux-x11',
++      cuHelper: { available: false, supported: false, reason: 'unsupported_platform' },
++    })
++    expect(resolveComputerUseCapability('freebsd', null, false)).toMatchObject({
+       supported: false,
+       engine: 'unsupported',
+     })
+@@ -383,13 +388,14 @@ describe('runPipInstallWithFallback', () => {
+   it('rejects setup on unsupported platforms before writing runtime files', async () => {
+     const { getUnsupportedComputerUsePlatformStep } = await importComputerUseApi()
+ 
+-    expect(getUnsupportedComputerUsePlatformStep('linux')).toEqual({
++    expect(getUnsupportedComputerUsePlatformStep('linux')).toBeNull()
++    expect(getUnsupportedComputerUsePlatformStep('darwin')).toBeNull()
++    expect(getUnsupportedComputerUsePlatformStep('win32')).toBeNull()
++    expect(getUnsupportedComputerUsePlatformStep('freebsd')).toEqual({
+       name: 'platform',
+       ok: false,
+-      message: 'Computer Use does not support platform: linux',
++      message: 'Computer Use does not support platform: freebsd',
+     })
+-    expect(getUnsupportedComputerUsePlatformStep('darwin')).toBeNull()
+-    expect(getUnsupportedComputerUsePlatformStep('win32')).toBeNull()
+   })
+ 
+   it('builds a clear unsupported Python version step for setup', async () => {
+diff --git a/src/server/api/computer-use.ts b/src/server/api/computer-use.ts
+index c90bbc28..e23f0efc 100644
+--- a/src/server/api/computer-use.ts
++++ b/src/server/api/computer-use.ts
+@@ -31,15 +31,20 @@ import {
+   resolveLaunchableCuHelperBinary,
+ } from '../../utils/computerUse/cuHelperBridge.js'
+ // Embed the runtime scripts at compile time so bundled mode has them without
+-// shipping loose files. Windows only: macOS drives Computer Use through the
+-// signed native `cu-helper` daemon, and `helperBridge` refuses to fall back to
+-// Python there, so a macOS helper script would be dead weight in the binary.
++// shipping loose files. Python-path platforms only: macOS drives Computer Use
++// through the signed native `cu-helper` daemon, and `helperBridge` refuses to
++// fall back to Python there, so a macOS helper script would be dead weight in
++// the binary.
+ // @ts-ignore — Bun text import
+ import WIN_HELPER_CONTENT from '../../../runtime/win_helper.py' with { type: 'text' }
+ // @ts-ignore — Bun text import
++import LINUX_HELPER_CONTENT from '../../../runtime/linux_helper.py' with { type: 'text' }
++// @ts-ignore — Bun text import
+ import WIN_CURSOR_BADGE_CONTENT from '../../../runtime/win_cursor_badge.py' with { type: 'text' }
+ // @ts-ignore — Bun text import
+ import REQUIREMENTS_WIN32 from '../../../runtime/requirements-win.txt' with { type: 'text' }
++// @ts-ignore — Bun text import
++import REQUIREMENTS_LINUX from '../../../runtime/requirements-linux.txt' with { type: 'text' }
+ 
+ const __dirname = path.dirname(fileURLToPath(import.meta.url))
+ const projectRoot = path.resolve(__dirname, '../../..')
+@@ -56,7 +61,8 @@ const MIN_PYTHON_MINOR = 9
+ export const MIN_MACOS_COMPUTER_USE_VERSION = '14.4'
+ 
+ const isWindows = process.platform === 'win32'
+-const REQUIREMENTS_CONTENT = REQUIREMENTS_WIN32
++const isLinux = process.platform === 'linux'
++const REQUIREMENTS_CONTENT = isLinux ? REQUIREMENTS_LINUX : REQUIREMENTS_WIN32
+ 
+ function getPythonCommandEnv(): Record<string, string> | undefined {
+   if (!isWindows) return undefined
+@@ -73,7 +79,7 @@ function getRequirementsPath(): string {
+ }
+ 
+ function getHelperFileName(): string {
+-  return 'win_helper.py'
++  return isLinux ? 'linux_helper.py' : 'win_helper.py'
+ }
+ 
+ /** The agent-activity badge runs as its own process, so it ships separately. */
+@@ -158,27 +164,31 @@ export async function runPipInstallWithFallback(
+ /**
+  * Ensure the Windows runtime files exist in ~/.claude/.runtime/.
+  *
+- * All three are written from constants embedded at compile time, so dev and
++ * All files are written from constants embedded at compile time, so dev and
+  * bundled mode behave identically and a stale copy from an earlier version is
+  * always overwritten rather than left in place.
+  *
+- * Windows only, in the same sense as the imports above: macOS never reaches
+- * the Python path.
++ * Windows and Linux only, in the same sense as the imports above: macOS never
++ * reaches the Python path. The cursor badge ships only on Windows — the Linux
++ * helper has no virtual-cursor overlay process.
+  */
+ async function ensureRuntimeFiles(): Promise<void> {
+   await mkdir(runtimeStateRoot, { recursive: true })
+ 
+   await writeFile(getRequirementsPath(), REQUIREMENTS_CONTENT, 'utf8')
+-  await writeFile(getHelperPath(), WIN_HELPER_CONTENT, 'utf8')
+-  // Ships alongside the helper because the helper is a stateless one-shot CLI
+-  // and cannot own a window across actions; the badge needs its own process.
+-  await writeFile(getCursorBadgePath(), WIN_CURSOR_BADGE_CONTENT, 'utf8')
++  const helperContent = isLinux ? LINUX_HELPER_CONTENT : WIN_HELPER_CONTENT
++  await writeFile(getHelperPath(), helperContent, 'utf8')
++  if (!isLinux) {
++    // Ships alongside the helper because the helper is a stateless one-shot CLI
++    // and cannot own a window across actions; the badge needs its own process.
++    await writeFile(getCursorBadgePath(), WIN_CURSOR_BADGE_CONTENT, 'utf8')
++  }
+ }
+ 
+ type EnvStatus = {
+   platform: string
+   supported: boolean
+-  engine: 'macos-native' | 'windows-compat' | 'unsupported'
++  engine: 'macos-native' | 'windows-compat' | 'linux-x11' | 'unsupported'
+   systemVersion: string | null
+   arch: string
+   /**
+@@ -265,6 +275,18 @@ export function resolveComputerUseCapability(
+       },
+     }
+   }
++  if (platform === 'linux') {
++    return {
++      supported: true,
++      engine: 'linux-x11',
++      cuHelper: {
++        ...baseHelper,
++        available: false,
++        supported: false,
++        reason: 'unsupported_platform',
++      },
++    }
++  }
+   if (platform !== 'darwin') {
+     return {
+       supported: false,
+@@ -621,10 +643,14 @@ export async function checkStatus(
+     const perms = await checkCuHelperPermissions()
+     accessibility = perms.accessibility
+     screenRecording = perms.screenRecording
+-  } else if (capability.engine === 'windows-compat' && effectiveVenvCreated && depsInstalled) {
+-    // Python path (Windows, or macOS without cu-helper). The helper uses
+-    // preflight + visible-window metadata as a passive fallback because plain
+-    // preflight can misreport child processes launched by the desktop app.
++  } else if (
++    (capability.engine === 'windows-compat' || capability.engine === 'linux-x11')
++    && effectiveVenvCreated
++    && depsInstalled
++  ) {
++    // Python path (Windows and Linux; macOS without cu-helper too). The helper
++    // uses preflight + visible-window metadata as a passive fallback because
++    // plain preflight can misreport child processes launched by the desktop app.
+     try { await ensureRuntimeFiles() } catch {}
+     const helperPath = getHelperPath()
+     if (await pathExists(helperPath)) {
+@@ -669,7 +695,7 @@ type SetupResult = {
+ export function getUnsupportedComputerUsePlatformStep(
+   platform: string,
+ ): SetupResult['steps'][number] | null {
+-  if (platform === 'darwin' || platform === 'win32') return null
++  if (platform === 'darwin' || platform === 'win32' || platform === 'linux') return null
+   return {
+     name: 'platform',
+     ok: false,
+diff --git a/src/skills/bundled/computerUse.ts b/src/skills/bundled/computerUse.ts
+index 69e0315f..94c6d818 100644
+--- a/src/skills/bundled/computerUse.ts
++++ b/src/skills/bundled/computerUse.ts
+@@ -9,11 +9,11 @@ const MAC_COMPUTER_USE_TOOLS = [
+ ].map(name => `mcp__computer-use__${name}`)
+ 
+ export function getComputerUseToolAllowlist(
+-  platform: 'darwin' | 'win32',
++  platform: 'darwin' | 'win32' | 'linux',
+ ): string[] {
+   if (platform === 'darwin') return MAC_COMPUTER_USE_TOOLS
+   return buildPlatformComputerUseTools(
+-    { platform: 'win32', screenshotFiltering: 'none' },
++    { platform: platform === 'linux' ? 'linux' : 'win32', screenshotFiltering: 'none' },
+     'pixels',
+   ).map(tool => `mcp__computer-use__${tool.name}`)
+ }
+@@ -200,15 +200,20 @@ and dismissing cookie banners do not require another confirmation when they are
+ already within the user's request.
+ `
+ 
+-export function getComputerUsePrompt(platform: 'darwin' | 'win32'): string {
+-  return platform === 'win32'
+-    ? WINDOWS_COMPUTER_USE_PROMPT
+-    : COMPUTER_USE_PROMPT
++export function getComputerUsePrompt(platform: 'darwin' | 'win32' | 'linux'): string {
++  return platform === 'darwin'
++    ? COMPUTER_USE_PROMPT
++    : WINDOWS_COMPUTER_USE_PROMPT
+ }
+ 
+ export function registerComputerUseSkill(): void {
+-  const platform = process.platform === 'win32' ? 'win32' : 'darwin'
+-  const isWindows = platform === 'win32'
++  const platform =
++    process.platform === 'win32'
++      ? 'win32'
++      : process.platform === 'linux'
++        ? 'linux'
++        : 'darwin'
++  const isWindows = platform === 'win32' || platform === 'linux'
+   registerBundledSkill({
+     name: 'computer-use',
+     // Task semantics first: skill descriptions can be truncated hard when many
+diff --git a/src/utils/computerUse/common.test.ts b/src/utils/computerUse/common.test.ts
+index b5c30e26..96378cd0 100644
+--- a/src/utils/computerUse/common.test.ts
++++ b/src/utils/computerUse/common.test.ts
+@@ -9,7 +9,8 @@ describe('computer use platform helpers', () => {
+   it('recognizes supported platforms', () => {
+     expect(isComputerUseSupportedPlatform('darwin')).toBe(true)
+     expect(isComputerUseSupportedPlatform('win32')).toBe(true)
+-    expect(isComputerUseSupportedPlatform('linux')).toBe(false)
++    expect(isComputerUseSupportedPlatform('linux')).toBe(true)
++    expect(isComputerUseSupportedPlatform('freebsd')).toBe(false)
+   })
+ 
+   it('returns macOS capabilities with native screenshot filtering', () => {
+@@ -25,4 +26,17 @@ describe('computer use platform helpers', () => {
+       platform: 'win32',
+     })
+   })
++
++  it('returns Linux capabilities with unfiltered screenshots', () => {
++    expect(getCliComputerUseCapabilities('linux')).toEqual({
++      screenshotFiltering: 'none',
++      platform: 'linux',
++    })
++  })
++
++  it('throws for unsupported platforms', () => {
++    expect(() => getCliComputerUseCapabilities('freebsd' as NodeJS.Platform)).toThrow(
++      /only supported on macOS, Windows and Linux/,
++    )
++  })
+ })
+diff --git a/src/utils/computerUse/common.ts b/src/utils/computerUse/common.ts
+index 4af8c57e..bc09c572 100644
+--- a/src/utils/computerUse/common.ts
++++ b/src/utils/computerUse/common.ts
+@@ -6,8 +6,8 @@ export const CLI_HOST_PLATFORM_BUNDLE_ID = 'com.anthropic.claude-code.cli-no-win
+ 
+ export function isComputerUseSupportedPlatform(
+   platform: NodeJS.Platform = process.platform,
+-): platform is 'darwin' | 'win32' {
+-  return platform === 'darwin' || platform === 'win32'
++): platform is 'darwin' | 'win32' | 'linux' {
++  return platform === 'darwin' || platform === 'win32' || platform === 'linux'
+ }
+ 
+ /**
+@@ -60,7 +60,7 @@ export function getCliComputerUseCapabilities(
+   platform: NodeJS.Platform = process.platform,
+ ): {
+   screenshotFiltering: 'native' | 'none'
+-  platform: 'darwin' | 'win32'
++  platform: 'darwin' | 'win32' | 'linux'
+ } {
+   if (platform === 'darwin') {
+     return {
+@@ -69,9 +69,16 @@ export function getCliComputerUseCapabilities(
+     }
+   }
+ 
++  if (platform === 'linux') {
++    return {
++      screenshotFiltering: 'none',
++      platform: 'linux',
++    }
++  }
++
+   if (platform !== 'win32') {
+     throw new Error(
+-      `Computer Use is only supported on macOS and Windows (received ${platform}).`,
++      `Computer Use is only supported on macOS, Windows and Linux (received ${platform}).`,
+     )
+   }
+ 
+diff --git a/src/utils/computerUse/executor.ts b/src/utils/computerUse/executor.ts
+index 74a7eaed..b18aeecb 100644
+--- a/src/utils/computerUse/executor.ts
++++ b/src/utils/computerUse/executor.ts
+@@ -73,7 +73,9 @@ async function writeClipboardViaPbcopy(text: string): Promise<void> {
+ }
+ 
+ async function readClipboard(): Promise<string> {
+-  if (process.platform === 'win32') {
++  // macOS uses the native pbpaste helper; Windows and Linux drive the Python
++  // helper, which wraps pyperclip (xclip/xsel under the hood on X11).
++  if (process.platform !== 'darwin') {
+     return callHelper<string>('read_clipboard', {})
+   }
+ 
+@@ -81,7 +83,7 @@ async function readClipboard(): Promise<string> {
+ }
+ 
+ async function writeClipboard(text: string): Promise<void> {
+-  if (process.platform === 'win32') {
++  if (process.platform !== 'darwin') {
+     await callHelper('write_clipboard', { text })
+     return
+   }
+@@ -333,7 +335,7 @@ export function createCliExecutor(opts: {
+ }): ComputerExecutor {
+   if (!isComputerUseSupportedPlatform()) {
+     throw new Error(
+-      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS and Windows.`,
++      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS, Windows and Linux.`,
+     )
+   }
+ 
+diff --git a/src/utils/computerUse/gates.test.ts b/src/utils/computerUse/gates.test.ts
+index 3a4409ac..a9289e71 100644
+--- a/src/utils/computerUse/gates.test.ts
++++ b/src/utils/computerUse/gates.test.ts
+@@ -32,8 +32,9 @@ describe('shouldExposeComputerUseMcp', () => {
+     expect(shouldExposeComputerUseMcp('darwin', false)).toBe(false)
+   })
+ 
+-  test('keeps Windows compatibility independent and rejects other platforms', () => {
++  test('keeps Windows and Linux compatibility independent and rejects other platforms', () => {
+     expect(shouldExposeComputerUseMcp('win32', false)).toBe(true)
+-    expect(shouldExposeComputerUseMcp('linux', true)).toBe(false)
++    expect(shouldExposeComputerUseMcp('linux', false)).toBe(true)
++    expect(shouldExposeComputerUseMcp('freebsd', true)).toBe(false)
+   })
+ })
+diff --git a/src/utils/computerUse/gates.ts b/src/utils/computerUse/gates.ts
+index 379ebe7a..a4b34e32 100644
+--- a/src/utils/computerUse/gates.ts
++++ b/src/utils/computerUse/gates.ts
+@@ -41,7 +41,7 @@ export function getChicagoEnabled(): boolean {
+ }
+ 
+ /**
+- * Computer Use is native-only on macOS and compatibility-only on Windows.
++ * Computer Use is native-only on macOS and compatibility-only on Windows and Linux.
+  * The macOS MCP must not be exposed until the exact helper that status/API
+  * calls use is launchable; otherwise the model sees tools that can only fail.
+  */
+@@ -50,6 +50,7 @@ export function shouldExposeComputerUseMcp(
+   macosNativeLaunchable: boolean,
+ ): boolean {
+   return platform === 'win32'
++    || platform === 'linux'
+     || (platform === 'darwin' && macosNativeLaunchable)
+ }
+ 
+diff --git a/src/utils/computerUse/pythonBridge.ts b/src/utils/computerUse/pythonBridge.ts
+index cc241115..9263cafa 100644
+--- a/src/utils/computerUse/pythonBridge.ts
++++ b/src/utils/computerUse/pythonBridge.ts
+@@ -25,14 +25,16 @@ const venvRoot = path.join(runtimeStateRoot, 'venv')
+ const installStampPath = path.join(runtimeStateRoot, 'requirements.sha256')
+ 
+ const isWindows = process.platform === 'win32'
++const isLinux = process.platform === 'linux'
+ const windowsInputTag = randomBytes(4).readUInt32LE(0) || 0x43434841
+ 
+ // Always read from ~/.claude/.runtime/ — works in both dev and bundled mode.
+ const requirementsPath = path.join(runtimeStateRoot, 'requirements.txt')
+-const helperFileName = 'win_helper.py'
++const helperFileName = isLinux ? 'linux_helper.py' : 'win_helper.py'
+ const helperPath = path.join(runtimeStateRoot, helperFileName)
+ // Runs as its own process (the helper is a stateless one-shot CLI and cannot
+-// own a window across actions), so it ships as a separate file.
++// own a window across actions), so it ships as a separate file. Windows-only:
++// on Linux a badge would be a top-level X11 window visible in every screenshot.
+ const cursorBadgeFileName = 'win_cursor_badge.py'
+ const cursorBadgePath = path.join(runtimeStateRoot, cursorBadgeFileName)
+ 
+@@ -110,7 +112,11 @@ async function getVenvCreationPythonCommand(): Promise<string> {
+ async function ensureRuntimeFiles(): Promise<void> {
+   await mkdir(runtimeStateRoot, { recursive: true })
+ 
+-  const devRequirements = path.join(projectRoot, 'runtime', 'requirements-win.txt')
++  const devRequirements = path.join(
++    projectRoot,
++    'runtime',
++    isLinux ? 'requirements-linux.txt' : 'requirements-win.txt',
++  )
+   const devHelper = path.join(projectRoot, 'runtime', helperFileName)
+ 
+   // Always sync from dev runtime/ so source changes are reflected immediately.
+@@ -124,9 +130,11 @@ async function ensureRuntimeFiles(): Promise<void> {
+     await writeFile(helperPath, await readFile(devHelper, 'utf8'), 'utf8')
+   }
+ 
+-  const devBadge = path.join(projectRoot, 'runtime', cursorBadgeFileName)
+-  if (await pathExists(devBadge)) {
+-    await writeFile(cursorBadgePath, await readFile(devBadge, 'utf8'), 'utf8')
++  if (!isLinux) {
++    const devBadge = path.join(projectRoot, 'runtime', cursorBadgeFileName)
++    if (await pathExists(devBadge)) {
++      await writeFile(cursorBadgePath, await readFile(devBadge, 'utf8'), 'utf8')
++    }
+   }
+ }
+ 
+diff --git a/src/utils/computerUse/setup.test.ts b/src/utils/computerUse/setup.test.ts
+index 80c0174c..35d267cb 100644
+--- a/src/utils/computerUse/setup.test.ts
++++ b/src/utils/computerUse/setup.test.ts
+@@ -35,12 +35,27 @@ describe('setupComputerUseMCP runtime capability', () => {
+     expect(result.allowedTools).not.toContain('mcp__computer-use__js')
+   })
+ 
+-  test('does not resolve a helper or advertise tools on unsupported platforms', () => {
+-    expect(setupComputerUseMCP({
++  test('keeps the Linux compatibility engine available without a macOS helper', () => {
++    const result = setupComputerUseMCP({
+       platform: 'linux',
+       resolveMacosNativeBinary: () => {
+         throw new Error('must not resolve a macOS helper on Linux')
+       },
++    })
++
++    expect(Object.keys(result.mcpConfig)).toEqual(['computer-use'])
++    expect(result.allowedTools).toContain('mcp__computer-use__screenshot')
++    expect(result.allowedTools).not.toContain('mcp__computer-use__get_app_state')
++    expect(result.allowedTools).not.toContain('mcp__computer-use__sequence')
++    expect(result.allowedTools).not.toContain('mcp__computer-use__js')
++  })
++
++  test('does not resolve a helper or advertise tools on unsupported platforms', () => {
++    expect(setupComputerUseMCP({
++      platform: 'freebsd',
++      resolveMacosNativeBinary: () => {
++        throw new Error('must not resolve a macOS helper on other platforms')
++      },
+     })).toEqual({ mcpConfig: {}, allowedTools: [] })
+   })
+ })
+diff --git a/src/utils/computerUse/skillGate.test.ts b/src/utils/computerUse/skillGate.test.ts
+index 103174e5..d74ac934 100644
+--- a/src/utils/computerUse/skillGate.test.ts
++++ b/src/utils/computerUse/skillGate.test.ts
+@@ -53,10 +53,16 @@ describe('computer use skill gate', () => {
+   })
+ 
+   test('stays off on platforms without either engine', () => {
+-    if (process.platform === 'darwin' || process.platform === 'win32') return
++    if (process.platform === 'darwin' || process.platform === 'win32' || process.platform === 'linux') return
+     expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(false)
+   })
+ 
++  test('enables on Linux via the pixel-tool face', () => {
++    if (process.platform !== 'linux') return
++    invalidateComputerUseSkillGate()
++    expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(true)
++  })
++
+   test('caches briefly so an open slash menu does not stat on every keystroke', () => {
+     if (process.platform !== 'darwin' && process.platform !== 'win32') return
+     invalidateComputerUseSkillGate()
+diff --git a/src/utils/computerUse/skillGate.ts b/src/utils/computerUse/skillGate.ts
+index 8a015ad0..04581a2d 100644
+--- a/src/utils/computerUse/skillGate.ts
++++ b/src/utils/computerUse/skillGate.ts
+@@ -50,9 +50,15 @@ export function invalidateComputerUseSkillGate(): void {
+ }
+ 
+ function computeEnabled(readConfigFile: (path: string) => string): boolean {
+-  // The native semantic engine runs on macOS; Windows uses the pixel-tool
+-  // face backed by the packaged Python helper. Other platforms have neither.
+-  if (process.platform !== 'darwin' && process.platform !== 'win32') return false
++  // The native semantic engine runs on macOS; Windows and Linux use the
++  // pixel-tool face backed by the packaged Python helper.
++  if (
++    process.platform !== 'darwin'
++    && process.platform !== 'win32'
++    && process.platform !== 'linux'
++  ) {
++    return false
++  }
+ 
+   // Respect the kill switch before reading anything the user set: when the
+   // feature is force-disabled its tools are not registered either, so guidance
+diff --git a/src/vendor/computer-use-mcp/executor.ts b/src/vendor/computer-use-mcp/executor.ts
+index 17ac4731..d2bc5310 100644
+--- a/src/vendor/computer-use-mcp/executor.ts
++++ b/src/vendor/computer-use-mcp/executor.ts
+@@ -245,7 +245,7 @@ export interface ResolvePrepareCaptureResult extends ScreenshotResult {
+ export interface ComputerExecutor {
+   capabilities: {
+     screenshotFiltering: 'native' | 'none'
+-    platform: 'darwin' | 'win32'
++    platform: 'darwin' | 'win32' | 'linux'
+     hostBundleId: string
+     teachMode?: boolean
+   }
+diff --git a/src/vendor/computer-use-mcp/keyBlocklist.ts b/src/vendor/computer-use-mcp/keyBlocklist.ts
+index eb63c05e..b783394a 100644
+--- a/src/vendor/computer-use-mcp/keyBlocklist.ts
++++ b/src/vendor/computer-use-mcp/keyBlocklist.ts
+@@ -204,7 +204,7 @@ function splitChords(seq: string): string[] {
+  */
+ export function isSystemKeyCombo(
+   seq: string,
+-  platform: "darwin" | "win32",
++  platform: "darwin" | "win32" | "linux",
+ ): boolean {
+   const blocklist =
+     platform === "darwin" ? BLOCKED_DARWIN_CHORDS : BLOCKED_WIN32_CHORDS;
+diff --git a/src/vendor/computer-use-mcp/mcpServer.ts b/src/vendor/computer-use-mcp/mcpServer.ts
+index ab620063..779da6b4 100644
+--- a/src/vendor/computer-use-mcp/mcpServer.ts
++++ b/src/vendor/computer-use-mcp/mcpServer.ts
+@@ -104,16 +104,16 @@ function mergePermissionResponse(
+ export function buildPlatformComputerUseTools(
+   caps: {
+     screenshotFiltering: "native" | "none";
+-    platform: "darwin" | "win32";
++    platform: "darwin" | "win32" | "linux";
+     teachMode?: boolean;
+   },
+   coordinateMode: CoordinateMode,
+   installedAppNames?: string[],
+ ): Tool[] {
+-  return caps.platform === "win32"
+-    ? buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
+-    : buildComputerUseTools(caps, coordinateMode, installedAppNames)
+-      .filter(tool => tool.name === 'js' || tool.name === 'js_reset');
++  return caps.platform === "darwin"
++    ? buildComputerUseTools(caps, coordinateMode, installedAppNames)
++      .filter(tool => tool.name === 'js' || tool.name === 'js_reset')
++    : buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
+ }
+ 
+ /**
+@@ -187,7 +187,8 @@ export function bindSessionContext(
+   // Everything below — dispatch, lock deferral, stale-mouse cleanup — has to
+   // come from the SAME module, or a Windows session would defer the lock by
+   // the semantic face's rules while dispatching through the pixel one.
+-  const legacyPixelFace = adapter.executor.capabilities.platform === "win32";
++  const legacyPixelFace =
++    adapter.executor.capabilities.platform !== "darwin";
+   const dispatchToolCall = legacyPixelFace
+     ? legacyHandleToolCall
+     : handleToolCall;
+diff --git a/src/vendor/computer-use-mcp/toolCalls.ts b/src/vendor/computer-use-mcp/toolCalls.ts
+index e90e9734..c0d03257 100644
+--- a/src/vendor/computer-use-mcp/toolCalls.ts
++++ b/src/vendor/computer-use-mcp/toolCalls.ts
+@@ -558,7 +558,7 @@ function parseRequest(
+   name: string,
+   args: Record<string, unknown>,
+   grantFlags: CuGrantFlags | undefined,
+-  platform: "darwin" | "win32",
++  platform: "darwin" | "win32" | "linux",
+ ): ParsedRequest {
+   if (name === "list_apps") {
+     return {
+@@ -873,7 +873,7 @@ export function staticRequestError(
+   name: string,
+   args: unknown,
+   grantFlags: CuGrantFlags | undefined,
+-  platform: "darwin" | "win32",
++  platform: "darwin" | "win32" | "linux",
+ ): CuCallToolResult | undefined {
+   if (!KNOWN_TOOLS.has(name)) {
+     return errorResult(`Unknown computer-use tool "${name}".`, "bad_args");
+diff --git a/src/vendor/computer-use-mcp/tools.ts b/src/vendor/computer-use-mcp/tools.ts
+index 137598a8..56a85fe8 100644
+--- a/src/vendor/computer-use-mcp/tools.ts
++++ b/src/vendor/computer-use-mcp/tools.ts
+@@ -90,7 +90,7 @@ function coordinateProp(axis: "x" | "y", role: string) {
+ export function buildComputerUseTools(
+   _caps?: {
+     screenshotFiltering?: "native" | "none";
+-    platform?: "darwin" | "win32";
++    platform?: "darwin" | "win32" | "linux";
+     teachMode?: boolean;
+   },
+   _coordinateMode?: CoordinateMode,
+diff --git a/src/vendor/computer-use-mcp/windowsLegacyToolCalls.ts b/src/vendor/computer-use-mcp/windowsLegacyToolCalls.ts
+index 71e50cef..2b06fd58 100644
+--- a/src/vendor/computer-use-mcp/windowsLegacyToolCalls.ts
++++ b/src/vendor/computer-use-mcp/windowsLegacyToolCalls.ts
+@@ -2111,7 +2111,7 @@ async function handleType(
+     (text.includes("\n") ||
+       (adapter.executor.capabilities.platform === "darwin" &&
+         hasNonControlText) ||
+-      (adapter.executor.capabilities.platform === "win32" &&
++      (adapter.executor.capabilities.platform !== "darwin" &&
+         hasNonAsciiText)) &&
+     overrides.grantFlags.clipboardWrite &&
+     subGates.clipboardPasteMultiline;
+@@ -2141,7 +2141,7 @@ async function handleType(
+   // Return/Tab semantics and paces the Unicode input internally so the
+   // foreground lease and interference monitor remain active for the whole
+   // operation.
+-  if (adapter.executor.capabilities.platform === "win32") {
++  if (adapter.executor.capabilities.platform !== "darwin") {
+     if (overrides.isAborted?.()) {
+       return errorResult(
+         `Typing aborted after 0 of ${graphemes.length} graphemes (user interrupt).`,
+diff --git a/src/vendor/computer-use-mcp/windowsLegacyTools.ts b/src/vendor/computer-use-mcp/windowsLegacyTools.ts
+index 19712b51..079086e9 100644
+--- a/src/vendor/computer-use-mcp/windowsLegacyTools.ts
++++ b/src/vendor/computer-use-mcp/windowsLegacyTools.ts
+@@ -118,7 +118,7 @@ const BATCH_ACTION_ITEM_SCHEMA = {
+ export function buildComputerUseTools(
+   caps: {
+     screenshotFiltering: "native" | "none";
+-    platform: "darwin" | "win32";
++    platform: "darwin" | "win32" | "linux";
+     /** Include request_teach_access + teach_step. Read once at server construction. */
+     teachMode?: boolean;
+   },

@@ -15,6 +15,7 @@ import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { WorkspaceFileOpenWith } from '@/components/workspace/WorkspaceFileOpenWith'
 import { resolveAbsoluteOpenPath } from '@/lib/systemFileOpen'
 import { useMenuKeyboard } from '@/components/workbench/menuKeyboard'
+import { downloadLocalFile } from '@/lib/handlePreviewLink'
 
 export type WorkspaceFileTreePaneProps = {
   sessionId: string
@@ -63,6 +64,9 @@ export function WorkspaceFileTreePane({
     offset: 0,
     clampHeight: true,
   })
+  // Tree paths are workspace-relative; downloading and open-with resolve them to
+  // an absolute path against the session's working directory. Read from the
+  // store here rather than threaded as a prop.
   const workDir = useWorkspaceContentStore((state) => state.statusBySession[sessionId]?.workDir)
   const loadStatus = useWorkspaceContentStore((state) => state.loadStatus)
   useEffect(() => {
@@ -406,6 +410,20 @@ export function WorkspaceFileTreePane({
               onPreview={() => onOpen(menu.row.path)}
               onAfterSelect={closeMenu}
             />
+          ) : null}
+          {!menu.row.isDirectory ? (
+            <Button
+              role="menuitem"
+              variant="ghost"
+              size="sm"
+              data-testid="workspace-tree-download"
+              onClick={() => {
+                downloadLocalFile(resolveAbsoluteOpenPath(menu.row.path, workDir ?? undefined))
+                closeMenu()
+              }}
+            >
+              {t('workspace.download')}
+            </Button>
           ) : null}
         </div>
       ) : null}

@@ -527,6 +527,45 @@ describe('reduceTranscript activity usage', () => {
     }])
   })
 
+  it('replaces a call\'s partial usage line with its final one', () => {
+    // Real transcripts write a call twice: the first line carries the prompt with
+    // `output_tokens: 0` and no cache read, the last carries the final split. Counting only the
+    // first (what the dedup did) stored `output_tokens: 0` and `cache_read_input_tokens: 0` for
+    // every indexed row, so the activity views had no output and no cache-hit data at all.
+    const entry = (usage: Record<string, unknown>) => ({
+      type: 'assistant',
+      requestId: 'req_two_phase',
+      message: {
+        role: 'assistant',
+        model: 'claude-opus-5',
+        id: 'msg_two_phase',
+        content: [{ type: 'text', text: 'x' }],
+        usage,
+      },
+      timestamp: '2026-01-01T10:00:00.000Z',
+    })
+    const result = reduceTranscript(
+      completeChunks([
+        entry({ input_tokens: 30_505, output_tokens: 0 }),
+        entry({
+          input_tokens: 1_129,
+          output_tokens: 67,
+          cache_read_input_tokens: 29_376,
+          cache_creation_input_tokens: 0,
+        }),
+      ]),
+      initialProjection(),
+    )
+
+    expect(modelTotals(result)).toEqual([{
+      model: 'claude-opus-5',
+      inputTokens: 1_129,
+      outputTokens: 67,
+      cacheReadInputTokens: 29_376,
+      cacheCreationInputTokens: 0,
+    }])
+  })
+
   it('keeps deduplicating across an incremental read', () => {
     const [firstLine, ...restLines] = assistantBlockLines({
       messageId: 'msg_split',

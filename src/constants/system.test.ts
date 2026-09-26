@@ -9,7 +9,12 @@ describe('getAttributionHeader', () => {
 
   test('uses Claude Code compatibility version and always includes CCH placeholder', () => {
     const originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
+    const originalAttribution = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
     process.env.CLAUDE_CODE_ENTRYPOINT = 'cli'
+    // The desktop app exports CLAUDE_CODE_ATTRIBUTION_HEADER=0 into its
+    // processes; a falsy inherited value would disable the header and break
+    // this default-enabled assertion, so pin it on for the test.
+    process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '1'
 
     try {
       expect(getAttributionHeader('abc')).toBe(
@@ -18,6 +23,8 @@ describe('getAttributionHeader', () => {
     } finally {
       if (originalEntrypoint === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT
       else process.env.CLAUDE_CODE_ENTRYPOINT = originalEntrypoint
+      if (originalAttribution === undefined) delete process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
+      else process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = originalAttribution
     }
   })
 })

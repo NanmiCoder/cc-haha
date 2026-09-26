@@ -11,7 +11,7 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
-import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, boundToolUseResultPreview, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
 import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
@@ -223,6 +223,8 @@ export type MessageEntry = {
   collaboration?: { sourceSessionId: string; messageId: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
+  /** Raw JSONL subtype, present for compact boundary system entries ('compact_boundary' / 'microcompact_boundary'). */
+  subtype?: string
   content: unknown
   bodyTruncated?: boolean
   toolUseResult?: unknown
@@ -238,14 +240,20 @@ export type MessageEntry = {
    * the line carries no message id, which by the same convention means "always count it".
    */
   usageKey?: string
+  /**
+   * Wall-clock ms this thinking block spent generating (content_block_start →
+   * content_block_stop), persisted on the transcript line by the SDK stream.
+   * Only present on assistant lines whose single content block is a thinking
+   * block; lets a reopened session re-show the per-thought timing.
+   */
+  thinkingDurationMs?: number
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean
   cwd?: string
 }
 
-export type SessionMessagesWithEvidence = {
-  messages: MessageEntry[]
+export type SessionMessagesWithEvidence = {  messages: MessageEntry[]
   transcriptEvidenceComplete: boolean
 }
 
@@ -419,19 +427,52 @@ type TranscriptContextAccumulator = {
   transcriptHasMediaInput: boolean
 }
 
+/** One call's usage as it has already been folded into the running totals. */
+type CountedUsage = {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  webSearchRequests: number
+  costUSD: number
+}
+
+/** Which call a line's `usage` belongs to, and what that key has already contributed. */
+type UsageClaim = {
+  /** `null` when the line carries no identity to deduplicate on and is counted as-is. */
+  key: string | null
+  /**
+   * The value already counted for this key. Non-null means this line **supersedes** that
+   * contribution rather than adding to it.
+   */
+  previous: CountedUsage | null
+}
+
 /**
- * Whether this line's `usage` is the first sighting of its reply.
+ * Resolves which call this line's `usage` describes, or `null` when it must not be counted
+ * (an inherited fork line).
  *
  * Claude Code writes one JSONL line per content block of an assistant message and repeats the
- * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
- * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
- * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
- * inherited only the fork check and so reported inflated totals to the context panel.
+ * `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is 14 lines.
+ * Summing raw lines overstated real transcripts by 2.2x, which is why `stats.ts` and the
+ * activity index both deduplicate.
+ *
+ * The repeats are **not identical**, which is what the dedup has to respect: measured over 1227
+ * calls, a call's early lines carry `output_tokens: 0` (with, per provider, either the prompt
+ * total and no cache fields, or a running prefix), and the last line carries the final split —
+ * uncached input, cache read/write, and the real output count. Keeping the **first** line threw
+ * away every output token and every cache read of the session, which read in the context panel
+ * as 0 tok/s and a 0% cache hit rate on a perfectly healthy session. A later line therefore
+ * replaces its key's earlier contribution instead of being discarded.
  *
  * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
  * agrees about what one session cost.
  */
-function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+function claimUsageRecord(
+  entry: RawEntry,
+  countedUsage: Map<string, CountedUsage>,
+): UsageClaim | null {
   const record = entry as unknown as Record<string, unknown>
   const identity = {
     version: record.version,
@@ -440,13 +481,14 @@ function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
     messageId: entry.message?.id,
     forkedFrom: record.forkedFrom,
   }
-  if (!isBillableUsageRecord(identity)) return false
+  if (!isBillableUsageRecord(identity)) return null
   const key = usageRecordKey(identity)
-  if (key === null) return true
-  if (countedKeys.has(key)) return false
-  if (countedKeys.size >= 50_000 || key.length > 4096) throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
-  countedKeys.add(key)
-  return true
+  if (key === null) return { key: null, previous: null }
+  const previous = countedUsage.get(key)
+  if (previous === undefined && (countedUsage.size >= 50_000 || key.length > 4096)) {
+    throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
+  }
+  return { key, previous: previous ?? null }
 }
 
 function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
@@ -1933,11 +1975,22 @@ export class SessionService {
       ...(sessionReferences ? { sessionReferences } : {}),
       ...(collaboration ? { collaboration } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
-      ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      // Tool results echo tool *inputs* back (FileEdit's `originalFile` is the
+      // whole pre-edit file). Ship a bounded projection so one edited file
+      // cannot dominate the transport; the field itself is kept because
+      // consumers use its presence to tell tool results from human turns.
+      ...(entry.toolUseResult !== undefined
+        ? { toolUseResult: boundToolUseResultPreview(entry.toolUseResult) }
+        : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
       ...(usage ? { usage } : {}),
       ...(usageKey ? { usageKey } : {}),
+      ...(typeof entry.thinkingDurationMs === 'number' &&
+      Number.isFinite(entry.thinkingDurationMs) &&
+      entry.thinkingDurationMs >= 0
+        ? { thinkingDurationMs: entry.thinkingDurationMs }
+        : {}),
       parentUuid: entry.parentUuid ?? undefined,
       parentToolUseId,
       isSidechain: entry.isSidechain,
@@ -2677,6 +2730,10 @@ export class SessionService {
                 sessionId,
                 projectsRoot!,
               )
+              // The index already validated this exact path, so one bounded read
+              // here only serves transcript-vs-placeholder ordering. The
+              // filesystem fallback below stays mtime-only because it runs on
+              // every reader call and must not do unbounded full reads.
               hydratedMatches.push({
                 ...match,
                 mtimeMs: stat.mtimeMs,
@@ -2725,16 +2782,32 @@ export class SessionService {
     const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number; hasTranscript: boolean }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
+      let stat: Awaited<ReturnType<typeof fs.stat>>
       try {
-        const stat = await fs.stat(filePath)
-        matches.push({
-          filePath,
-          projectDir: dir,
-          mtimeMs: stat.mtimeMs,
-          hasTranscript: await this.fileHasConversationTranscript(filePath),
-        })
+        stat = await fs.stat(filePath)
       } catch {
         continue
+      }
+      matches.push({
+        filePath,
+        projectDir: dir,
+        mtimeMs: stat.mtimeMs,
+        hasTranscript: false,
+      })
+    }
+
+    // The transcript path is stable per session id, so an unbounded full read
+    // here would run on every reader call (inspection/history/subagent lookups).
+    // It is only ever needed to rank two files that share an id — a worktree
+    // transcript vs. the original placeholder — where the transcript must win
+    // even if its mtime is not strictly newer.
+    if (matches.length > 1) {
+      for (const match of matches) {
+        try {
+          match.hasTranscript = await this.fileHasConversationTranscript(match.filePath)
+        } catch {
+          match.hasTranscript = false
+        }
       }
     }
 
@@ -2960,6 +3033,8 @@ export class SessionService {
     const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
     const providerTokens = promptTokens + latest.outputTokens
     const hasProviderUsage = providerTokens > 0
+    // estimatedTokens 仍用全量 rough 累加（媒体信任启发式需要「内容估计」为
+    // 正且小于窗口才能触发），显示总量单独走 usage 锚口径（见 totalTokens）。
     const estimatedTokens = estimatedTokensFromMessages || promptTokens
     const contextBudget = calculateContextBudget({
       estimatedTokens,
@@ -2975,15 +3050,13 @@ export class SessionService {
       }),
       hasMediaInput: transcriptHasMediaInput,
     })
+    // 显示总量走 usage 锚口径（与 auto-compact 的 tokenCountWithEstimation
+    // 同口径）：最后一条真实 usage 总量 + 其后 rough 累加。bc 中间件压缩后
+    // usage 回落 → 百分比收敛，不再被自 boundary 的全量累加钉死 100%。
+    // 低信任+媒体的可疑 usage 尖峰仍走估计口径（ignoredUsageReason 分支）。
     const totalTokens =
       hasProviderUsage && !contextBudget.ignoredUsageReason
-        ? Math.min(
-            Math.max(
-              contextBudget.usedTokens,
-              providerTokens + estimatedTokensAfterUsage,
-            ),
-            rawMaxTokens,
-          )
+        ? Math.min(providerTokens + estimatedTokensAfterUsage, rawMaxTokens)
         : contextBudget.usedTokens
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
     const usageCategories: TranscriptContextEstimate['categories'] = [
@@ -3117,7 +3190,7 @@ export class SessionService {
     let lastUsageAt: number | null = null
 
     const contextState = createTranscriptContextAccumulator()
-    const countedUsageKeys = new Set<string>()
+    const countedUsage = new Map<string, CountedUsage>()
 
     await this.streamJsonlFile(found.filePath, (entry) => {
       if (typeof entry.message?.model === 'string') {
@@ -3200,9 +3273,10 @@ export class SessionService {
         ? usage.server_tool_use.web_search_requests
         : 0
 
-      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
-      // same class of over-count; `claimUsageRecord` rejects both.
-      if (!claimUsageRecord(entry, countedUsageKeys)) return
+      // Fork-inherited lines are skipped; a repeated line for a call already counted comes
+      // back with `previous` so it can replace that contribution (see `claimUsageRecord`).
+      const claim = claimUsageRecord(entry, countedUsage)
+      if (claim === null) return
 
       if (
         inputTokens === 0 &&
@@ -3249,6 +3323,28 @@ export class SessionService {
         models.set(model, modelUsage)
       }
 
+      // A newer line for the same call first takes back what the older one contributed: the
+      // early line's numbers are a partial view of the same request, not a separate one.
+      if (claim.previous) {
+        const previous = claim.previous
+        const previousModel = models.get(previous.model)
+        if (previousModel) {
+          previousModel.inputTokens -= previous.inputTokens
+          previousModel.outputTokens -= previous.outputTokens
+          previousModel.cacheReadInputTokens -= previous.cacheReadInputTokens
+          previousModel.cacheCreationInputTokens -= previous.cacheCreationInputTokens
+          previousModel.webSearchRequests -= previous.webSearchRequests
+          previousModel.costUSD -= previous.costUSD
+          previousModel.costDisplay = this.formatCost(previousModel.costUSD)
+        }
+        totalCostUSD -= previous.costUSD
+        totalInputTokens -= previous.inputTokens
+        totalOutputTokens -= previous.outputTokens
+        totalCacheReadInputTokens -= previous.cacheReadInputTokens
+        totalCacheCreationInputTokens -= previous.cacheCreationInputTokens
+        totalWebSearchRequests -= previous.webSearchRequests
+      }
+
       modelUsage.inputTokens += inputTokens
       modelUsage.outputTokens += outputTokens
       modelUsage.cacheReadInputTokens += cacheReadInputTokens
@@ -3263,6 +3359,18 @@ export class SessionService {
       totalCacheReadInputTokens += cacheReadInputTokens
       totalCacheCreationInputTokens += cacheCreationInputTokens
       totalWebSearchRequests += webSearchRequests
+
+      if (claim.key !== null) {
+        countedUsage.set(claim.key, {
+          model,
+          inputTokens,
+          outputTokens,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
+          webSearchRequests,
+          costUSD,
+        })
+      }
 
       if (entry.timestamp) {
         const time = Date.parse(entry.timestamp)
@@ -3309,6 +3417,9 @@ export class SessionService {
           // them from, so callers must treat 0 as "unknown" rather than "instant".
           totalDecodeDuration: 0,
           totalTtftDuration: 0,
+          // Nothing to pair with either: a transcript carries no decode span, so the panel
+          // must not divide these tokens by someone else's timing.
+          totalTimedOutputTokens: 0,
           totalDuration:
             firstUsageAt !== null && lastUsageAt !== null
               ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
@@ -5258,6 +5369,21 @@ export class SessionService {
       const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
       if (goalLocalCommandMessage) {
         messages.push(goalLocalCommandMessage)
+        continue
+      }
+
+      // Compact boundary entries carry no `message` role, so the generic filter below
+      // would drop them. Surface them as a typed system entry so the client can use the
+      // boundaries as export range markers (and the UI already renders the
+      // "Conversation compacted" text as a compact summary).
+      if (entry.type === 'system' && (entry.subtype === 'compact_boundary' || entry.subtype === 'microcompact_boundary')) {
+        messages.push({
+          id: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : crypto.randomUUID(),
+          type: 'system',
+          subtype: entry.subtype,
+          content: entry.content,
+          timestamp: entry.timestamp || new Date().toISOString(),
+        })
         continue
       }
 

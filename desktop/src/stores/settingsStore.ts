@@ -65,11 +65,15 @@ type SettingsStore = {
   currentModel: ModelInfo | null
   effortLevel: EffortLevel
   thinkingEnabled: boolean
+  thinkingSendBack: boolean
+  vccCompactBackend: 'algorithm' | 'llm'
   workflowKeywordTriggerEnabled: boolean
   agentTeamsEnabled: boolean
   autoDreamEnabled: boolean
+  disableUpdates: boolean
   autoQuestion: AutoQuestionSettings
   autoModeOptInAccepted: boolean
+
   availableModels: ModelInfo[]
   activeProviderName: string | null
   locale: Locale
@@ -111,9 +115,12 @@ type SettingsStore = {
   setModel: (modelId: string) => Promise<void>
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
+  setThinkingSendBack: (enabled: boolean) => Promise<void>
+  setVccCompactBackend: (backend: 'algorithm' | 'llm') => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
+  setDisableUpdates: (enabled: boolean) => Promise<void>
   setAutoQuestion: (settings: AutoQuestionSettings) => Promise<void>
   acceptAutoModeOptIn: () => Promise<void>
   setLocale: (locale: Locale) => void
@@ -137,6 +144,7 @@ type SettingsStore = {
     publicBaseUrl?: string | null
     fixedPort?: number | null
     disconnectGraceSeconds?: number | null
+    requireToken?: boolean
   }) => Promise<void>
   setResponseLanguage: (language: string) => Promise<void>
   fetchAppMode: () => Promise<void>
@@ -156,6 +164,7 @@ const DEFAULT_H5_ACCESS_SETTINGS: H5AccessSettings = {
   publicBaseUrl: null,
   fixedPort: null,
   disconnectGraceSeconds: null,
+  requireToken: false,
 }
 
 const DEFAULT_DESKTOP_TERMINAL_SETTINGS: DesktopTerminalSettings = {
@@ -206,9 +215,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   currentModel: null,
   effortLevel: 'max',
   thinkingEnabled: true,
+  thinkingSendBack: false,
+  vccCompactBackend: 'algorithm',
   workflowKeywordTriggerEnabled: true,
   agentTeamsEnabled: true,
   autoDreamEnabled: false,
+  disableUpdates: false,
   autoQuestion: DEFAULT_AUTO_QUESTION_SETTINGS,
   autoModeOptInAccepted: false,
   availableModels: [],
@@ -285,9 +297,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         currentModel: model,
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
+        thinkingSendBack: userSettings.sendThinkingHistory === true,
+        vccCompactBackend:
+          userSettings.vccCompactBackend === 'llm' ? 'llm' : 'algorithm',
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
         autoDreamEnabled: userSettings.autoDreamEnabled === true,
+        disableUpdates: userSettings.disableUpdates === true,
         autoQuestion: normalizeAutoQuestionSettings(userSettings.autoQuestion),
         autoModeOptInAccepted: userSettings.skipAutoPermissionPrompt === true,
         chatSendBehavior: normalizeChatSendBehavior(userSettings.chatSendBehavior),
@@ -361,6 +377,26 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setThinkingSendBack: async (enabled) => {
+    const prev = get().thinkingSendBack
+    set({ thinkingSendBack: enabled })
+    try {
+      await settingsApi.updateUser({ sendThinkingHistory: enabled })
+    } catch {
+      set({ thinkingSendBack: prev })
+    }
+  },
+
+  setVccCompactBackend: async (backend) => {
+    const prev = get().vccCompactBackend
+    set({ vccCompactBackend: backend })
+    try {
+      await settingsApi.updateUser({ vccCompactBackend: backend })
+    } catch {
+      set({ vccCompactBackend: prev })
+    }
+  },
+
   setWorkflowKeywordTriggerEnabled: async (enabled) => {
     const prev = get().workflowKeywordTriggerEnabled
     set({ workflowKeywordTriggerEnabled: enabled })
@@ -394,6 +430,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setDisableUpdates: async (enabled) => {
+    const prev = get().disableUpdates
+    set({ disableUpdates: enabled })
+    try {
+      await settingsApi.updateUser({ disableUpdates: enabled })
+    } catch (error) {
+      set({ disableUpdates: prev })
+      throw error
+    }
+  },
   setAutoQuestion: async (settings) => {
     const previous = get().autoQuestion
     const next = normalizeAutoQuestionSettings(settings)
@@ -860,6 +906,7 @@ function normalizeH5AccessSettings(settings: H5AccessSettings | undefined): H5Ac
     publicBaseUrl: settings?.publicBaseUrl ?? null,
     fixedPort: typeof settings?.fixedPort === 'number' ? settings.fixedPort : null,
     disconnectGraceSeconds: typeof settings?.disconnectGraceSeconds === 'number' ? settings.disconnectGraceSeconds : null,
+    requireToken: settings?.requireToken === true,
   }
 }
 

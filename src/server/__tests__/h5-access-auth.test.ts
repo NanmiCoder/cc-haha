@@ -16,6 +16,7 @@ let baseUrl = ''
 let wsBaseUrl = ''
 let lanBaseUrl = ''
 let lanWsBaseUrl = ''
+let unixSocket = ''
 let tmpDir = ''
 let originalConfigDir: string | undefined
 let originalAnthropicApiKey: string | undefined
@@ -25,6 +26,7 @@ let originalServerAuthRequired: string | undefined
 let originalLocalAccessToken: string | undefined
 let originalTrustedRendererOrigin: string | undefined
 let originalPetAccessToken: string | undefined
+let originalTestUnixSocket: string | undefined
 let originalServerPort = 3456
 const PHONE_ORIGIN = 'https://phone.example'
 const SERVER_STOP_WAIT_MS = 500
@@ -71,6 +73,13 @@ async function startRemoteServer(options: { authRequired?: boolean } = {}): Prom
     delete process.env.SERVER_AUTH_REQUIRED
   }
 
+  // Enable the server's test-only unix-socket mirror so the "remote browser"
+  // tests can connect from a socket that carries no peer address. H5 auth
+  // classifies a missing source IP as a public (non-LAN) source, reproducing a
+  // genuinely remote client without needing a real public IP on this host.
+  unixSocket = path.join(tmpDir, 'remote.sock')
+  process.env.CC_HAHA_TEST_UNIX_SOCKET = unixSocket
+
   server = startServer(0, '0.0.0.0')
   const port = server.port
   baseUrl = `http://127.0.0.1:${port}`
@@ -78,6 +87,12 @@ async function startRemoteServer(options: { authRequired?: boolean } = {}): Prom
   lanBaseUrl = resolvePrivateLanBaseUrl(port) ?? ''
   lanWsBaseUrl = lanBaseUrl.replace(/^http/, 'ws')
   await waitForServer(`${baseUrl}/health`)
+}
+
+// Fetch over the unix-socket mirror: no peer address → treated as a remote
+// (public) source by H5 auth. Used to assert the H5 token is required.
+async function remoteFetch(pathname: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`http://remote-host${pathname}`, { ...init, unix: unixSocket } as RequestInit)
 }
 
 async function stopRemoteServer(): Promise<void> {
@@ -116,32 +131,39 @@ function spoofedLoopbackHeaders(port: string): Record<string, string> {
   }
 }
 
-function localFileUrl(base: string, absPath: string): string {
+function localFilePath(absPath: string): string {
   const normalized = absPath.replace(/\\/g, '/')
   const rooted = normalized.startsWith('/') ? normalized : `/${normalized}`
   const encoded = rooted
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/')
-  return `${base}/local-file${encoded}`
+  return `/local-file${encoded}`
+}
+
+function localFileUrl(base: string, absPath: string): string {
+  return `${base}${localFilePath(absPath)}`
 }
 
 async function enableH5Access(options: {
   allowedOrigins?: string[]
   publicBaseUrl?: string | null
+  requireToken?: boolean
 } = {}): Promise<string> {
   const service = new H5AccessService()
-  if (options.allowedOrigins || options.publicBaseUrl !== undefined) {
+  if (options.allowedOrigins || options.publicBaseUrl !== undefined || options.requireToken !== undefined) {
     await service.updateSettings({
       allowedOrigins: options.allowedOrigins,
       publicBaseUrl: options.publicBaseUrl,
+      requireToken: options.requireToken,
     })
   }
   const { token } = await service.enable()
-  if (options.allowedOrigins || options.publicBaseUrl !== undefined) {
+  if (options.allowedOrigins || options.publicBaseUrl !== undefined || options.requireToken !== undefined) {
     await service.updateSettings({
       allowedOrigins: options.allowedOrigins,
       publicBaseUrl: options.publicBaseUrl,
+      requireToken: options.requireToken,
     })
   }
   return token
@@ -226,6 +248,7 @@ beforeEach(async () => {
   delete process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN
   originalPetAccessToken = process.env.CC_HAHA_PET_ACCESS_TOKEN
   originalServerPort = ProviderService.getServerPort()
+  originalTestUnixSocket = process.env.CC_HAHA_TEST_UNIX_SOCKET
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   const h5DistDir = path.join(tmpDir, 'dist')
   process.env.CLAUDE_H5_DIST_DIR = h5DistDir
@@ -264,9 +287,10 @@ afterEach(async () => {
   else process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN = originalTrustedRendererOrigin
   if (originalPetAccessToken === undefined) delete process.env.CC_HAHA_PET_ACCESS_TOKEN
   else process.env.CC_HAHA_PET_ACCESS_TOKEN = originalPetAccessToken
+  if (originalTestUnixSocket === undefined) delete process.env.CC_HAHA_TEST_UNIX_SOCKET
+  else process.env.CC_HAHA_TEST_UNIX_SOCKET = originalTestUnixSocket
 
-  await fs.rm(tmpDir, {
-    recursive: true,
+  await fs.rm(tmpDir, {    recursive: true,
     force: true,
     maxRetries: 5,
     retryDelay: 50,
@@ -341,8 +365,12 @@ describe('remote H5 auth and CORS integration', () => {
       headers: { ...headers, 'X-Forwarded-For': '192.168.0.44' },
     })
     expect(proxiedPreflight.status).toBe(403)
+    // Deliberate divergence from the upstream gate: `/api/settings/session-cleanup`
+    // is no longer in `LOCAL_CREDENTIAL_ONLY_PATHS`, so it follows the rest of the
+    // General settings page and its preflight is allowed (the H5 token still
+    // guards the actual call). See `h5AccessPolicy.ts` for the rationale.
     const cleanupPreflight = await fetch(`${baseUrl}/api/settings/session-cleanup`, { method: 'OPTIONS', headers })
-    expect(cleanupPreflight.status).toBe(403)
+    expect(cleanupPreflight.status).toBe(204)
   })
 
   test('rejects loopback preflight when no renderer origin is trusted', async () => {
@@ -1117,16 +1145,17 @@ describe('remote H5 auth and CORS integration', () => {
   test('requires H5 token for remote browser REST requests when H5 access is enabled', async () => {
     const token = await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
 
-    const missingTokenResponse = await fetch(`${baseUrl}/api/status`, {
+    const missingTokenResponse = await remoteFetch('/api/status', {
       headers: {
         Origin: PHONE_ORIGIN,
       },
     })
     expect(missingTokenResponse.status).toBe(401)
 
-    const validTokenResponse = await fetch(`${baseUrl}/api/status`, {
+    const validTokenResponse = await remoteFetch('/api/status', {
       headers: {
         Origin: PHONE_ORIGIN,
         Authorization: `Bearer ${token}`,
@@ -1138,17 +1167,18 @@ describe('remote H5 auth and CORS integration', () => {
   test('requires H5 token for remote browser settings surface requests when H5 access is enabled', async () => {
     const token = await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
 
     for (const endpoint of settingsSurfaceEndpoints) {
-      const missingTokenResponse = await fetch(`${baseUrl}${endpoint.path}`, {
+      const missingTokenResponse = await remoteFetch(endpoint.path, {
         headers: {
           Origin: PHONE_ORIGIN,
         },
       })
       expect(missingTokenResponse.status).toBe(401)
 
-      const wrongTokenResponse = await fetch(`${baseUrl}${endpoint.path}`, {
+      const wrongTokenResponse = await remoteFetch(endpoint.path, {
         headers: {
           Origin: PHONE_ORIGIN,
           Authorization: 'Bearer wrong-token',
@@ -1156,7 +1186,7 @@ describe('remote H5 auth and CORS integration', () => {
       })
       expect(wrongTokenResponse.status).toBe(401)
 
-      const validTokenResponse = await fetch(`${baseUrl}${endpoint.path}`, {
+      const validTokenResponse = await remoteFetch(endpoint.path, {
         headers: {
           Origin: PHONE_ORIGIN,
           Authorization: `Bearer ${token}`,
@@ -1176,17 +1206,18 @@ describe('remote H5 auth and CORS integration', () => {
   test('requires H5 token for remote browser local-file and preview-fs requests when H5 access is enabled', async () => {
     const token = await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
-    const localFile = localFileUrl(baseUrl, path.join(process.cwd(), 'package.json'))
+    const localFile = localFilePath(path.join(process.cwd(), 'package.json'))
 
-    const missingLocalFileToken = await fetch(localFile, {
+    const missingLocalFileToken = await remoteFetch(localFile, {
       headers: {
         Origin: PHONE_ORIGIN,
       },
     })
     expect(missingLocalFileToken.status).toBe(401)
 
-    const wrongLocalFileToken = await fetch(localFile, {
+    const wrongLocalFileToken = await remoteFetch(localFile, {
       headers: {
         Origin: PHONE_ORIGIN,
         Authorization: 'Bearer wrong-token',
@@ -1194,7 +1225,7 @@ describe('remote H5 auth and CORS integration', () => {
     })
     expect(wrongLocalFileToken.status).toBe(401)
 
-    const validLocalFileToken = await fetch(localFile, {
+    const validLocalFileToken = await remoteFetch(localFile, {
       headers: {
         Origin: PHONE_ORIGIN,
         Authorization: `Bearer ${token}`,
@@ -1203,7 +1234,7 @@ describe('remote H5 auth and CORS integration', () => {
     expect(validLocalFileToken.status).toBe(200)
     await expect(validLocalFileToken.text()).resolves.toContain('"name"')
 
-    const missingPreviewToken = await fetch(`${baseUrl}/preview-fs/h5-auth-test/index.html`, {
+    const missingPreviewToken = await remoteFetch('/preview-fs/h5-auth-test/index.html', {
       headers: {
         Origin: PHONE_ORIGIN,
       },
@@ -1237,9 +1268,10 @@ describe('remote H5 auth and CORS integration', () => {
     process.env.ANTHROPIC_API_KEY = 'test-server-key'
     await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
 
-    const apiResponse = await fetch(`${baseUrl}/api/status`, {
+    const apiResponse = await remoteFetch('/api/status', {
       headers: {
         Origin: PHONE_ORIGIN,
         Authorization: 'Bearer test-server-key',
@@ -1250,7 +1282,7 @@ describe('remote H5 auth and CORS integration', () => {
       message: 'Invalid H5 access token',
     })
 
-    const proxyResponse = await fetch(`${baseUrl}/proxy/v1/messages`, {
+    const proxyResponse = await remoteFetch('/proxy/v1/messages', {
       method: 'POST',
       headers: {
         Origin: PHONE_ORIGIN,
@@ -1261,7 +1293,7 @@ describe('remote H5 auth and CORS integration', () => {
     })
     expect(proxyResponse.status).toBe(401)
 
-    const wsResponse = await fetch(`${baseUrl}/ws/h5-auth-test`, {
+    const wsResponse = await remoteFetch('/ws/h5-auth-test', {
       headers: {
         ...makeUpgradeHeaders(PHONE_ORIGIN),
         Authorization: 'Bearer test-server-key',
@@ -1273,9 +1305,10 @@ describe('remote H5 auth and CORS integration', () => {
   test('requires H5 token for remote browser proxy requests when H5 access is enabled', async () => {
     const token = await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
 
-    const missingTokenResponse = await fetch(`${baseUrl}/proxy/v1/messages`, {
+    const missingTokenResponse = await remoteFetch('/proxy/v1/messages', {
       method: 'POST',
       headers: {
         Origin: PHONE_ORIGIN,
@@ -1285,7 +1318,7 @@ describe('remote H5 auth and CORS integration', () => {
     })
     expect(missingTokenResponse.status).toBe(401)
 
-    const validTokenResponse = await fetch(`${baseUrl}/proxy/v1/messages`, {
+    const validTokenResponse = await remoteFetch('/proxy/v1/messages', {
       method: 'POST',
       headers: {
         Origin: PHONE_ORIGIN,
@@ -1379,14 +1412,15 @@ describe('remote H5 auth and CORS integration', () => {
   test('requires H5 token for remote browser websocket requests when H5 access is enabled', async () => {
     const token = await enableH5Access({
       allowedOrigins: [PHONE_ORIGIN],
+      requireToken: true,
     })
 
-    const missingTokenResponse = await fetch(`${baseUrl}/ws/h5-auth-test`, {
+    const missingTokenResponse = await remoteFetch('/ws/h5-auth-test', {
       headers: makeUpgradeHeaders(PHONE_ORIGIN),
     })
     expect(missingTokenResponse.status).toBe(401)
 
-    const validTokenResponse = await fetch(`${baseUrl}/ws/h5-auth-test?token=${token}`, {
+    const validTokenResponse = await remoteFetch(`/ws/h5-auth-test?token=${token}`, {
       headers: makeUpgradeHeaders(PHONE_ORIGIN),
     })
     expect(validTokenResponse.status).toBe(400)

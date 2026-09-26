@@ -137,7 +137,8 @@
             "id": "msg#1",
             "type": "thinking",
             "content": "Considering options",
-            "timestamp": 0
+            "timestamp": 0,
+            "thinkingDurationMs": 51
           }
         ],
         "chatState": "streaming",
@@ -163,7 +164,8 @@
             "id": "msg#1",
             "type": "thinking",
             "content": "Considering options",
-            "timestamp": 0
+            "timestamp": 0,
+            "thinkingDurationMs": 51
           }
         ],
         "chatState": "streaming",
@@ -189,7 +191,8 @@
             "id": "msg#1",
             "type": "thinking",
             "content": "Considering options",
-            "timestamp": 0
+            "timestamp": 0,
+            "thinkingDurationMs": 51
           },
           {
             "id": "msg#2",

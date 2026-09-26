@@ -11,8 +11,11 @@ import { copyTextToClipboard } from './clipboard'
 import { sessionsApi } from '../api/sessions'
 import type { OpenTarget } from '../stores/openTargetStore'
 import { workspaceOpen } from './workspace/openTarget'
+import { isWorkspaceBrowserAvailable } from './workspace/browserHost'
 import { useOpenTargetStore } from '../stores/openTargetStore'
+import { useUIStore } from '../stores/uiStore'
 import { reportOpenFailure } from './systemFileOpen'
+import { downloadLocalFile } from './handlePreviewLink'
 
 type Translate = (key: string, vars?: Record<string, string>) => string
 
@@ -44,7 +47,20 @@ export function openWithMenuDeps(
   { sessionId, t, omitCopyPath }: OpenWithMenuOptions,
 ): OpenWithDeps {
   return {
-    openInAppBrowser: (url) => { workspaceOpen.browser(sessionId, url) },
+    openInAppBrowser: (url) => {
+      if (!isWorkspaceBrowserAvailable()) {
+        // The built-in browser only exists in the desktop app. On the H5/remote
+        // surface there is no in-app browser tab, so open in the system browser
+        // and tell the user the built-in one needs the desktop version.
+        useUIStore.getState().addToast({
+          type: 'info',
+          message: t('workspace.browser.unavailableTitle'),
+        })
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return
+      }
+      workspaceOpen.browser(sessionId, url)
+    },
     openSystem: (target) => {
       void getDesktopHost().shell.openPath(target).catch(() => window.open(target, '_blank'))
     },
@@ -77,6 +93,12 @@ export function openWithMenuDeps(
               if (result.state !== 'ok' || typeof result.content !== 'string') return
               await copyTextToClipboard(result.content)
             })().catch(() => {})
+          },
+          // A file is the only context with something to save; the download goes
+          // through the local server's attachment route so the browser streams it
+          // and the server's header fixes the saved name.
+          downloadFile: (absolutePath: string) => {
+            downloadLocalFile(absolutePath)
           },
         }
       : {}),

@@ -245,7 +245,7 @@ export interface ResolvePrepareCaptureResult extends ScreenshotResult {
 export interface ComputerExecutor {
   capabilities: {
     screenshotFiltering: 'native' | 'none'
-    platform: 'darwin' | 'win32'
+    platform: 'darwin' | 'win32' | 'linux'
     hostBundleId: string
     teachMode?: boolean
   }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { isolateModelDefaultsEnv } from '../testUtils/modelEnv.js'
 import {
   EFFORT_LEVELS,
   getEffortLevelDescription,
@@ -13,6 +14,8 @@ import {
   GROK_MODEL_CATALOG,
   setGrokRuntimeModelCatalog,
 } from 'src/services/grokAuth/models.js'
+
+isolateModelDefaultsEnv()
 
 describe('agent effort values', () => {
   test('accepts all named agent effort levels including xhigh', () => {
