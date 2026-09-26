@@ -128,6 +128,7 @@ describe('provider presets API', () => {
     const minimax = PROVIDER_PRESETS.find((preset) => preset.id === 'minimax')
     const shengsuanyun = PROVIDER_PRESETS.find((preset) => preset.id === 'shengsuanyun')
     const atlascloud = PROVIDER_PRESETS.find((preset) => preset.id === 'atlascloud')
+    const unifically = PROVIDER_PRESETS.find((preset) => preset.id === 'unifically')
     const xuanshuapi = PROVIDER_PRESETS.find((preset) => preset.id === 'xuanshuapi')
     const fennoai = PROVIDER_PRESETS.find((preset) => preset.id === 'fennoai')
     const qiniuai = PROVIDER_PRESETS.find((preset) => preset.id === 'qiniuai')
@@ -194,6 +195,15 @@ describe('provider presets API', () => {
       opus: 'deepseek-ai/deepseek-v4-pro',
     })
     expect(atlascloud?.modelContextWindows?.['deepseek-ai/deepseek-v4-pro']).toBe(1000000)
+    expect(unifically?.baseUrl).toBe('https://api.unifically.com')
+    expect(unifically?.apiFormat).toBe('anthropic')
+    expect(unifically?.authStrategy).toBe('auth_token')
+    expect(unifically?.defaultModels).toEqual({
+      main: 'anthropic/claude-sonnet-5',
+      haiku: 'anthropic/claude-haiku-4-5',
+      sonnet: 'anthropic/claude-sonnet-5',
+      opus: 'anthropic/claude-opus-5',
+    })
     expect(xuanshuapi?.baseUrl).toBe('https://www.xuanshuapi.com')
     expect(xuanshuapi?.apiFormat).toBe('anthropic')
     expect(xuanshuapi?.authStrategy).toBe('auth_token')
