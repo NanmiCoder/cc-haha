@@ -31,11 +31,12 @@ export type BackgroundTaskState =
 /**
  * Check if a task should be shown in the background tasks indicator.
  * A task is considered a background task if:
- * 1. It is running or pending
+ * 1. It is running or pending, or is a recovered local shell with unknown state
  * 2. It has been explicitly backgrounded (not a foreground task)
  */
 export function isBackgroundTask(task: TaskState): task is BackgroundTaskState {
-  if (task.status !== 'running' && task.status !== 'pending') {
+  const isUnknownShell = task.type === 'local_bash' && task.status === 'unknown'
+  if (!isUnknownShell && task.status !== 'running' && task.status !== 'pending') {
     return false
   }
   // Foreground tasks (isBackgrounded === false) are not yet "background tasks"

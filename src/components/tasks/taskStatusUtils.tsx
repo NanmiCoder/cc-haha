@@ -14,7 +14,7 @@ import { summarizeRecentActivities } from 'src/utils/collapseReadSearch.js';
  * Returns true if the given task status represents a terminal (finished) state.
  */
 export function isTerminalStatus(status: TaskStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'killed';
+  return status === 'completed' || status === 'failed' || status === 'killed' || status === 'unknown';
 }
 
 /**
@@ -41,6 +41,7 @@ export function getTaskStatusIcon(status: TaskStatus, options?: {
   }
   if (status === 'completed') return figures.tick;
   if (status === 'failed' || status === 'killed') return figures.cross;
+  if (status === 'unknown') return figures.warning;
   return figures.bullet;
 }
 
@@ -65,7 +66,7 @@ export function getTaskStatusColor(status: TaskStatus, options?: {
   if (isIdle) return 'background';
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
-  if (status === 'killed') return 'warning';
+  if (status === 'killed' || status === 'unknown') return 'warning';
   return 'background';
 }
 

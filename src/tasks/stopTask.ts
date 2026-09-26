@@ -38,6 +38,7 @@ type StopTaskResult = {
 export async function stopTask(
   taskId: string,
   context: StopTaskContext,
+  terminationSource: 'user' | 'agent' = 'agent',
 ): Promise<StopTaskResult> {
   const { getAppState, setAppState } = context
   const appState = getAppState()
@@ -62,13 +63,12 @@ export async function stopTask(
     )
   }
 
-  // LocalShellTask.kill() atomically marks the task notified before returning.
-  // Capture the pre-kill state so the desktop SDK bookend is not suppressed by
-  // that implementation detail.
+  // Capture the pre-kill state before the terminal transition so the desktop
+  // SDK bookend reflects whether this stop request owns the notification.
   const shouldEmitShellTermination =
     isLocalShellTask(task) && !task.agentId && !task.notified
 
-  await taskImpl.kill(taskId, setAppState)
+  await taskImpl.kill(taskId, setAppState, terminationSource)
 
   // Bash: suppress the "exit code 137" notification (noise). Agent tasks: don't
   // suppress — the AbortError catch sends a notification carrying
@@ -122,7 +122,7 @@ export async function stopTaskFromControlRequest(
   context: StopTaskContext,
 ): Promise<StopTaskControlResult> {
   try {
-    await stopTask(taskId, context)
+    await stopTask(taskId, context, 'user')
     return { ok: true, alreadyGone: false }
   } catch (error) {
     if (error instanceof StopTaskError && error.code === 'not_found') {

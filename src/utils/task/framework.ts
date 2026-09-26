@@ -156,6 +156,7 @@ export function evictTerminalTask(
     const task = prev.tasks?.[taskId]
     if (!task) return prev
     if (!isTerminalTaskStatus(task.status)) return prev
+    if (task.type === 'local_bash' && task.status === 'unknown') return prev
     if (!task.notified) return prev
     // Panel grace period — blocks eviction until deadline passes.
     // 'retain' in task narrows to LocalAgentTaskState (the only type with
@@ -203,6 +204,12 @@ export async function generateTaskAttachments(state: AppState): Promise<{
           // Evict terminal tasks — they've been consumed and can be GC'd
           evictedTaskIds.push(taskState.id)
           continue
+        case 'unknown':
+          if (taskState.type !== 'local_bash') {
+            evictedTaskIds.push(taskState.id)
+            continue
+          }
+          break
         case 'pending':
           // Keep in map — hasn't run yet, but parent already knows about it
           continue
@@ -262,6 +269,9 @@ export function applyTaskOffsetsAndEvictions(
       // Re-check terminal+notified on fresh state (TOCTOU: resume may have
       // replaced the task during the generateTaskAttachments await)
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {
+        continue
+      }
+      if (fresh.type === 'local_bash' && fresh.status === 'unknown') {
         continue
       }
       if ('retain' in fresh && (fresh.evictAfter ?? Infinity) > Date.now()) {
@@ -326,6 +336,8 @@ function getStatusText(status: TaskStatus): string {
       return 'failed'
     case 'killed':
       return 'was stopped'
+    case 'unknown':
+      return 'has an unknown state'
     case 'running':
       return 'is running'
     case 'paused':

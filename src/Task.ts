@@ -21,6 +21,7 @@ export type TaskStatus =
   | 'completed'
   | 'failed'
   | 'killed'
+  | 'unknown'
 
 /**
  * True when a task is in a terminal state and will not transition further.
@@ -28,7 +29,7 @@ export type TaskStatus =
  * finished tasks from AppState, and orphan-cleanup paths.
  */
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'killed'
+  return status === 'completed' || status === 'failed' || status === 'killed' || status === 'unknown'
 }
 
 export type TaskHandle = {
@@ -67,6 +68,7 @@ export type LocalShellSpawnInput = {
   agentId?: AgentId
   /** UI display variant: description-as-label, dialog title, status bar pill. */
   kind?: 'bash' | 'monitor'
+  shellType?: 'bash' | 'powershell'
 }
 
 // What getTaskByType dispatches for: kill. spawn/render were never
@@ -75,7 +77,7 @@ export type LocalShellSpawnInput = {
 export type Task = {
   name: string
   type: TaskType
-  kill(taskId: string, setAppState: SetAppState): Promise<void>
+  kill(taskId: string, setAppState: SetAppState, terminationSource?: 'user' | 'agent'): Promise<void>
 }
 
 // Task ID prefixes

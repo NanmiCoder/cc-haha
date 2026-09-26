@@ -27,6 +27,31 @@ export function isProcessRunning(pid: number): boolean {
   }
 }
 
+export type ProcessProbeState = 'alive' | 'dead' | 'unknown'
+
+/**
+ * Probe a process without collapsing permission errors into "dead".
+ * This is intentionally separate from isProcessRunning(), whose legacy
+ * conservative behavior is used by lock recovery.
+ */
+export function probeProcessState(pid: number): ProcessProbeState {
+  if (pid <= 1) return 'dead'
+  try {
+    process.kill(pid, 0)
+    return 'alive'
+  } catch (error: unknown) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ESRCH'
+    ) {
+      return 'dead'
+    }
+    return 'unknown'
+  }
+}
+
 /**
  * Gets the ancestor process chain for a given process (up to maxDepth levels)
  * @param pid - The starting process ID

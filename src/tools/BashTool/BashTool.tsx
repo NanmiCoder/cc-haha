@@ -227,6 +227,7 @@ isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
 const fullInputSchema = lazySchema(() => z.strictObject({
   command: z.string().describe('The command to execute'),
   timeout: semanticNumber(z.number().optional()).describe(`Optional timeout in milliseconds (max ${getMaxTimeoutMs()})`),
+  timeout_behavior: z.enum(['background', 'terminate']).optional().describe('What to do when a foreground command hits its timeout. "background" keeps it running as a background task where that is allowed for this command; otherwise it is terminated. This timeout no longer applies after the command enters the background.'),
   description: z.string().optional().describe(`Clear, concise description of what this command does in active voice. Never use words like "complex" or "risk" in the description - just describe what it does.
 
 For simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):
@@ -285,6 +286,7 @@ const outputSchema = lazySchema(() => z.object({
   backgroundTaskId: z.string().optional().describe('ID of the background task if command is running in background'),
   backgroundedByUser: z.boolean().optional().describe('True if the user manually backgrounded the command with Ctrl+B'),
   assistantAutoBackgrounded: z.boolean().optional().describe('True if assistant-mode auto-backgrounded a long-running blocking command'),
+  timeoutBehavior: z.enum(['background', 'terminate']).optional(),
   dangerouslyDisableSandbox: z.boolean().optional().describe('Flag to indicate if sandbox mode was overridden'),
   returnCodeInterpretation: z.string().optional().describe('Semantic interpretation for non-error exit codes with special meaning'),
   noOutputExpected: z.boolean().optional().describe('Whether the command is expected to produce no output on success'),
@@ -680,6 +682,12 @@ export const BashTool = buildTool({
 
       // Get the final result from the generator's return value
       result = generatorResult.value;
+      if (result.terminationFailure) {
+        throw new Error(result.stderr);
+      }
+      if (result.code === undefined) {
+        throw new Error('Shell process ended before its exit code was available');
+      }
       trackGitOperations(input.command, result.code, result.stdout);
       const isInterrupt = result.interrupted && abortController.signal.reason === 'interrupt';
 
@@ -810,6 +818,7 @@ export const BashTool = buildTool({
       backgroundTaskId: result.backgroundTaskId,
       backgroundedByUser: result.backgroundedByUser,
       assistantAutoBackgrounded: result.assistantAutoBackgrounded,
+      timeoutBehavior: input.timeout_behavior,
       dangerouslyDisableSandbox: 'dangerouslyDisableSandbox' in input ? input.dangerouslyDisableSandbox as boolean | undefined : undefined,
       persistedOutputPath,
       persistedOutputSize
@@ -855,6 +864,7 @@ async function* runShellCommand({
     command,
     description,
     timeout,
+    timeout_behavior,
     run_in_background
   } = input;
   const timeoutMs = timeout || getDefaultTimeoutMs();
@@ -864,6 +874,7 @@ async function* runShellCommand({
   let lastTotalBytes = 0;
   let backgroundShellId: string | undefined = undefined;
   let assistantAutoBackgrounded = false;
+  let foregroundTaskId: string | undefined = undefined;
 
   // Progress signal: resolved by onProgress callback from the shared poller,
   // waking the generator to yield a progress update.
@@ -894,11 +905,40 @@ async function* runShellCommand({
     },
     preventCwdChanges,
     shouldUseSandbox: shouldUseSandbox(input),
-    shouldAutoBackground
+    shouldAutoBackground,
+    timeoutBehavior: timeout_behavior
   });
 
   // Start the command execution
-  const resultPromise = shellCommand.result;
+  const resultPromise = shellCommand.terminationFailureResult
+    ? Promise.race([shellCommand.result, shellCommand.terminationFailureResult])
+    : shellCommand.result;
+  void resultPromise.then(result => {
+    if (!result.terminationFailure) return;
+    const failureMessage = result.stderr;
+    if (!foregroundTaskId) {
+      foregroundTaskId = registerForeground({
+        command,
+        description: description || command,
+        shellCommand,
+        agentId,
+        shellType: 'bash',
+      }, setAppState, toolUseId);
+    }
+    const taskId = foregroundTaskId;
+    backgroundExistingForegroundTask(taskId, shellCommand, description || command, setAppState, toolUseId, failureMessage);
+    setAppState(previous => {
+      const task = previous.tasks[taskId];
+      if (!task || task.type !== 'local_bash' || task.status !== 'running') return previous;
+      return {
+        ...previous,
+        tasks: {
+          ...previous.tasks,
+          [taskId]: { ...task, error: failureMessage },
+        },
+      };
+    });
+  });
 
   // Helper to spawn a background task and return its ID
   async function spawnBackgroundTask(): Promise<string> {
@@ -907,7 +947,8 @@ async function* runShellCommand({
       description: description || command,
       shellCommand,
       toolUseId,
-      agentId
+      agentId,
+      shellType: 'bash'
     }, {
       abortController,
       getAppState: () => {
@@ -1002,7 +1043,6 @@ async function* runShellCommand({
 
   // Wait for the initial threshold before showing progress
   const startTime = Date.now();
-  let foregroundTaskId: string | undefined = undefined;
   {
     const initialResult = await Promise.race([resultPromise, new Promise<null>(resolve => {
       const t = setTimeout((r: (v: null) => void) => r(null), PROGRESS_THRESHOLD_MS, resolve);
@@ -1035,6 +1075,7 @@ async function* runShellCommand({
       const progressSignal = createProgressSignal();
       const result = await Promise.race([resultPromise, progressSignal]);
       if (result !== null) {
+        if (result.terminationFailure) return result;
         // Race: backgrounding fired (15s timer / onTimeout / Ctrl+B) but the
         // command completed before the next poll tick. #handleExit sets
         // backgroundTaskId but skips outputFilePath (it assumes the background
@@ -1114,7 +1155,8 @@ async function* runShellCommand({
             command,
             description: description || command,
             shellCommand,
-            agentId
+            agentId,
+            shellType: 'bash'
           }, setAppState, toolUseId);
         }
         setToolJSX({

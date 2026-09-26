@@ -27,6 +27,37 @@ type TaskOutputResult = {
   bytesTotal: number;
 };
 
+export function formatShellProcessDetails(
+  processObservation?: string,
+  terminalReason?: string,
+): string {
+  const observations: Record<string, string> = {
+    alive: 'process is running',
+    dead: 'process is no longer running',
+    unknown: 'process state unavailable',
+  };
+  const reasons: Record<string, string> = {
+    command_exited: 'command exited',
+    spawn_error: 'command could not start',
+    termination_confirmed: 'stop confirmed',
+    timeout_termination_confirmed: 'command terminated after timeout',
+    abort_termination_confirmed: 'command terminated after abort',
+    output_limit_termination_confirmed: 'command terminated after output limit',
+    termination_requested: 'stop requested',
+    termination_request_failed: 'stop request failed',
+    termination_timeout: 'stop request timed out',
+    process_disappeared: 'exit status unavailable',
+    process_disappeared_after_restart: 'process ended while the app was closed',
+    process_state_unverified: 'state could not be verified after restart; the process may still be running outside cc-haha',
+    reconciled_after_restart: 'state restored after restart',
+  };
+  const details = [
+    processObservation ? observations[processObservation] ?? processObservation : undefined,
+    terminalReason ? reasons[terminalReason] ?? terminalReason : undefined,
+  ].filter(Boolean).join('; ');
+  return details ? ` (${details})` : '';
+}
+
 /**
  * Read the tail of the task output file. Only reads the last few KB,
  * not the entire file.
@@ -123,7 +154,7 @@ export function ShellDetailDialog(t0) {
   }
   useKeybindings(t5, t6);
   let t7;
-  if ($[12] !== onBack || $[13] !== onDone || $[14] !== onKillShell || $[15] !== shell.status) {
+  if ($[12] !== onBack || $[13] !== onDone || $[14] !== onKillShell || $[15] !== `${shell.status}:${!!shell.shellCommand}:${!!shell.terminationPending}`) {
     t7 = e => {
       if (e.key === " ") {
         e.preventDefault();
@@ -135,7 +166,7 @@ export function ShellDetailDialog(t0) {
           e.preventDefault();
           onBack();
         } else {
-          if (e.key === "x" && shell.status === "running" && onKillShell) {
+          if (e.key === "x" && shell.status === "running" && shell.shellCommand && !shell.terminationPending && onKillShell) {
             e.preventDefault();
             onKillShell();
           }
@@ -145,7 +176,7 @@ export function ShellDetailDialog(t0) {
     $[12] = onBack;
     $[13] = onDone;
     $[14] = onKillShell;
-    $[15] = shell.status;
+    $[15] = `${shell.status}:${!!shell.shellCommand}:${!!shell.terminationPending}`;
     $[16] = t7;
   } else {
     t7 = $[16];
@@ -163,15 +194,16 @@ export function ShellDetailDialog(t0) {
   const displayCommand = t8;
   const t9 = isMonitor ? "Monitor details" : "Shell details";
   let t10;
-  if ($[19] !== onBack || $[20] !== onKillShell || $[21] !== shell.status) {
-    t10 = exitState => exitState.pending ? <Text>Press {exitState.keyName} again to exit</Text> : <Byline>{onBack && <KeyboardShortcutHint shortcut={"\u2190"} action="go back" />}<KeyboardShortcutHint shortcut="Esc/Enter/Space" action="close" />{shell.status === "running" && onKillShell && <KeyboardShortcutHint shortcut="x" action="stop" />}</Byline>;
+  if ($[19] !== onBack || $[20] !== onKillShell || $[21] !== `${shell.status}:${!!shell.shellCommand}:${!!shell.terminationPending}`) {
+    t10 = exitState => exitState.pending ? <Text>Press {exitState.keyName} again to exit</Text> : <Byline>{onBack && <KeyboardShortcutHint shortcut={"\u2190"} action="go back" />}<KeyboardShortcutHint shortcut="Esc/Enter/Space" action="close" />{shell.status === "running" && shell.shellCommand && !shell.terminationPending && onKillShell && <KeyboardShortcutHint shortcut="x" action="stop" />}</Byline>;
     $[19] = onBack;
     $[20] = onKillShell;
-    $[21] = shell.status;
+    $[21] = `${shell.status}:${!!shell.shellCommand}:${!!shell.terminationPending}`;
     $[22] = t10;
   } else {
     t10 = $[22];
   }
+  const processDetailsSuffix = [formatShellProcessDetails(shell.processObservation, shell.terminalReason), shell.error ? ` (${shell.error})` : ''].join('');
   let t11;
   if ($[23] === Symbol.for("react.memo_cache_sentinel")) {
     t11 = <Text bold={true}>Status:</Text>;
@@ -179,11 +211,12 @@ export function ShellDetailDialog(t0) {
   } else {
     t11 = $[23];
   }
+  const statusColor = shell.status === "running" ? "background" : shell.status === "completed" ? "success" : shell.status === "unknown" ? "warning" : "error";
   let t12;
-  if ($[24] !== shell.result || $[25] !== shell.status) {
-    t12 = <Text>{t11}{" "}{shell.status === "running" ? <Text color="background">{shell.status}{shell.result?.code !== undefined && ` (exit code: ${shell.result.code})`}</Text> : shell.status === "completed" ? <Text color="success">{shell.status}{shell.result?.code !== undefined && ` (exit code: ${shell.result.code})`}</Text> : <Text color="error">{shell.status}{shell.result?.code !== undefined && ` (exit code: ${shell.result.code})`}</Text>}</Text>;
-    $[24] = shell.result;
-    $[25] = shell.status;
+  if ($[24] !== shell || $[25] !== processDetailsSuffix) {
+    t12 = <Text>{t11}{" "}<Text color={statusColor}>{shell.status}{shell.result?.code !== undefined && ` (exit code: ${shell.result.code})`}{processDetailsSuffix}</Text></Text>;
+    $[24] = shell;
+    $[25] = processDetailsSuffix;
     $[26] = t12;
   } else {
     t12 = $[26];

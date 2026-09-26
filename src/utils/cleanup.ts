@@ -22,6 +22,7 @@ import { cleanupStaleAgentWorktrees } from './worktree.js'
 
 /** Subagent transcripts live under `<projectsDir>/<project>/<sessionId>/subagents`. */
 const SUBAGENTS_SUBDIR = 'subagents'
+const LOCAL_SHELLS_SUBDIR = 'local-shells'
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
@@ -301,14 +302,15 @@ export async function cleanupOldSessionFiles(
           result.errors++
         }
       } else if (entry.isDirectory()) {
-        // Session directory — subagent transcripts and tool results live
-        // beneath it; both follow the same mtime rule so the reported count
-        // matches what disappears. Other session subdirectories (workflows,
-        // remote-agents, session-memory) are left alone and can keep the
-        // directory itself alive.
+        // Session directory — subagent transcripts, tool results, and local
+        // shell metadata follow the same retention window as the transcript.
+        // Other session subdirectories are left alone.
         const sessionDir = join(projectDir, entry.name)
         await cleanupNestedDir(join(sessionDir, SUBAGENTS_SUBDIR))
         await cleanupToolResultsDir(join(sessionDir, TOOL_RESULTS_SUBDIR))
+        const localShellsDir = join(sessionDir, LOCAL_SHELLS_SUBDIR)
+        await cleanupNestedDir(localShellsDir)
+        await removeEmptyDir(localShellsDir)
         await removeEmptyDir(sessionDir)
       }
     }

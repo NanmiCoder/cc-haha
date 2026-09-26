@@ -7,9 +7,15 @@ import {
 import type { AppState } from '../../state/AppState.js'
 import type { RemoteAgentTaskState } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js'
 import type { TaskState } from '../../tasks/types.js'
+import { isBackgroundTask } from '../../tasks/types.js'
 import type { SessionId } from '../../types/ids.js'
 import { drainSdkEvents, emitTaskTerminatedSdk } from '../sdkEventQueue.js'
-import { registerTask } from './framework.js'
+import {
+  applyTaskOffsetsAndEvictions,
+  evictTerminalTask,
+  generateTaskAttachments,
+  registerTask,
+} from './framework.js'
 import { emitTaskProgress } from './sdkProgress.js'
 
 beforeEach(() => {
@@ -73,6 +79,53 @@ function makeHarness() {
     },
   }
 }
+
+test('keeps a recovered unknown shell task visible as a background task', () => {
+  const task = makeTask({
+    id: 'unknown-shell-task',
+    type: 'local_bash',
+    status: 'unknown',
+    notified: true,
+    isBackgrounded: true,
+  })
+
+  expect(isBackgroundTask(task)).toBe(true)
+})
+
+test('does not evict a recovered unknown shell task', async () => {
+  const task = makeTask({
+    id: 'unknown-shell-task',
+    type: 'local_bash',
+    status: 'unknown',
+    notified: true,
+    isBackgrounded: true,
+  })
+  const harness = makeHarness()
+  harness.setAppState(prev => ({ ...prev, tasks: { [task.id]: task } }))
+
+  const result = await generateTaskAttachments(harness.state)
+  applyTaskOffsetsAndEvictions(harness.setAppState, result.updatedTaskOffsets, result.evictedTaskIds)
+
+  expect(harness.state.tasks[task.id]).toBe(task)
+  applyTaskOffsetsAndEvictions(harness.setAppState, {}, [task.id])
+  expect(harness.state.tasks[task.id]).toBe(task)
+})
+
+test('does not eagerly evict a recovered unknown shell task', () => {
+  const task = makeTask({
+    id: 'unknown-shell-task',
+    type: 'local_bash',
+    status: 'unknown',
+    notified: true,
+    isBackgrounded: true,
+  })
+  const harness = makeHarness()
+  harness.setAppState(prev => ({ ...prev, tasks: { [task.id]: task } }))
+
+  evictTerminalTask(task.id, harness.setAppState)
+
+  expect(harness.state.tasks[task.id]).toBe(task)
+})
 
 test('emits a task_started event for a main-thread shell task', () => {
   const harness = makeHarness()

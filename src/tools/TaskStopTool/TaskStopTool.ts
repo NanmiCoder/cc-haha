@@ -1,5 +1,7 @@
 import { z } from 'zod/v4'
 import type { TaskStateBase } from '../../Task.js'
+import { isLocalShellTask } from '../../tasks/LocalShellTask/guards.js'
+import { resolveLocalShellTask } from '../../tasks/LocalShellTask/resolveLocalShellTask.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { stopTask } from '../../tasks/stopTask.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -70,8 +72,14 @@ export const TaskStopTool = buildTool({
 
     const appState = getAppState()
     const task = appState.tasks?.[id] as TaskStateBase | undefined
+    const resolved = task && isLocalShellTask(task) && task.status === 'running' && !task.shellCommand
+      ? await resolveLocalShellTask(id, getAppState)
+      : task
+        ? undefined
+        : await resolveLocalShellTask(id, getAppState)
+    const resolvedTask = resolved?.task ?? task
 
-    if (!task) {
+    if (!resolvedTask) {
       return {
         result: false,
         message: `No task found with ID: ${id}`,
@@ -79,10 +87,42 @@ export const TaskStopTool = buildTool({
       }
     }
 
-    if (task.status !== 'running') {
+    if (isLocalShellTask(resolvedTask) && resolvedTask.status === 'running' && resolvedTask.terminationPending) {
       return {
         result: false,
-        message: `Task ${id} is not running (status: ${task.status})`,
+        message: `Task ${id} termination is already in progress`,
+        errorCode: 4,
+      }
+    }
+
+    if (isLocalShellTask(resolvedTask) && resolvedTask.status === 'running' && !resolvedTask.shellCommand) {
+      return {
+        result: false,
+        message: `Task ${id} has no controllable process handle`,
+        errorCode: 3,
+      }
+    }
+
+    if (resolved && !resolved.canStop) {
+      return {
+        result: false,
+        message: `Task ${id} was recovered without a controllable process handle`,
+        errorCode: 3,
+      }
+    }
+
+    if (resolvedTask.status !== 'running') {
+      return {
+        result: false,
+        message: `Task ${id} is not running (status: ${resolvedTask.status})`,
+        errorCode: 3,
+      }
+    }
+
+    if (isLocalShellTask(resolvedTask) && resolvedTask.processObservation === 'unknown') {
+      return {
+        result: false,
+        message: `Task ${id} process state is unverified`,
         errorCode: 3,
       }
     }
@@ -106,7 +146,7 @@ export const TaskStopTool = buildTool({
   renderToolResultMessage,
   async call(
     { task_id, shell_id },
-    { getAppState, setAppState, abortController },
+    { getAppState, setAppState },
   ) {
     // Support both task_id and shell_id (deprecated KillShell compat)
     const id = task_id ?? shell_id
