@@ -31,7 +31,12 @@ import { extractConversationText, SESSION_TITLE_PROMPT } from '../../utils/sessi
 import type { ProviderAuthStrategy } from '../types/provider.js'
 
 const TITLE_MAX_LEN = 50
-const TITLE_MAX_OUTPUT_TOKENS = 100
+// Thinking models that ignore (or silently drop) `thinking: disabled` spend the
+// whole budget on reasoning: the text block comes back empty, parsing yields
+// null, and the session keeps the first-message placeholder forever (#1340).
+// 100 was only enough for a title with no reasoning in front of it; 2048 leaves
+// headroom for the thinking burn while staying trivial for a 3-7 word title.
+const TITLE_MAX_OUTPUT_TOKENS = 2048
 const TITLE_INPUT_MAX_LEN = 2000
 
 export type TitleLanguagePreference = {

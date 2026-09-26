@@ -209,6 +209,99 @@ describe('titleService', () => {
     }
   })
 
+  test('budgets output tokens a thinking model can spend before the title (#1340)', async () => {
+    let requestBody: Record<string, unknown> | null = null
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(req) {
+        requestBody = await req.json() as Record<string, unknown>
+        return Response.json({
+          content: [{ type: 'text', text: '{"title":"Budget respected"}' }],
+        })
+      },
+    })
+
+    try {
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Thinking Budget', apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${server.port}/anthropic`, apiFormat: 'anthropic',
+        models: {
+          main: 'glm-5.3-flash', haiku: 'glm-5.3-flash',
+          sonnet: 'glm-5.3-flash', opus: 'glm-5.3-flash',
+        },
+      })
+
+      await expect(generateTitle('给这条会话起个短标题', provider.id)).resolves.toBe('Budget respected')
+      // 100 tokens left nothing for the text once reasoning ran: empty content,
+      // null title, placeholder forever (#1340).
+      expect(requestBody?.max_tokens).toBeGreaterThanOrEqual(1024)
+      expect(requestBody?.thinking).toEqual({ type: 'disabled' })
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test('extracts the title when the response carries a thinking block first (#1340)', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch() {
+        return Response.json({
+          content: [
+            { type: 'thinking', thinking: 'The user wants a short title about the migration.', signature: 'sig' },
+            { type: 'text', text: '{"title":"Migration recap"}' },
+          ],
+        })
+      },
+    })
+
+    try {
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Thinking Response', apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${server.port}/anthropic`, apiFormat: 'anthropic',
+        models: {
+          main: 'glm-5.3-flash', haiku: 'glm-5.3-flash',
+          sonnet: 'glm-5.3-flash', opus: 'glm-5.3-flash',
+        },
+      })
+
+      await expect(generateTitle('Summarize the migration plan', provider.id))
+        .resolves.toBe('Migration recap')
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test('returns null when reasoning left no text block, so the caller keeps the placeholder (#1340)', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch() {
+        return Response.json({
+          content: [
+            { type: 'thinking', thinking: 'burned the entire budget on reasoning', signature: 'sig' },
+          ],
+        })
+      },
+    })
+
+    try {
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Starved Response', apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${server.port}/anthropic`, apiFormat: 'anthropic',
+        models: {
+          main: 'glm-5.3-flash', haiku: 'glm-5.3-flash',
+          sonnet: 'glm-5.3-flash', opus: 'glm-5.3-flash',
+        },
+      })
+
+      await expect(generateTitle('Summarize the migration plan', provider.id)).resolves.toBeNull()
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test('derives slash-command titles from command metadata without raw XML tags', () => {
     const raw = [
       '<command-message>frontend-design</command-message>',
