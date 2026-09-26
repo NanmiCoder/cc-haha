@@ -7,7 +7,13 @@ import {
 import type { AppState } from '../state/AppState.js'
 import type { SessionId } from '../types/ids.js'
 import { drainSdkEvents } from '../utils/sdkEventQueue.js'
+import {
+  createLocalShellFinalization,
+  settleLocalShellFinalization,
+} from './LocalShellTask/guards.js'
 import { stopTask, stopTaskFromControlRequest } from './stopTask.js'
+import { TaskStopTool } from '../tools/TaskStopTool/TaskStopTool.js'
+import type { ToolUseContext } from '../Tool.js'
 
 function makeShellTaskHarness(agentId?: string) {
   let killed = false
@@ -26,9 +32,34 @@ function makeShellTaskHarness(agentId?: string) {
         notified: false,
         completionStatusSentInAttachment: false,
         shellCommand: {
+          pid: undefined,
           kill: () => {
             killed = true
+            queueMicrotask(() => {
+              state = {
+                ...state,
+                tasks: {
+                  ...state.tasks,
+                  btask123: {
+                    ...state.tasks.btask123,
+                    status: 'killed',
+                    shellCommand: null,
+                  },
+                },
+              } as unknown as AppState
+              settleLocalShellFinalization('btask123')
+            })
           },
+          waitForExit: async () => true,
+          async terminateAndWait() {
+            this.kill()
+            return await this.waitForExit()
+          },
+          terminationRequested: false,
+          terminationConfirmed: true,
+          terminationFailure: false,
+          status: 'killed',
+          processExited: true,
           cleanup: () => {},
         },
         lastReportedTotalLines: 0,
@@ -37,6 +68,7 @@ function makeShellTaskHarness(agentId?: string) {
       },
     },
   } as unknown as AppState
+  createLocalShellFinalization('btask123')
 
   return {
     get state() {
@@ -64,7 +96,19 @@ afterEach(() => {
 })
 
 describe('stopTask SDK events', () => {
-  test('emits a stopped bookend after LocalShellTask marks itself notified', async () => {
+  test('TaskStop 返回已确认终止的任务信息', async () => {
+    const harness = makeShellTaskHarness()
+    const result = await TaskStopTool.call({ task_id: 'btask123' }, {
+      getAppState: () => harness.state,
+      setAppState: harness.setAppState,
+    } as ToolUseContext)
+    expect(result.data).toMatchObject({
+      task_id: 'btask123', task_type: 'local_bash', command: 'sleep 300',
+    })
+    expect(result.data.message).toContain('Successfully stopped task')
+    expect(harness.state.tasks.btask123?.status).toBe('killed')
+  })
+  test('emits a stopped bookend for a main-session shell task', async () => {
     const harness = makeShellTaskHarness()
 
     await stopTask('btask123', {
@@ -136,6 +180,25 @@ describe('stopTaskFromControlRequest', () => {
     expect(result).toEqual({
       ok: false,
       message: 'Task btask123 is not running (status: completed)',
+    })
+    expect(harness.killed).toBe(false)
+  })
+
+  test('reports unsupported running task types without invoking kill', async () => {
+    const harness = makeShellTaskHarness()
+    harness.state.tasks.btask123 = {
+      ...harness.state.tasks.btask123,
+      type: 'unsupported' as never,
+    }
+
+    const result = await stopTaskFromControlRequest('btask123', {
+      getAppState: () => harness.state,
+      setAppState: harness.setAppState,
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Unsupported task type: unsupported',
     })
     expect(harness.killed).toBe(false)
   })
