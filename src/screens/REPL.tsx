@@ -177,7 +177,7 @@ import { deserializeMessages } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
 import { runPostCompactCleanup } from '../services/compact/postCompactCleanup.js';
-import { provisionContentReplacementState, reconstructContentReplacementState, type ContentReplacementRecord } from '../utils/toolResultStorage.js';
+import { clearReadFileStateForReplacements, provisionContentReplacementState, reconstructContentReplacementState, type ContentReplacementRecord } from '../utils/toolResultStorage.js';
 import { partialCompactConversation } from '../services/compact/compact.js';
 import type { LogOption } from '../types/logs.js';
 import type { AgentColorName } from '../tools/AgentTool/agentColorManager.js';
@@ -1924,6 +1924,7 @@ export function REPL({
       // JSONL with the fork's sessionId, so `claude -r {forkId}` also works.
       if (contentReplacementStateRef.current && entrypoint !== 'fork') {
         contentReplacementStateRef.current = reconstructContentReplacementState(messages, log.contentReplacements ?? []);
+        clearReadFileStateForReplacements(readFileState.current, contentReplacementStateRef.current);
       }
 
       // Reset messages to the provided initial messages
@@ -1984,6 +1985,10 @@ export function REPL({
   useEffect(() => {
     if (initialMessages && initialMessages.length > 0) {
       restoreReadFileState(initialMessages, getOriginalCwd());
+      clearReadFileStateForReplacements(
+        readFileState.current,
+        contentReplacementStateRef.current,
+      );
       void restoreRemoteAgentTasks({
         abortController: new AbortController(),
         getAppState: () => store.getState(),

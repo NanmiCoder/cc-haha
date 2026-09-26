@@ -15,11 +15,19 @@ import {
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { logEvent } from '../services/analytics/index.js'
 import { sanitizeToolNameForAnalytics } from '../services/analytics/metadata.js'
+import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
+import {
+  FILE_READ_TOOL_NAME,
+  FILE_UNCHANGED_STUB,
+} from '../tools/FileReadTool/prompt.js'
+import { FILE_WRITE_TOOL_NAME } from '../tools/FileWriteTool/prompt.js'
 import type { Message } from '../types/message.js'
 import { logForDebugging } from './debug.js'
 import { getErrnoCode, toError } from './errors.js'
+import { normalizePathForComparison } from './file.js'
 import { formatFileSize } from './format.js'
 import { logError } from './log.js'
+import { expandPath } from './path.js'
 import { getProjectDir } from './sessionStorage.js'
 import { jsonStringify } from './slowOperations.js'
 
@@ -32,6 +40,11 @@ export const PERSISTED_OUTPUT_CLOSING_TAG = '</persisted-output>'
 
 // Message used when tool result content was cleared without persisting to file
 export const TOOL_RESULT_CLEARED_MESSAGE = '[Old tool result content cleared]'
+
+export const LARGE_READ_RESULT_CLEARED_MESSAGE =
+  '[Large tool result content cleared]'
+
+const LARGE_READ_GROUP_THRESHOLD = 25_000
 
 /**
  * GrowthBook override map: tool name -> persistence threshold (chars).
@@ -390,10 +403,65 @@ export function isPersistError(
 export type ContentReplacementState = {
   seenIds: Set<string>
   replacements: Map<string, string>
+  readLifecycle: ReadLifecycleState
+}
+
+type ReadResultLifecycle = {
+  toolUseId: string
+  path: string
+  size: number
+  consumed: boolean
+  largeGroup: boolean
+  invalidated: boolean
+  invalidationReady: boolean
+  sequence: number
+}
+
+type ReadLifecycleState = {
+  results: Map<string, ReadResultLifecycle>
+  activeByPath: Map<string, string[]>
+  currentGroup: { ids: string[]; total: number }
+  pendingConsumption: Set<string>
+  providerCompleted: boolean
+  nextSequence: number
+}
+
+type ReadCandidateReference = Pick<ToolResultCandidate, 'toolUseId' | 'size'>
+
+const readCandidateCache = new WeakMap<
+  Message[],
+  ReadCandidateReference[][]
+>()
+
+function cacheReadCandidates(
+  messages: Message[],
+  candidates: ToolResultCandidate[][],
+): void {
+  readCandidateCache.set(
+    messages,
+    candidates.map(group =>
+      group.map(({ toolUseId, size }) => ({ toolUseId, size })),
+    ),
+  )
+}
+
+function createReadLifecycleState(): ReadLifecycleState {
+  return {
+    results: new Map(),
+    activeByPath: new Map(),
+    currentGroup: { ids: [], total: 0 },
+    pendingConsumption: new Set(),
+    providerCompleted: false,
+    nextSequence: 0,
+  }
 }
 
 export function createContentReplacementState(): ContentReplacementState {
-  return { seenIds: new Set(), replacements: new Map() }
+  return {
+    seenIds: new Set(),
+    replacements: new Map(),
+    readLifecycle: createReadLifecycleState(),
+  }
 }
 
 /**
@@ -408,6 +476,10 @@ export function cloneContentReplacementState(
   return {
     seenIds: new Set(source.seenIds),
     replacements: new Map(source.replacements),
+    // Read lifecycle is agent-local. The aggregate budget decisions above
+    // remain shared for prompt-cache stability, while Read groups and
+    // provider acknowledgements start independently in the fork.
+    readLifecycle: createReadLifecycleState(),
   }
 }
 
@@ -528,6 +600,166 @@ function contentSize(
   )
 }
 
+type ToolUseMetadata = { name: string; input: unknown }
+
+function filePathFromToolInput(input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const candidate = (input as Record<string, unknown>).file_path
+  if (typeof candidate !== 'string' || candidate.trim() === '') return undefined
+  try {
+    return normalizePathForComparison(expandPath(candidate))
+  } catch {
+    return undefined
+  }
+}
+
+function finishReadGroup(state: ReadLifecycleState): void {
+  state.currentGroup = { ids: [], total: 0 }
+}
+
+function observeReadToolResult(
+  state: ReadLifecycleState,
+  block: ToolResultBlockParam,
+  metadata: ToolUseMetadata | undefined,
+  trackAsActive = true,
+): void {
+  if (!metadata) {
+    finishReadGroup(state)
+    return
+  }
+  if (metadata.name === FILE_READ_TOOL_NAME) {
+    if (state.results.has(block.tool_use_id)) return
+    if (block.is_error === true || block.content === FILE_UNCHANGED_STUB) return
+  }
+  const path = filePathFromToolInput(metadata.input)
+  if (metadata.name === FILE_READ_TOOL_NAME && path) {
+    if (state.results.has(block.tool_use_id)) return
+    const size = block.content ? contentSize(block.content) : 0
+    const result: ReadResultLifecycle = {
+      toolUseId: block.tool_use_id,
+      path,
+      size,
+      consumed: false,
+      largeGroup: false,
+      invalidated: false,
+      invalidationReady: false,
+      sequence: state.nextSequence++,
+    }
+    state.results.set(block.tool_use_id, result)
+    if (trackAsActive) {
+      state.activeByPath.set(path, [
+        ...(state.activeByPath.get(path) ?? []),
+        block.tool_use_id,
+      ])
+    }
+    state.currentGroup.ids.push(block.tool_use_id)
+    state.currentGroup.total += size
+    if (state.currentGroup.total > LARGE_READ_GROUP_THRESHOLD) {
+      for (const id of state.currentGroup.ids) {
+        const member = state.results.get(id)
+        if (member) member.largeGroup = true
+      }
+    }
+    return
+  }
+
+  finishReadGroup(state)
+  if (
+    (metadata.name !== FILE_EDIT_TOOL_NAME &&
+      metadata.name !== FILE_WRITE_TOOL_NAME) ||
+    block.is_error === true ||
+    !path
+  ) {
+    return
+  }
+  const ids = state.activeByPath.get(path)
+  if (!ids) return
+  for (const id of ids) {
+    const result = state.results.get(id)
+    if (result) {
+      result.invalidated = true
+      result.invalidationReady = false
+    }
+  }
+  state.activeByPath.delete(path)
+}
+
+function applyReadLifecycleReplacements(
+  state: ContentReplacementState,
+  candidatesByMessage: ToolResultCandidate[][],
+): Map<string, string> {
+  const replacementMap = new Map<string, string>()
+  if (!state.readLifecycle.providerCompleted) return replacementMap
+  for (const candidate of candidatesByMessage.flat()) {
+    const result = state.readLifecycle.results.get(candidate.toolUseId)
+    if (
+      !result ||
+      !result.consumed ||
+      (result.invalidated && !result.invalidationReady) ||
+      (!result.largeGroup && !result.invalidated) ||
+      state.replacements.has(candidate.toolUseId)
+    ) {
+      continue
+    }
+    const replacement = result.invalidated
+      ? TOOL_RESULT_CLEARED_MESSAGE
+      : LARGE_READ_RESULT_CLEARED_MESSAGE
+    state.replacements.set(candidate.toolUseId, replacement)
+    replacementMap.set(candidate.toolUseId, replacement)
+  }
+  return replacementMap
+}
+
+export function markReadProviderRequestCompleted(
+  state: ContentReplacementState | undefined,
+): void {
+  if (!state) return
+  for (const id of state.readLifecycle.pendingConsumption) {
+    const result = state.readLifecycle.results.get(id)
+    if (result) {
+      result.consumed = true
+      if (result.invalidated) result.invalidationReady = true
+    }
+  }
+  state.readLifecycle.pendingConsumption.clear()
+  state.readLifecycle.providerCompleted = true
+}
+
+function prepareReadProviderRequest(
+  state: ContentReplacementState,
+  candidatesByMessage: ReadCandidateReference[][],
+  excludedToolUseIds: ReadonlySet<string> = new Set(),
+): void {
+  state.readLifecycle.pendingConsumption.clear()
+  for (const candidate of candidatesByMessage.flat()) {
+    if (excludedToolUseIds.has(candidate.toolUseId)) continue
+    const result = state.readLifecycle.results.get(candidate.toolUseId)
+    if (
+      result &&
+      candidate.size === result.size &&
+      !state.replacements.has(candidate.toolUseId) &&
+      (!result.consumed || (result.invalidated && !result.invalidationReady))
+    ) {
+      state.readLifecycle.pendingConsumption.add(candidate.toolUseId)
+    }
+  }
+  state.readLifecycle.providerCompleted = false
+}
+
+export function prepareReadProviderRequestForQuery(
+  state: ContentReplacementState | undefined,
+  messages: Message[],
+  excludedToolUseIds: ReadonlySet<string> = new Set(),
+): void {
+  if (!state) return
+  const cachedCandidates = readCandidateCache.get(messages)
+  const candidates = cachedCandidates ?? collectCandidatesByMessage(messages)
+  if (!cachedCandidates) {
+    cacheReadCandidates(messages, candidates)
+  }
+  prepareReadProviderRequest(state, candidates, excludedToolUseIds)
+}
+
 /**
  * Walk messages and build tool_use_id → tool_name from assistant tool_use
  * blocks. tool_use always precedes its tool_result (model calls, then result
@@ -599,9 +831,14 @@ function collectCandidatesFromMessage(message: Message): ToolResultCandidate[] {
  */
 function collectCandidatesByMessage(
   messages: Message[],
+  onToolResult?: (
+    block: ToolResultBlockParam,
+    metadata: ToolUseMetadata | undefined,
+  ) => void,
 ): ToolResultCandidate[][] {
   const groups: ToolResultCandidate[][] = []
   let current: ToolResultCandidate[] = []
+  const toolUses = new Map<string, ToolUseMetadata>()
 
   const flush = () => {
     if (current.length > 0) groups.push(current)
@@ -623,8 +860,23 @@ function collectCandidatesByMessage(
   const seenAsstIds = new Set<string>()
   for (const message of messages) {
     if (message.type === 'user') {
+      if (Array.isArray(message.message.content)) {
+        for (const block of message.message.content) {
+          if (block.type === 'tool_result') {
+            onToolResult?.(block, toolUses.get(block.tool_use_id))
+          }
+        }
+      }
       current.push(...collectCandidatesFromMessage(message))
     } else if (message.type === 'assistant') {
+      const content = message.message.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'tool_use') {
+            toolUses.set(block.id, { name: block.name, input: block.input })
+          }
+        }
+      }
       if (!seenAsstIds.has(message.message.id)) {
         flush()
         seenAsstIds.add(message.message.id)
@@ -770,16 +1022,24 @@ export async function enforceToolResultBudget(
   messages: Message[],
   state: ContentReplacementState,
   skipToolNames: ReadonlySet<string> = new Set(),
+  onReadReplacement?: (path: string, toolUseId: string) => void,
+  deferReadProviderPreparation = false,
 ): Promise<{
   messages: Message[]
   newlyReplaced: ToolResultReplacementRecord[]
 }> {
-  const candidatesByMessage = collectCandidatesByMessage(messages)
+  const candidatesByMessage = collectCandidatesByMessage(messages, (block, metadata) =>
+    state.seenIds.has(block.tool_use_id)
+      ? undefined
+      : observeReadToolResult(state.readLifecycle, block, metadata),
+  )
+  cacheReadCandidates(messages, candidatesByMessage)
   const nameByToolUseId =
     skipToolNames.size > 0 ? buildToolNameMap(messages) : undefined
   const shouldSkip = (id: string): boolean =>
-    nameByToolUseId !== undefined &&
-    skipToolNames.has(nameByToolUseId.get(id) ?? '')
+    state.readLifecycle.results.has(id) ||
+    (nameByToolUseId !== undefined &&
+      skipToolNames.has(nameByToolUseId.get(id) ?? ''))
   // Resolve once per call. A mid-session flag change only affects FRESH
   // messages (prior decisions are frozen via seenIds/replacements), so
   // prompt cache for already-seen content is preserved regardless.
@@ -788,7 +1048,18 @@ export async function enforceToolResultBudget(
   // Walk each API-level message group independently. For previously-processed messages
   // (all IDs in seenIds) this just re-applies cached replacements. For the
   // single new message this turn added, it runs the budget check.
-  const replacementMap = new Map<string, string>()
+  const replacementMap = applyReadLifecycleReplacements(
+    state,
+    candidatesByMessage,
+  )
+  const lifecycleReplacements: ToolResultReplacementRecord[] = []
+  for (const [toolUseId, replacement] of replacementMap) {
+    lifecycleReplacements.push({
+      kind: 'tool-result',
+      toolUseId,
+      replacement,
+    })
+  }
   const toPersist: ToolResultCandidate[] = []
   let reappliedCount = 0
   let messagesOverBudget = 0
@@ -847,7 +1118,10 @@ export async function enforceToolResultBudget(
   }
 
   if (replacementMap.size === 0 && toPersist.length === 0) {
-    return { messages, newlyReplaced: [] }
+    if (!deferReadProviderPreparation) {
+      prepareReadProviderRequest(state, candidatesByMessage)
+    }
+    return { messages, newlyReplaced: lifecycleReplacements }
   }
 
   // Fresh: concurrent persist for all selected candidates across all
@@ -855,7 +1129,7 @@ export async function enforceToolResultBudget(
   const freshReplacements = await Promise.all(
     toPersist.map(async c => [c, await buildReplacement(c)] as const),
   )
-  const newlyReplaced: ToolResultReplacementRecord[] = []
+  const newlyReplaced: ToolResultReplacementRecord[] = [...lifecycleReplacements]
   let replacedSize = 0
   for (const [candidate, replacement] of freshReplacements) {
     // Mark seen HERE, post-await, atomically with replacements.set for
@@ -885,7 +1159,10 @@ export async function enforceToolResultBudget(
   }
 
   if (replacementMap.size === 0) {
-    return { messages, newlyReplaced: [] }
+    if (!deferReadProviderPreparation) {
+      prepareReadProviderRequest(state, candidatesByMessage)
+    }
+    return { messages, newlyReplaced }
   }
 
   if (newlyReplaced.length > 0) {
@@ -902,8 +1179,16 @@ export async function enforceToolResultBudget(
     })
   }
 
+  if (!deferReadProviderPreparation) {
+    prepareReadProviderRequest(state, candidatesByMessage)
+  }
+  const outputMessages =
+    replacementMap.size > 0
+      ? replaceToolResultContents(messages, replacementMap)
+      : messages
+  cacheReadCandidates(outputMessages, candidatesByMessage)
   return {
-    messages: replaceToolResultContents(messages, replacementMap),
+    messages: outputMessages,
     newlyReplaced,
   }
 }
@@ -924,13 +1209,46 @@ export async function enforceToolResultBudget(
 export async function applyToolResultBudget(
   messages: Message[],
   state: ContentReplacementState | undefined,
-  writeToTranscript?: (records: ToolResultReplacementRecord[]) => void,
+  writeToTranscript?: (
+    records: ToolResultReplacementRecord[],
+  ) => void | Promise<void>,
   skipToolNames?: ReadonlySet<string>,
+  onReadReplacement?: (path: string, toolUseId: string) => void,
+  deferReadProviderPreparation = false,
 ): Promise<Message[]> {
   if (!state) return messages
-  const result = await enforceToolResultBudget(messages, state, skipToolNames)
-  if (result.newlyReplaced.length > 0) {
-    writeToTranscript?.(result.newlyReplaced)
+  const result = await enforceToolResultBudget(
+    messages,
+    state,
+    skipToolNames,
+    onReadReplacement,
+    deferReadProviderPreparation,
+  )
+  if (result.newlyReplaced.length > 0 && writeToTranscript) {
+    // Keep new decisions provisional until their transcript entry has been
+    // appended. Existing replacements remain active while persistence waits.
+    for (const record of result.newlyReplaced) {
+      state.replacements.delete(record.toolUseId)
+      if (!state.readLifecycle.results.has(record.toolUseId)) {
+        state.seenIds.delete(record.toolUseId)
+      }
+    }
+    try {
+      await writeToTranscript(result.newlyReplaced)
+    } catch (error) {
+      logError(toError(error))
+      return replaceToolResultContents(messages, state.replacements)
+    }
+    for (const record of result.newlyReplaced) {
+      state.replacements.set(record.toolUseId, record.replacement)
+      state.seenIds.add(record.toolUseId)
+    }
+  }
+  if (onReadReplacement) {
+    for (const record of result.newlyReplaced) {
+      const readResult = state.readLifecycle.results.get(record.toolUseId)
+      if (readResult) onReadReplacement(readResult.path, record.toolUseId)
+    }
   }
   return result.messages
 }
@@ -956,17 +1274,41 @@ export async function applyToolResultBudget(
  *     it as frozen. The parent's live state still has the mapping; copy
  *     it for IDs in messages that records don't cover. No-op for non-fork
  *     resumes (parent IDs aren't in the subagent's messages).
+ *   - inheritedReadIds: parent-owned IDs in fork-resume messages. They remain
+ *     seen for replacement stability but are excluded from child Read
+ *     lifecycle reconstruction.
  */
 export function reconstructContentReplacementState(
   messages: Message[],
   records: ContentReplacementRecord[],
   inheritedReplacements?: ReadonlyMap<string, string>,
+  inheritedReadIds?: ReadonlySet<string>,
 ): ContentReplacementState {
   const state = createContentReplacementState()
+  const persistedReplacementIds = new Set(
+    records
+      .filter((record): record is ToolResultReplacementRecord => record.kind === 'tool-result')
+      .map(record => record.toolUseId),
+  )
+  if (inheritedReplacements) {
+    for (const id of inheritedReplacements.keys()) persistedReplacementIds.add(id)
+  }
+  const candidatesByMessage = collectCandidatesByMessage(messages, (block, metadata) => {
+    if (
+      metadata?.name === FILE_READ_TOOL_NAME &&
+      inheritedReadIds?.has(block.tool_use_id)
+    ) {
+      return
+    }
+    observeReadToolResult(
+      state.readLifecycle,
+      block,
+      metadata,
+      !persistedReplacementIds.has(block.tool_use_id),
+    )
+  })
   const candidateIds = new Set(
-    collectCandidatesByMessage(messages)
-      .flat()
-      .map(c => c.toolUseId),
+    candidatesByMessage.flat().map(candidate => candidate.toolUseId),
   )
 
   for (const id of candidateIds) {
@@ -984,7 +1326,42 @@ export function reconstructContentReplacementState(
       }
     }
   }
+  for (const result of state.readLifecycle.results.values()) {
+    result.consumed = persistedReplacementIds.has(result.toolUseId)
+    if (result.invalidated && result.consumed) {
+      result.invalidationReady = true
+    }
+  }
+  state.readLifecycle.pendingConsumption.clear()
+  state.readLifecycle.providerCompleted = false
   return state
+}
+
+export function getReadReplacementPaths(
+  state: ContentReplacementState,
+): Set<string> {
+  const paths = new Set<string>()
+  for (const id of state.replacements.keys()) {
+    const result = state.readLifecycle.results.get(id)
+    if (!result) continue
+    if ((state.readLifecycle.activeByPath.get(result.path) ?? []).length === 0) {
+      paths.add(result.path)
+    }
+  }
+  return paths
+}
+
+export function clearReadFileStateForReplacements(
+  readFileState: { keys(): Iterable<string>; delete(key: string): unknown },
+  state: ContentReplacementState | undefined,
+): void {
+  if (!state) return
+  const replacedReadPaths = getReadReplacementPaths(state)
+  for (const key of readFileState.keys()) {
+    if (replacedReadPaths.has(normalizePathForComparison(key))) {
+      readFileState.delete(key)
+    }
+  }
 }
 
 /**
@@ -1008,6 +1385,7 @@ export function reconstructForSubagentResume(
     resumedMessages,
     sidechainRecords,
     parentState.replacements,
+    parentState.seenIds,
   )
 }
 
