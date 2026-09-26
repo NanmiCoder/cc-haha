@@ -1,0 +1,254 @@
+diff --git a/src/server/index.ts b/src/server/index.ts
+index faa3bbeb..f651066c 100644
+--- a/src/server/index.ts
++++ b/src/server/index.ts
+@@ -9,6 +9,7 @@ import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
+  */
+ 
+ import { existsSync, unlinkSync } from 'node:fs'
++import { stat } from 'node:fs/promises'
+ import { handleApiRequest } from './router.js'
+ import { handleWebSocket, type WebSocketData } from './ws/handler.js'
+ import { resolveCors, type CorsResolution } from './middleware/cors.js'
+@@ -147,6 +148,41 @@ function beginBackgroundIndexStartup(): void {
+   })
+ }
+ 
++/**
++ * Transcript size per session, cached briefly.
++ *
++ * Only consulted once a response is otherwise eligible for compression. The H5
++ * history walk issues one request per page and every page asks the same
++ * question, so the cache keeps a deep walk from re-resolving the same file on
++ * each of its (hundreds of) requests. A null result means "unknown" and falls
++ * back to compressing, so a transient stat failure cannot strand large
++ * sessions uncompressed.
++ */
++const SESSION_SIZE_CACHE_TTL_MS = 10_000
++const SESSION_SIZE_CACHE_LIMIT = 64
++const sessionSizeCache = new Map<string, { size: number | null; at: number }>()
++
++async function resolveSessionSizeBytes(sessionId: string): Promise<number | null> {
++  const now = Date.now()
++  const cached = sessionSizeCache.get(sessionId)
++  if (cached && now - cached.at < SESSION_SIZE_CACHE_TTL_MS) return cached.size
++
++  let size: number | null = null
++  try {
++    const found = await sessionService.findSessionFile(sessionId)
++    if (found) size = (await stat(found.filePath)).size
++  } catch {
++    size = null
++  }
++
++  sessionSizeCache.set(sessionId, { size, at: now })
++  if (sessionSizeCache.size > SESSION_SIZE_CACHE_LIMIT) {
++    const oldest = sessionSizeCache.keys().next().value
++    if (oldest !== undefined) sessionSizeCache.delete(oldest)
++  }
++  return size
++}
++
+ function withCors(response: Response, cors: CorsResolution): Response {
+   const headers = new Headers(response.headers)
+   for (const [key, value] of Object.entries(cors.headers)) {
+@@ -626,8 +662,12 @@ export function startServer(port = PORT, host = HOST) {
+               handleApiRequest(req, url, { remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
+             )
+             // Remote API responses are gzip-compressed (transparent to browser
+-            // fetch); loopback desktop traffic stays uncompressed.
+-            return withCors(await withGzipIfEligible(req, response, clientAddress), cors)
++            // fetch); loopback desktop traffic stays uncompressed, and sessions
++            // below the transport floor skip compression entirely.
++            return withCors(
++              await withGzipIfEligible(req, response, clientAddress, resolveSessionSizeBytes),
++              cors,
++            )
+           } catch (error) {
+             void diagnosticsService.recordEvent({
+               type: 'api_request_failed',
+diff --git a/src/server/responseCompression.test.ts b/src/server/responseCompression.test.ts
+index 5064ea12..a97f7128 100644
+--- a/src/server/responseCompression.test.ts
++++ b/src/server/responseCompression.test.ts
+@@ -1,6 +1,6 @@
+ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
+ import { gunzipSync } from 'node:zlib'
+-import { shouldGzipResponse, withGzipIfEligible } from './responseCompression.js'
++import { shouldGzipResponse, withGzipIfEligible, sessionIdFromPath, MIN_COMPRESSIBLE_SESSION_BYTES } from './responseCompression.js'
+ 
+ const big = 'x'.repeat(300 * 1024)
+ const small = 'x'.repeat(1024)
+@@ -126,5 +126,80 @@ describe('withGzipIfEligible', () => {
+     const out = await withGzipIfEligible(jsonReq('gzip'), jsonRes(JSON.stringify(body)), '192.168.1.50')
+     expect(out.headers.get('content-encoding')).toBeNull()
+   })
++
++  describe('session size floor', () => {
++    const bigBody = JSON.stringify({
++      messages: Array.from({ length: 300 }, (_, i) => ({ id: i, text: big.slice(0, 1000) })),
++    })
++    const seen: Array<string> = []
++    const resolver = (size: number | null) => async (sessionId: string) => {
++      seen.push(sessionId)
++      return size
++    }
++
++    test('compresses a session at or above the floor', async () => {
++      seen.length = 0
++      const out = await withGzipIfEligible(
++        jsonReq('gzip'), jsonRes(bigBody), '192.168.1.50',
++        resolver(MIN_COMPRESSIBLE_SESSION_BYTES),
++      )
++      expect(out.headers.get('content-encoding')).toBe('gzip')
++      expect(seen).toEqual(['x'])
++    })
++
++    test('skips a session below the floor even when the response is large', async () => {
++      const out = await withGzipIfEligible(
++        jsonReq('gzip'), jsonRes(bigBody), '192.168.1.50',
++        resolver(MIN_COMPRESSIBLE_SESSION_BYTES - 1),
++      )
++      expect(out.headers.get('content-encoding')).toBeNull()
++      expect(JSON.parse(await out.text())).toEqual(JSON.parse(bigBody))
++    })
++
++    test('unknown size falls back to compressing', async () => {
++      const out = await withGzipIfEligible(
++        jsonReq('gzip'), jsonRes(bigBody), '192.168.1.50', resolver(null),
++      )
++      expect(out.headers.get('content-encoding')).toBe('gzip')
++    })
++
++    test('never resolves the size for loopback or non-session traffic', async () => {
++      seen.length = 0
++      // Loopback is rejected before the floor check.
++      await withGzipIfEligible(jsonReq('gzip'), jsonRes(bigBody), '127.0.0.1', resolver(1))
++      // Not session-scoped: no id to look up, and the response still compresses.
++      const other = new Request('http://127.0.0.1:7788/api/settings', {
++        method: 'GET', headers: { 'accept-encoding': 'gzip' },
++      })
++      const out = await withGzipIfEligible(other, jsonRes(bigBody), '192.168.1.50', resolver(1))
++      expect(out.headers.get('content-encoding')).toBe('gzip')
++      expect(seen).toEqual([])
++    })
++
++    test('a small response still compresses nothing, though the size is consulted', async () => {
++      // `Response.json` sets no content-length, so `shouldGzipResponse` cannot
++      // apply the per-response floor up front — it returns true and the real
++      // size check happens after the body is buffered. The session lookup
++      // therefore does run here; this pins that (slightly wasteful) ordering so
++      // a future change to it is a deliberate one.
++      seen.length = 0
++      const out = await withGzipIfEligible(
++        jsonReq('gzip'), jsonRes(`{"m":"${small}"}`), '192.168.1.50', resolver(1),
++      )
++      expect(out.headers.get('content-encoding')).toBeNull()
++      expect(seen).toEqual(['x'])
++    })
++  })
++})
++
++describe('sessionIdFromPath', () => {
++  test('extracts the session id and ignores other routes', () => {
++    expect(sessionIdFromPath('/api/sessions/abc-123/messages')).toBe('abc-123')
++    expect(sessionIdFromPath('/api/sessions/abc-123')).toBe('abc-123')
++    expect(sessionIdFromPath('/api/sessions')).toBeNull()
++    expect(sessionIdFromPath('/api/settings')).toBeNull()
++    // Must not be fooled by a route that merely shares the prefix.
++    expect(sessionIdFromPath('/api/sessionsfoo/bar')).toBeNull()
++  })
+ })
+ 
+diff --git a/src/server/responseCompression.ts b/src/server/responseCompression.ts
+index bcac9d56..891da02b 100644
+--- a/src/server/responseCompression.ts
++++ b/src/server/responseCompression.ts
+@@ -1,6 +1,22 @@
+-import { gzipSync } from 'node:zlib'
++import { gzip } from 'node:zlib'
+ import { isLoopbackHost } from './h5AccessPolicy.js'
+ 
++/**
++ * Compress off the main thread. `gzipSync` blocks the event loop for the whole
++ * deflate, and the remote history path is exactly where that hurts: a large
++ * session is fetched as many sequential pages, so every page stalled every
++ * other request (and the paging loop itself) for the duration.
++ * The async form runs on the libuv threadpool, so concurrent work keeps
++ * progressing while a page compresses.
++ */
++function gzipBuffer(input: Uint8Array): Promise<Buffer> {
++  return new Promise((resolve, reject) => {
++    gzip(input, { level: 6 }, (error, result) =>
++      error ? reject(error) : resolve(result),
++    )
++  })
++}
++
+ /**
+  * Transport compression for non-local API responses.
+  *
+@@ -20,6 +36,30 @@ import { isLoopbackHost } from './h5AccessPolicy.js'
+ // Below this size the win is marginal (a ~200 KB page compresses to ~70 KB).
+ const MIN_COMPRESS_BYTES = 128 * 1024
+ 
++/**
++ * Only compress when the *session* is big enough to be worth it.
++ *
++ * Compression is decided per response, but the cost is per response too, and a
++ * small session produces small responses on every page. Once transcripts are
++ * no longer dominated by echoed file bodies, most sessions are small enough
++ * that paying deflate on each page buys little; below this floor the plain JSON
++ * is sent as-is.
++ */
++export const MIN_COMPRESSIBLE_SESSION_BYTES = 10 * 1024 * 1024
++
++const SESSION_PATH_PATTERN = /^\/api\/sessions\/([^/]+)(?:\/|$)/
++
++/** The session a request addresses, or null when it is not session-scoped. */
++export function sessionIdFromPath(pathname: string): string | null {
++  const match = SESSION_PATH_PATTERN.exec(pathname)
++  if (!match?.[1]) return null
++  try {
++    return decodeURIComponent(match[1])
++  } catch {
++    return match[1]
++  }
++}
++
+ const DEBUG_LOG_LIMIT = 5
+ 
+ let debugLogsEmitted = 0
+@@ -56,8 +96,23 @@ export async function withGzipIfEligible(
+   request: Request,
+   response: Response,
+   clientAddress: string | null,
++  resolveSessionSize?: (sessionId: string) => Promise<number | null>,
+ ): Promise<Response> {
+   if (!shouldGzipResponse(request, response, clientAddress)) return response
++
++  // Session floor is checked last, and only once the cheap checks above have
++  // already decided this response would be compressed — resolving the size
++  // costs a filesystem lookup, so loopback/small/non-JSON traffic must not pay
++  // for it. A failed lookup (`null`) falls back to the previous behaviour
++  // rather than silently dropping compression.
++  if (resolveSessionSize) {
++    const sessionId = sessionIdFromPath(new URL(request.url).pathname)
++    if (sessionId) {
++      const size = await resolveSessionSize(sessionId).catch(() => null)
++      if (size !== null && size < MIN_COMPRESSIBLE_SESSION_BYTES) return response
++    }
++  }
++
+   let raw: Uint8Array
+   try {
+     raw = new Uint8Array(await response.arrayBuffer())
+@@ -82,7 +137,7 @@ export async function withGzipIfEligible(
+ 
+   let compressed: Uint8Array
+   try {
+-    compressed = new Uint8Array(gzipSync(raw, { level: 6 }))
++    compressed = new Uint8Array(await gzipBuffer(raw))
+   } catch (error) {
+     console.warn(
+       '[Server] gzip compression failed, sending uncompressed:',

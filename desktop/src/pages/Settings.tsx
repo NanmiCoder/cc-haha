@@ -29,6 +29,28 @@ export function Settings() {
   return getDesktopHost().isDesktop ? <DesktopSettings /> : <H5Settings />
 }
 
+// The full Settings tab list, shared by the desktop rail and the H5 pill
+// strip so the two surfaces always expose the same sections.
+export const SETTINGS_TABS = [
+  { id: 'providers', icon: 'dns' },
+  { id: 'general', icon: 'tune' },
+  { id: 'h5Access', icon: 'qr_code_2' },
+  { id: 'adapters', icon: 'chat' },
+  { id: 'terminal', icon: 'terminal' },
+  { id: 'mcp', icon: 'dns' },
+  { id: 'agents', icon: 'smart_toy' },
+  { id: 'skills', icon: 'auto_awesome' },
+  { id: 'memory', icon: 'history_edu' },
+  { id: 'plugins', icon: 'extension' },
+  { id: 'pets', icon: 'pets' },
+  { id: 'computerUse', icon: 'mouse' },
+  { id: 'activity', icon: 'monitoring' },
+  { id: 'trace', icon: 'account_tree' },
+  { id: 'diagnostics', icon: 'monitor_heart' },
+] as const
+
+export const SETTINGS_ABOUT_TAB = { id: 'about', icon: 'info' } as const
+
 export function DesktopSettings() {
   const activeTab = useUIStore((s) => s.activeSettingsTab)
   const setActiveTab = useUIStore((s) => s.setActiveSettingsTab)
@@ -66,24 +88,12 @@ export function DesktopSettings() {
           className="w-[195px] flex-shrink-0 flex flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-surface)] py-4 pl-3 pr-1"
         >
           <div className="flex-1 flex flex-col gap-0.5">
-            <TabButton icon="dns" label={t('settings.tab.providers')} active={activeTab === 'providers'} onClick={() => setActiveTab('providers')} />
-            <TabButton icon="tune" label={t('settings.tab.general')} active={activeTab === 'general'} onClick={() => setActiveTab('general')} />
-            <TabButton icon="qr_code_2" label={t('settings.tab.h5Access')} active={activeTab === 'h5Access'} onClick={() => setActiveTab('h5Access')} />
-            <TabButton icon="chat" label={t('settings.tab.adapters')} active={activeTab === 'adapters'} onClick={() => setActiveTab('adapters')} />
-            <TabButton icon="terminal" label={t('settings.tab.terminal')} active={activeTab === 'terminal'} onClick={() => setActiveTab('terminal')} />
-            <TabButton icon="dns" label={t('settings.tab.mcp')} active={activeTab === 'mcp'} onClick={() => setActiveTab('mcp')} />
-            <TabButton icon="smart_toy" label={t('settings.tab.agents')} active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} />
-            <TabButton icon="auto_awesome" label={t('settings.tab.skills')} active={activeTab === 'skills'} onClick={() => setActiveTab('skills')} />
-            <TabButton icon="history_edu" label={t('settings.tab.memory')} active={activeTab === 'memory'} onClick={() => setActiveTab('memory')} />
-            <TabButton icon="extension" label={t('settings.tab.plugins')} active={activeTab === 'plugins'} onClick={() => setActiveTab('plugins')} />
-            <TabButton icon="pets" label={t('settings.tab.pets')} active={activeTab === 'pets'} onClick={() => setActiveTab('pets')} />
-            <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
-            <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
-            <TabButton icon="account_tree" label={t('settings.tab.trace')} active={activeTab === 'trace'} onClick={() => setActiveTab('trace')} />
-            <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
+            {SETTINGS_TABS.map((tab) => (
+              <TabButton key={tab.id} icon={tab.icon} label={t(`settings.tab.${tab.id}`)} active={activeTab === tab.id} onClick={() => setActiveTab(tab.id)} />
+            ))}
           </div>
           <div className="mt-2 border-t border-[var(--color-border-separator)] pt-2">
-            <TabButton icon="info" label={t('settings.tab.about')} active={activeTab === 'about'} onClick={() => setActiveTab('about')} />
+            <TabButton icon={SETTINGS_ABOUT_TAB.icon} label={t('settings.tab.about')} active={activeTab === 'about'} onClick={() => setActiveTab('about')} />
           </div>
         </div>
 

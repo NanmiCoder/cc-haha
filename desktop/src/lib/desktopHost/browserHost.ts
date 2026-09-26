@@ -7,6 +7,21 @@ import type {
 } from './types'
 import { buildTraceWindowUrl } from '../traceLaunch'
 import { readBrowserLanguages } from '../../i18n/locale'
+import { getTerminalWsClient } from './terminalWs'
+import { getApiUrl, getAuthToken } from '../../api/client'
+
+function buildBrowserApiHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  const token = getAuthToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
+function terminalApiUrl(): string {
+  return getApiUrl('/api/terminal/bash-path')
+}
 
 const browserCapabilities: DesktopHostCapabilities = {
   appMode: false,
@@ -16,7 +31,7 @@ const browserCapabilities: DesktopHostCapabilities = {
   previewWebview: false,
   workspaceBrowser: false,
   shell: false,
-  terminal: false,
+  terminal: true,
   updates: false,
   windowControls: false,
   zoom: false,
@@ -265,32 +280,45 @@ export const browserHost: DesktopHost = {
     },
   },
   terminal: {
-    async spawn() {
-      unsupported('Native terminal sessions')
+    // 浏览器端终端走独立 WS 通道 /ws/terminal（sidecar 内 node-pty），
+    // 与桌面端 Electron IPC 实现互不干扰；xterm 层只依赖 terminalApi 形状。
+    supportsStartupCorrelation: true,
+    async spawn(options) {
+      return getTerminalWsClient().spawn(options)
     },
-    async write() {
-      unsupported('Native terminal sessions')
+    async write(sessionId, data) {
+      getTerminalWsClient().write(sessionId, data)
     },
-    async resize() {
-      unsupported('Native terminal sessions')
+    async resize(sessionId, cols, rows) {
+      getTerminalWsClient().resize(sessionId, cols, rows)
     },
-    async kill() {
-      unsupported('Native terminal sessions')
+    async kill(sessionId) {
+      getTerminalWsClient().kill(sessionId)
     },
-    async onOutput(): Promise<DesktopHostUnlisten> {
-      return noopUnlisten
+    async onOutput(handler): Promise<DesktopHostUnlisten> {
+      return getTerminalWsClient().onOutput(handler)
     },
-    async onExit(): Promise<DesktopHostUnlisten> {
-      return noopUnlisten
+    async onExit(handler): Promise<DesktopHostUnlisten> {
+      return getTerminalWsClient().onExit(handler)
     },
     async getBashPath() {
-      return null
+      try {
+        const response = await fetch(terminalApiUrl(), { headers: buildBrowserApiHeaders() })
+        if (!response.ok) return null
+        const body = (await response.json()) as { bashPath?: string | null }
+        return typeof body.bashPath === 'string' ? body.bashPath : null
+      } catch {
+        return null
+      }
     },
-    async setBashPath() {
-      unsupported('Native shell path settings')
+    async setBashPath(path) {
+      await fetch(terminalApiUrl(), {
+        method: 'PUT',
+        headers: buildBrowserApiHeaders(),
+        body: JSON.stringify({ bashPath: path }),
+      })
     },
-  },
-  preview: {
+  },  preview: {
     async open() {
       unsupported('Native preview webview')
     },

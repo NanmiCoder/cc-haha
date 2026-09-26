@@ -10,6 +10,7 @@ import {
   hasVisibleSessionActivity,
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { clearTpsCalibration, loadTpsCalibration } from '../lib/tpsCalibration'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
 const {
@@ -191,8 +192,10 @@ import {
   mapHistoryMessagesToUiMessages,
   appendReplayedUserMessage,
   registerAgentRunSession,
+  getSessionTpsMeter,
   reconstructAgentNotifications,
   reconstructRunActivityFromTranscript,
+  settleThinkingDurations,
   stripGeneratedImageMetadataLines,
   type PerSessionState,
   useChatStore,
@@ -248,6 +251,41 @@ describe('stripGeneratedImageMetadataLines', () => {
 
   it('returns empty string when the text is only metadata', () => {
     expect(stripGeneratedImageMetadataLines('[Image source: /tmp/x.png]')).toBe('')
+  })
+})
+
+describe('settleThinkingDurations', () => {
+  it('stamps the elapsed span onto each unsettled thinking block and leaves others alone', () => {
+    const now = 1_000_000
+    const input = [
+      { id: 'a', type: 'thinking', content: 'one', timestamp: now - 2000 },
+      { id: 'b', type: 'assistant_text', content: 'text', timestamp: now - 1000 },
+      { id: 'c', type: 'thinking', content: 'two', timestamp: now - 5000 },
+    ] as const
+    const settled = settleThinkingDurations([...input] as any[], now)
+    expect(settled[0]).toMatchObject({ type: 'thinking', thinkingDurationMs: 2000 })
+    expect(settled[1]).toEqual(input[1])
+    expect(settled[2]).toMatchObject({ type: 'thinking', thinkingDurationMs: 5000 })
+  })
+
+  it('never overwrites a duration that was already settled', () => {
+    const input = [
+      { id: 'a', type: 'thinking', content: 'one', timestamp: 100, thinkingDurationMs: 777 },
+    ] as const
+    const settled = settleThinkingDurations([...input] as any[], 999_999)
+    expect(settled[0]).toMatchObject({ thinkingDurationMs: 777 })
+  })
+
+  it('clamps a negative span (clock skew) to zero and returns the same array when nothing changes', () => {
+    const skew = [
+      { id: 'a', type: 'thinking', content: 'one', timestamp: 5000 },
+    ] as const
+    expect(settleThinkingDurations([...skew] as any[], 4000)[0]).toMatchObject({ thinkingDurationMs: 0 })
+
+    const done = [
+      { id: 'a', type: 'thinking', content: 'one', timestamp: 100, thinkingDurationMs: 1 },
+    ] as UIMessage[]
+    expect(settleThinkingDurations(done, 200)).toBe(done)
   })
 })
 
@@ -743,6 +781,169 @@ describe('chatStore history mapping', () => {
     ])
     expect(mapped[2]).toMatchObject({ parentToolUseId: 'agent-1' })
     expect(mapped[3]).toMatchObject({ parentToolUseId: 'agent-1' })
+  })
+
+  it('carries a reply\'s reported usage onto every row it produced, under one key', () => {
+    // The transcript repeats the whole `usage` object on each of the reply's
+    // lines, and every row of one API call shares its key so a turn total counts
+    // it once.
+    const messages: MessageEntry[] = [
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        usage: { output_tokens: 250 },
+        usageKey: 'msg_1\0req_1',
+        content: [
+          { type: 'thinking', thinking: 'plan the fix' },
+          { type: 'text', text: 'wiring it up' },
+          { type: 'tool_use', id: 'tool-1', name: 'Read', input: { file_path: '/a.ts' } },
+        ],
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped.map((message) => message.type)).toEqual(['thinking', 'assistant_text', 'tool_use'])
+    for (const message of mapped) {
+      expect(message).toMatchObject({
+        usage: { output_tokens: 250 },
+        usageKey: 'msg_1\0req_1',
+      })
+    }
+  })
+
+  it('carries usage on a reply stored as plain string content', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: 'all done',
+        usage: { output_tokens: 90 },
+        usageKey: 'msg_9\0req_9',
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped[0]).toMatchObject({
+      type: 'assistant_text',
+      usage: { output_tokens: 90 },
+      usageKey: 'msg_9\0req_9',
+    })
+  })
+
+  it('keeps usage when a reply\'s rows fold into the previous one instead of adding rows', () => {
+    // Adjacent thinking snapshots merge into the row before them, so nothing new
+    // is pushed; the usage still belongs to the turn and lands on the row that
+    // absorbed it rather than being dropped.
+    const messages: MessageEntry[] = [
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: [{ type: 'thinking', thinking: 'first pass' }],
+      },
+      {
+        id: 'a2',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:01.000Z',
+        usage: { output_tokens: 300 },
+        usageKey: 'msg_2\0req_2',
+        content: [{ type: 'thinking', thinking: 'second pass' }],
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({ usage: { output_tokens: 300 }, usageKey: 'msg_2\0req_2' })
+  })
+
+  it('leaves rows without usage untouched when a reply reported none', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: 'no usage on this transcript',
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped[0]).not.toHaveProperty('usage')
+    expect(mapped[0]).not.toHaveProperty('usageKey')
+  })
+
+  it('never back-fills a row that already belongs to another call', () => {
+    // The second call produced no row of its own (its only block was blank), so
+    // the back-fill reaches the first call's row. Overwriting it would erase the
+    // first call's tokens, which is worse than dropping the blank one's.
+    const messages: MessageEntry[] = [
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        usage: { output_tokens: 500 },
+        usageKey: 'msg_1\0req_1',
+        content: [{ type: 'thinking', thinking: 'real work' }],
+      },
+      {
+        id: 'a2',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:01.000Z',
+        usage: { output_tokens: 7 },
+        usageKey: 'msg_2\0req_2',
+        content: [{ type: 'thinking', thinking: '   ' }],
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({ usage: { output_tokens: 500 }, usageKey: 'msg_1\0req_1' })
+  })
+
+  it('does not back-fill across the turn boundary', () => {
+    // A prompt separates the calls, so a rowless call must not reach back onto
+    // the previous turn's reply and add its tokens there.
+    const messages: MessageEntry[] = [
+      {
+        id: 'u1',
+        type: 'user',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: 'first prompt',
+      },
+      {
+        id: 'a1',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:01.000Z',
+        usage: { output_tokens: 500 },
+        usageKey: 'msg_1\0req_1',
+        content: 'first reply',
+      },
+      {
+        id: 'u2',
+        type: 'user',
+        timestamp: '2026-04-06T00:00:02.000Z',
+        content: 'second prompt',
+      },
+      {
+        id: 'a2',
+        type: 'assistant',
+        timestamp: '2026-04-06T00:00:03.000Z',
+        usage: { output_tokens: 7 },
+        usageKey: 'msg_2\0req_2',
+        content: [{ type: 'thinking', thinking: '   ' }],
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    const reply = mapped.find((message) => message.id === 'a1')
+    expect(reply).toMatchObject({ usage: { output_tokens: 500 }, usageKey: 'msg_1\0req_1' })
   })
 
   it('keeps collaboration source metadata on user messages from history', () => {
@@ -10334,6 +10535,149 @@ describe('chatStore history mapping', () => {
       unregister()
       vi.useRealTimers()
     }
+  })
+
+  it("folds an unopened subagent run's decode text into the parent TPS meter", () => {
+    const parentSessionId = '__tps-parent-probe'
+    const send = (event: Extract<ServerMessage, { type: 'agent_run_event' }>['event']) => {
+      useChatStore.getState().handleServerMessage(parentSessionId, {
+        type: 'agent_run_event',
+        runAgentId: 'metered-agent',
+        streamId: 'metered-stream',
+        targetAgentId: 'metered-agent',
+        event,
+      })
+    }
+
+    send({ type: 'content_delta', text: 'x'.repeat(60) })
+
+    const meter = getSessionTpsMeter(parentSessionId)
+    expect(meter.hasStreamed()).toBe(true)
+    // Metered, never rendered: the frame is buffered for a run page that may
+    // never open, and no session state is fabricated for the parent.
+    expect(useChatStore.getState().sessions[parentSessionId]).toBeUndefined()
+
+    // A whole-block thinking hand-over replays text whose fragments already
+    // arrived — metering it again would double the run's token rate.
+    const lastAfterDelta = meter.lastDataTime()
+    send({ type: 'thinking', text: 'y'.repeat(60), complete: true })
+    expect(meter.lastDataTime()).toBe(lastAfterDelta)
+  })
+
+  it('reconciles a finished call against its real usage and banks it per model', () => {
+    clearTpsCalibration()
+    const sessionId = '__tps-reconcile'
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'p1',
+      modelId: 'qwen3-coder',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({ sessions: { [sessionId]: makeSession() } })
+
+    // 30 streamed frames, then the CLI reports the call really produced 60 tokens.
+    for (let i = 0; i < 30; i++) {
+      useChatStore.getState().handleServerMessage(sessionId, { type: 'content_delta', text: 'x'.repeat(6) })
+    }
+    const meter = getSessionTpsMeter(sessionId)
+    expect(meter.calibration()).toEqual({ kCjk: 1, kAscii: 1 })
+
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'message_complete',
+      usage: { input_tokens: 10, output_tokens: 60 },
+      timing: { duration_ms: 2000, duration_api_ms: 1800, ttft_ms: 300, decode_ms: 1500 },
+    })
+
+    const learned = meter.calibration()
+    expect(learned).not.toEqual({ kCjk: 1, kAscii: 1 })
+    // The coefficients are remembered for this model, so the next session does
+    // not start from 1.0 and under-read until its own first call completes.
+    expect(loadTpsCalibration('qwen3-coder')).toEqual(learned)
+  })
+
+  it('does not let subagent frames teach the parent call reconciliation', () => {
+    clearTpsCalibration()
+    const sessionId = '__tps-external'
+    useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'p1', modelId: 'ext-model' })
+    useChatStore.setState({ sessions: { [sessionId]: makeSession() } })
+
+    // Only a subagent streamed: its tokens reached this socket as relayed text,
+    // but its real usage belongs to another API call, so nothing can be learned.
+    for (let i = 0; i < 30; i++) {
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'agent_run_event',
+        runAgentId: 'a1',
+        streamId: 's1',
+        targetAgentId: 'a1',
+        event: { type: 'content_delta', text: 'x'.repeat(6) },
+      })
+    }
+    expect(getSessionTpsMeter(sessionId).hasStreamed()).toBe(true)
+
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'message_complete',
+      usage: { input_tokens: 10, output_tokens: 60 },
+    })
+    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kCjk: 1, kAscii: 1 })
+    expect(loadTpsCalibration('ext-model')).toBeNull()
+  })
+
+  it('counts relayed token ids exactly and stops sampling the duplicated text', () => {
+    const sessionId = '__tps-ids'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession() } })
+
+    // Relay a real count, then the text of those same tokens.
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'tps_tokens', tokens: 40 })
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'content_delta', text: 'x'.repeat(200) })
+
+    const meter = getSessionTpsMeter(sessionId)
+    expect(meter.source()).toBe('ids')
+    // Only the relayed 40 tokens — the text frame would have added ~57 more.
+    expect(meter.windowTokens()).toBeCloseTo(40, 5)
+  })
+
+  it('drops the sampling window when the transport reconnects', () => {
+    clearTpsCalibration()
+    const sessionId = '__tps-reconnect'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession() } })
+
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'content_delta', text: 'hello' })
+    expect(getSessionTpsMeter(sessionId).windowTokens()).toBeGreaterThan(0)
+
+    // A reconnect can replay deltas; the replayed prefix must not be counted.
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'connected', sessionId })
+    expect(getSessionTpsMeter(sessionId).windowTokens()).toBe(0)
+    expect(getSessionTpsMeter(sessionId).hasStreamed()).toBe(false)
+  })
+
+  it('banks the old model coefficients and starts fresh when the model changes', () => {
+    clearTpsCalibration()
+    const sessionId = '__tps-model-switch'
+    useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'p1', modelId: 'model-a' })
+    useChatStore.setState({ sessions: { [sessionId]: makeSession() } })
+
+    for (let i = 0; i < 30; i++) {
+      useChatStore.getState().handleServerMessage(sessionId, { type: 'content_delta', text: 'x'.repeat(6) })
+    }
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'message_complete',
+      usage: { input_tokens: 10, output_tokens: 60 },
+      timing: { duration_ms: 1, duration_api_ms: 1, ttft_ms: 1, decode_ms: 1500 },
+    })
+    const modelA = getSessionTpsMeter(sessionId).calibration()
+    expect(modelA).not.toEqual({ kCjk: 1, kAscii: 1 })
+
+    // The runtime switches to a model nothing is known about yet.
+    useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'p1', modelId: 'model-b' })
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'runtime_config_applied',
+      providerId: 'p1',
+      modelId: 'model-b',
+      effortLevel: 'high',
+    })
+
+    // model-a's numbers were banked; model-b re-learns from neutral.
+    expect(loadTpsCalibration('model-a')).toEqual(modelA)
+    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kCjk: 1, kAscii: 1 })
   })
 
   it('does not replay buffered output after an unregistered run has completed', () => {

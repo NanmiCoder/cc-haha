@@ -93,6 +93,50 @@ function decodeCursor(value: string): Cursor {
 
 /** Produce a display preview without dropping a message's identity. Durable
  * replay and semantic state reducers always receive the original record. */
+/** Per-string clip for the `toolUseResult` projection that ships with history.
+ * `toolUseResult` echoes tool *inputs* back to the client — notably FileEdit's
+ * `originalFile`, the entire pre-edit file. It is display-only (the model sees
+ * `mapToolResultToToolResultBlockParam` output, and turn diffs read
+ * `structuredPatch`), so clipping long strings cannot change what the model was
+ * told or what a diff shows. */
+export const TOOL_USE_RESULT_STRING_LIMIT = 16 * 1024
+const TOOL_USE_RESULT_ITEM_LIMIT = 2048
+const TOOL_USE_RESULT_DEPTH_LIMIT = 12
+
+/**
+ * Bound `toolUseResult` for transport. Keys and container types are preserved
+ * so consumers keep working; only oversized strings (and pathologically long
+ * arrays/objects) are trimmed.
+ *
+ * Deliberately reports nothing: setting `bodyTruncated` here would propagate to
+ * `contentTruncated` and then `historyComplete`, making the client treat a
+ * complete transcript as incomplete and re-enter recovery for a field that was
+ * only ever a transport concern.
+ */
+export function boundToolUseResultPreview(value: unknown): unknown {
+  const visit = (input: unknown, depth: number): unknown => {
+    if (typeof input === 'string') {
+      return input.length <= TOOL_USE_RESULT_STRING_LIMIT
+        ? input
+        : `${input.slice(0, TOOL_USE_RESULT_STRING_LIMIT)}\n… [truncated preview]`
+    }
+    if (!input || typeof input !== 'object') return input
+    if (depth >= TOOL_USE_RESULT_DEPTH_LIMIT) return input
+    if (Array.isArray(input)) {
+      const kept = input.length > TOOL_USE_RESULT_ITEM_LIMIT
+        ? input.slice(0, TOOL_USE_RESULT_ITEM_LIMIT)
+        : input
+      return kept.map(item => visit(item, depth + 1))
+    }
+    const entries = Object.entries(input)
+    const kept = entries.length > TOOL_USE_RESULT_ITEM_LIMIT
+      ? entries.slice(0, TOOL_USE_RESULT_ITEM_LIMIT)
+      : entries
+    return Object.fromEntries(kept.map(([key, child]) => [key, visit(child, depth + 1)]))
+  }
+  return visit(value, 0)
+}
+
 export function displayPreview(entry: Record<string, unknown>): Record<string, unknown> {
   let truncated = false
   let remaining = 48 * 1024

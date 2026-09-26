@@ -1,0 +1,166 @@
+diff --git a/src/server/services/boundedSessionHistory.test.ts b/src/server/services/boundedSessionHistory.test.ts
+index b1ec4b63..cacdcdf9 100644
+--- a/src/server/services/boundedSessionHistory.test.ts
++++ b/src/server/services/boundedSessionHistory.test.ts
+@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, appendFile, open, rename } from 'node:fs/promis
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+ import sharp from 'sharp'
+-import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
++import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, boundToolUseResultPreview, TOOL_USE_RESULT_STRING_LIMIT, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
+ 
+ let directory: string
+ let file: string
+@@ -282,3 +282,40 @@ describe('bounded history pages', () => {
+     expect(await replacement).toBe('replacement')
+   })
+ })
++
++describe('toolUseResult transport projection', () => {
++  test('clips oversized strings and keeps every key and container type', () => {
++    const originalFile = 'x'.repeat(500_000)
++    const result = boundToolUseResultPreview({
++      filePath: '/tmp/big.js',
++      originalFile,
++      structuredPatch: [{ lines: ['+one'] }],
++      replaceAll: false,
++    }) as Record<string, unknown>
++
++    // FileEdit's schema requires a string, and the CLI renderer calls
++    // `.split('\n')` on it unguarded — a null/undefined here would blank the
++    // result entirely.
++    expect(typeof result.originalFile).toBe('string')
++    expect((result.originalFile as string).length).toBeLessThan(originalFile.length)
++    expect((result.originalFile as string)).toStartWith('x'.repeat(TOOL_USE_RESULT_STRING_LIMIT))
++    // Diff rendering and turn stats read these; they must survive intact.
++    expect(result.filePath).toBe('/tmp/big.js')
++    expect(result.structuredPatch).toEqual([{ lines: ['+one'] }])
++    expect(result.replaceAll).toBe(false)
++  })
++
++  test('leaves ordinary results byte-identical', () => {
++    const small = { filePath: '/tmp/a.txt', originalFile: 'tiny\n', replaceAll: false }
++    expect(boundToolUseResultPreview(small)).toEqual(small)
++  })
++
++  test('does not flag truncation, so historyComplete cannot flip', () => {
++    const result = boundToolUseResultPreview({
++      originalFile: 'y'.repeat(200_000),
++    }) as Record<string, unknown>
++    // A truncated *body* marks the transcript incomplete; this is a transport
++    // clip of a display-only field, so it must stay silent.
++    expect(result.bodyTruncated).toBeUndefined()
++  })
++})
+diff --git a/src/server/services/boundedSessionHistory.ts b/src/server/services/boundedSessionHistory.ts
+index 5da62344..bceb4c42 100644
+--- a/src/server/services/boundedSessionHistory.ts
++++ b/src/server/services/boundedSessionHistory.ts
+@@ -6,8 +6,12 @@ export const HISTORY_SCAN_BYTES = 16 * 1024 * 1024
+ /** Scan ceiling for the full-history read. It may walk much further than a
+  * single page because its output budget is `HISTORY_FULL_BYTES`, but the I/O
+  * per request still needs a hard cap: one bounded read is a synchronous walk
+- * with no other yield point. */
+-export const HISTORY_FULL_SCAN_BYTES = 64 * 1024 * 1024
++ * with no other yield point.
++ * Kept at 3x `HISTORY_FULL_BYTES` to absorb records skipped by
++ * `HISTORY_SEMANTIC_RECORD_BYTES`. The scan budget — not the output budget — is
++ * what actually bounds a request's latency and (on the remote path) the
++ * synchronous gzip, so lowering the output budget alone would change nothing. */
++export const HISTORY_FULL_SCAN_BYTES = 24 * 1024 * 1024
+ export const HISTORY_SEMANTIC_RECORD_BYTES = 8 * 1024 * 1024
+ export const HISTORY_RECORD_BYTES = 1024 * 1024
+ export const HISTORY_PAGE_BYTES = 256 * 1024
+@@ -16,8 +20,11 @@ export const HISTORY_PAGE_ROWS = 500
+ /** Single-request ceiling for the "load the whole transcript at once" path.
+  * The desktop timeline reads this in one shot so it never has to stitch pages
+  * together; past the budget the reader still returns the newest slice and
+- * reports `historyComplete: false` instead of failing with 413. */
+-export const HISTORY_FULL_BYTES = 32 * 1024 * 1024
++ * reports `historyComplete: false` instead of failing with 413.
++ * Deliberately small: one response must not spike renderer memory or block the
++ * event loop in `gzipSync` for a transcript whose individual records are
++ * already bounded by the tool-result preview. */
++export const HISTORY_FULL_BYTES = 8 * 1024 * 1024
+ /** Row ceiling for the full-history path. The byte budget is the real bound;
+  * this only stops pathological all-tiny-record transcripts from building a
+  * six-figure-entry array. */
+@@ -93,6 +100,50 @@ function decodeCursor(value: string): Cursor {
+ 
+ /** Produce a display preview without dropping a message's identity. Durable
+  * replay and semantic state reducers always receive the original record. */
++/** Per-string clip for the `toolUseResult` projection that ships with history.
++ * `toolUseResult` echoes tool *inputs* back to the client — notably FileEdit's
++ * `originalFile`, the entire pre-edit file. It is display-only (the model sees
++ * `mapToolResultToToolResultBlockParam` output, and turn diffs read
++ * `structuredPatch`), so clipping long strings cannot change what the model was
++ * told or what a diff shows. */
++export const TOOL_USE_RESULT_STRING_LIMIT = 16 * 1024
++const TOOL_USE_RESULT_ITEM_LIMIT = 2048
++const TOOL_USE_RESULT_DEPTH_LIMIT = 12
++
++/**
++ * Bound `toolUseResult` for transport. Keys and container types are preserved
++ * so consumers keep working; only oversized strings (and pathologically long
++ * arrays/objects) are trimmed.
++ *
++ * Deliberately reports nothing: setting `bodyTruncated` here would propagate to
++ * `contentTruncated` and then `historyComplete`, making the client treat a
++ * complete transcript as incomplete and re-enter recovery for a field that was
++ * only ever a transport concern.
++ */
++export function boundToolUseResultPreview(value: unknown): unknown {
++  const visit = (input: unknown, depth: number): unknown => {
++    if (typeof input === 'string') {
++      return input.length <= TOOL_USE_RESULT_STRING_LIMIT
++        ? input
++        : `${input.slice(0, TOOL_USE_RESULT_STRING_LIMIT)}\n… [truncated preview]`
++    }
++    if (!input || typeof input !== 'object') return input
++    if (depth >= TOOL_USE_RESULT_DEPTH_LIMIT) return input
++    if (Array.isArray(input)) {
++      const kept = input.length > TOOL_USE_RESULT_ITEM_LIMIT
++        ? input.slice(0, TOOL_USE_RESULT_ITEM_LIMIT)
++        : input
++      return kept.map(item => visit(item, depth + 1))
++    }
++    const entries = Object.entries(input)
++    const kept = entries.length > TOOL_USE_RESULT_ITEM_LIMIT
++      ? entries.slice(0, TOOL_USE_RESULT_ITEM_LIMIT)
++      : entries
++    return Object.fromEntries(kept.map(([key, child]) => [key, visit(child, depth + 1)]))
++  }
++  return visit(value, 0)
++}
++
+ export function displayPreview(entry: Record<string, unknown>): Record<string, unknown> {
+   let truncated = false
+   let remaining = 48 * 1024
+diff --git a/src/server/services/sessionService.ts b/src/server/services/sessionService.ts
+index a9495492..8fabdafa 100644
+--- a/src/server/services/sessionService.ts
++++ b/src/server/services/sessionService.ts
+@@ -9,7 +9,7 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
+  * 确保 Desktop App 与 CLI 的数据完全互通。
+  */
+ 
+-import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
++import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, boundToolUseResultPreview, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+ import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
+ import { createHash } from 'node:crypto'
+ import * as fs from 'node:fs/promises'
+@@ -1910,7 +1910,13 @@ export class SessionService {
+       ...(sessionReferences ? { sessionReferences } : {}),
+       ...(collaboration ? { collaboration } : {}),
+       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
+-      ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
++      // Tool results echo tool *inputs* back (FileEdit's `originalFile` is the
++      // whole pre-edit file). Ship a bounded projection so one edited file
++      // cannot dominate the transport; the field itself is kept because
++      // consumers use its presence to tell tool results from human turns.
++      ...(entry.toolUseResult !== undefined
++        ? { toolUseResult: boundToolUseResultPreview(entry.toolUseResult) }
++        : {}),
+       timestamp: entry.timestamp || new Date().toISOString(),
+       model: msg.model,
+       ...(usage ? { usage } : {}),

@@ -440,6 +440,12 @@ function ActivityRowView({
       : isTask && row.summary && row.summary !== row.label
         ? row.summary
         : undefined
+  // Execution time on the right of the row. Deliberately not for subagents:
+  // clicking one opens its run detail, and the floating card is too narrow to
+  // carry another field on every agent line (the row would truncate the label).
+  const rowDuration = row.section === 'tasks' || row.section === 'backgroundTasks'
+    ? formatBackgroundDuration(row.usage?.durationMs, t)
+    : undefined
   const content = (
     <>
       {isTask ? (
@@ -463,6 +469,14 @@ function ActivityRowView({
           </span>
         ) : null}
       </span>
+      {rowDuration ? (
+        <span
+          data-activity-duration="true"
+          className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
+        >
+          {rowDuration}
+        </span>
+      ) : null}
       {isTask ? null : (
         <ActivityStatusIndicator
           status={displayStatus}
@@ -573,13 +587,14 @@ function ActivityRowView({
 
 function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
   const t = useTranslation()
+  // Execution time gets its own slot on the right of the usage row rather than
+  // being glued into the token string: it is the number a reader scans for, and
+  // "94.3k tokens · 1m 7s" buries it mid-line where the eye has to parse past
+  // the count to find it.
   const duration = formatBackgroundDuration(row.usage?.durationMs, t)
-  const usageParts = [
-    typeof row.usage?.totalTokens === 'number'
-      ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
-      : '',
-    duration,
-  ].filter(Boolean)
+  const usageTokens = typeof row.usage?.totalTokens === 'number'
+    ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
+    : ''
   const details = [
     row.taskType || row.workflowName
       ? { label: t('session.activity.details.type'), value: getTaskTypeLabel(row.taskType, t) }
@@ -593,10 +608,10 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
     row.outputFile
       ? { label: t('session.activity.details.outputFile'), value: row.outputFile }
       : null,
-    usageParts.length > 0
-      ? { label: t('session.activity.details.usage'), value: usageParts.join(' · ') }
+    usageTokens || duration
+      ? { label: t('session.activity.details.usage'), value: usageTokens, trailing: duration }
       : null,
-  ].filter((item): item is { label: string; value: string } => Boolean(item?.value))
+  ].filter((item): item is { label: string; value: string; trailing?: string } => Boolean(item && (item.value || item.trailing)))
 
   if (details.length === 0) return null
 
@@ -612,7 +627,17 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
               {detail.label}
             </dt>
             <dd className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
-              {detail.value}
+              {detail.trailing ? (
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 break-words">{detail.value}</span>
+                  <span
+                    data-activity-detail-duration="true"
+                    className="shrink-0 whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
+                  >
+                    {detail.trailing}
+                  </span>
+                </span>
+              ) : detail.value}
             </dd>
           </div>
         ))}

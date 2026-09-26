@@ -2,9 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { browserHost } from '../lib/desktopHost/browserHost'
 
+// 浏览器端 terminal 命名空间底层是 /ws/terminal 的 WS 客户端；测试里 mock 掉，
+// 只验证 terminalApi → browserHost.terminal → terminalWs 的委托链。
+const terminalWsMock = vi.hoisted(() => ({
+  client: {
+    spawn: vi.fn(),
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    onOutput: vi.fn(),
+    onExit: vi.fn(),
+  },
+  getTerminalWsClient: vi.fn(),
+}))
+
+vi.mock('../lib/desktopHost/terminalWs', () => ({
+  getTerminalWsClient: terminalWsMock.getTerminalWsClient,
+}))
+
 describe('terminalApi desktop host bridge', () => {
   beforeEach(() => {
     vi.resetModules()
+    terminalWsMock.getTerminalWsClient.mockReturnValue(terminalWsMock.client)
     Reflect.deleteProperty(window, 'desktopHost')
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
     Reflect.deleteProperty(window, '__TAURI__')
@@ -84,12 +103,41 @@ describe('terminalApi desktop host bridge', () => {
     expect(setBashPath).toHaveBeenCalledWith('/opt/bash')
   })
 
-  it('keeps terminal unavailable in browser fallback', async () => {
+  it('routes the browser fallback through the terminal websocket client', async () => {
+    const unlisten = vi.fn()
+    terminalWsMock.client.spawn.mockResolvedValue({
+      session_id: 4,
+      shell: '/bin/bash',
+      cwd: '/home/user',
+    })
+    terminalWsMock.client.onOutput.mockReturnValue(unlisten)
+    terminalWsMock.client.onExit.mockReturnValue(unlisten)
+
     const { terminalApi } = await import('./terminal')
 
-    expect(terminalApi.isAvailable()).toBe(false)
-    expect(() => terminalApi.spawn({ cols: 80, rows: 24 })).toThrow(
-      'Terminal is available in the desktop app runtime.',
-    )
+    expect(terminalApi.isAvailable()).toBe(true)
+    const result = await terminalApi.spawn({ cols: 80, rows: 24, requestId: 'req-1' })
+    expect(result).toEqual({ session_id: 4, shell: '/bin/bash', cwd: '/home/user' })
+    expect(terminalWsMock.client.spawn).toHaveBeenCalledWith({
+      cols: 80,
+      rows: 24,
+      requestId: 'req-1',
+    })
+
+    await terminalApi.write(4, 'ls\n')
+    await terminalApi.resize(4, 100, 30)
+    await terminalApi.kill(4)
+    expect(terminalWsMock.client.write).toHaveBeenCalledWith(4, 'ls\n')
+    expect(terminalWsMock.client.resize).toHaveBeenCalledWith(4, 100, 30)
+    expect(terminalWsMock.client.kill).toHaveBeenCalledWith(4)
+
+    const outputHandler = vi.fn()
+    const exitHandler = vi.fn()
+    const off = await terminalApi.onOutput(outputHandler)
+    const offExit = await terminalApi.onExit(exitHandler)
+    expect(terminalWsMock.client.onOutput).toHaveBeenCalledWith(outputHandler)
+    expect(terminalWsMock.client.onExit).toHaveBeenCalledWith(exitHandler)
+    off()
+    offExit()
   })
 })

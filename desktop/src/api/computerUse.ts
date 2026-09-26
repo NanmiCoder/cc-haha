@@ -74,7 +74,7 @@ export function __resetAppIconCacheForTests(): void {
 export type ComputerUseStatus = {
   platform: string
   supported: boolean
-  engine: 'macos-native' | 'windows-compat' | 'unsupported'
+  engine: 'macos-native' | 'windows-compat' | 'linux-x11' | 'unsupported'
   systemVersion: string | null
   arch: string
   /**

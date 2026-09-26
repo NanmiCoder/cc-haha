@@ -1,14 +1,19 @@
 import { memo, useCallback, useMemo, useState } from 'react'
 import { BookMarked, ChevronDown, ChevronRight, CircleCheck, Settings } from 'lucide-react'
 import { ToolCallBlock, type ToolCallChrome } from './ToolCallBlock'
+import { TurnDownloadCard } from './DownloadReferencesCard'
 import { ActivityGroup } from './ActivityGroup'
 import { ThinkingBlock } from './ThinkingBlock'
 import {
   activityStepToolCalls,
+  agentGroupSpanMs,
+  agentRunDurationMs,
+  agentRunInterval,
   toActivitySteps,
   toolCallDurationMs,
   type ActivityStep,
 } from './activityGroupModel'
+import { formatDuration } from './ToolCallBlock'
 import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
 import { useAgentRunActivity } from './useAgentRunActivity'
@@ -151,41 +156,49 @@ export const ToolCallGroup = memo(function ToolCallGroup({
           isStreaming={isStreaming}
         />
         {regularSteps.length > 0 ? (
-          <ToolCallGroupContent
-            sessionId={sessionId}
-            onOpenAgentRun={onOpenAgentRun}
-            resolveAgentActivityTarget={resolveAgentActivityTarget}
-            steps={regularSteps}
-            resultMap={resultMap}
-            childToolCallsByParent={childToolCallsByParent}
-            agentTaskNotifications={agentTaskNotifications}
-            agentTaskStatuses={agentTaskStatuses}
-            activeThinkingId={activeThinkingId}
-            showOpenRun={showOpenRun}
-            isStreaming={isStreaming}
-            disclosureKey={disclosureKey}
-          />
+          <>
+            <ToolCallGroupContent
+              sessionId={sessionId}
+              onOpenAgentRun={onOpenAgentRun}
+              resolveAgentActivityTarget={resolveAgentActivityTarget}
+              steps={regularSteps}
+              resultMap={resultMap}
+              childToolCallsByParent={childToolCallsByParent}
+              agentTaskNotifications={agentTaskNotifications}
+              agentTaskStatuses={agentTaskStatuses}
+              activeThinkingId={activeThinkingId}
+              showOpenRun={showOpenRun}
+              isStreaming={isStreaming}
+              disclosureKey={disclosureKey}
+            />
+            <TurnDownloadCard
+              toolCalls={toolCalls.filter((toolCall) => !isMemoryToolCall(toolCall))}
+            />
+          </>
         ) : null}
       </div>
     )
   }
 
   return (
-    <ToolCallGroupContent
-      sessionId={sessionId}
-      onOpenAgentRun={onOpenAgentRun}
-      resolveAgentActivityTarget={resolveAgentActivityTarget}
-      steps={resolvedSteps}
-      resultMap={resultMap}
-      childToolCallsByParent={childToolCallsByParent}
-      agentTaskNotifications={agentTaskNotifications}
-      agentTaskStatuses={agentTaskStatuses}
-      activeThinkingId={activeThinkingId}
-      showOpenRun={showOpenRun}
-      isStreaming={isStreaming}
-      isLive={isLive}
-      disclosureKey={disclosureKey}
-    />
+    <>
+      <ToolCallGroupContent
+        sessionId={sessionId}
+        onOpenAgentRun={onOpenAgentRun}
+        resolveAgentActivityTarget={resolveAgentActivityTarget}
+        steps={resolvedSteps}
+        resultMap={resultMap}
+        childToolCallsByParent={childToolCallsByParent}
+        agentTaskNotifications={agentTaskNotifications}
+        agentTaskStatuses={agentTaskStatuses}
+        activeThinkingId={activeThinkingId}
+        showOpenRun={showOpenRun}
+        isStreaming={isStreaming}
+        isLive={isLive}
+        disclosureKey={disclosureKey}
+      />
+      <TurnDownloadCard toolCalls={toolCalls} />
+    </>
   )
 })
 
@@ -467,6 +480,17 @@ function AgentToolGroup({
   const errorPresent = statuses.some((status) => status === 'failed')
   const allComplete = statuses.every((status) => status === 'done')
   const anyStopped = statuses.some((status) => status === 'stopped')
+  // Wall-clock span of the whole dispatch — earliest start to latest end, NOT
+  // the sum of the members: the runtime runs a dispatched group in parallel, so
+  // three concurrent 2-minute agents are 2 minutes, not 6. Members still in
+  // flight contribute nothing until they report or settle, so the number only
+  // ever grows towards the truth.
+  const totalDuration = agentGroupSpanMs(toolCalls.map((toolCall) => agentRunInterval(
+    toolCall,
+    resultMap.get(toolCall.toolUseId),
+    agentTaskNotifications[toolCall.toolUseId]?.usage?.durationMs,
+  )))
+  const totalDurationLabel = totalDuration === undefined ? '' : formatDuration(totalDuration)
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
@@ -483,6 +507,19 @@ function AgentToolGroup({
         <span className="flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
           {toolCalls.length === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: toolCalls.length })}
         </span>
+        {/* Flush right, before the status: "dispatched 3 agents · 总耗时5m12s · running".
+            Unlike the per-run number on each row below, this one carries its label —
+            the summary bar has the slack to spend on it. Label and number are two
+            elements joined by a 3px gap rather than one string with a space, because
+            a full space between a CJK label and a digit reads as a hole at this size. */}
+        {totalDurationLabel && (
+          <span className="inline-flex shrink-0 items-baseline gap-[3px] whitespace-nowrap text-right text-[12px] text-[var(--color-text-secondary)]">
+            <span>{t('toolGroup.agentTotalDuration')}</span>
+            <span data-agent-group-duration="true" className="tabular-nums">
+              {totalDurationLabel}
+            </span>
+          </span>
+        )}
         {isAnyRunning && (
           <Badge tone="warning" className="font-semibold">
             {t('agentStatus.running')}
@@ -605,6 +642,13 @@ function AgentCallCard({
   const description = typeof input.description === 'string' ? input.description : ''
   const openRunTitle = description.trim() || 'Agent'
   const canOpenRun = showOpenRun && !!sessionId && !!toolCall.toolUseId
+  // This run's execution time: the runtime's report for a background agent, the
+  // tool_use → result delta for a synchronous one. Absent while a synchronous
+  // run is still in flight (nothing trustworthy to measure against yet).
+  const durationMs = agentRunDurationMs(
+    agentRunInterval(toolCall, result, agentTaskNotification?.usage?.durationMs),
+  )
+  const durationLabel = durationMs === undefined ? '' : formatDuration(durationMs)
 
   return (
     <div data-agent-call-layout="row">
@@ -676,6 +720,15 @@ function AgentCallCard({
           >
             {t('toolGroup.openRun')}
           </Button>
+        )}
+        {/* Between the actions and the status: "… · Open run · 5m12s · done". */}
+        {durationLabel && (
+          <span
+            data-agent-call-duration="true"
+            className="shrink-0 whitespace-nowrap font-mono text-[11.5px] tabular-nums text-[var(--color-text-tertiary)]"
+          >
+            {durationLabel}
+          </span>
         )}
         <Badge tone={statusTone} className="font-semibold">
           {statusLabel}

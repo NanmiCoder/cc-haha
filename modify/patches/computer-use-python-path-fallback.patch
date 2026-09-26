@@ -1,0 +1,159 @@
+diff --git a/desktop/src/i18n/locales/en.ts b/desktop/src/i18n/locales/en.ts
+index dbe50735..027ab4f6 100644
+--- a/desktop/src/i18n/locales/en.ts
++++ b/desktop/src/i18n/locales/en.ts
+@@ -2093,6 +2093,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
+   'settings.computerUse.pythonPathSaveFailed': 'Save failed. Try again.',
+   'settings.computerUse.pythonPathDialogTitle': 'Select Python Interpreter',
+   'settings.computerUse.pythonPathDialogFailed': 'Could not open the file picker. Paste the path manually.',
++  'settings.computerUse.pythonPathDialogDetected': 'This environment has no native file picker. The detected interpreter path was filled in — just confirm and save.',
+   'settings.computerUse.venv': 'Virtual Environment',
+   'settings.computerUse.venvReady': 'Ready',
+   'settings.computerUse.venvNotReady': 'Not created',
+diff --git a/desktop/src/i18n/locales/jp.ts b/desktop/src/i18n/locales/jp.ts
+index 58f23c2e..4c8ea390 100644
+--- a/desktop/src/i18n/locales/jp.ts
++++ b/desktop/src/i18n/locales/jp.ts
+@@ -2095,6 +2095,7 @@ export const jp: Record<TranslationKey, string> = {
+   'settings.computerUse.pythonPathSaveFailed': '保存に失敗しました。もう一度お試しください。',
+   'settings.computerUse.pythonPathDialogTitle': 'Python インタープリターを選択',
+   'settings.computerUse.pythonPathDialogFailed': 'ファイルピッカーを開けませんでした。パスを手動で貼り付けてください。',
++  'settings.computerUse.pythonPathDialogDetected': 'この環境にはネイティブのファイルピッカーがありません。検出されたインタープリタのパスを入力しました。確認して保存してください。',
+   'settings.computerUse.venv': '仮想環境',
+   'settings.computerUse.venvReady': '準備完了',
+   'settings.computerUse.venvNotReady': '未作成',
+diff --git a/desktop/src/i18n/locales/kr.ts b/desktop/src/i18n/locales/kr.ts
+index d0a0b17f..9f49a897 100644
+--- a/desktop/src/i18n/locales/kr.ts
++++ b/desktop/src/i18n/locales/kr.ts
+@@ -2097,6 +2097,7 @@ export const kr: Record<TranslationKey, string> = {
+   'settings.computerUse.pythonPathSaveFailed': '저장에 실패했습니다. 다시 시도하세요.',
+   'settings.computerUse.pythonPathDialogTitle': 'Python 인터프리터 선택',
+   'settings.computerUse.pythonPathDialogFailed': '파일 선택기를 열 수 없습니다. 경로를 수동으로 붙여넣으세요.',
++  'settings.computerUse.pythonPathDialogDetected': '이 환경에는 네이티브 파일 선택기가 없습니다. 감지된 인터프리터 경로를 채웠습니다. 확인 후 저장하세요.',
+   'settings.computerUse.venv': '가상 환경',
+   'settings.computerUse.venvReady': '준비됨',
+   'settings.computerUse.venvNotReady': '만들어지지 않음',
+diff --git a/desktop/src/i18n/locales/zh-TW.ts b/desktop/src/i18n/locales/zh-TW.ts
+index a600bb25..fd75d045 100644
+--- a/desktop/src/i18n/locales/zh-TW.ts
++++ b/desktop/src/i18n/locales/zh-TW.ts
+@@ -2093,6 +2093,7 @@ export const zh: Record<TranslationKey, string> = {
+   'settings.computerUse.pythonPathSaveFailed': '儲存失敗，請稍後重試。',
+   'settings.computerUse.pythonPathDialogTitle': '選擇 Python 直譯器',
+   'settings.computerUse.pythonPathDialogFailed': '無法開啟檔案選擇器，請手動貼上路徑。',
++  'settings.computerUse.pythonPathDialogDetected': '此環境沒有系統檔案選擇器，已填入檢測到的解譯器路徑，確認後儲存即可。',
+   'settings.computerUse.venv': '虛擬環境',
+   'settings.computerUse.venvReady': '已就緒',
+   'settings.computerUse.venvNotReady': '未建立',
+diff --git a/desktop/src/i18n/locales/zh.ts b/desktop/src/i18n/locales/zh.ts
+index eaacab5f..f51debc0 100644
+--- a/desktop/src/i18n/locales/zh.ts
++++ b/desktop/src/i18n/locales/zh.ts
+@@ -2093,6 +2093,7 @@ export const zh: Record<TranslationKey, string> = {
+   'settings.computerUse.pythonPathSaveFailed': '保存失败，请稍后重试。',
+   'settings.computerUse.pythonPathDialogTitle': '选择 Python 解释器',
+   'settings.computerUse.pythonPathDialogFailed': '无法打开文件选择器，请手动粘贴路径。',
++  'settings.computerUse.pythonPathDialogDetected': '此环境没有系统文件选择器，已填入检测到的解释器路径，确认后保存即可。',
+   'settings.computerUse.venv': '虚拟环境',
+   'settings.computerUse.venvReady': '已就绪',
+   'settings.computerUse.venvNotReady': '未创建',
+diff --git a/desktop/src/pages/ComputerUseSettings.test.tsx b/desktop/src/pages/ComputerUseSettings.test.tsx
+index 6e268d7d..d61228d4 100644
+--- a/desktop/src/pages/ComputerUseSettings.test.tsx
++++ b/desktop/src/pages/ComputerUseSettings.test.tsx
+@@ -229,7 +229,7 @@ describe('ComputerUseSettings', () => {
+     })
+   })
+ 
+-  it('falls back to manual Python path entry when dialogs are unavailable', async () => {
++  it('fills in the detected interpreter when dialogs are unavailable', async () => {
+     window.desktopHost = {
+       ...browserHost,
+       kind: 'browser',
+@@ -242,6 +242,41 @@ describe('ComputerUseSettings', () => {
+ 
+     render(<ComputerUseSettings />)
+ 
++    const input = await screen.findByLabelText('Python Interpreter Path')
++    await act(async () => {
++      fireEvent.click(screen.getByText('Browse'))
++      await Promise.resolve()
++    })
++
++    // The interpreter runs on the sidecar machine, so a browser file chooser
++    // could never reach it; the path the server already detected is filled in
++    // and the user only has to confirm (nothing is saved without an explicit click).
++    expect(input).toHaveValue('/usr/bin/python3')
++    expect(
++      screen.getByText(
++        'This environment has no native file picker. The detected interpreter path was filled in — just confirm and save.',
++      ),
++    ).toBeInTheDocument()
++    expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
++  })
++
++  it('explains the manual step when dialogs are unavailable and nothing was detected', async () => {
++    window.desktopHost = {
++      ...browserHost,
++      kind: 'browser',
++      isDesktop: false,
++      capabilities: {
++        ...browserHost.capabilities,
++        dialogs: false,
++      },
++    }
++    computerUseApiMock.getStatus.mockResolvedValue({
++      ...readyStatus,
++      python: { installed: false, version: null, path: null, source: null, error: null },
++    })
++
++    render(<ComputerUseSettings />)
++
+     await screen.findByLabelText('Python Interpreter Path')
+     await act(async () => {
+       fireEvent.click(screen.getByText('Browse'))
+diff --git a/desktop/src/pages/ComputerUseSettings.tsx b/desktop/src/pages/ComputerUseSettings.tsx
+index c33f5c3a..32b9a749 100644
+--- a/desktop/src/pages/ComputerUseSettings.tsx
++++ b/desktop/src/pages/ComputerUseSettings.tsx
+@@ -220,10 +220,29 @@ export function ComputerUseSettings() {
+     }
+   }
+ 
++  /**
++   * The interpreter lives on the machine running the sidecar, so a browser
++   * (H5) file chooser could never point at it — and a native dialog can also
++   * fail on a Linux host with no portal. Either way, fall back to what the
++   * server already detected instead of leaving the user to type a path from
++   * scratch; they only have to confirm and save.
++   */
++  const fallbackToDetectedPythonPath = () => {
++    const detected = status?.python.path
++    if (detected && !pythonPathDraft.trim()) setPythonPathDraft(detected)
++    setPythonPathMessage(
++      t(
++        detected
++          ? 'settings.computerUse.pythonPathDialogDetected'
++          : 'settings.computerUse.pythonPathDialogFailed',
++      ),
++    )
++  }
++
+   const choosePythonPath = async () => {
+     const host = getDesktopHost()
+     if (!host.capabilities.dialogs) {
+-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
++      fallbackToDetectedPythonPath()
+       return
+     }
+     try {
+@@ -238,7 +257,7 @@ export function ComputerUseSettings() {
+         await savePythonPath(selectedPath)
+       }
+     } catch {
+-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
++      fallbackToDetectedPythonPath()
+     }
+   }
+ 

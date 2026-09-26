@@ -1250,7 +1250,7 @@ describe('WebSocket stream event translation', () => {
         delta: { type: 'thinking_delta', thinking: 'Let me think' },
       },
     }, sessionId)).toEqual([
-      { type: 'thinking', text: 'Let me think' },
+      expect.objectContaining({ type: 'thinking', text: 'Let me think' }),
     ])
 
     expect(translateCliMessage({

@@ -4,6 +4,14 @@ import { ModelInfoSchema } from './coreSchemas.js'
 
 describe('ModelInfoSchema effort capabilities', () => {
   test('accepts model-specific effort levels emitted by CLI initialization', () => {
+    // These models resolve their effort levels from the built-in Claude
+    // capability list, which is only trusted when no third-party
+    // ANTHROPIC_BASE_URL is configured. A developer shell that points the
+    // provider at a proxy would otherwise report no effort for these models,
+    // so pin a first-party base URL for the test and restore it after.
+    const originalBaseUrl = process.env.ANTHROPIC_BASE_URL
+    process.env.ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
+
     const cases = [
       {
         value: 'sonnet',
@@ -17,18 +25,23 @@ describe('ModelInfoSchema effort capabilities', () => {
       },
     ]
 
-    for (const { value, model, expected } of cases) {
-      const supportedEffortLevels = getSupportedEffortLevelsForModel(model)
-      expect(supportedEffortLevels).toEqual(expected)
-      expect(
-        ModelInfoSchema().safeParse({
-          value,
-          displayName: value,
-          description: `${value} model`,
-          supportsEffort: true,
-          supportedEffortLevels,
-        }).success,
-      ).toBe(true)
+    try {
+      for (const { value, model, expected } of cases) {
+        const supportedEffortLevels = getSupportedEffortLevelsForModel(model)
+        expect(supportedEffortLevels).toEqual(expected)
+        expect(
+          ModelInfoSchema().safeParse({
+            value,
+            displayName: value,
+            description: `${value} model`,
+            supportsEffort: true,
+            supportedEffortLevels,
+          }).success,
+        ).toBe(true)
+      }
+    } finally {
+      if (originalBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+      else process.env.ANTHROPIC_BASE_URL = originalBaseUrl
     }
   })
 

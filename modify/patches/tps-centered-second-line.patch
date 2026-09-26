@@ -1,0 +1,31 @@
+diff --git a/desktop/src/components/layout/AppShell.tsx b/desktop/src/components/layout/AppShell.tsx
+index 154eaaf1..b0b9b726 100644
+--- a/desktop/src/components/layout/AppShell.tsx
++++ b/desktop/src/components/layout/AppShell.tsx
+@@ -428,7 +428,9 @@ export function AppShell() {
+             ) : null}
+             {isActiveChatTab ? (
+               <div className="flex shrink-0 items-center gap-1">
+-                <div className="flex h-[36px] shrink-0 flex-col items-end justify-center gap-0.5">
++                {/* 两行块：上=费用，下=TPS。与桌面端同口径——TPS 行水平居中于费用徽章下方
++                    （`items-center`），两行宽度不对等时居中更对仗。 */}
++                <div className="flex h-[36px] shrink-0 flex-col items-center justify-center gap-0.5">
+                   <div className="flex h-[15px] items-center">
+                     {activeTabId ? (
+                       <SessionCostBadge sessionId={activeTabId} active={activeTab?.status === 'running'} compact />
+diff --git a/desktop/src/pages/ActiveSession.tsx b/desktop/src/pages/ActiveSession.tsx
+index 282ce912..4607e36c 100644
+--- a/desktop/src/pages/ActiveSession.tsx
++++ b/desktop/src/pages/ActiveSession.tsx
+@@ -904,8 +904,9 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
+                   metadata={headerMetadata}
+                   actions={
+                     <>
+-                      {/* 两行块：上=会话费用，下=TPS（固定占位，缺一项时另一行居中对齐）。 */}
+-                      <div className="flex h-[42px] shrink-0 flex-col items-end justify-center gap-0.5">
++                      {/* 两行块：上=会话费用，下=TPS。费用徽章较宽，故 TPS 行**水平居中**于其下方
++                          （`items-center`，而非靠右对齐）——两行宽度不对等时居中才显得对仗工整。 */}
++                      <div className="flex h-[42px] shrink-0 flex-col items-center justify-center gap-0.5">
+                         <div className="flex h-[16px] items-center">
+                           {activeTabId ? <SessionCostBadge sessionId={activeTabId} active={chatState !== 'idle'} /> : null}
+                         </div>

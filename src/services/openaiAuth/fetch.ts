@@ -17,6 +17,7 @@ import {
   resolveOpenAIReasoningEffortWithPriority,
 } from './models.js'
 import { getOpenAIOAuthTokens } from './storage.js'
+import { shouldSendThinkingToAPI } from '../../utils/thinking.js'
 import { resolvePromptCacheKey } from '../../server/proxy/promptCacheKey.js'
 import { anthropicToOpenaiResponses } from '../../server/proxy/transform/anthropicToOpenaiResponses.js'
 import { openaiResponsesToAnthropic } from '../../server/proxy/transform/openaiResponsesToAnthropic.js'
@@ -222,7 +223,7 @@ export function buildOpenAICodexFetch(
       openaiResponsesToAnthropic(
         responseBody,
         mappedModel,
-        { preserveOpenAIReasoning: true },
+        { preserveOpenAIReasoning: shouldSendThinkingToAPI() },
       ),
     )
   }

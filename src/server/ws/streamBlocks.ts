@@ -22,6 +22,13 @@ export type SessionStreamState = {
   activeMessageIdsByScope: Map<string, string>
   activeBlockScopesByIndex: Map<number, Set<string>>
   activeBlockTypes: Map<string, 'text' | 'tool_use' | 'thinking'>
+  /** Epoch ms the server first saw each open thinking block's `content_block_start`.
+   *  Attached to the block's `thinking` deltas as `serverStart` so the client can
+   *  anchor the block's wall-clock start on the server's receive clock (the true
+   *  "generation began" moment) instead of its own delta-receive clock, and show
+   *  the elapsed thinking time ticking from the very first block, not after the
+   *  text/tool block that follows it. */
+  thinkingBlockStarts: Map<string, number>
   activeToolBlocks: Map<string, { toolName: string; toolUseId: string; inputJson: string; parentToolUseId?: string }>
   pendingLocalCommand?: { name: string; args: string }
   /** Tool blocks whose input JSON failed to parse in content_block_stop.
@@ -40,6 +47,7 @@ export function resetCurrentStreamAttempt(state: SessionStreamState): void {
   state.activeMessageIdsByScope.clear()
   state.activeBlockScopesByIndex.clear()
   state.activeBlockTypes.clear()
+  state.thinkingBlockStarts.clear()
   state.activeToolBlocks.clear()
   state.pendingToolBlocks.clear()
   state.toolParentUseIds.clear()

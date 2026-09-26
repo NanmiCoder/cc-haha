@@ -52,6 +52,7 @@ describe('H5AccessService', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
 
     await expect(service.validateToken('missing-token')).resolves.toBe(false)
@@ -80,6 +81,7 @@ describe('H5AccessService', () => {
       publicBaseUrl: null,
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     expect(saved.h5Access.enabled).toBe(true)
     // Plaintext is persisted on purpose (issue #767): the desktop app must be
@@ -405,6 +407,7 @@ describe('H5AccessService', () => {
       publicBaseUrl: 'https://public.example.com/app',
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
 
     await expect(
@@ -456,6 +459,7 @@ describe('H5AccessService', () => {
       publicBaseUrl: 'https://public.example.com',
       fixedPort: null,
       disconnectGraceSeconds: null,
+      requireToken: false,
     })
     await expect(service.validateToken('anything')).resolves.toBe(false)
     await expect(service.isOriginAllowed('https://example.com')).resolves.toBe(false)

@@ -81,6 +81,8 @@ export type ProjectConfig = {
   lastAPIDurationWithoutRetries?: number
   lastDecodeDuration?: number
   lastTtftDuration?: number
+  // Output tokens paired with `lastDecodeDuration`; see the panel's generation-speed pairing.
+  lastTimedOutputTokens?: number
   lastToolDuration?: number
   lastCost?: number
   lastDuration?: number

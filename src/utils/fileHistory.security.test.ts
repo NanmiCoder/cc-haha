@@ -553,6 +553,57 @@ describe('completed turn checkpoint persistence', () => {
     await fileHistoryCompleteSnapshot(updateState, randomUUID() as UUID)
     expect(getState().snapshots[0]?.completedFileBackups).toBeUndefined()
   })
+
+  test('reuses the previous end-of-turn copy when the file is untouched', async () => {
+    const firstTurn = randomUUID() as UUID
+    const secondTurn = randomUUID() as UUID
+    const trackedPath = join(getOriginalCwd(), 'stable.txt')
+    await writeFile(trackedPath, 'turn one\n')
+    const { getState, updateState } = createHistoryState(firstTurn)
+    await fileHistoryTrackEdit(updateState, trackedPath, firstTurn)
+
+    await fileHistoryCompleteSnapshot(updateState, firstTurn)
+    const firstBackup =
+      getState().snapshots.find(s => s.messageId === firstTurn)!
+        .completedFileBackups!['stable.txt']!
+
+    // Next turn starts, the tracked file set is inherited, and the file is not
+    // touched. Copying again here is what made the backup directory grow with
+    // turns rather than with edits.
+    await fileHistoryMakeSnapshot(updateState, secondTurn)
+    await fileHistoryCompleteSnapshot(updateState, secondTurn)
+    const secondBackup =
+      getState().snapshots.find(s => s.messageId === secondTurn)!
+        .completedFileBackups!['stable.txt']!
+
+    expect(secondBackup.backupFileName).toBe(firstBackup.backupFileName)
+    expect((await readBackupFileSafely(secondBackup.backupFileName!)).content.toString()).toBe('turn one\n')
+  })
+
+  test('still copies when the file changed, and the copy holds the new bytes', async () => {
+    const firstTurn = randomUUID() as UUID
+    const secondTurn = randomUUID() as UUID
+    const trackedPath = join(getOriginalCwd(), 'changing.txt')
+    await writeFile(trackedPath, 'turn one\n')
+    const { getState, updateState } = createHistoryState(firstTurn)
+    await fileHistoryTrackEdit(updateState, trackedPath, firstTurn)
+    await fileHistoryCompleteSnapshot(updateState, firstTurn)
+    const firstBackup =
+      getState().snapshots.find(s => s.messageId === firstTurn)!
+        .completedFileBackups!['changing.txt']!
+
+    await fileHistoryMakeSnapshot(updateState, secondTurn)
+    await writeFile(trackedPath, 'turn two\n')
+    await fileHistoryCompleteSnapshot(updateState, secondTurn)
+    const secondBackup =
+      getState().snapshots.find(s => s.messageId === secondTurn)!
+        .completedFileBackups!['changing.txt']!
+
+    expect(secondBackup.backupFileName).not.toBe(firstBackup.backupFileName)
+    expect((await readBackupFileSafely(secondBackup.backupFileName!)).content.toString()).toBe('turn two\n')
+    // The earlier turn's bytes must survive for rewind.
+    expect((await readBackupFileSafely(firstBackup.backupFileName!)).content.toString()).toBe('turn one\n')
+  })
 })
 
 

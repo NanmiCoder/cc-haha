@@ -7,6 +7,12 @@ export type RequestCompatibilityOptions = {
   budgetSource?: OutputBudgetSource
   openAICodexOAuth?: boolean
   passSamplingParams?: boolean
+  /**
+   * The caller believes this endpoint implements `return_token_ids` (a local
+   * engine, or a provider that declared it). Only matters while the provider
+   * has not declared the capability itself.
+   */
+  passTokenIds?: boolean
 }
 
 export type ResolvedOutputBudget = {
@@ -40,6 +46,8 @@ export function resolveRequestCompatibility(
   outputBudget: ResolvedOutputBudget
   passSamplingParams: boolean
   passReasoning: boolean
+  /** Send `return_token_ids` so chunks carry real token counts (vLLM-family). */
+  returnTokenIds: boolean
   parallelToolCalls?: boolean
   structuredOutput?: StructuredOutputFormat
 } {
@@ -136,6 +144,8 @@ export function resolveRequestCompatibility(
     passSamplingParams: compatibility.sampling === 'supported'
       || (compatibility.sampling !== 'unsupported' && options.passSamplingParams === true),
     passReasoning: compatibility.reasoning !== 'unsupported',
+    returnTokenIds: compatibility.tokenIds === 'supported'
+      || (compatibility.tokenIds !== 'unsupported' && options.passTokenIds === true),
     ...(parallelToolCalls !== undefined ? { parallelToolCalls } : {}),
     ...(structuredOutput ? { structuredOutput } : {}),
   }

@@ -314,6 +314,31 @@ export function H5AccessSettings() {
             </Badge>
           </div>
 
+          {h5Access.enabled && (
+            <div className="mt-4 flex items-start gap-3 border-t border-[var(--color-border-separator)] pt-4">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 rounded-[var(--radius-sm)] border-[var(--color-border)] accent-[var(--color-brand)]"
+                checked={h5Access.requireToken}
+                disabled={h5ActionRunning}
+                aria-label={t('settings.general.h5AccessRequireToken')}
+                onChange={(event) => {
+                  void runH5Action(async () => {
+                    await updateH5AccessSettings({ requireToken: event.target.checked })
+                  })
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-[var(--color-text-primary)]">
+                  {t('settings.general.h5AccessRequireToken')}
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-[var(--color-text-tertiary)]">
+                  {t('settings.general.h5AccessRequireTokenHint')}
+                </span>
+              </span>
+            </div>
+          )}
+
           {h5AccessDiagnostics?.storedHostStaleness === 'unreachable' && h5AccessDiagnostics.storedPublicBaseUrl ? (
             <div
               data-testid="h5-access-stale-host-banner"

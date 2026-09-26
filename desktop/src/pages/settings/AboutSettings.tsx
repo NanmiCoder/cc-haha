@@ -4,6 +4,7 @@ import { useTranslation } from '../../i18n'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Switch } from '@/components/ui/Switch'
 import type { UpdateProxyMode } from '../../types/settings'
 import { MarkdownRenderer } from '../../components/markdown/MarkdownRenderer'
 import { useUpdateStore } from '../../stores/updateStore'
@@ -37,6 +38,8 @@ export function AboutSettings() {
   const [version, setVersion] = useState('')
   const updateProxy = useSettingsStore((s) => s.updateProxy)
   const setUpdateProxy = useSettingsStore((s) => s.setUpdateProxy)
+  const disableUpdates = useSettingsStore((s) => s.disableUpdates)
+  const setDisableUpdates = useSettingsStore((s) => s.setDisableUpdates)
   const updateStatus = useUpdateStore((s) => s.status)
   const availableVersion = useUpdateStore((s) => s.availableVersion)
   const releaseNotes = useUpdateStore((s) => s.releaseNotes)
@@ -195,9 +198,19 @@ export function AboutSettings() {
             variant="secondary"
             onClick={() => void checkForUpdates()}
             loading={updateStatus === 'checking'}
+            disabled={disableUpdates}
           >
             {t('update.checkNow')}
           </Button>
+        </div>
+
+        <div className="mt-3">
+          <Switch
+            checked={disableUpdates}
+            onChange={(enabled) => void setDisableUpdates(enabled)}
+            label={t('update.disableUpdates')}
+            description={t('update.disableUpdatesDescription')}
+          />
         </div>
 
         <div className="mt-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">

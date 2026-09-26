@@ -8,14 +8,36 @@ import { useUIStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useProviderStore } from '@/stores/providerStore'
 import { providersApi } from '@/api/providers'
-import { settingsApi } from '@/api/settings'
-import { modelsApi } from '@/api/models'
 import type { SavedProvider } from '@/types/provider'
 
 const saved: SavedProvider = {
   id: 'fixture-provider', name: 'Fixture provider', presetId: 'custom', baseUrl: 'https://fixture.example', apiKey: '', apiFormat: 'anthropic',
   models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
 }
+
+// The H5 surface now exposes the full desktop tab list; only the tab it
+// navigates into needs real rendering. Everything else is a light stub so the
+// test stays focused on the navigation parity, not every page's internals.
+vi.mock('../ActivitySettings', () => ({ ActivitySettings: () => <div>ActivitySettings Mock</div> }))
+vi.mock('../AdapterSettings', () => ({ AdapterSettings: () => <div>AdapterSettings Mock</div> }))
+vi.mock('../ComputerUseSettings', () => ({ ComputerUseSettings: () => <div>ComputerUseSettings Mock</div> }))
+vi.mock('../DiagnosticsSettings', () => ({ DiagnosticsSettings: () => <div>DiagnosticsSettings Mock</div> }))
+vi.mock('../McpSettings', () => ({ McpSettings: () => <div>McpSettings Mock</div> }))
+vi.mock('../MemorySettings', () => ({ MemorySettings: () => <div>MemorySettings Mock</div> }))
+vi.mock('../TerminalSettings', () => ({ TerminalSettings: () => <div>TerminalSettings Mock</div> }))
+vi.mock('../TraceList', () => ({ TraceList: () => <div>TraceList Mock</div> }))
+vi.mock('./GeneralSettings', () => ({ GeneralSettings: () => <div>GeneralSettings Mock</div> }))
+vi.mock('./H5AccessSettings', () => ({ H5AccessSettings: () => <div>H5AccessSettings Mock</div> }))
+vi.mock('./AboutSettings', () => ({ AboutSettings: () => <div>AboutSettings Mock</div> }))
+vi.mock('../../features/pets/PetSettings', () => ({ PetSettings: () => <div>PetSettings Mock</div> }))
+vi.mock('../../components/settings/AgentManager', () => ({ AgentManager: () => <div>AgentManager Mock</div> }))
+vi.mock('../../components/skills/SkillList', () => ({ SkillList: () => <div>SkillList Mock</div> }))
+vi.mock('../../components/skills/SkillDetail', () => ({ SkillDetail: () => <div>SkillDetail Mock</div> }))
+vi.mock('../../components/plugins/PluginList', () => ({ PluginList: () => <div>PluginList Mock</div> }))
+vi.mock('../../components/plugins/PluginDetail', () => ({ PluginDetail: () => <div>PluginDetail Mock</div> }))
+vi.mock('../../stores/skillStore', () => ({ useSkillStore: (selector: (s: { selectedSkill: string | null }) => unknown) => selector({ selectedSkill: null }) }))
+vi.mock('../../stores/pluginStore', () => ({ usePluginStore: (selector: (s: { selectedPlugin: string | null }) => unknown) => selector({ selectedPlugin: null }) }))
+
 beforeEach(() => {
   useSettingsStore.setState({ locale: 'en', outputStyle: 'default', responseLanguage: '', effortLevel: 'high', currentModel: { id: 'fixture-model', name: 'Fixture model', context: '', description: '', supportedReasoningEfforts: ['low', 'high'] } })
   useUIStore.setState({ activeSettingsTab: 'providers', pendingSettingsTab: null })
@@ -26,22 +48,23 @@ beforeEach(() => {
   vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
-it('limits browser navigation to providers and general, with local appearance and shared agent preferences', async () => {
-  useUIStore.setState({ activeSettingsTab: 'terminal' })
+it('exposes the same full section list as the desktop rail', async () => {
   render(<H5Settings />)
   const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
-  expect(nav.getAllByRole('button')).toHaveLength(2)
-  expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
-  fireEvent.click(nav.getByRole('button', { name: 'General' }))
-  expect(screen.getByText('Appearance and interface language apply only to this browser.')).toBeInTheDocument()
-  const update = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
-  fireEvent.change(screen.getByLabelText('Output Style'), { target: { value: 'Learning' } })
-  await waitFor(() => expect(update).toHaveBeenCalledWith({ outputStyle: 'Learning' }))
-  await waitFor(() => expect(screen.getByLabelText('Reasoning effort')).not.toBeDisabled())
-  const effort = vi.spyOn(modelsApi, 'setEffort').mockResolvedValue({ ok: true, level: 'low' })
-  fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'low' } })
-  await waitFor(() => expect(effort).toHaveBeenCalledWith('low'))
-  expect(screen.queryByLabelText(/ngrok Authtoken/)).not.toBeInTheDocument()
+  expect(nav.getAllByRole('button')).toHaveLength(16)
+  expect(nav.getByRole('button', { name: 'H5 Access' })).toBeInTheDocument()
+  expect(nav.getByRole('button', { name: 'Terminal' })).toBeInTheDocument()
+  expect(nav.getByRole('button', { name: 'About' })).toBeInTheDocument()
+})
+it('navigates to any desktop section, including ones the old two-pill fence hid', async () => {
+  useUIStore.setState({ activeSettingsTab: 'terminal' })
+  render(<H5Settings />)
+  expect(screen.getByText('TerminalSettings Mock')).toBeInTheDocument()
+  const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
+  fireEvent.click(nav.getByRole('button', { name: 'H5 Access' }))
+  expect(screen.getByText('H5AccessSettings Mock')).toBeInTheDocument()
+  expect(useUIStore.getState().activeSettingsTab).toBe('h5Access')
+  expect(useUIStore.getState().pendingSettingsTab).toBeNull()
 })
 it('edits saved providers without reading or overwriting stored keys or global settings', async () => {
   const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider: saved })
@@ -83,24 +106,13 @@ it('activates and deletes providers through the existing API without connection 
   await waitFor(() => expect(remove).toHaveBeenCalledWith('fixture-provider'))
   expect(probe).not.toHaveBeenCalled()
 })
-it('changes browser appearance without writing connected computer settings', async () => {
-  useUIStore.setState({ activeSettingsTab: 'general', followSystemTheme: true })
-  const update = vi.spyOn(settingsApi, 'updateUser')
-  render(<H5Settings />)
-  fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: 'ink-blue' } })
-  expect(useUIStore.getState().theme).toBe('ink-blue')
-  expect(useUIStore.getState().followSystemTheme).toBe(false)
-  expect(update).not.toHaveBeenCalled()
-})
-
-it('routes the actual Settings page to the browser-safe panels', async () => {
+it('routes the actual Settings page to the full browser tab list', async () => {
   render(<Settings />)
   const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
-  expect(nav.getAllByRole('button')).toHaveLength(2)
+  expect(nav.getAllByRole('button')).toHaveLength(16)
   expect(screen.queryByTestId('settings-navigation')).not.toBeInTheDocument()
   expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
 })
-
 it.each([true, false])('shows beta details on focus without overflowing narrow forms (browserMode=%s)', async (browserMode) => {
   render(<ProviderSettings browserMode={browserMode} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))

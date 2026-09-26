@@ -26,6 +26,24 @@ describe('TurnCompletionStamp', () => {
     expect(container.querySelector('[data-turn-completion-duration]')).toBeNull()
   })
 
+  it('shows what the turn spent, before how long it took', () => {
+    const { container } = render(
+      <TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 739_000, outputTokens: 1_500 }} />,
+    )
+
+    expect(screen.getByText('used 1.50k')).toBeTruthy()
+    // Same order as the activity digest: tokens first, elapsed time last.
+    const text = container.textContent ?? ''
+    expect(text.indexOf('used 1.50k')).toBeLessThan(text.indexOf('took 12m 19s'))
+  })
+
+  it('omits the token total for a turn whose calls reported none', () => {
+    const { container } = render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 1_000 }} />)
+
+    expect(container.querySelector('[data-turn-completion-usage]')).toBeNull()
+    expect(screen.getByText('took 1s')).toBeTruthy()
+  })
+
   it('carries the exact timestamp as a title for the rounded clock label', () => {
     render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 1_000 }} />)
 

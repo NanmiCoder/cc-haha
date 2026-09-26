@@ -278,6 +278,8 @@ describe('ConversationService', () => {
   test('buildChildEnv flushes desktop transcripts before the SDK reports turn completion (#1033)', async () => {
     const previous = process.env.CLAUDE_CODE_EAGER_FLUSH
     delete process.env.CLAUDE_CODE_EAGER_FLUSH
+    const previousEmit = process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS
+    delete process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS
     resetTerminalShellEnvironmentCacheForTests()
     try {
       const service = new ConversationService() as any
@@ -302,6 +304,8 @@ describe('ConversationService', () => {
     } finally {
       if (previous === undefined) delete process.env.CLAUDE_CODE_EAGER_FLUSH
       else process.env.CLAUDE_CODE_EAGER_FLUSH = previous
+      if (previousEmit === undefined) delete process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS
+      else process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = previousEmit
       resetTerminalShellEnvironmentCacheForTests()
     }
   })
@@ -554,12 +558,17 @@ describe('ConversationService', () => {
   test.each([1_800_000, 14_400_000, 21_600_000])('buildChildEnv raises all request budgets for a long local-model response (%i ms, #1307)', async timeoutMs => {
     const prev = process.env.CLAUDE_STREAM_MAX_DURATION_MS
     delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
+    // A caller-provided first-token watchdog (the documented #826 override)
+    // must not mask the budget raised from the request timeout here.
+    const prevFirstToken = process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+    delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
     await fs.writeFile(
       path.join(tmpDir, 'settings.json'),
       JSON.stringify({ network: { aiRequestTimeoutMs: timeoutMs } }),
       'utf-8',
     )
     try {
+
       const service = new ConversationService() as any
       const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
 
@@ -573,6 +582,8 @@ describe('ConversationService', () => {
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_STREAM_MAX_DURATION_MS
       else process.env.CLAUDE_STREAM_MAX_DURATION_MS = prev
+      if (prevFirstToken === undefined) delete process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS
+      else process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS = prevFirstToken
     }
   })
 

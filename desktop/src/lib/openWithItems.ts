@@ -45,7 +45,7 @@ export function isPreviewableChangedFile(path: string): boolean {
 
 // ─── Open-with items ──────────────────────────────────────────────────────────
 
-export type OpenWithIcon = 'in-app-browser' | 'system' | 'application' | 'ide' | 'file-manager' | 'preview' | 'copy'
+export type OpenWithIcon = 'in-app-browser' | 'system' | 'application' | 'ide' | 'file-manager' | 'preview' | 'copy' | 'download'
 
 export type OpenWithItem = {
   id: string
@@ -65,6 +65,9 @@ export type OpenWithDeps = {
   /** Omit to leave the copy entries out (a URL context has nothing to copy). */
   copyPath?: (absolutePath: string) => void
   copyFileContent?: (path: string) => void
+  /** Omit to leave the download entry out (a URL context has no file to save). */
+  downloadFile?: (absolutePath: string) => void
+
   /**
    * Which editor gets the single top-level slot. Falls back to the first one
    * detected — the point is that the slot is predictable, so it must not be
@@ -191,6 +194,13 @@ export function buildOpenWithItems(ctx: OpenWithContext, targets: OpenTarget[], 
     const copyFileContent = deps.copyFileContent
     const readPath = ctx.relPath ?? ctx.absolutePath
     clipboard.push({ id: 'copy-content', label: deps.t('openWith.copyFileContent'), icon: 'copy', onSelect: () => copyFileContent(readPath) })
+  }
+  // Download saves the file to the user's machine through the local server's
+  // attachment route; it is a plain file action (no target), so it rides with the
+  // clipboard group rather than the "open in…" application list.
+  if (deps.downloadFile) {
+    const downloadFile = deps.downloadFile
+    clipboard.push({ id: 'download', label: deps.t('workspace.download'), icon: 'download', onSelect: () => downloadFile(ctx.absolutePath) })
   }
   pushGroup(items, clipboard)
 

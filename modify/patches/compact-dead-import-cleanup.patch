@@ -1,0 +1,36 @@
+diff --git a/src/services/compact/compact.ts b/src/services/compact/compact.ts
+index 085a458..47f1182 100644
+--- a/src/services/compact/compact.ts
++++ b/src/services/compact/compact.ts
+@@ -39,7 +39,6 @@ import {
+   getMcpInstructionsDeltaAttachment,
+ } from '../../utils/attachments.js'
+ import { getMemoryPath } from '../../utils/config.js'
+-import { isEnvTruthy } from '../../utils/env.js'
+ import { COMPACT_MAX_OUTPUT_TOKENS } from '../../utils/context.js'
+ 
+ import {
+diff --git a/src/services/compact/vcc/vendor/core/build-sections.ts b/src/services/compact/vcc/vendor/core/build-sections.ts
+index 2061d7e..b36756a 100644
+--- a/src/services/compact/vcc/vendor/core/build-sections.ts
++++ b/src/services/compact/vcc/vendor/core/build-sections.ts
+@@ -1,7 +1,7 @@
+ // Vendored from @sting8k/pi-vcc@0.8.0 (MIT). Do not edit by hand.
+ // @ts-nocheck
+ import type { FileOps, NormalizedBlock } from "../types";
+-import { clip, clipSentence, nonEmptyLines } from "./content";
++import { clipSentence, nonEmptyLines } from "./content";
+ import type { SectionData } from "../sections";
+ import { extractGoals } from "../extract/goals";
+ import { extractFiles } from "../extract/files";
+diff --git a/src/services/compact/vcc/vendor/types.ts b/src/services/compact/vcc/vendor/types.ts
+index f86ca7b..203a768 100644
+--- a/src/services/compact/vcc/vendor/types.ts
++++ b/src/services/compact/vcc/vendor/types.ts
+@@ -1,6 +1,5 @@
+ // Vendored from @sting8k/pi-vcc@0.8.0 (MIT). Do not edit by hand.
+ // @ts-nocheck
+-import type { Message } from "../pi-ai";
+ 
+ export type CompactionReason = "manual" | "threshold" | "overflow";
+ 

@@ -65,12 +65,17 @@ const BUILT_IN_OUTPUT_STYLE_TRANSLATION_KEYS = {
 } satisfies Record<string, { label: TranslationKey; description: TranslationKey }>
 
 export function GeneralSettings() {
+
   const {
     currentModel,
     effortLevel,
     setEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    thinkingSendBack,
+    setThinkingSendBack,
+    vccCompactBackend,
+    setVccCompactBackend,
     workflowKeywordTriggerEnabled,
     setWorkflowKeywordTriggerEnabled,
     agentTeamsEnabled,
@@ -127,6 +132,22 @@ export function GeneralSettings() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sessions = useSessionStore((s) => s.sessions)
   const t = useTranslation()
+  const COMPACTION_BACKEND_ITEMS: Array<{
+    value: 'algorithm' | 'llm'
+    label: string
+    description: string
+  }> = [
+    {
+      value: 'algorithm',
+      label: t('settings.general.compactionBackend.algorithm.label'),
+      description: t('settings.general.compactionBackend.algorithm.description'),
+    },
+    {
+      value: 'llm',
+      label: t('settings.general.compactionBackend.llm.label'),
+      description: t('settings.general.compactionBackend.llm.description'),
+    },
+  ]
   const [webSearchDraft, setWebSearchDraft] = useState(webSearch)
   const [networkDraft, setNetworkDraft] = useState(network)
   const [networkTimeoutInput, setNetworkTimeoutInput] = useState(String(Math.round(network.aiRequestTimeoutMs / 1000)))
@@ -1081,6 +1102,58 @@ export function GeneralSettings() {
             </div>
           </div>
         </label>
+        {thinkingEnabled && (
+          <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 mt-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
+            <input
+              type="checkbox"
+              aria-label={t('settings.general.thinkingSendBackTitle')}
+              checked={thinkingSendBack}
+              onChange={(e) => void setThinkingSendBack(e.target.checked)}
+              className={SETTINGS_CHECKBOX_INPUT_CLASS}
+            />
+            <SettingsCheckboxMark checked={thinkingSendBack} />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                {t('settings.general.thinkingSendBackTitle')}
+              </div>
+              <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
+                {t('settings.general.thinkingSendBackHint')}
+              </div>
+            </div>
+          </label>
+        )}
+      </div>
+
+      <div className="mt-8">
+        {/* Context compaction */}
+        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.compactionTitle')}</h2>
+        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.compactionDescription')}</p>
+        <Dropdown<'algorithm' | 'llm'>
+          items={COMPACTION_BACKEND_ITEMS}
+          value={vccCompactBackend}
+          onChange={(value) => void setVccCompactBackend(value)}
+          width="100%"
+          maxHeight={240}
+          className="block w-full"
+          trigger={
+            <Button
+              variant="secondary"
+              size="md"
+              block
+              className="h-10 gap-3"
+              aria-label={t('settings.general.compactionTitle')}
+            >
+              <span className="min-w-0 flex-1 truncate text-left">
+                {t(
+                  vccCompactBackend === 'llm'
+                    ? 'settings.general.compactionBackend.llm.label'
+                    : 'settings.general.compactionBackend.algorithm.label',
+                )}
+              </span>
+              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+            </Button>
+          }
+        />
       </div>
 
       {/*

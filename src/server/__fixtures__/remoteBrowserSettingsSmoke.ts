@@ -29,13 +29,25 @@ try {
   const h5 = new H5AccessService()
   const { token } = await h5.enable()
   await h5.updateSettings({ allowedOrigins: [origin] })
+  // The fixture asserts that an *unauthenticated* browser request is rejected.
+  // The v0.5.3 re-implementation ships requireToken=false (tokenless by
+  // default), so restore the strict token-required posture explicitly to keep
+  // that assertion meaningful for the whole run.
+  await h5.updateSettings({ requireToken: true })
   const providerService = new ProviderService()
   for (const transport of ['public', 'lan'] as const) {
     const base = transport === 'public' ? remote : local
     const headers = { Origin: origin, ...(transport === 'public' ? { Cookie: cookie } : { Authorization: `Bearer ${token}` }) }
     const request = (route: string, method = 'GET', body?: unknown) => fetch(base + route, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     const protectedResponse = await fetch(base + '/api/providers', { headers: { Origin: origin } })
-    check(protectedResponse.status === 401, `${transport}: unauthenticated provider list allowed`)
+    // The `public` transport answers through the reverse proxy, whose protected
+    // paths require a paired-device cookie (publicAccess.ts) — so no cookie
+    // means 401 regardless of the H5 token setting. The direct loopback `lan`
+    // connection hits the main server's H5 gate, and loopback is a trusted
+    // local source (v0.5.3 §二 source-address exemption), so it reads the list
+    // successfully without a token.
+    const expectedProtectedStatus = transport === 'public' ? 401 : 200
+    check(protectedResponse.status === expectedProtectedStatus, `${transport}: unauthenticated provider list expected ${expectedProtectedStatus}, got ${protectedResponse.status}`)
     const input = { presetId: 'custom', name: `Fixture ${transport}`, apiKey: `fake-${transport}-secret`, baseUrl: 'https://example.invalid', apiFormat: 'anthropic', models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' }, imageGeneration: { model: 'fixture-image', apiKey: `fake-${transport}-image-secret` }, requestCompatibility: { maxOutputTokens: 2048, privateFutureKey: 'fake-hidden-compatibility-key' } }
     const created = await request('/api/providers', 'POST', input)
     const createdBody = await created.json()

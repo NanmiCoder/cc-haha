@@ -40,8 +40,14 @@ const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
 // Keep at least 75% of their advertised window available to the compact input.
 const MAX_SUMMARY_RESERVE_CONTEXT_FRACTION = 0.25
 
-// Returns the context window size minus the max output tokens for the model
-export function getEffectiveContextWindowSize(model: string): number {
+/**
+ * The model's context window before the summary reserve is subtracted — i.e.
+ * the number an operator declares as "上下文窗口" (provider preset, built-in
+ * table, `[1m]` marker, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`). Auto-compact
+ * tiers are keyed off this, because the tier bands (100K/200K/300K/500K) are
+ * statements about the declared window, not about the post-reserve headroom.
+ */
+export function getResolvedContextWindow(model: string): number {
   let contextWindow = getContextWindowForModel(model, getSdkBetas())
 
   const autoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
@@ -64,6 +70,13 @@ export function getEffectiveContextWindowSize(model: string): number {
     }
   }
 
+  return contextWindow
+}
+
+// Returns the context window size minus the max output tokens for the model
+export function getEffectiveContextWindowSize(model: string): number {
+  const contextWindow = getResolvedContextWindow(model)
+
   const reservedTokensForSummary = Math.min(
     getMaxOutputTokensForModel(model),
     MAX_OUTPUT_TOKENS_FOR_SUMMARY,
@@ -84,27 +97,73 @@ export type AutoCompactTrackingState = {
   consecutiveFailures?: number
 }
 
+/** The pre-tier fixed headroom. Still enforced as an upper bound on how late
+ * compaction may start, so 12K–32K windows keep the behavior the small-window
+ * guard was added for: at 13% of a 12K window only ~1.5K tokens would remain,
+ * which is not enough room for the summary and would hit prompt_too_long. */
 export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
 export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
+
+/**
+ * Auto-compact tiers, keyed by the *declared* context window
+ * (`getResolvedContextWindow`). Each tier states how much should be left when
+ * compaction starts (`pctLeft` of the window) and the absolute floor below
+ * which compaction is forced regardless of percentage (`floorTokens`).
+ *
+ * Bands are inclusive upper bounds, evaluated top to bottom.
+ */
+export const AUTOCOMPACT_TIERS: ReadonlyArray<{
+  upToWindow: number
+  pctLeft: number
+  floorTokens: number
+}> = [
+  { upToWindow: 100_000, pctLeft: 0.13, floorTokens: 13_000 },
+  { upToWindow: 200_000, pctLeft: 0.17, floorTokens: 32_000 },
+  { upToWindow: 300_000, pctLeft: 0.21, floorTokens: 36_000 },
+  { upToWindow: 500_000, pctLeft: 0.17, floorTokens: 53_000 },
+  { upToWindow: Number.POSITIVE_INFINITY, pctLeft: 0.15, floorTokens: 65_000 },
+]
+
+export function getAutoCompactTier(declaredWindow: number): {
+  pctLeft: number
+  floorTokens: number
+} {
+  for (const tier of AUTOCOMPACT_TIERS) {
+    if (declaredWindow <= tier.upToWindow) {
+      return { pctLeft: tier.pctLeft, floorTokens: tier.floorTokens }
+    }
+  }
+  const last = AUTOCOMPACT_TIERS[AUTOCOMPACT_TIERS.length - 1]!
+  return { pctLeft: last.pctLeft, floorTokens: last.floorTokens }
+}
 
 // Stop trying autocompact after this many consecutive failures.
 // BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
 // in a single session, wasting ~250K API calls/day globally.
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 
+/**
+ * Soft trigger: the token count at which auto-compact starts.
+ *
+ * The tier supplies the share of the window that should remain, but the result
+ * is additionally capped by the legacy `min(13K, window/3)` guard. For windows
+ * up to ~40K that guard is the binding term, so small-window behavior is
+ * unchanged; for larger windows the tier decides and compaction starts
+ * meaningfully earlier than a flat 13K buffer would allow.
+ */
 export function getAutoCompactThreshold(model: string): number {
   const effectiveContextWindow = getEffectiveContextWindowSize(model)
+  const { pctLeft } = getAutoCompactTier(getResolvedContextWindow(model))
 
-  // The fixed 13K buffer is larger than some supported context windows. Cap it
-  // at one third of the effective window so the threshold remains useful for
-  // 16K/32K providers while preserving the existing buffer for larger models.
-  const autoCompactBuffer = Math.min(
-    AUTOCOMPACT_BUFFER_TOKENS,
-    Math.floor(effectiveContextWindow / 3),
+  const tieredThreshold = Math.floor(
+    effectiveContextWindow * (1 - pctLeft),
   )
-  const autocompactThreshold = effectiveContextWindow - autoCompactBuffer
+  const legacyGuard =
+    effectiveContextWindow -
+    Math.min(AUTOCOMPACT_BUFFER_TOKENS, Math.floor(effectiveContextWindow / 3))
+  const autocompactThreshold = Math.min(tieredThreshold, legacyGuard)
 
   // Override for easier testing of autocompact
   const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
@@ -121,6 +180,26 @@ export function getAutoCompactThreshold(model: string): number {
   return autocompactThreshold
 }
 
+/**
+ * Hard trigger: remaining tokens below the tier's absolute floor. The soft
+ * percentage normally fires first, so this is a backstop — it guarantees a
+ * compaction attempt when the remaining budget is genuinely small even if the
+ * percentage path was bypassed (overridden, or already compacted and refilled).
+ *
+ * Never returned earlier than the soft trigger, so crossing it always implies
+ * the soft condition was already satisfied.
+ */
+export function getForcedCompactThreshold(model: string): number {
+  // Measured on the declared window, the same basis as the tier bands: the
+  // floor is stated as an absolute number of tokens left, so it has to be
+  // subtracted from the window the operator declared. Both are clamped so the
+  // result can never precede the soft trigger.
+  const declaredWindow = getResolvedContextWindow(model)
+  const { floorTokens } = getAutoCompactTier(declaredWindow)
+  const floor = Math.min(floorTokens, declaredWindow)
+  return Math.max(declaredWindow - floor, getAutoCompactThreshold(model))
+}
+
 export function calculateTokenWarningState(
   tokenUsage: number,
   model: string,
@@ -129,6 +208,7 @@ export function calculateTokenWarningState(
   isAboveWarningThreshold: boolean
   isAboveErrorThreshold: boolean
   isAboveAutoCompactThreshold: boolean
+  isAtForcedCompactLimit: boolean
   isAtBlockingLimit: boolean
 } {
   const autoCompactThreshold = getAutoCompactThreshold(model)
@@ -136,9 +216,17 @@ export function calculateTokenWarningState(
     ? autoCompactThreshold
     : getEffectiveContextWindowSize(model)
 
+  // Percent is reported against the context window, not against the compaction
+  // threshold. Using the threshold as the denominator made the indicator read
+  // 0% at the moment compaction starts, while the tier rules — and the reader —
+  // mean "13%/17%/21%/15% of the window still free".
+  const percentBase = getEffectiveContextWindowSize(model)
   const percentLeft = Math.max(
     0,
-    Math.round(((threshold - tokenUsage) / threshold) * 100),
+    Math.min(
+      100,
+      Math.round(((percentBase - tokenUsage) / percentBase) * 100),
+    ),
   )
 
   const warningThreshold = threshold - WARNING_THRESHOLD_BUFFER_TOKENS
@@ -149,6 +237,8 @@ export function calculateTokenWarningState(
 
   const isAboveAutoCompactThreshold =
     isAutoCompactEnabled() && tokenUsage >= autoCompactThreshold
+  const isAtForcedCompactLimit =
+    isAutoCompactEnabled() && tokenUsage >= getForcedCompactThreshold(model)
 
   const actualContextWindow = getEffectiveContextWindowSize(model)
   const defaultBlockingLimit =
@@ -171,6 +261,7 @@ export function calculateTokenWarningState(
     isAboveWarningThreshold,
     isAboveErrorThreshold,
     isAboveAutoCompactThreshold,
+    isAtForcedCompactLimit,
     isAtBlockingLimit,
   }
 }
@@ -283,18 +374,20 @@ export async function shouldAutoCompact(
     fixedContextTokens -
     snipTokensFreed
   const threshold = getAutoCompactThreshold(model)
+  const forcedThreshold = getForcedCompactThreshold(model)
   const effectiveWindow = getEffectiveContextWindowSize(model)
 
   logForDebugging(
-    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${fixedContextTokens > 0 ? ` fallbackFixed=${fixedContextTokens}` : ''}${snipTokensFreed > 0 ? ` snipFreed=${snipTokensFreed}` : ''}`,
+    `autocompact: tokens=${tokenCount} threshold=${threshold} forcedThreshold=${forcedThreshold} effectiveWindow=${effectiveWindow}${fixedContextTokens > 0 ? ` fallbackFixed=${fixedContextTokens}` : ''}${snipTokensFreed > 0 ? ` snipFreed=${snipTokensFreed}` : ''}`,
   )
 
-  const { isAboveAutoCompactThreshold } = calculateTokenWarningState(
-    tokenCount,
-    model,
-  )
+  const { isAboveAutoCompactThreshold, isAtForcedCompactLimit } =
+    calculateTokenWarningState(tokenCount, model)
 
-  return isAboveAutoCompactThreshold
+  // The forced trigger is a backstop: the tier keeps `floorTokens` at or below
+  // `window * pctLeft`, so the soft condition normally fires first. The OR only
+  // matters if the percentage path was bypassed.
+  return isAboveAutoCompactThreshold || isAtForcedCompactLimit
 }
 
 export async function autoCompactIfNeeded(

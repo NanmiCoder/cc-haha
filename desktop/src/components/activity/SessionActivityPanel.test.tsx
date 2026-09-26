@@ -399,7 +399,14 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByText('Summary')).toBeInTheDocument()
     expect(screen.getByText('Task completed with a long markdown report')).toBeInTheDocument()
     expect(screen.getByText('Usage')).toBeInTheDocument()
-    expect(screen.getByText('94.3k tokens · 1m 7s')).toBeInTheDocument()
+    expect(screen.getByText('94.3k tokens')).toBeInTheDocument()
+    // The duration is its own right-aligned slot on the usage row, not part of
+    // the token string — the reader scans for it rather than parsing past the
+    // count to find it. It is shown twice on purpose: once on the collapsed row
+    // and once in the expanded detail.
+    expect(screen.getAllByText('1m 7s')).toHaveLength(2)
+    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
+    expect(document.querySelector('[data-activity-duration="true"]')).not.toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
 

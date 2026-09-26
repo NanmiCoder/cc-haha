@@ -204,7 +204,7 @@ function splitChords(seq: string): string[] {
  */
 export function isSystemKeyCombo(
   seq: string,
-  platform: "darwin" | "win32",
+  platform: "darwin" | "win32" | "linux",
 ): boolean {
   const blocklist =
     platform === "darwin" ? BLOCKED_DARWIN_CHORDS : BLOCKED_WIN32_CHORDS;

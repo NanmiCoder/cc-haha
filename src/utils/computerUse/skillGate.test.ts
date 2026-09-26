@@ -53,8 +53,14 @@ describe('computer use skill gate', () => {
   })
 
   test('stays off on platforms without either engine', () => {
-    if (process.platform === 'darwin' || process.platform === 'win32') return
+    if (process.platform === 'darwin' || process.platform === 'win32' || process.platform === 'linux') return
     expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(false)
+  })
+
+  test('enables on Linux via the pixel-tool face', () => {
+    if (process.platform !== 'linux') return
+    invalidateComputerUseSkillGate()
+    expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(true)
   })
 
   test('caches briefly so an open slash menu does not stat on every keystroke', () => {

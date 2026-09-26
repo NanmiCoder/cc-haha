@@ -1,0 +1,547 @@
+diff --git a/desktop/src/pages/settings/GeneralSettings.tsx b/desktop/src/pages/settings/GeneralSettings.tsx
+index 33c4419d..59fee994 100644
+--- a/desktop/src/pages/settings/GeneralSettings.tsx
++++ b/desktop/src/pages/settings/GeneralSettings.tsx
+@@ -65,12 +65,17 @@ const BUILT_IN_OUTPUT_STYLE_TRANSLATION_KEYS = {
+ } satisfies Record<string, { label: TranslationKey; description: TranslationKey }>
+ 
+ export function GeneralSettings() {
++
+   const {
+     currentModel,
+     effortLevel,
+     setEffort,
+     thinkingEnabled,
+     setThinkingEnabled,
++    thinkingSendBack,
++    setThinkingSendBack,
++    vccCompactBackend,
++    setVccCompactBackend,
+     workflowKeywordTriggerEnabled,
+     setWorkflowKeywordTriggerEnabled,
+     agentTeamsEnabled,
+@@ -127,6 +132,22 @@ export function GeneralSettings() {
+   const activeSessionId = useSessionStore((s) => s.activeSessionId)
+   const sessions = useSessionStore((s) => s.sessions)
+   const t = useTranslation()
++  const COMPACTION_BACKEND_ITEMS: Array<{
++    value: 'algorithm' | 'llm'
++    label: string
++    description: string
++  }> = [
++    {
++      value: 'algorithm',
++      label: t('settings.general.compactionBackend.algorithm.label'),
++      description: t('settings.general.compactionBackend.algorithm.description'),
++    },
++    {
++      value: 'llm',
++      label: t('settings.general.compactionBackend.llm.label'),
++      description: t('settings.general.compactionBackend.llm.description'),
++    },
++  ]
+   const [webSearchDraft, setWebSearchDraft] = useState(webSearch)
+   const [networkDraft, setNetworkDraft] = useState(network)
+   const [networkTimeoutInput, setNetworkTimeoutInput] = useState(String(Math.round(network.aiRequestTimeoutMs / 1000)))
+@@ -1081,6 +1102,58 @@ export function GeneralSettings() {
+             </div>
+           </div>
+         </label>
++        {thinkingEnabled && (
++          <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 mt-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
++            <input
++              type="checkbox"
++              aria-label={t('settings.general.thinkingSendBackTitle')}
++              checked={thinkingSendBack}
++              onChange={(e) => void setThinkingSendBack(e.target.checked)}
++              className={SETTINGS_CHECKBOX_INPUT_CLASS}
++            />
++            <SettingsCheckboxMark checked={thinkingSendBack} />
++            <div className="min-w-0">
++              <div className="text-sm font-medium text-[var(--color-text-primary)]">
++                {t('settings.general.thinkingSendBackTitle')}
++              </div>
++              <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
++                {t('settings.general.thinkingSendBackHint')}
++              </div>
++            </div>
++          </label>
++        )}
++      </div>
++
++      <div className="mt-8">
++        {/* Context compaction */}
++        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.compactionTitle')}</h2>
++        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.compactionDescription')}</p>
++        <Dropdown<'algorithm' | 'llm'>
++          items={COMPACTION_BACKEND_ITEMS}
++          value={vccCompactBackend}
++          onChange={(value) => void setVccCompactBackend(value)}
++          width="100%"
++          maxHeight={240}
++          className="block w-full"
++          trigger={
++            <Button
++              variant="secondary"
++              size="md"
++              block
++              className="h-10 gap-3"
++              aria-label={t('settings.general.compactionTitle')}
++            >
++              <span className="min-w-0 flex-1 truncate text-left">
++                {t(
++                  vccCompactBackend === 'llm'
++                    ? 'settings.general.compactionBackend.llm.label'
++                    : 'settings.general.compactionBackend.algorithm.label',
++                )}
++              </span>
++              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
++            </Button>
++          }
++        />
+       </div>
+ 
+       {/*
+diff --git a/src/server/__tests__/providers.test.ts b/src/server/__tests__/providers.test.ts
+index 55c5360b..2f021ad7 100644
+--- a/src/server/__tests__/providers.test.ts
++++ b/src/server/__tests__/providers.test.ts
+@@ -2072,6 +2072,10 @@ describe('ProviderService', () => {
+     })
+ 
+     test('round-trips DeepSeek reasoning by model on generic OpenAI Chat hosts', async () => {
++      // This test verifies the round-trip path, which the thinking-send-back gate
++      // disables by default. Enable the env escape hatch so reasoning is sent back.
++      const originalSendThinking = process.env.CC_HAHA_SEND_THINKING_HISTORY
++      process.env.CC_HAHA_SEND_THINKING_HISTORY = '1'
+       const originalFetch = globalThis.fetch
+       const calls: Array<Record<string, unknown>> = []
+       globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+@@ -2151,6 +2155,8 @@ describe('ProviderService', () => {
+         expect(genericAssistant?.reasoning_content).toBeUndefined()
+       } finally {
+         globalThis.fetch = originalFetch
++        if (originalSendThinking === undefined) delete process.env.CC_HAHA_SEND_THINKING_HISTORY
++        else process.env.CC_HAHA_SEND_THINKING_HISTORY = originalSendThinking
+       }
+     })
+ 
+@@ -3332,6 +3338,10 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
+   })
+ 
+   test('streamed tool calls survive the proxy and their result is sent back with DeepSeek reasoning', async () => {
++    // Verifies the DeepSeek reasoning round-trip path, which the thinking-send-back
++    // gate disables by default. Enable the env escape hatch so reasoning is sent back.
++    const originalSendThinking = process.env.CC_HAHA_SEND_THINKING_HISTORY
++    process.env.CC_HAHA_SEND_THINKING_HISTORY = '1'
+     const { preset, provider } = await createApiSmart()
+     const originalFetch = globalThis.fetch
+     const calls: any[] = []
+@@ -3402,8 +3412,11 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
+       ])
+     } finally {
+       globalThis.fetch = originalFetch
++      if (originalSendThinking === undefined) delete process.env.CC_HAHA_SEND_THINKING_HISTORY
++      else process.env.CC_HAHA_SEND_THINKING_HISTORY = originalSendThinking
+     }
+   })
++
+ })
+ 
+ /**
+diff --git a/src/server/proxy/handler.ts b/src/server/proxy/handler.ts
+index eb126371..5f42ca68 100644
+--- a/src/server/proxy/handler.ts
++++ b/src/server/proxy/handler.ts
+@@ -29,6 +29,7 @@ import { openaiChatStreamToAnthropic } from './streaming/openaiChatStreamToAnthr
+ import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStreamToAnthropic.js'
+ import type { AnthropicRequest } from './transform/types.js'
+ import { getProxyFetchOptions } from '../../utils/proxy.js'
++import { shouldSendThinkingToAPI } from '../../utils/thinking.js'
+ import {
+   getNetworkProxyFetchOptions,
+   loadNetworkSettings,
+@@ -703,7 +704,11 @@ async function handleOpenaiChat(
+   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
+   const transformed = anthropicToOpenaiChat(body, {
+     ...requestOptions,
+-    roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
++    // Only round-trip reasoning content back to the API when thinking is being
++    // sent back at all; otherwise the previous turn's reasoning is dropped.
++    roundTripReasoningContent:
++      (knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4') &&
++      shouldSendThinkingToAPI(),
+     passThinkingToggle: knownDeepSeekHost,
+     imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl, body.model) ? 'text_only' : 'vision',
+   })
+diff --git a/src/services/api/claude.ts b/src/services/api/claude.ts
+index 5a8827af..1bb57dfb 100644
+--- a/src/services/api/claude.ts
++++ b/src/services/api/claude.ts
+@@ -97,6 +97,7 @@ import {
+   type SystemPrompt,
+ } from "../../utils/systemPromptType.js";
+ import { tokenCountFromLastAPIResponse } from "../../utils/tokens.js";
++import { shouldSendThinkingToAPI } from "../../utils/thinking.js";
+ import { getDynamicConfig_BLOCKS_ON_INIT } from "../analytics/growthbook.js";
+ import {
+   currentLimits,
+@@ -1419,6 +1420,10 @@ async function* queryModel(
+     messages,
+     filteredTools,
+     options.model,
++    // When the "send thinking back to the API" toggle is OFF (default),
++    // strip the previous turn's thinking blocks from the request body to
++    // save prefill tokens. Local history always keeps them.
++    { stripThinking: !shouldSendThinkingToAPI() },
+   );
+   queryCheckpoint("query_message_normalization_end");
+ 
+@@ -1829,9 +1834,12 @@ async function* queryModel(
+       }
+     }
+ 
+-    // Get API context management strategies if enabled
++    // Get API context management strategies if enabled. Only request the
++    // clear_thinking "keep:all" retention strategy when thinking is actually
++    // being sent back to the API — otherwise it's a pointless instruction to
++    // a backend that has no thinking blocks to retain.
+     const contextManagement = getAPIContextManagement({
+-      hasThinking,
++      hasThinking: hasThinking && shouldSendThinkingToAPI(),
+       isRedactThinkingActive: betasParams.includes(REDACT_THINKING_BETA_HEADER),
+       clearAllThinking: thinkingClearLatched,
+     });
+diff --git a/src/services/openaiAuth/fetch.ts b/src/services/openaiAuth/fetch.ts
+index c63429ea..6985bcd5 100644
+--- a/src/services/openaiAuth/fetch.ts
++++ b/src/services/openaiAuth/fetch.ts
+@@ -17,6 +17,7 @@ import {
+   resolveOpenAIReasoningEffortWithPriority,
+ } from './models.js'
+ import { getOpenAIOAuthTokens } from './storage.js'
++import { shouldSendThinkingToAPI } from '../../utils/thinking.js'
+ import { resolvePromptCacheKey } from '../../server/proxy/promptCacheKey.js'
+ import { anthropicToOpenaiResponses } from '../../server/proxy/transform/anthropicToOpenaiResponses.js'
+ import { openaiResponsesToAnthropic } from '../../server/proxy/transform/openaiResponsesToAnthropic.js'
+@@ -222,7 +223,7 @@ export function buildOpenAICodexFetch(
+       openaiResponsesToAnthropic(
+         responseBody,
+         mappedModel,
+-        { preserveOpenAIReasoning: true },
++        { preserveOpenAIReasoning: shouldSendThinkingToAPI() },
+       ),
+     )
+   }
+diff --git a/src/tools/ConfigTool/supportedSettings.ts b/src/tools/ConfigTool/supportedSettings.ts
+index 935a574c..811475ad 100644
+--- a/src/tools/ConfigTool/supportedSettings.ts
++++ b/src/tools/ConfigTool/supportedSettings.ts
+@@ -110,6 +110,19 @@ export const SUPPORTED_SETTINGS: Record<string, SettingConfig> = {
+     description: 'Enable extended thinking (false to disable)',
+     appStateKey: 'thinkingEnabled',
+   },
++  sendThinkingHistory: {
++    source: 'settings',
++    type: 'boolean',
++    description:
++      'Send prior thinking blocks back to the backend API as context (true to enable)',
++  },
++  vccCompactBackend: {
++    source: 'settings',
++    type: 'string',
++    description:
++      'Context compaction engine: "algorithm" (pi-vcc, no LLM call) or "llm" (original summary)',
++    options: ['algorithm', 'llm'],
++  },
+   'permissions.defaultMode': {
+     source: 'settings',
+     type: 'string',
+diff --git a/src/utils/__tests__/thinking.test.ts b/src/utils/__tests__/thinking.test.ts
+index fb463e37..6d9da427 100644
+--- a/src/utils/__tests__/thinking.test.ts
++++ b/src/utils/__tests__/thinking.test.ts
+@@ -1,4 +1,4 @@
+-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
++import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+ import { get3PModelCapabilityOverride } from '../model/modelSupportOverrides.js'
+ import { resolveSideQueryThinkingConfig } from '../sideQuery.js'
+ import {
+@@ -21,6 +21,7 @@ import {
+   modelSupportsThinking,
+   resolveModelThinkingEnabled,
+   shouldSendExplicitDisabledThinking,
++  shouldSendThinkingToAPI,
+ } from '../thinking.js'
+ 
+ describe('provider-aware thinking support', () => {
+@@ -262,3 +263,46 @@ function clearBetaCache() {
+     cache?: { clear?: () => void }
+   }).cache?.clear?.()
+ }
++
++describe('shouldSendThinkingToAPI', () => {
++  const mockSettings: {
++    sendThinkingHistory?: boolean
++  } = {}
++
++  mock.module('../settings/settings.js', () => ({
++    getSettingsWithErrors: () => ({
++      settings: mockSettings,
++      errors: [],
++    }),
++  }))
++
++  beforeEach(() => {
++    delete process.env.CC_HAHA_SEND_THINKING_HISTORY
++  })
++
++  afterEach(() => {
++    mockSettings.sendThinkingHistory = undefined
++    restoreEnv('CC_HAHA_SEND_THINKING_HISTORY', undefined)
++  })
++
++  test('defaults to off when the setting is absent', () => {
++    expect(shouldSendThinkingToAPI()).toBe(false)
++  })
++
++  test('off when the setting is explicitly false', () => {
++    mockSettings.sendThinkingHistory = false
++    expect(shouldSendThinkingToAPI()).toBe(false)
++  })
++
++  test('on when the setting is explicitly true', () => {
++    mockSettings.sendThinkingHistory = true
++    expect(shouldSendThinkingToAPI()).toBe(true)
++  })
++
++  test('env forces on regardless of the setting', () => {
++    process.env.CC_HAHA_SEND_THINKING_HISTORY = '1'
++    expect(shouldSendThinkingToAPI()).toBe(true)
++    mockSettings.sendThinkingHistory = false
++    expect(shouldSendThinkingToAPI()).toBe(true)
++  })
++})
+diff --git a/src/utils/messages.test.ts b/src/utils/messages.test.ts
+index 4cd3cde0..f56e18fb 100644
+--- a/src/utils/messages.test.ts
++++ b/src/utils/messages.test.ts
+@@ -182,6 +182,83 @@ describe('normalizeMessagesForAPI tool-result media', () => {
+   })
+ })
+ 
++describe('normalizeMessagesForAPI stripThinking option', () => {
++  const thinkingBlock = {
++    type: 'thinking' as const,
++    thinking: 'internal reasoning',
++    signature: 'sig-123',
++  }
++  const redactedBlock = {
++    type: 'redacted_thinking' as const,
++    data: 'redacted-payload',
++  }
++
++  test('keeps thinking blocks by default', () => {
++    const normalized = normalizeMessagesForAPI([
++      createUserMessage({ content: 'hi' }),
++      assistant('r1', [thinkingBlock, { type: 'text', text: 'answer' }]),
++    ])
++    const content = normalized.find(
++      message => message.type === 'assistant',
++    )?.message.content
++    expect(content?.some(block => block.type === 'thinking')).toBe(true)
++  })
++
++  test('strips thinking and redacted_thinking when enabled', () => {
++    const normalized = normalizeMessagesForAPI(
++      [
++        createUserMessage({ content: 'hi' }),
++        assistant('r1', [
++          thinkingBlock,
++          { type: 'text', text: 'answer' },
++          toolUse('t1'),
++        ]),
++        assistant('r2', [redactedBlock, { type: 'text', text: 'more' }]),
++      ],
++      [],
++      undefined,
++      { stripThinking: true },
++    )
++    const assistants = normalized.filter(
++      (message): message is AssistantMessage => message.type === 'assistant',
++    )
++    const allBlocks = assistants.flatMap(
++      message => message.message.content as ContentBlockParam[],
++    )
++    expect(allBlocks.some(block => block.type === 'thinking')).toBe(false)
++    expect(
++      allBlocks.some(block => block.type === 'redacted_thinking'),
++    ).toBe(false)
++    expect(allBlocks.some(block => block.type === 'text')).toBe(true)
++    expect(allBlocks.some(block => block.type === 'tool_use')).toBe(true)
++  })
++
++  test('handles thinking-only assistant messages without error', () => {
++    const normalized = normalizeMessagesForAPI(
++      [
++        createUserMessage({ content: 'hi' }),
++        assistant('r1', [thinkingBlock]),
++        createUserMessage({ content: 'next' }),
++        assistant('r2', [{ type: 'text', text: 'answer' }]),
++      ],
++      [],
++      undefined,
++      { stripThinking: true },
++    )
++    const assistants = normalized.filter(
++      (message): message is AssistantMessage => message.type === 'assistant',
++    )
++    expect(assistants.length).toBeGreaterThan(0)
++    for (const message of assistants) {
++      expect(
++        (message.message.content as ContentBlockParam[]).some(
++          block => block.type === 'thinking',
++        ),
++      ).toBe(false)
++    }
++  })
++})
++
+ describe('stripSignatureBlocksAfterModelChange', () => {
+   test('removes protected thinking from history produced by another model', () => {
+     const previous = assistant('response-a', [
+diff --git a/src/utils/messages.ts b/src/utils/messages.ts
+index 506177b3..67261c62 100644
+--- a/src/utils/messages.ts
++++ b/src/utils/messages.ts
+@@ -2023,6 +2023,7 @@ export function normalizeMessagesForAPI(
+   messages: Message[],
+   tools: Tools = [],
+   currentModel?: string,
++  options?: { stripThinking?: boolean },
+ ): (UserMessage | AssistantMessage)[] {
+   // Build set of available tool names for filtering unavailable tool references
+   const availableToolNames = new Set(tools.map(t => t.name))
+@@ -2390,11 +2391,24 @@ export function normalizeMessagesForAPI(
+     ? relocateToolReferenceSiblings(result)
+     : result
+ 
++  // When the "send thinking back to the API" toggle is OFF (default), strip
++  // the previous turn's thinking / redacted_thinking blocks before the trailing
++  // cleanup chain. Must run here — before filterTrailingThinkingFromLastAssistant
++  // and filterWhitespaceOnlyAssistantMessages — so a thinking-only message that
++  // becomes empty after the strip is absorbed by ensureNonEmptyAssistantContent's
++  // placeholder (the API 400 invariants all still hold). Local history is
++  // untouched; only the outgoing request body is trimmed.
++  const withStrippedThinking = options?.stripThinking
++    ? stripThinkingBlocksForAPI(relocated)
++    : relocated
++
+   // Filter orphaned thinking-only assistant messages (likely introduced by
+   // compaction slicing away intervening messages between a failed streaming
+   // response and its retry). Without this, consecutive assistant messages with
+   // mismatched thinking block signatures cause API 400 errors.
+-  const withFilteredOrphans = filterOrphanedThinkingOnlyMessages(relocated)
++  const withFilteredOrphans = filterOrphanedThinkingOnlyMessages(
++    withStrippedThinking,
++  )
+ 
+   // Reorder assistant content so any tool_use blocks form a contiguous run.
+   // mergeAssistantMessages also reorders, but this pass additionally protects
+@@ -5339,13 +5353,45 @@ export function stripSignatureBlocks(messages: Message[]): Message[] {
+   return changed ? result : messages
+ }
+ 
++/**
++ * Strip the previous turn's thinking / redacted_thinking blocks from every
++ * assistant message, for the API request only. Used by normalizeMessagesForAPI
++ * when settings.sendThinkingHistory is OFF (default): replaying full thinking
++ * to a backend without 1P cache retention costs a real prefill per turn.
++ * Local session history (in-memory scroll / jsonl / in-session render) keeps
++ * the blocks — only the request body is trimmed. Mirrors stripSignatureBlocks:
++ * thinking-only messages are reduced to [] and the empty-content placeholder
++ * in normalizeMessagesForAPI (ensureNonEmptyAssistantContent) absorbs them.
++ */
++export function stripThinkingBlocksForAPI(
++  messages: (UserMessage | AssistantMessage)[],
++): (UserMessage | AssistantMessage)[] {
++  let changed = false
++  const result = messages.map(msg => {
++    if (msg.type !== 'assistant') return msg
++
++    const content = msg.message.content
++    if (!Array.isArray(content)) return msg
++
++    const filtered = content.filter(block => !isThinkingBlock(block))
++    if (filtered.length === content.length) return msg
++
++    changed = true
++    return {
++      ...msg,
++      message: { ...msg.message, content: filtered },
++    } as typeof msg
++  })
++
++  return changed ? result : messages
++}
++
+ /**
+  * Protected thinking signatures are model-bound. When a resumed session moves
+  * to another model, replaying those blocks can either fail signature validation
+  * or send a block type the new provider does not implement. Keep the transcript
+  * intact and clean only the in-memory request history.
+- */
+-export function stripSignatureBlocksAfterModelChange(
++ */export function stripSignatureBlocksAfterModelChange(
+   messages: Message[],
+   currentModel: string,
+ ): Message[] {
+diff --git a/src/utils/settings/types.ts b/src/utils/settings/types.ts
+index 69f2a48e..acd565e8 100644
+--- a/src/utils/settings/types.ts
++++ b/src/utils/settings/types.ts
+@@ -750,6 +750,26 @@ export const SettingsSchema = lazySchema(() =>
+           'When false, thinking is disabled. When absent or true, thinking is ' +
+             'enabled automatically for supported models.',
+         ),
++      sendThinkingHistory: z
++        .boolean()
++        .optional()
++        .describe(
++          'When true, the previous turn\'s assistant thinking / ' +
++            'redacted_thinking blocks are sent back to the backend API as ' +
++            'context. When absent or false (default) they are stripped from ' +
++            'API requests to save tokens; local session history always ' +
++            'preserves them.',
++        ),
++      vccCompactBackend: z
++        .enum(['algorithm', 'llm'])
++        .optional()
++        .describe(
++          'Which engine compacts the conversation when context runs low. ' +
++            '"algorithm" (default) uses the pi-vcc algorithmic compactor — ' +
++            'a transcript-preserving structured summary with no LLM call. ' +
++            '"llm" uses the original LLM summary step. Read live at each ' +
++            'compaction, so switching mid-session takes effect immediately.',
++        ),
+       effortLevel: z
+         .enum(
+           process.env.USER_TYPE === 'ant'
+diff --git a/src/utils/thinking.ts b/src/utils/thinking.ts
+index fca8f4ae..b6ba7a5e 100644
+--- a/src/utils/thinking.ts
++++ b/src/utils/thinking.ts
+@@ -221,3 +221,13 @@ export function shouldEnableThinkingByDefault(): boolean {
+ export function shouldSendExplicitDisabledThinking(): boolean {
+   return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
+ }
++
++// Whether the previous turn's assistant thinking / redacted_thinking blocks
++// should be sent back to the backend API as context.
++//   - Env CC_HAHA_SEND_THINKING_HISTORY=1 forces ON (debug escape hatch).
++//   - Otherwise follows settings.sendThinkingHistory (absent/false = OFF = stripped).
++// Local session history is always preserved regardless of this flag.
++export function shouldSendThinkingToAPI(): boolean {
++  if (isEnvTruthy(process.env.CC_HAHA_SEND_THINKING_HISTORY)) return true
++  return getSettingsWithErrors().settings.sendThinkingHistory === true
++}

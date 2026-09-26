@@ -1,0 +1,518 @@
+diff --git a/desktop/src/components/activity/SessionActivityPanel.test.tsx b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+index ec84458..16da8b2 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.test.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+@@ -399,7 +399,14 @@ describe('SessionActivityPanel', () => {
+     expect(screen.getByText('Summary')).toBeInTheDocument()
+     expect(screen.getByText('Task completed with a long markdown report')).toBeInTheDocument()
+     expect(screen.getByText('Usage')).toBeInTheDocument()
+-    expect(screen.getByText('94.3k tokens · 1m 7s')).toBeInTheDocument()
++    expect(screen.getByText('94.3k tokens')).toBeInTheDocument()
++    // The duration is its own right-aligned slot on the usage row, not part of
++    // the token string — the reader scans for it rather than parsing past the
++    // count to find it. It is shown twice on purpose: once on the collapsed row
++    // and once in the expanded detail.
++    expect(screen.getAllByText('1m 7s')).toHaveLength(2)
++    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
++    expect(document.querySelector('[data-activity-duration="true"]')).not.toBeNull()
+ 
+     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
+ 
+diff --git a/desktop/src/components/activity/SessionActivityPanel.tsx b/desktop/src/components/activity/SessionActivityPanel.tsx
+index 8287ea4..61f4fdf 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.tsx
+@@ -440,6 +440,12 @@ function ActivityRowView({
+       : isTask && row.summary && row.summary !== row.label
+         ? row.summary
+         : undefined
++  // Execution time on the right of the row. Deliberately not for subagents:
++  // clicking one opens its run detail, and the floating card is too narrow to
++  // carry another field on every agent line (the row would truncate the label).
++  const rowDuration = row.section === 'tasks' || row.section === 'backgroundTasks'
++    ? formatBackgroundDuration(row.usage?.durationMs, t)
++    : undefined
+   const content = (
+     <>
+       {isTask ? (
+@@ -463,6 +469,14 @@ function ActivityRowView({
+           </span>
+         ) : null}
+       </span>
++      {rowDuration ? (
++        <span
++          data-activity-duration="true"
++          className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
++        >
++          {rowDuration}
++        </span>
++      ) : null}
+       {isTask ? null : (
+         <ActivityStatusIndicator
+           status={displayStatus}
+@@ -573,13 +587,14 @@ function ActivityRowView({
+ 
+ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+   const t = useTranslation()
++  // Execution time gets its own slot on the right of the usage row rather than
++  // being glued into the token string: it is the number a reader scans for, and
++  // "94.3k tokens · 1m 7s" buries it mid-line where the eye has to parse past
++  // the count to find it.
+   const duration = formatBackgroundDuration(row.usage?.durationMs, t)
+-  const usageParts = [
+-    typeof row.usage?.totalTokens === 'number'
+-      ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
+-      : '',
+-    duration,
+-  ].filter(Boolean)
++  const usageTokens = typeof row.usage?.totalTokens === 'number'
++    ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
++    : ''
+   const details = [
+     row.taskType || row.workflowName
+       ? { label: t('session.activity.details.type'), value: getTaskTypeLabel(row.taskType, t) }
+@@ -593,10 +608,10 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+     row.outputFile
+       ? { label: t('session.activity.details.outputFile'), value: row.outputFile }
+       : null,
+-    usageParts.length > 0
+-      ? { label: t('session.activity.details.usage'), value: usageParts.join(' · ') }
++    usageTokens || duration
++      ? { label: t('session.activity.details.usage'), value: usageTokens, trailing: duration }
+       : null,
+-  ].filter((item): item is { label: string; value: string } => Boolean(item?.value))
++  ].filter((item): item is { label: string; value: string; trailing?: string } => Boolean(item && (item.value || item.trailing)))
+ 
+   if (details.length === 0) return null
+ 
+@@ -612,7 +627,17 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+               {detail.label}
+             </dt>
+             <dd className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+-              {detail.value}
++              {detail.trailing ? (
++                <span className="flex items-baseline justify-between gap-2">
++                  <span className="min-w-0 break-words">{detail.value}</span>
++                  <span
++                    data-activity-detail-duration="true"
++                    className="shrink-0 whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
++                  >
++                    {detail.trailing}
++                  </span>
++                </span>
++              ) : detail.value}
+             </dd>
+           </div>
+         ))}
+diff --git a/desktop/src/components/chat/ActivityGroup.test.tsx b/desktop/src/components/chat/ActivityGroup.test.tsx
+index 0a6a3f7..f101e17 100644
+--- a/desktop/src/components/chat/ActivityGroup.test.tsx
++++ b/desktop/src/components/chat/ActivityGroup.test.tsx
+@@ -1,7 +1,7 @@
+ import { beforeEach, describe, expect, it } from 'vitest'
+ import { fireEvent, render, screen, within } from '@testing-library/react'
+ import { ActivityGroup } from './ActivityGroup'
+-import { buildActivitySegments, type ActivityStep } from './activityGroupModel'
++import { agentGroupSpanMs, agentRunDurationMs, agentRunInterval, buildActivitySegments, type ActivityStep } from './activityGroupModel'
+ import { useSettingsStore } from '../../stores/settingsStore'
+ import { translate } from '../../i18n'
+ import type { UIMessage } from '../../types/chat'
+@@ -376,3 +376,53 @@ describe('buildActivitySegments', () => {
+     expect(segments.map((segment) => segment.label)).toEqual(['TaskUpdate', 'SendMessage (2)'])
+   })
+ })
++
++describe('subagent run duration', () => {
++  it('prefers the runtime report, which is the only length a background run has', () => {
++    // A background agent returns from its launch immediately, so the transcript
++    // delta is ~0 while the run itself took three minutes. The report wins, and
++    // it is placed from the call's own start.
++    const interval = agentRunInterval({ timestamp: 1_000 }, { timestamp: 1_050 }, 180_000)
++    expect(interval).toEqual({ startMs: 1_000, endMs: 181_000 })
++    expect(agentRunDurationMs(interval)).toBe(180_000)
++  })
++
++  it('falls back to the tool_use → result delta for a synchronous run', () => {
++    // No report at all (older transcript, or an Explore/Plan agent that emits no
++    // usage block): the blocking call's own span is the run's wall clock.
++    expect(agentRunDurationMs(agentRunInterval({ timestamp: 1_000 }, { timestamp: 121_000 }, undefined))).toBe(120_000)
++    // A zero report is not a measurement — fall through rather than print 0s.
++    expect(agentRunDurationMs(agentRunInterval({ timestamp: 1_000 }, { timestamp: 121_000 }, 0))).toBe(120_000)
++  })
++
++  it('measures nothing until a synchronous run settles', () => {
++    expect(agentRunInterval({ timestamp: 1_000 }, undefined, undefined)).toBeUndefined()
++    // An end before the start is not a span — refuse it rather than print a
++    // negative duration.
++    expect(agentRunInterval({ timestamp: 5_000 }, { timestamp: 1_000 }, undefined)).toBeUndefined()
++  })
++
++  it('spans the group instead of summing it, because a dispatch runs in parallel', () => {
++    // Three agents dispatched together, each taking two minutes. Serial logic
++    // would say 6m; wall clock is 2m.
++    const concurrent = [
++      { startMs: 0, endMs: 120_000 },
++      { startMs: 500, endMs: 120_500 },
++      { startMs: 1_000, endMs: 121_000 },
++    ]
++    expect(agentGroupSpanMs(concurrent)).toBe(121_000)
++    // Summing is the wrong answer for a parallel dispatch; assert the difference
++    // explicitly so a regression to `+=` cannot pass quietly.
++    expect(agentGroupSpanMs(concurrent)).not.toBe(361_500)
++  })
++
++  it('spans from the earliest start to the latest end when runs overlap only partly', () => {
++    expect(agentGroupSpanMs([{ startMs: 0, endMs: 60_000 }, { startMs: 30_000, endMs: 90_000 }])).toBe(90_000)
++  })
++
++  it('ignores unmeasurable members and stays undefined when none were measured', () => {
++    expect(agentGroupSpanMs([{ startMs: 0, endMs: 30_000 }, undefined, { startMs: 10_000, endMs: 60_000 }])).toBe(60_000)
++    expect(agentGroupSpanMs([undefined, undefined])).toBeUndefined()
++    expect(agentGroupSpanMs([])).toBeUndefined()
++  })
++})
+diff --git a/desktop/src/components/chat/ToolCallGroup.test.tsx b/desktop/src/components/chat/ToolCallGroup.test.tsx
+new file mode 100644
+index 0000000..2d2ddaa
+--- /dev/null
++++ b/desktop/src/components/chat/ToolCallGroup.test.tsx
+@@ -0,0 +1,112 @@
++import { describe, expect, it } from 'vitest'
++import { fireEvent, render, screen } from '@testing-library/react'
++import { ToolCallGroup } from './ToolCallGroup'
++import type { AgentTaskNotification, UIMessage } from '../../types/chat'
++
++type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
++type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
++
++function agentCall(id: string, timestamp: number): ToolCall {
++  return {
++    id: `tool-${id}`,
++    type: 'tool_use',
++    toolName: 'Agent',
++    toolUseId: id,
++    input: { description: `Review ${id}` },
++    timestamp,
++  }
++}
++
++function result(id: string, timestamp: number): ToolResult {
++  return {
++    id: `result-${id}`,
++    type: 'tool_result',
++    toolUseId: id,
++    content: 'done',
++    isError: false,
++    timestamp,
++  }
++}
++
++function renderGroup(toolCalls: ToolCall[], results: ToolResult[], notifications: Record<string, AgentTaskNotification> = {}) {
++  return render(
++    <ToolCallGroup
++      sessionId="session-1"
++      toolCalls={toolCalls}
++      resultMap={new Map(results.map((item) => [item.toolUseId, item]))}
++      childToolCallsByParent={new Map()}
++      agentTaskNotifications={notifications}
++    />,
++  )
++}
++
++function rowDurations(): (string | null | undefined)[] {
++  return Array.from(document.querySelectorAll('[data-agent-call-duration="true"]'))
++    .map((node) => node.textContent?.trim())
++}
++
++describe('subagent run duration', () => {
++  it('sums the members into the header and shows each run beside its own actions', () => {
++    // Two synchronous agents, each blocking its own tool call: 120s and 300s.
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 200_000)]
++    const results = [result('a', 121_000), result('b', 500_000)]
++    renderGroup(toolCalls, results)
++
++    // Header is the group's wall-clock SPAN, not the sum: the runs start 199s
++    // apart and the last ends at 500s, so it reads 8m19s — a serial sum would
++    // have said 2m0s + 5m0s = 7m0s.
++    const header = screen.getByRole('button', { name: /dispatched 2 agents/i })
++    const headerDuration = document.querySelector('[data-agent-group-duration="true"]')
++    expect(headerDuration?.textContent?.trim()).toBe('8m19s')
++    expect(header.textContent).toContain('Duration')
++    expect(header.textContent).not.toContain('7m0s')
++    // Rows only mount once the group is expanded, and each stays bare.
++    expect(rowDurations()).toEqual([])
++    fireEvent.click(header)
++    expect(rowDurations()).toEqual(['2m0s', '5m0s'])
++  })
++
++  it('prefers the runtime report for a background agent, whose call returns at launch', () => {
++    // The launch result lands 50ms after the call, but the run itself took
++    // three minutes — only the report knows that.
++    const toolCalls = [agentCall('bg', 1_000)]
++    const results = [result('bg', 1_050)]
++    const notifications: Record<string, AgentTaskNotification> = {
++      bg: {
++        taskId: 'task-bg',
++        toolUseId: 'bg',
++        status: 'completed',
++        usage: { durationMs: 180_000 },
++      },
++    }
++    renderGroup(toolCalls, results, notifications)
++
++    expect(document.querySelector('[data-agent-group-duration="true"]')?.textContent?.trim()).toBe('3m0s')
++    fireEvent.click(screen.getByRole('button', { name: /agent/i }))
++    expect(rowDurations()).toEqual(['3m0s'])
++  })
++
++  it('omits the duration while a synchronous run is still in flight', () => {
++    // No result and no incoming report: there is no trustworthy anchor, so
++    // neither the row nor the header may guess a number.
++    renderGroup([agentCall('a', 1_000)], [])
++
++    const header = screen.getByRole('button', { name: /agent/i })
++    expect(document.querySelector('[data-agent-group-duration="true"]')).toBeNull()
++    fireEvent.click(header)
++    expect(rowDurations()).toEqual([])
++  })
++})
++
++describe('a parallel dispatch is spanned, never summed', () => {
++  it('reports one run\'s length when the agents start together', () => {
++    // Both dispatched at the same instant, each taking two minutes. Summing
++    // would print 4m of work for 2m of wall clock.
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 1_000)]
++    const results = [result('a', 121_000), result('b', 121_000)]
++    renderGroup(toolCalls, results)
++
++    const headerDuration = document.querySelector('[data-agent-group-duration="true"]')
++    expect(headerDuration?.textContent?.trim()).toBe('2m0s')
++  })
++})
+diff --git a/desktop/src/components/chat/ToolCallGroup.tsx b/desktop/src/components/chat/ToolCallGroup.tsx
+index 7874963..1922334 100644
+--- a/desktop/src/components/chat/ToolCallGroup.tsx
++++ b/desktop/src/components/chat/ToolCallGroup.tsx
+@@ -6,10 +6,14 @@ import { ActivityGroup } from './ActivityGroup'
+ import { ThinkingBlock } from './ThinkingBlock'
+ import {
+   activityStepToolCalls,
++  agentGroupSpanMs,
++  agentRunDurationMs,
++  agentRunInterval,
+   toActivitySteps,
+   toolCallDurationMs,
+   type ActivityStep,
+ } from './activityGroupModel'
++import { formatDuration } from './ToolCallBlock'
+ import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
+ import { isImageGenerationToolName } from './imageGenerationTools'
+ import { useAgentRunActivity } from './useAgentRunActivity'
+@@ -476,6 +480,17 @@ function AgentToolGroup({
+   const errorPresent = statuses.some((status) => status === 'failed')
+   const allComplete = statuses.every((status) => status === 'done')
+   const anyStopped = statuses.some((status) => status === 'stopped')
++  // Wall-clock span of the whole dispatch — earliest start to latest end, NOT
++  // the sum of the members: the runtime runs a dispatched group in parallel, so
++  // three concurrent 2-minute agents are 2 minutes, not 6. Members still in
++  // flight contribute nothing until they report or settle, so the number only
++  // ever grows towards the truth.
++  const totalDuration = agentGroupSpanMs(toolCalls.map((toolCall) => agentRunInterval(
++    toolCall,
++    resultMap.get(toolCall.toolUseId),
++    agentTaskNotifications[toolCall.toolUseId]?.usage?.durationMs,
++  )))
++  const totalDurationLabel = totalDuration === undefined ? '' : formatDuration(totalDuration)
+ 
+   return (
+     <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+@@ -492,6 +507,19 @@ function AgentToolGroup({
+         <span className="flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
+           {toolCalls.length === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: toolCalls.length })}
+         </span>
++        {/* Flush right, before the status: "dispatched 3 agents · 总耗时5m12s · running".
++            Unlike the per-run number on each row below, this one carries its label —
++            the summary bar has the slack to spend on it. Label and number are two
++            elements joined by a 3px gap rather than one string with a space, because
++            a full space between a CJK label and a digit reads as a hole at this size. */}
++        {totalDurationLabel && (
++          <span className="inline-flex shrink-0 items-baseline gap-[3px] whitespace-nowrap text-right text-[12px] text-[var(--color-text-secondary)]">
++            <span>{t('toolGroup.agentTotalDuration')}</span>
++            <span data-agent-group-duration="true" className="tabular-nums">
++              {totalDurationLabel}
++            </span>
++          </span>
++        )}
+         {isAnyRunning && (
+           <Badge tone="warning" className="font-semibold">
+             {t('agentStatus.running')}
+@@ -614,6 +642,13 @@ function AgentCallCard({
+   const description = typeof input.description === 'string' ? input.description : ''
+   const openRunTitle = description.trim() || 'Agent'
+   const canOpenRun = showOpenRun && !!sessionId && !!toolCall.toolUseId
++  // This run's execution time: the runtime's report for a background agent, the
++  // tool_use → result delta for a synchronous one. Absent while a synchronous
++  // run is still in flight (nothing trustworthy to measure against yet).
++  const durationMs = agentRunDurationMs(
++    agentRunInterval(toolCall, result, agentTaskNotification?.usage?.durationMs),
++  )
++  const durationLabel = durationMs === undefined ? '' : formatDuration(durationMs)
+ 
+   return (
+     <div data-agent-call-layout="row">
+@@ -686,6 +721,15 @@ function AgentCallCard({
+             {t('toolGroup.openRun')}
+           </Button>
+         )}
++        {/* Between the actions and the status: "… · Open run · 5m12s · done". */}
++        {durationLabel && (
++          <span
++            data-agent-call-duration="true"
++            className="shrink-0 whitespace-nowrap font-mono text-[11.5px] tabular-nums text-[var(--color-text-tertiary)]"
++          >
++            {durationLabel}
++          </span>
++        )}
+         <Badge tone={statusTone} className="font-semibold">
+           {statusLabel}
+         </Badge>
+diff --git a/desktop/src/components/chat/activityGroupModel.ts b/desktop/src/components/chat/activityGroupModel.ts
+index faed376..0aadde4 100644
+--- a/desktop/src/components/chat/activityGroupModel.ts
++++ b/desktop/src/components/chat/activityGroupModel.ts
+@@ -55,6 +55,75 @@ export function toolCallDurationMs(
+   return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
+ }
+ 
++/**
++ * When one Agent (subagent) run started and ended, on the parent session's clock.
++ *
++ * The runtime dispatches a group's agents **in parallel**, so a group's total is
++ * a span over intervals, never a sum of durations — three concurrent 2-minute
++ * runs are 2 minutes of wall clock, not 6. Measuring that needs both ends of each
++ * run, which is why the interval (not just a duration) is the primitive here.
++ *
++ * `endMs` comes from the runtime's own report when there is one —
++ * `AgentTaskNotification.usage.durationMs`, carried by `task_progress` /
++ * `task_notification` — because a *background* agent returns from its launch
++ * immediately: its tool_result lands ~milliseconds later while the run itself
++ * takes minutes, so the report is the only truthful length. A *synchronous*
++ * agent blocks its tool call, so tool_use → tool_result is that run's real span
++ * (the same measurement `toolCallDurationMs` uses for every other tool) and is
++ * used when nothing was reported: older transcripts, and the one-shot
++ * Explore/Plan agents that emit no `<usage>` block at all.
++ *
++ * `undefined` while a synchronous run is still in flight — there is no
++ * trustworthy anchor to tick from, so the caller shows no number rather than a
++ * guessed one.
++ */
++export type AgentRunInterval = { startMs: number; endMs: number }
++
++export function agentRunInterval(
++  toolCall: Pick<ToolCall, 'timestamp'>,
++  result: Pick<ToolResult, 'timestamp'> | undefined,
++  reportedDurationMs?: number,
++): AgentRunInterval | undefined {
++  const startMs = toolCall.timestamp
++  if (!Number.isFinite(startMs)) return undefined
++  if (typeof reportedDurationMs === 'number' && Number.isFinite(reportedDurationMs) && reportedDurationMs > 0) {
++    return { startMs, endMs: startMs + reportedDurationMs }
++  }
++  const endMs = result?.timestamp
++  if (typeof endMs !== 'number' || !Number.isFinite(endMs) || endMs < startMs) return undefined
++  return { startMs, endMs }
++}
++
++/** One run's own length, for the row that shows it. */
++export function agentRunDurationMs(interval: AgentRunInterval | undefined): number | undefined {
++  return interval ? interval.endMs - interval.startMs : undefined
++}
++
++/**
++ * Wall-clock span of a subagent group: earliest start to latest end.
++ *
++ * The union of the members' intervals, so concurrent runs are counted once —
++ * the same reason {@link activityDurationMs} sums its steps: those steps (a
++ * thought, then a tool) genuinely happen in sequence, whereas a dispatched group
++ * genuinely runs at once. Runs that are still in flight, or that carried no
++ * usable timestamps, contribute nothing; a group where none was measurable
++ * returns `undefined` so the header prints no number instead of `0s`.
++ */
++export function agentGroupSpanMs(
++  intervals: ReadonlyArray<AgentRunInterval | undefined>,
++): number | undefined {
++  let spanStart = Infinity
++  let spanEnd = -Infinity
++  for (const interval of intervals) {
++    if (!interval) continue
++    if (!Number.isFinite(interval.startMs) || !Number.isFinite(interval.endMs)) continue
++    if (interval.startMs < spanStart) spanStart = interval.startMs
++    if (interval.endMs > spanEnd) spanEnd = interval.endMs
++  }
++  if (spanStart === Infinity || spanEnd < spanStart) return undefined
++  return spanEnd - spanStart
++}
++
+ const TOOL_VERBS: Record<string, (count: number, t: Translate) => string> = {
+   Read: (n, t) => n === 1 ? t('toolGroup.readOne') : t('toolGroup.readMany', { count: n }),
+   Write: (n, t) => n === 1 ? t('toolGroup.createdOne') : t('toolGroup.createdMany', { count: n }),
+diff --git a/desktop/src/i18n/locales/en.ts b/desktop/src/i18n/locales/en.ts
+index 027ab4f..a442c20 100644
+--- a/desktop/src/i18n/locales/en.ts
++++ b/desktop/src/i18n/locales/en.ts
+@@ -2875,6 +2875,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
+   'toolGroup.searchedMany': 'searched {count} patterns',
+   'toolGroup.agentOne': 'dispatched an agent',
+   'toolGroup.agentMany': 'dispatched {count} agents',
++  'toolGroup.agentTotalDuration': 'Duration',
+   'toolGroup.thought': 'Thinking',
+   'toolGroup.thoughtMany': 'Thought {count} times',
+   'toolGroup.failedCount': '{count} failed',
+diff --git a/desktop/src/i18n/locales/jp.ts b/desktop/src/i18n/locales/jp.ts
+index 4c8ea39..9f0cc47 100644
+--- a/desktop/src/i18n/locales/jp.ts
++++ b/desktop/src/i18n/locales/jp.ts
+@@ -2877,6 +2877,7 @@ export const jp: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '{count} 件のパターンを検索しました',
+   'toolGroup.agentOne': 'エージェントを 1 件起動しました',
+   'toolGroup.agentMany': '{count} 件のエージェントを起動しました',
++  'toolGroup.agentTotalDuration': '合計',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '{count} 回思考',
+   'toolGroup.failedCount': '{count} 件失敗',
+diff --git a/desktop/src/i18n/locales/kr.ts b/desktop/src/i18n/locales/kr.ts
+index 9f49a89..7e23e4d 100644
+--- a/desktop/src/i18n/locales/kr.ts
++++ b/desktop/src/i18n/locales/kr.ts
+@@ -2878,6 +2878,7 @@ export const kr: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '패턴 {count}개를 검색했습니다',
+   'toolGroup.agentOne': '에이전트 1개를 디스패치했습니다',
+   'toolGroup.agentMany': '에이전트 {count}개를 디스패치했습니다',
++  'toolGroup.agentTotalDuration': '총',
+   'toolGroup.thought': '사고',
+   'toolGroup.thoughtMany': '{count}번 사고',
+   'toolGroup.failedCount': '{count}건 실패',
+diff --git a/desktop/src/i18n/locales/zh-TW.ts b/desktop/src/i18n/locales/zh-TW.ts
+index fd75d04..77aecf1 100644
+--- a/desktop/src/i18n/locales/zh-TW.ts
++++ b/desktop/src/i18n/locales/zh-TW.ts
+@@ -2874,6 +2874,7 @@ export const zh: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '搜尋了 {count} 個模式',
+   'toolGroup.agentOne': '派遣了一個代理',
+   'toolGroup.agentMany': '派遣了 {count} 個代理',
++  'toolGroup.agentTotalDuration': '總耗時',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '思考 {count} 次',
+   'toolGroup.failedCount': '{count} 項失敗',
+diff --git a/desktop/src/i18n/locales/zh.ts b/desktop/src/i18n/locales/zh.ts
+index f51debc..1734891 100644
+--- a/desktop/src/i18n/locales/zh.ts
++++ b/desktop/src/i18n/locales/zh.ts
+@@ -2876,6 +2876,7 @@ export const zh: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '搜索了 {count} 个模式',
+   'toolGroup.agentOne': '派遣了一个代理',
+   'toolGroup.agentMany': '派遣了 {count} 个代理',
++  'toolGroup.agentTotalDuration': '总耗时',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '思考 {count} 次',
+   'toolGroup.failedCount': '{count} 项失败',

@@ -1,18 +1,18 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from '@whiskeysockets/baileys'
+
+// baileys is loaded lazily inside createWhatsAppSocket (see below) so that
+// importing this module — which the adapters API does eagerly — does not
+// require the dependency to be installed. Only the type is needed up front.
+import type { makeWASocket } from '@whiskeysockets/baileys'
 
 export type WhatsAppSocket = ReturnType<typeof makeWASocket>
 
 const CREDS_FILE = 'creds.json'
 const CREDS_BACKUP_FILE = 'creds.json.bak'
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401
+// 401 is the documented `DisconnectReason.loggedOut` value; it is also the
+// fallback used when the dependency is not yet loaded.
+const LOGGED_OUT_STATUS = 401
 
 const credsSaveQueues = new Map<string, Promise<void>>()
 
@@ -45,6 +45,16 @@ export async function createWhatsAppSocket(options: {
   const authDir = path.resolve(options.authDir)
   fs.mkdirSync(authDir, { recursive: true, mode: 0o700 })
   maybeRestoreCredsFromBackup(authDir)
+
+  // Dynamic import: keeps the top-level import graph dependency-free so the
+  // adapters API (which imports this module eagerly) works when baileys is not
+  // installed. A missing dependency now only fails an actual login attempt.
+  const {
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    makeWASocket,
+    useMultiFileAuthState,
+  } = await import('@whiskeysockets/baileys')
 
   const logger = makeBaileysLogger(options.verbose ? 'info' : 'silent')
   const { state, saveCreds } = await useMultiFileAuthState(authDir)

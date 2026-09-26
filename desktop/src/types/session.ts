@@ -49,6 +49,8 @@ export type MessageEntry = {
   collaboration?: { sourceSessionId: string; messageId?: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
+  /** Raw JSONL subtype, present for compact boundary system entries. */
+  subtype?: string
   content: unknown
   toolUseResult?: unknown
   timestamp: string
@@ -60,6 +62,12 @@ export type MessageEntry = {
    * totals usage must count each key once. Absent means the line carries no id — count it.
    */
   usageKey?: string
+  /**
+   * Wall-clock ms this thinking block spent generating (content_block_start →
+   * content_block_stop), persisted on the transcript line. Only on assistant
+   * lines whose single content block is a thinking block.
+   */
+  thinkingDurationMs?: number
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean

@@ -57,6 +57,7 @@ export async function handleH5AccessApi(
             publicBaseUrl: body.publicBaseUrl as string | null | undefined,
             fixedPort: body.fixedPort as number | null | undefined,
             disconnectGraceSeconds: body.disconnectGraceSeconds as number | null | undefined,
+            requireToken: typeof body.requireToken === 'boolean' ? body.requireToken : undefined,
           })
           // Keep the synchronous disconnect-cleanup cache in step with the new value.
           await refreshDisconnectGraceMs()

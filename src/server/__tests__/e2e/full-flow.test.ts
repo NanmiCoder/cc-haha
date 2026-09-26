@@ -16,6 +16,17 @@ let tmpDir: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 const originalCliPath = process.env.CLAUDE_CLI_PATH
 const originalDisableTerminalShellEnv = process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV
+// A developer who exports process-access tokens would otherwise leak them into
+// the fixture and flip `localAccessTokenConfigured` to true, which makes the
+// loopback-browser-origin CORS cases treat the browser as an h5-browser and
+// expect a token (403) instead of the trusted no-token 204. Isolate them.
+const TOKEN_ENV_KEYS = [
+  'CC_HAHA_LOCAL_ACCESS_TOKEN',
+  'CC_HAHA_PET_ACCESS_TOKEN',
+] as const
+const originalTokenEnv = Object.fromEntries(
+  TOKEN_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof TOKEN_ENV_KEYS)[number], string | undefined>
 const mockSdkCliPath = fileURLToPath(new URL('../fixtures/mock-sdk-cli.ts', import.meta.url))
 
 // The models API derives its model list from these env vars (see
@@ -35,6 +46,10 @@ const originalModelEnv = Object.fromEntries(
 function restoreEnv() {
   for (const key of MODEL_ENV_KEYS) {
     if (originalModelEnv[key] !== undefined) process.env[key] = originalModelEnv[key]
+    else delete process.env[key]
+  }
+  for (const key of TOKEN_ENV_KEYS) {
+    if (originalTokenEnv[key] !== undefined) process.env[key] = originalTokenEnv[key]
     else delete process.env[key]
   }
   if (originalConfigDir !== undefined) {
@@ -65,6 +80,8 @@ async function startTestServer() {
   process.env.CLAUDE_CLI_PATH = mockSdkCliPath
   process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
   for (const key of MODEL_ENV_KEYS) delete process.env[key]
+  for (const key of TOKEN_ENV_KEYS) delete process.env[key]
+
 
   // Create required directories
   await fs.mkdir(path.join(tmpDir, 'projects'), { recursive: true })

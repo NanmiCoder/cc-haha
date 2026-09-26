@@ -21,7 +21,7 @@ export function ScheduledTasks() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="animate-screen-pop mx-auto max-w-[1180px] px-11 pb-12 pt-8">
+      <div className="animate-screen-pop mx-auto max-w-[1180px] px-4 pb-12 pt-8 lg:px-11">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

@@ -1,0 +1,679 @@
+diff --git a/desktop/src/components/chat/TurnCompletionStamp.test.tsx b/desktop/src/components/chat/TurnCompletionStamp.test.tsx
+index 7813412b..fa51b92a 100644
+--- a/desktop/src/components/chat/TurnCompletionStamp.test.tsx
++++ b/desktop/src/components/chat/TurnCompletionStamp.test.tsx
+@@ -26,6 +26,24 @@ describe('TurnCompletionStamp', () => {
+     expect(container.querySelector('[data-turn-completion-duration]')).toBeNull()
+   })
+ 
++  it('shows what the turn spent, before how long it took', () => {
++    const { container } = render(
++      <TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 739_000, outputTokens: 1_500 }} />,
++    )
++
++    expect(screen.getByText('used 1.50k')).toBeTruthy()
++    // Same order as the activity digest: tokens first, elapsed time last.
++    const text = container.textContent ?? ''
++    expect(text.indexOf('used 1.50k')).toBeLessThan(text.indexOf('took 12m 19s'))
++  })
++
++  it('omits the token total for a turn whose calls reported none', () => {
++    const { container } = render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 1_000 }} />)
++
++    expect(container.querySelector('[data-turn-completion-usage]')).toBeNull()
++    expect(screen.getByText('took 1s')).toBeTruthy()
++  })
++
+   it('carries the exact timestamp as a title for the rounded clock label', () => {
+     render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 1_000 }} />)
+ 
+diff --git a/desktop/src/components/chat/TurnCompletionStamp.tsx b/desktop/src/components/chat/TurnCompletionStamp.tsx
+index 6a666497..ccb42a01 100644
+--- a/desktop/src/components/chat/TurnCompletionStamp.tsx
++++ b/desktop/src/components/chat/TurnCompletionStamp.tsx
+@@ -2,6 +2,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
+ import { useTranslation } from '../../i18n'
+ import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
+ import { formatDurationMs } from '../../lib/backgroundTasks'
++import { formatActivityTokens } from './activityGroupModel'
+ import type { TurnCompletion } from '../../lib/turnCompletion'
+ 
+ type Props = {
+@@ -9,9 +10,14 @@ type Props = {
+ }
+ 
+ /**
+- * Compact metadata for the last reply's action row: when the turn ended and how
+- * long it took. The parent action row keeps this visible on pointer and touch
+- * layouts alike (#1151).
++ * Compact metadata for the last reply's action row: when the turn ended, how
++ * many tokens it spent and how long it took. The parent action row keeps this
++ * visible on pointer and touch layouts alike (#1151).
++ *
++ * Usage comes before duration, matching the activity digest's ordering. Both
++ * parts are optional and render nothing when absent: a turn whose calls reported
++ * no usage (older transcripts, a provider that returns none) keeps its clock
++ * rather than showing a confident zero.
+  */
+ export function TurnCompletionStamp({ completion }: Props) {
+   const locale = useSettingsStore((state) => state.locale)
+@@ -21,6 +27,10 @@ export function TurnCompletionStamp({ completion }: Props) {
+   if (!clockLabel) return null
+ 
+   const duration = formatDurationMs(completion.durationMs, t)
++  const usageLabel =
++    typeof completion.outputTokens === 'number' && completion.outputTokens > 0
++      ? formatActivityTokens(completion.outputTokens)
++      : ''
+ 
+   return (
+     <span
+@@ -30,6 +40,12 @@ export function TurnCompletionStamp({ completion }: Props) {
+       <span title={formatExactMessageTimestamp(completion.completedAt, locale) || clockLabel}>
+         {clockLabel}
+       </span>
++      {usageLabel ? (
++        <>
++          <span aria-hidden="true">·</span>
++          <span data-turn-completion-usage>{t('chat.turnUsage', { tokens: usageLabel })}</span>
++        </>
++      ) : null}
+       {duration ? (
+         <>
+           <span aria-hidden="true">·</span>
+diff --git a/desktop/src/i18n/locales/en.ts b/desktop/src/i18n/locales/en.ts
+index 1d21df55..dbe50735 100644
+--- a/desktop/src/i18n/locales/en.ts
++++ b/desktop/src/i18n/locales/en.ts
+@@ -2581,6 +2581,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
+   'chat.duration.hoursMinutes': '{hours}h {minutes}m',
+   'chat.turnCompletedAt': 'Done {time}',
+   'chat.turnDuration': 'took {duration}',
++  'chat.turnUsage': 'used {tokens}',
+   'slash.mcp.title': 'Available MCP tools',
+   'slash.mcp.subtitle': 'Global and current-project MCP servers available in this chat context.',
+   'slash.mcp.subtitleWithProject': 'Showing global plus project MCP for: {path}',
+diff --git a/desktop/src/i18n/locales/jp.ts b/desktop/src/i18n/locales/jp.ts
+index c85a12a7..58f23c2e 100644
+--- a/desktop/src/i18n/locales/jp.ts
++++ b/desktop/src/i18n/locales/jp.ts
+@@ -2583,6 +2583,7 @@ export const jp: Record<TranslationKey, string> = {
+   'chat.duration.hoursMinutes': '{hours}時間 {minutes}分',
+   'chat.turnCompletedAt': '{time} 完了',
+   'chat.turnDuration': '所要 {duration}',
++  'chat.turnUsage': '使用 {tokens}',
+   'slash.mcp.title': '利用可能な MCP ツール',
+   'slash.mcp.subtitle': 'このチャットコンテキストで利用できる、グローバルおよび現在のプロジェクトの MCP サーバー。',
+   'slash.mcp.subtitleWithProject': '次のグローバルおよびプロジェクトの MCP を表示中: {path}',
+diff --git a/desktop/src/i18n/locales/kr.ts b/desktop/src/i18n/locales/kr.ts
+index c7555446..d0a0b17f 100644
+--- a/desktop/src/i18n/locales/kr.ts
++++ b/desktop/src/i18n/locales/kr.ts
+@@ -2584,6 +2584,7 @@ export const kr: Record<TranslationKey, string> = {
+   'chat.duration.hoursMinutes': '{hours}시간 {minutes}분',
+   'chat.turnCompletedAt': '{time} 완료',
+   'chat.turnDuration': '소요 {duration}',
++  'chat.turnUsage': '사용 {tokens}',
+   'slash.mcp.title': '사용 가능한 MCP 도구',
+   'slash.mcp.subtitle': '이 채팅 컨텍스트에서 사용 가능한 전역 및 현재 프로젝트 MCP 서버입니다.',
+   'slash.mcp.subtitleWithProject': '다음의 전역 및 프로젝트 MCP를 표시 중: {path}',
+diff --git a/desktop/src/i18n/locales/zh-TW.ts b/desktop/src/i18n/locales/zh-TW.ts
+index eb9c884a..a600bb25 100644
+--- a/desktop/src/i18n/locales/zh-TW.ts
++++ b/desktop/src/i18n/locales/zh-TW.ts
+@@ -2580,6 +2580,7 @@ export const zh: Record<TranslationKey, string> = {
+   'chat.duration.hoursMinutes': '{hours} 小時 {minutes} 分',
+   'chat.turnCompletedAt': '完成於 {time}',
+   'chat.turnDuration': '耗時 {duration}',
++  'chat.turnUsage': '用量 {tokens}',
+   'slash.mcp.title': '可用 MCP 工具',
+   'slash.mcp.subtitle': '展示當前聊天上下文裡的全域性 MCP 和當前專案 MCP。',
+   'slash.mcp.subtitleWithProject': '當前展示全域性 MCP 以及這個專案的 MCP：{path}',
+diff --git a/desktop/src/i18n/locales/zh.ts b/desktop/src/i18n/locales/zh.ts
+index ca9b9b93..eaacab5f 100644
+--- a/desktop/src/i18n/locales/zh.ts
++++ b/desktop/src/i18n/locales/zh.ts
+@@ -2581,6 +2581,7 @@ export const zh: Record<TranslationKey, string> = {
+   'chat.duration.hoursMinutes': '{hours} 小时 {minutes} 分',
+   'chat.turnCompletedAt': '完成于 {time}',
+   'chat.turnDuration': '耗时 {duration}',
++  'chat.turnUsage': '用量 {tokens}',
+   'slash.mcp.title': '可用 MCP 工具',
+   'slash.mcp.subtitle': '展示当前聊天上下文里的全局 MCP 和当前项目 MCP。',
+   'slash.mcp.subtitleWithProject': '当前展示全局 MCP 以及这个项目的 MCP：{path}',
+diff --git a/desktop/src/lib/turnCompletion.test.ts b/desktop/src/lib/turnCompletion.test.ts
+index c2bb40b6..d14ddbdc 100644
+--- a/desktop/src/lib/turnCompletion.test.ts
++++ b/desktop/src/lib/turnCompletion.test.ts
+@@ -182,3 +182,88 @@ describe('buildTurnCompletionByMessageId', () => {
+     expect(completions.size).toBe(0)
+   })
+ })
++
++describe('buildTurnCompletionByMessageId — turn token usage', () => {
++  function withUsage(
++    id: string,
++    offsetMs: number,
++    outputTokens: number,
++    usageKey?: string,
++  ): UIMessage {
++    return {
++      id,
++      type: 'assistant_text',
++      content: `reply ${id}`,
++      timestamp: T0 + offsetMs,
++      usage: { output_tokens: outputTokens },
++      ...(usageKey ? { usageKey } : {}),
++    }
++  }
++
++  it('totals every API call the turn made, not just its last one', () => {
++    // A turn is model call → tool → model call: the footer's number has to be
++    // what the whole turn spent, so it sums both replies' reported output.
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      withUsage('a1', 5 * SECOND, 400, 'msg_1\0req_1'),
++      toolResult('r1', 8 * SECOND),
++      withUsage('a2', 12 * SECOND, 600, 'msg_2\0req_2'),
++    ])
++
++    expect(completions.get('a2')?.outputTokens).toBe(1000)
++  })
++
++  it('counts one API call once even though the transcript repeats it on every row', () => {
++    // One reply is persisted as a dozen lines (one per content block) that each
++    // repeat the whole `usage` object; summing per row is the 2.2x inflation the
++    // transcript readers already dedupe on `usageKey`.
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      { id: 't1', type: 'thinking', content: 'thinking', timestamp: T0 + 2 * SECOND, usage: { output_tokens: 250 }, usageKey: 'msg_1\0req_1' },
++      withUsage('a1', 5 * SECOND, 250, 'msg_1\0req_1'),
++      withUsage('a2', 7 * SECOND, 250, 'msg_1\0req_1'),
++    ])
++
++    expect(completions.get('a2')?.outputTokens).toBe(250)
++  })
++
++  it('counts rows that carry no usage key, matching the transcript readers', () => {
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      withUsage('a1', 2 * SECOND, 100),
++      withUsage('a2', 4 * SECOND, 100),
++    ])
++
++    expect(completions.get('a2')?.outputTokens).toBe(200)
++  })
++
++  it('keeps each turn to its own calls', () => {
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      withUsage('a1', 3 * SECOND, 500, 'msg_1\0req_1'),
++      user('u2', 60 * SECOND),
++      withUsage('a2', 65 * SECOND, 700, 'msg_2\0req_2'),
++    ])
++
++    expect(completions.get('a1')?.outputTokens).toBe(500)
++    expect(completions.get('a2')?.outputTokens).toBe(700)
++  })
++
++  it('leaves the total off when no call reported one', () => {
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      assistant('a1', 3 * SECOND),
++    ])
++
++    expect(completions.get('a1')).not.toHaveProperty('outputTokens')
++  })
++
++  it('treats a reported zero as no measurement rather than printing 0.00k', () => {
++    const completions = buildTurnCompletionByMessageId([
++      user('u1', 0),
++      withUsage('a1', 3 * SECOND, 0, 'msg_1\0req_1'),
++    ])
++
++    expect(completions.get('a1')).not.toHaveProperty('outputTokens')
++  })
++})
+diff --git a/desktop/src/lib/turnCompletion.ts b/desktop/src/lib/turnCompletion.ts
+index 060e03b7..f509a3b2 100644
+--- a/desktop/src/lib/turnCompletion.ts
++++ b/desktop/src/lib/turnCompletion.ts
+@@ -5,6 +5,13 @@ export type TurnCompletion = {
+   completedAt: number
+   /** 用户提示词发出到该轮结束的耗时；起止时间不可信时缺省。 */
+   durationMs?: number
++  /**
++   * 这一轮里各次 API 调用自报的输出 token 合计（`usage.output_tokens`，按
++   * `usageKey` 去重）。一轮可能有多轮「模型调用→工具→再调用」，故是求和而非
++   * 单次值。全部调用都没自报数量时缺省 —— 老 transcript、以及不返回 usage 的
++   * provider 都属于这种情况，此时不显示，而不是显示一个 0。
++   */
++  outputTokens?: number
+ }
+ 
+ /**
+@@ -19,6 +26,30 @@ type OpenTurn = {
+   lastAssistantTextId: string | null
+   /** 最后一条助手文本之后是否还有实质内容（有的话这轮不是以回复收尾的）。 */
+   hasWorkAfterLastReply: boolean
++  outputTokens: number
++  /** 有任意一次调用自报了数量，才让 `outputTokens` 参与展示。 */
++  hasReportedUsage: boolean
++  /** 已计入的 API 调用标识，防止同一次调用被重复累加。 */
++  countedUsageKeys: Set<string>
++}
++
++/**
++ * 一行消息上可用的调用自报用量。只有助手侧的行会带 `usage`（一次调用的全部内容
++ * 块都重复同一份），且数量为 0 或缺失时视为「没自报」，返回 null。
++ */
++function responseUsage(message: UIMessage): { outputTokens: number; key?: string } | null {
++  if (
++    message.type !== 'assistant_text' &&
++    message.type !== 'thinking' &&
++    message.type !== 'tool_use'
++  ) {
++    return null
++  }
++  const outputTokens = message.usage?.output_tokens
++  if (typeof outputTokens !== 'number' || !Number.isFinite(outputTokens) || outputTokens <= 0) {
++    return null
++  }
++  return { outputTokens, ...(message.usageKey ? { key: message.usageKey } : {}) }
+ }
+ 
+ function isTurnStart(message: UIMessage): boolean {
+@@ -65,6 +96,9 @@ export function buildTurnCompletionByMessageId(
+         completedAt: startedAt,
+         lastAssistantTextId: null,
+         hasWorkAfterLastReply: false,
++        outputTokens: 0,
++        hasReportedUsage: false,
++        countedUsageKeys: new Set<string>(),
+       }
+       turns.push(current)
+       continue
+@@ -74,6 +108,16 @@ export function buildTurnCompletionByMessageId(
+     if (!current) continue
+     if (isTrailingCard(message)) continue
+ 
++    // 用量就在这次遍历里顺带累加（这一轮的所有调用都在同一段消息区间内），
++    // 不额外扫一遍。同一次调用的十来行重复携带同一份 usage，靠 usageKey 去重；
++    // 没有 key 的行照计，与 `summarizeTokenUsageFromHistory` 的口径一致。
++    const usage = responseUsage(message)
++    if (usage && (!usage.key || !current.countedUsageKeys.has(usage.key))) {
++      if (usage.key) current.countedUsageKeys.add(usage.key)
++      current.outputTokens += usage.outputTokens
++      current.hasReportedUsage = true
++    }
++
+     if (Number.isFinite(message.timestamp)) {
+       current.completedAt = Number.isFinite(current.completedAt)
+         ? Math.max(current.completedAt, message.timestamp)
+@@ -98,6 +142,7 @@ export function buildTurnCompletionByMessageId(
+     completions.set(turn.lastAssistantTextId, {
+       completedAt: turn.completedAt,
+       ...(plausible ? { durationMs } : {}),
++      ...(turn.hasReportedUsage ? { outputTokens: turn.outputTokens } : {}),
+     })
+   })
+ 
+diff --git a/desktop/src/stores/chatStore.test.ts b/desktop/src/stores/chatStore.test.ts
+index 746b687b..447df452 100644
+--- a/desktop/src/stores/chatStore.test.ts
++++ b/desktop/src/stores/chatStore.test.ts
+@@ -186,6 +186,7 @@ import {
+   mapHistoryMessagesToUiMessages,
+   appendReplayedUserMessage,
+   registerAgentRunSession,
++  getSessionTpsMeter,
+   reconstructAgentNotifications,
+   reconstructRunActivityFromTranscript,
+   settleThinkingDurations,
+@@ -733,6 +734,169 @@ describe('chatStore history mapping', () => {
+     expect(mapped[3]).toMatchObject({ parentToolUseId: 'agent-1' })
+   })
+ 
++  it('carries a reply\'s reported usage onto every row it produced, under one key', () => {
++    // The transcript repeats the whole `usage` object on each of the reply's
++    // lines, and every row of one API call shares its key so a turn total counts
++    // it once.
++    const messages: MessageEntry[] = [
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        usage: { output_tokens: 250 },
++        usageKey: 'msg_1\0req_1',
++        content: [
++          { type: 'thinking', thinking: 'plan the fix' },
++          { type: 'text', text: 'wiring it up' },
++          { type: 'tool_use', id: 'tool-1', name: 'Read', input: { file_path: '/a.ts' } },
++        ],
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    expect(mapped.map((message) => message.type)).toEqual(['thinking', 'assistant_text', 'tool_use'])
++    for (const message of mapped) {
++      expect(message).toMatchObject({
++        usage: { output_tokens: 250 },
++        usageKey: 'msg_1\0req_1',
++      })
++    }
++  })
++
++  it('carries usage on a reply stored as plain string content', () => {
++    const messages: MessageEntry[] = [
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        content: 'all done',
++        usage: { output_tokens: 90 },
++        usageKey: 'msg_9\0req_9',
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    expect(mapped[0]).toMatchObject({
++      type: 'assistant_text',
++      usage: { output_tokens: 90 },
++      usageKey: 'msg_9\0req_9',
++    })
++  })
++
++  it('keeps usage when a reply\'s rows fold into the previous one instead of adding rows', () => {
++    // Adjacent thinking snapshots merge into the row before them, so nothing new
++    // is pushed; the usage still belongs to the turn and lands on the row that
++    // absorbed it rather than being dropped.
++    const messages: MessageEntry[] = [
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        content: [{ type: 'thinking', thinking: 'first pass' }],
++      },
++      {
++        id: 'a2',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:01.000Z',
++        usage: { output_tokens: 300 },
++        usageKey: 'msg_2\0req_2',
++        content: [{ type: 'thinking', thinking: 'second pass' }],
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    expect(mapped).toHaveLength(1)
++    expect(mapped[0]).toMatchObject({ usage: { output_tokens: 300 }, usageKey: 'msg_2\0req_2' })
++  })
++
++  it('leaves rows without usage untouched when a reply reported none', () => {
++    const messages: MessageEntry[] = [
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        content: 'no usage on this transcript',
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    expect(mapped[0]).not.toHaveProperty('usage')
++    expect(mapped[0]).not.toHaveProperty('usageKey')
++  })
++
++  it('never back-fills a row that already belongs to another call', () => {
++    // The second call produced no row of its own (its only block was blank), so
++    // the back-fill reaches the first call's row. Overwriting it would erase the
++    // first call's tokens, which is worse than dropping the blank one's.
++    const messages: MessageEntry[] = [
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        usage: { output_tokens: 500 },
++        usageKey: 'msg_1\0req_1',
++        content: [{ type: 'thinking', thinking: 'real work' }],
++      },
++      {
++        id: 'a2',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:01.000Z',
++        usage: { output_tokens: 7 },
++        usageKey: 'msg_2\0req_2',
++        content: [{ type: 'thinking', thinking: '   ' }],
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    expect(mapped).toHaveLength(1)
++    expect(mapped[0]).toMatchObject({ usage: { output_tokens: 500 }, usageKey: 'msg_1\0req_1' })
++  })
++
++  it('does not back-fill across the turn boundary', () => {
++    // A prompt separates the calls, so a rowless call must not reach back onto
++    // the previous turn's reply and add its tokens there.
++    const messages: MessageEntry[] = [
++      {
++        id: 'u1',
++        type: 'user',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        content: 'first prompt',
++      },
++      {
++        id: 'a1',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:01.000Z',
++        usage: { output_tokens: 500 },
++        usageKey: 'msg_1\0req_1',
++        content: 'first reply',
++      },
++      {
++        id: 'u2',
++        type: 'user',
++        timestamp: '2026-04-06T00:00:02.000Z',
++        content: 'second prompt',
++      },
++      {
++        id: 'a2',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:03.000Z',
++        usage: { output_tokens: 7 },
++        usageKey: 'msg_2\0req_2',
++        content: [{ type: 'thinking', thinking: '   ' }],
++      },
++    ]
++
++    const mapped = mapHistoryMessagesToUiMessages(messages)
++
++    const reply = mapped.find((message) => message.id === 'a1')
++    expect(reply).toMatchObject({ usage: { output_tokens: 500 }, usageKey: 'msg_1\0req_1' })
++  })
++
+   it('keeps collaboration source metadata on user messages from history', () => {
+     const messages: MessageEntry[] = [
+       {
+@@ -10324,6 +10488,33 @@ describe('chatStore history mapping', () => {
+     }
+   })
+ 
++  it("folds an unopened subagent run's decode text into the parent TPS meter", () => {
++    const parentSessionId = '__tps-parent-probe'
++    const send = (event: Extract<ServerMessage, { type: 'agent_run_event' }>['event']) => {
++      useChatStore.getState().handleServerMessage(parentSessionId, {
++        type: 'agent_run_event',
++        runAgentId: 'metered-agent',
++        streamId: 'metered-stream',
++        targetAgentId: 'metered-agent',
++        event,
++      })
++    }
++
++    send({ type: 'content_delta', text: 'x'.repeat(60) })
++
++    const meter = getSessionTpsMeter(parentSessionId)
++    expect(meter.hasStreamed()).toBe(true)
++    // Metered, never rendered: the frame is buffered for a run page that may
++    // never open, and no session state is fabricated for the parent.
++    expect(useChatStore.getState().sessions[parentSessionId]).toBeUndefined()
++
++    // A whole-block thinking hand-over replays text whose fragments already
++    // arrived — metering it again would double the run's token rate.
++    const lastAfterDelta = meter.lastDataTime()
++    send({ type: 'thinking', text: 'y'.repeat(60), complete: true })
++    expect(meter.lastDataTime()).toBe(lastAfterDelta)
++  })
++
+   it('does not replay buffered output after an unregistered run has completed', () => {
+     vi.useFakeTimers()
+     const runSessionId = '__subagent__test-session-1__completed-before-open'
+diff --git a/desktop/src/stores/chatStore.ts b/desktop/src/stores/chatStore.ts
+index d2bd41da..6e00da23 100644
+--- a/desktop/src/stores/chatStore.ts
++++ b/desktop/src/stores/chatStore.ts
+@@ -7785,6 +7785,71 @@ export function reconstructAgentNotifications(messages: MessageEntry[]): Record<
+   return notifications
+ }
+ 
++/**
++ * 把一次 API 调用自报的 `usage` 盖到它产出的那些行上。
++ *
++ * transcript 里一条回复被写成十来行（每个内容块一行），每行都重复同一份 `usage`；
++ * 这个数字属于那次调用而不是某个块，所以整段行共用同一个 `usageKey`，轮次合计时
++ * 按 key 只计一次（与 `summarizeTokenUsageFromHistory` 同口径）。
++ *
++ * 行可能并不新增：历史映射会把相邻思考块并成一行、把同一段正文的前缀增长并进上一行
++ * （`pushAssistantHistoryThinking` / `pushAssistantHistoryText`）。那种情况下往回收
++ * 一行来承接用量，而不是丢掉。回退是**有界**的：不越过本轮起点，也不覆盖已经写着
++ * 归属（`usageKey`）的行——那行属于另一次调用，改写它会把那次调用的用量抹掉。
++ */
++function stampResponseUsage(
++  uiMessages: UIMessage[],
++  firstRowIndex: number,
++  msg: MessageEntry,
++): void {
++  const usage = msg.usage
++  if (!usage) return
++  const usageKey = msg.usageKey
++
++  // 收窄必须内联：助手侧只有这三个变体带 `usage`，拆成返回布尔值的辅助函数后 TS
++  // 就无法把 `UIMessage` 联合收窄到可赋值的那几个。
++  const stamp = (index: number): boolean => {
++    const message = uiMessages[index]
++    if (
++      !message ||
++      (message.type !== 'assistant_text' &&
++        message.type !== 'thinking' &&
++        message.type !== 'tool_use')
++    ) {
++      return false
++    }
++    // 已带用量的行属于另一次调用：改写它会把那次调用的数字抹掉，比丢掉本次更糟。
++    if (message.usage) return false
++    uiMessages[index] = { ...message, usage, ...(usageKey ? { usageKey } : {}) }
++    return true
++  }
++
++  let stamped = false
++  for (let index = firstRowIndex; index < uiMessages.length; index += 1) {
++    if (stamp(index)) stamped = true
++  }
++  if (stamped) return
++
++  // 本次调用一行都没新增（整行被并入上一行，或只有空白块被丢弃）：往回收下一行承接。
++  // 只看**最近的**一行助手内容就停下——再往前那是更早的内容，不该承接。本轮起点
++  // （用户消息）是硬边界。
++  for (let index = Math.min(firstRowIndex, uiMessages.length) - 1; index >= 0; index -= 1) {
++    const message = uiMessages[index]
++    if (!message) continue
++    if (message.type === 'user_text') return
++    if (
++      message.type !== 'assistant_text' &&
++      message.type !== 'thinking' &&
++      message.type !== 'tool_use'
++    ) {
++      continue
++    }
++    if (message.usage) return
++    uiMessages[index] = { ...message, usage, ...(usageKey ? { usageKey } : {}) }
++    return
++  }
++}
++
+ export function mapHistoryMessagesToUiMessages(
+   messages: MessageEntry[],
+   options?: HistoryMappingOptions,
+@@ -7916,6 +7981,7 @@ export function mapHistoryMessagesToUiMessages(
+     }
+     if (msg.type === 'assistant' && typeof msg.content === 'string') {
+       if (!msg.content.trim()) continue
++      const firstRowIndex = uiMessages.length
+       uiMessages.push({
+         id: msg.id || nextId(),
+         type: 'assistant_text',
+@@ -7924,9 +7990,11 @@ export function mapHistoryMessagesToUiMessages(
+         timestamp,
+         model: msg.model,
+       })
++      stampResponseUsage(uiMessages, firstRowIndex, msg)
+       continue
+     }
+     if ((msg.type === 'assistant' || msg.type === 'tool_use') && Array.isArray(msg.content)) {
++      const firstRowIndex = uiMessages.length
+       for (const [blockIndex, block] of (msg.content as AssistantHistoryBlock[]).entries()) {
+         if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp, msg.thinkingDurationMs)
+         else if (block.type === 'text' && block.text) {
+@@ -7941,6 +8009,7 @@ export function mapHistoryMessagesToUiMessages(
+         }
+         else if (block.type === 'tool_use') uiMessages.push({ id: `${msg.id}-block-${blockIndex}`, type: 'tool_use', toolName: block.name ?? 'unknown', toolUseId: block.id ?? '', originalToolUseId: block.original_tool_use_id, input: block.input, timestamp, parentToolUseId: msg.parentToolUseId })
+       }
++      stampResponseUsage(uiMessages, firstRowIndex, msg)
+       continue
+     }
+     if ((msg.type === 'user' || msg.type === 'tool_result') && Array.isArray(msg.content)) {
+diff --git a/desktop/src/types/chat.ts b/desktop/src/types/chat.ts
+index 87f0ae4b..41f80dea 100644
+--- a/desktop/src/types/chat.ts
++++ b/desktop/src/types/chat.ts
+@@ -1,5 +1,6 @@
+ import type { PermissionMode } from './settings'
+ import type { RuntimeSelection } from './runtime'
++import type { MessageUsage } from './session'
+ 
+ // Source: src/server/ws/events.ts
+ 
+@@ -348,8 +349,16 @@ export type UIMessage =
+    * member transcript.
+    */
+   | { id: string; type: 'user_text'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; teammateFrom?: string }
+-  | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
+-  | { id: string; type: 'thinking'; content: string; timestamp: number; /** Wall-clock ms this block spent generating; set on completion (live) or mapped from the transcript (history). */ thinkingDurationMs?: number }
++  /**
++   * `usage` is the token counts the API call that produced this row reported,
++   * carried so a turn can total them. `usageKey` dedupes it: one reply is
++   * persisted as a dozen transcript lines that each repeat the whole `usage`
++   * object, so the number belongs to the call, not to the row. Rows of a reply
++   * that reported nothing — older transcripts, providers that return no usage —
++   * simply do not carry it, and the turn then shows no total.
++   */
++  | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string; usage?: MessageUsage; usageKey?: string }
++  | { id: string; type: 'thinking'; content: string; timestamp: number; /** Wall-clock ms this block spent generating; set on completion (live) or mapped from the transcript (history). */ thinkingDurationMs?: number; usage?: MessageUsage; usageKey?: string }
+   | {
+       id: string
+       type: 'tool_use'
+@@ -362,6 +371,8 @@ export type UIMessage =
+       isPending?: boolean
+       status?: 'stopped'
+       partialInput?: string
++      usage?: MessageUsage
++      usageKey?: string
+     }
+   | { id: string; type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }
+   | { id: string; type: 'background_task'; task: BackgroundAgentTask; timestamp: number }

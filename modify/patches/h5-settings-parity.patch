@@ -1,0 +1,428 @@
+diff --git a/desktop/src/pages/Settings.tsx b/desktop/src/pages/Settings.tsx
+index 912b3b05..e8c16666 100644
+--- a/desktop/src/pages/Settings.tsx
++++ b/desktop/src/pages/Settings.tsx
+@@ -29,6 +29,28 @@ export function Settings() {
+   return getDesktopHost().isDesktop ? <DesktopSettings /> : <H5Settings />
+ }
+ 
++// The full Settings tab list, shared by the desktop rail and the H5 pill
++// strip so the two surfaces always expose the same sections.
++export const SETTINGS_TABS = [
++  { id: 'providers', icon: 'dns' },
++  { id: 'general', icon: 'tune' },
++  { id: 'h5Access', icon: 'qr_code_2' },
++  { id: 'adapters', icon: 'chat' },
++  { id: 'terminal', icon: 'terminal' },
++  { id: 'mcp', icon: 'dns' },
++  { id: 'agents', icon: 'smart_toy' },
++  { id: 'skills', icon: 'auto_awesome' },
++  { id: 'memory', icon: 'history_edu' },
++  { id: 'plugins', icon: 'extension' },
++  { id: 'pets', icon: 'pets' },
++  { id: 'computerUse', icon: 'mouse' },
++  { id: 'activity', icon: 'monitoring' },
++  { id: 'trace', icon: 'account_tree' },
++  { id: 'diagnostics', icon: 'monitor_heart' },
++] as const
++
++export const SETTINGS_ABOUT_TAB = { id: 'about', icon: 'info' } as const
++
+ export function DesktopSettings() {
+   const activeTab = useUIStore((s) => s.activeSettingsTab)
+   const setActiveTab = useUIStore((s) => s.setActiveSettingsTab)
+@@ -66,24 +88,12 @@ export function DesktopSettings() {
+           className="w-[195px] flex-shrink-0 flex flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-surface)] py-4 pl-3 pr-1"
+         >
+           <div className="flex-1 flex flex-col gap-0.5">
+-            <TabButton icon="dns" label={t('settings.tab.providers')} active={activeTab === 'providers'} onClick={() => setActiveTab('providers')} />
+-            <TabButton icon="tune" label={t('settings.tab.general')} active={activeTab === 'general'} onClick={() => setActiveTab('general')} />
+-            <TabButton icon="qr_code_2" label={t('settings.tab.h5Access')} active={activeTab === 'h5Access'} onClick={() => setActiveTab('h5Access')} />
+-            <TabButton icon="chat" label={t('settings.tab.adapters')} active={activeTab === 'adapters'} onClick={() => setActiveTab('adapters')} />
+-            <TabButton icon="terminal" label={t('settings.tab.terminal')} active={activeTab === 'terminal'} onClick={() => setActiveTab('terminal')} />
+-            <TabButton icon="dns" label={t('settings.tab.mcp')} active={activeTab === 'mcp'} onClick={() => setActiveTab('mcp')} />
+-            <TabButton icon="smart_toy" label={t('settings.tab.agents')} active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} />
+-            <TabButton icon="auto_awesome" label={t('settings.tab.skills')} active={activeTab === 'skills'} onClick={() => setActiveTab('skills')} />
+-            <TabButton icon="history_edu" label={t('settings.tab.memory')} active={activeTab === 'memory'} onClick={() => setActiveTab('memory')} />
+-            <TabButton icon="extension" label={t('settings.tab.plugins')} active={activeTab === 'plugins'} onClick={() => setActiveTab('plugins')} />
+-            <TabButton icon="pets" label={t('settings.tab.pets')} active={activeTab === 'pets'} onClick={() => setActiveTab('pets')} />
+-            <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
+-            <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
+-            <TabButton icon="account_tree" label={t('settings.tab.trace')} active={activeTab === 'trace'} onClick={() => setActiveTab('trace')} />
+-            <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
++            {SETTINGS_TABS.map((tab) => (
++              <TabButton key={tab.id} icon={tab.icon} label={t(`settings.tab.${tab.id}`)} active={activeTab === tab.id} onClick={() => setActiveTab(tab.id)} />
++            ))}
+           </div>
+           <div className="mt-2 border-t border-[var(--color-border-separator)] pt-2">
+-            <TabButton icon="info" label={t('settings.tab.about')} active={activeTab === 'about'} onClick={() => setActiveTab('about')} />
++            <TabButton icon={SETTINGS_ABOUT_TAB.icon} label={t('settings.tab.about')} active={activeTab === 'about'} onClick={() => setActiveTab('about')} />
+           </div>
+         </div>
+ 
+diff --git a/desktop/src/pages/settings/H5GeneralSettings.tsx b/desktop/src/pages/settings/H5GeneralSettings.tsx
+deleted file mode 100644
+index 4956b360..00000000
+--- a/desktop/src/pages/settings/H5GeneralSettings.tsx
++++ /dev/null
+@@ -1,75 +0,0 @@
+-import { useState } from 'react'
+-import { useTranslation, type Locale } from '@/i18n'
+-import { useSettingsStore } from '@/stores/settingsStore'
+-import { useUIStore } from '@/stores/uiStore'
+-import { settingsApi } from '@/api/settings'
+-import { modelsApi } from '@/api/models'
+-import { SettingsSection } from '@/components/settings/SettingsSection'
+-import { SelectField } from '@/components/ui/SelectField'
+-import { Switch } from '@/components/ui/Switch'
+-import type { ThemeMode, UserSettings, EffortLevel } from '@/types/settings'
+-
+-export function H5GeneralSettings() {
+-  const t = useTranslation()
+-  const settings = useSettingsStore()
+-  const theme = useUIStore((state) => state.theme)
+-  const [busy, setBusy] = useState(false)
+-  const [failed, setFailed] = useState(false)
+-  const save = async (patch: Partial<UserSettings>) => {
+-    setBusy(true)
+-    setFailed(false)
+-    try {
+-      await settingsApi.updateUser(patch)
+-      await settings.fetchAll()
+-    } catch { setFailed(true) }
+-    finally { setBusy(false) }
+-  }
+-  const effort = async (level: EffortLevel) => {
+-    setBusy(true)
+-    setFailed(false)
+-    try { await modelsApi.setEffort(level); useSettingsStore.setState({ effortLevel: level }) }
+-    catch { setFailed(true) }
+-    finally { setBusy(false) }
+-  }
+-  const languages: { value: Locale, label: string }[] = [
+-    { value: 'en', label: 'English' }, { value: 'zh', label: '简体中文' }, { value: 'zh-TW', label: '繁體中文' }, { value: 'jp', label: '日本語' }, { value: 'kr', label: '한국어' },
+-  ]
+-  const themes: { value: ThemeMode, label: string }[] = [
+-    { value: 'white', label: t('settings.general.appearance.white') }, { value: 'paper', label: t('settings.general.appearance.paper') },
+-    { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') }, { value: 'celadon', label: t('settings.general.appearance.celadon') },
+-    { value: 'dark', label: t('settings.general.appearance.dark') }, { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
+-  ]
+-  const effortLabels = {
+-    low: t('settings.general.effort.low'), medium: t('settings.general.effort.medium'), high: t('settings.general.effort.high'),
+-    xhigh: t('settings.general.effort.xhigh'), max: t('settings.general.effort.max'),
+-  }
+-  const levels: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
+-  const supported = settings.currentModel?.supportedReasoningEfforts
+-  const effortOptions = !settings.currentModel ? [] : levels.filter((value) => supported ? supported.includes(value) : value !== 'xhigh')
+-  const selectedEffort = effortOptions.includes(settings.effortLevel) ? settings.effortLevel : effortOptions[0] ?? settings.effortLevel
+-  const responseLanguages = [{ value: '', label: t('settings.general.responseLangDefault') },
+-    { value: 'english', label: 'English' }, { value: 'chinese', label: '中文' }, { value: 'japanese', label: '日本語' }, { value: 'korean', label: '한국어' }]
+-  if (settings.responseLanguage && !responseLanguages.some((item) => item.value === settings.responseLanguage)) responseLanguages.push({ value: settings.responseLanguage, label: settings.responseLanguage })
+-  const styles = [{ value: 'default', label: t('settings.general.outputStyleBuiltin.default.label') },
+-    { value: 'Explanatory', label: t('settings.general.outputStyleBuiltin.explanatory.label') }, { value: 'Learning', label: t('settings.general.outputStyleBuiltin.learning.label') }]
+-  if (settings.outputStyle && !styles.some((item) => item.value === settings.outputStyle)) styles.push({ value: settings.outputStyle, label: settings.outputStyle })
+-  return <div className="max-w-xl space-y-5">
+-    {failed && <p role="alert" className="text-sm text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
+-    <SettingsSection title={t('settings.general.appearanceTitle')} description={t('h5Settings.browserOnly')}>
+-      <div className="space-y-4">
+-        <SelectField label={t('settings.general.appearanceTitle')} value={theme} options={themes} onChange={(value) => { useUIStore.getState().setFollowSystemTheme(false); void settings.setTheme(value) }} />
+-        <SelectField label={t('settings.general.languageTitle')} value={settings.locale} options={languages} onChange={settings.setLocale} />
+-      </div>
+-    </SettingsSection>
+-    <SettingsSection title={t('h5Settings.agentPreferences')} description={t('h5Settings.agentPreferencesHint')}>
+-      <div className="space-y-5">
+-        <SelectField label={t('settings.general.responseLangTitle')} disabled={busy} value={settings.responseLanguage} options={responseLanguages} onChange={(language) => void save({ language })} />
+-        <SelectField label={t('settings.general.outputStyleTitle')} disabled={busy} value={settings.outputStyle || 'default'} options={styles} onChange={(outputStyle) => void save({ outputStyle })} />
+-        <SelectField label={t('h5Settings.effort')} disabled={busy || !effortOptions.length} value={selectedEffort} options={effortOptions.map((value) => ({ value, label: effortLabels[value] }))} onChange={(value) => void effort(value)} />
+-        <SelectField label={t('h5Settings.sendBehavior')} disabled={busy} value={settings.chatSendBehavior} options={[{ value: 'enter', label: t('h5Settings.enter') }, { value: 'modifierEnter', label: t('h5Settings.modifierEnter') }]} onChange={(chatSendBehavior) => void save({ chatSendBehavior })} />
+-        <Switch disabled={busy} checked={settings.thinkingEnabled} label={t('settings.general.thinkingEnabled')} description={t('settings.general.thinkingDescription')} onChange={(alwaysThinkingEnabled) => void save({ alwaysThinkingEnabled })} />
+-        <Switch disabled={busy} checked={settings.workflowKeywordTriggerEnabled} label={t('settings.general.workflowKeywordEnabled')} description={t('settings.general.workflowKeywordDescription')} onChange={(workflowKeywordTriggerEnabled) => void save({ workflowKeywordTriggerEnabled })} />
+-      </div>
+-    </SettingsSection>
+-  </div>
+-}
+diff --git a/desktop/src/pages/settings/H5Settings.test.tsx b/desktop/src/pages/settings/H5Settings.test.tsx
+index 991f72f7..2d5ea3da 100644
+--- a/desktop/src/pages/settings/H5Settings.test.tsx
++++ b/desktop/src/pages/settings/H5Settings.test.tsx
+@@ -8,14 +8,36 @@ import { useUIStore } from '@/stores/uiStore'
+ import { useSettingsStore } from '@/stores/settingsStore'
+ import { useProviderStore } from '@/stores/providerStore'
+ import { providersApi } from '@/api/providers'
+-import { settingsApi } from '@/api/settings'
+-import { modelsApi } from '@/api/models'
+ import type { SavedProvider } from '@/types/provider'
+ 
+ const saved: SavedProvider = {
+   id: 'fixture-provider', name: 'Fixture provider', presetId: 'custom', baseUrl: 'https://fixture.example', apiKey: '', apiFormat: 'anthropic',
+   models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
+ }
++
++// The H5 surface now exposes the full desktop tab list; only the tab it
++// navigates into needs real rendering. Everything else is a light stub so the
++// test stays focused on the navigation parity, not every page's internals.
++vi.mock('../ActivitySettings', () => ({ ActivitySettings: () => <div>ActivitySettings Mock</div> }))
++vi.mock('../AdapterSettings', () => ({ AdapterSettings: () => <div>AdapterSettings Mock</div> }))
++vi.mock('../ComputerUseSettings', () => ({ ComputerUseSettings: () => <div>ComputerUseSettings Mock</div> }))
++vi.mock('../DiagnosticsSettings', () => ({ DiagnosticsSettings: () => <div>DiagnosticsSettings Mock</div> }))
++vi.mock('../McpSettings', () => ({ McpSettings: () => <div>McpSettings Mock</div> }))
++vi.mock('../MemorySettings', () => ({ MemorySettings: () => <div>MemorySettings Mock</div> }))
++vi.mock('../TerminalSettings', () => ({ TerminalSettings: () => <div>TerminalSettings Mock</div> }))
++vi.mock('../TraceList', () => ({ TraceList: () => <div>TraceList Mock</div> }))
++vi.mock('./GeneralSettings', () => ({ GeneralSettings: () => <div>GeneralSettings Mock</div> }))
++vi.mock('./H5AccessSettings', () => ({ H5AccessSettings: () => <div>H5AccessSettings Mock</div> }))
++vi.mock('./AboutSettings', () => ({ AboutSettings: () => <div>AboutSettings Mock</div> }))
++vi.mock('../../features/pets/PetSettings', () => ({ PetSettings: () => <div>PetSettings Mock</div> }))
++vi.mock('../../components/settings/AgentManager', () => ({ AgentManager: () => <div>AgentManager Mock</div> }))
++vi.mock('../../components/skills/SkillList', () => ({ SkillList: () => <div>SkillList Mock</div> }))
++vi.mock('../../components/skills/SkillDetail', () => ({ SkillDetail: () => <div>SkillDetail Mock</div> }))
++vi.mock('../../components/plugins/PluginList', () => ({ PluginList: () => <div>PluginList Mock</div> }))
++vi.mock('../../components/plugins/PluginDetail', () => ({ PluginDetail: () => <div>PluginDetail Mock</div> }))
++vi.mock('../../stores/skillStore', () => ({ useSkillStore: (selector: (s: { selectedSkill: string | null }) => unknown) => selector({ selectedSkill: null }) }))
++vi.mock('../../stores/pluginStore', () => ({ usePluginStore: (selector: (s: { selectedPlugin: string | null }) => unknown) => selector({ selectedPlugin: null }) }))
++
+ beforeEach(() => {
+   useSettingsStore.setState({ locale: 'en', outputStyle: 'default', responseLanguage: '', effortLevel: 'high', currentModel: { id: 'fixture-model', name: 'Fixture model', context: '', description: '', supportedReasoningEfforts: ['low', 'high'] } })
+   useUIStore.setState({ activeSettingsTab: 'providers', pendingSettingsTab: null })
+@@ -26,22 +48,23 @@ beforeEach(() => {
+   vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+ })
+ afterEach(() => { cleanup(); vi.restoreAllMocks() })
+-it('limits browser navigation to providers and general, with local appearance and shared agent preferences', async () => {
++it('exposes the same full section list as the desktop rail', async () => {
++  render(<H5Settings />)
++  const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
++  expect(nav.getAllByRole('button')).toHaveLength(16)
++  expect(nav.getByRole('button', { name: 'H5 Access' })).toBeInTheDocument()
++  expect(nav.getByRole('button', { name: 'Terminal' })).toBeInTheDocument()
++  expect(nav.getByRole('button', { name: 'About' })).toBeInTheDocument()
++})
++it('navigates to any desktop section, including ones the old two-pill fence hid', async () => {
+   useUIStore.setState({ activeSettingsTab: 'terminal' })
+   render(<H5Settings />)
++  expect(screen.getByText('TerminalSettings Mock')).toBeInTheDocument()
+   const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
+-  expect(nav.getAllByRole('button')).toHaveLength(2)
+-  expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
+-  fireEvent.click(nav.getByRole('button', { name: 'General' }))
+-  expect(screen.getByText('Appearance and interface language apply only to this browser.')).toBeInTheDocument()
+-  const update = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+-  fireEvent.change(screen.getByLabelText('Output Style'), { target: { value: 'Learning' } })
+-  await waitFor(() => expect(update).toHaveBeenCalledWith({ outputStyle: 'Learning' }))
+-  await waitFor(() => expect(screen.getByLabelText('Reasoning effort')).not.toBeDisabled())
+-  const effort = vi.spyOn(modelsApi, 'setEffort').mockResolvedValue({ ok: true, level: 'low' })
+-  fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'low' } })
+-  await waitFor(() => expect(effort).toHaveBeenCalledWith('low'))
+-  expect(screen.queryByLabelText(/ngrok Authtoken/)).not.toBeInTheDocument()
++  fireEvent.click(nav.getByRole('button', { name: 'H5 Access' }))
++  expect(screen.getByText('H5AccessSettings Mock')).toBeInTheDocument()
++  expect(useUIStore.getState().activeSettingsTab).toBe('h5Access')
++  expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+ })
+ it('edits saved providers without reading or overwriting stored keys or global settings', async () => {
+   const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider: saved })
+@@ -83,24 +106,13 @@ it('activates and deletes providers through the existing API without connection
+   await waitFor(() => expect(remove).toHaveBeenCalledWith('fixture-provider'))
+   expect(probe).not.toHaveBeenCalled()
+ })
+-it('changes browser appearance without writing connected computer settings', async () => {
+-  useUIStore.setState({ activeSettingsTab: 'general', followSystemTheme: true })
+-  const update = vi.spyOn(settingsApi, 'updateUser')
+-  render(<H5Settings />)
+-  fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: 'ink-blue' } })
+-  expect(useUIStore.getState().theme).toBe('ink-blue')
+-  expect(useUIStore.getState().followSystemTheme).toBe(false)
+-  expect(update).not.toHaveBeenCalled()
+-})
+-
+-it('routes the actual Settings page to the browser-safe panels', async () => {
++it('routes the actual Settings page to the full browser tab list', async () => {
+   render(<Settings />)
+   const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
+-  expect(nav.getAllByRole('button')).toHaveLength(2)
++  expect(nav.getAllByRole('button')).toHaveLength(16)
+   expect(screen.queryByTestId('settings-navigation')).not.toBeInTheDocument()
+   expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
+ })
+-
+ it.each([true, false])('shows beta details on focus without overflowing narrow forms (browserMode=%s)', async (browserMode) => {
+   render(<ProviderSettings browserMode={browserMode} />)
+   fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+diff --git a/desktop/src/pages/settings/H5Settings.tsx b/desktop/src/pages/settings/H5Settings.tsx
+index e6935e15..3d3425e0 100644
+--- a/desktop/src/pages/settings/H5Settings.tsx
++++ b/desktop/src/pages/settings/H5Settings.tsx
+@@ -1,27 +1,158 @@
+-import { useEffect } from 'react'
++import { useEffect, useMemo, useRef } from 'react'
+ import { useTranslation } from '@/i18n'
+ import { useUIStore } from '@/stores/uiStore'
+-import { SettingsPill } from '@/components/settings/SettingsSection'
++import { useSessionStore } from '@/stores/sessionStore'
++import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
++import { SETTINGS_TABS } from '../Settings'
++import { ActivitySettings } from '../ActivitySettings'
++import { AdapterSettings } from '../AdapterSettings'
++import { ComputerUseSettings } from '../ComputerUseSettings'
++import { DiagnosticsSettings } from '../DiagnosticsSettings'
++import { GeneralSettings } from './GeneralSettings'
++import { H5AccessSettings } from './H5AccessSettings'
++import { McpSettings } from '../McpSettings'
++import { MemorySettings } from '../MemorySettings'
++import { PetSettings } from '../../features/pets/PetSettings'
+ import { ProviderSettings } from './ProviderSettings'
+-import { H5GeneralSettings } from './H5GeneralSettings'
++import { TerminalSettings } from '../TerminalSettings'
++import { TraceList } from '../TraceList'
++import { AboutSettings } from './AboutSettings'
++import { AgentManager } from '../../components/settings/AgentManager'
++import { SkillList } from '../../components/skills/SkillList'
++import { SkillDetail } from '../../components/skills/SkillDetail'
++import { PluginList } from '../../components/plugins/PluginList'
++import { PluginDetail } from '../../components/plugins/PluginDetail'
++import { useSkillStore } from '../../stores/skillStore'
++import { usePluginStore } from '../../stores/pluginStore'
+ 
++// H5 (phone browser) Settings surface. It exposes the same full section list
++// as the desktop rail (SETTINGS_TABS + about) — the 0.6.6 "two pill" browser
++// fence is lifted, so every desktop setting is reachable from a phone.
++// Desktop-only capabilities still degrade inside their components
++// (terminal/pets/computer-use show their "desktop app required" state), which
++// keeps the list identical to the desktop app.
+ export function H5Settings() {
+   const t = useTranslation()
+   const active = useUIStore((state) => state.activeSettingsTab)
+   const pending = useUIStore((state) => state.pendingSettingsTab)
+-  const selected = (pending ?? active) === 'general' ? 'general' : 'providers'
++  const selected = pending ?? active
+   useEffect(() => {
+-    useUIStore.getState().setActiveSettingsTab(selected)
++    if (pending) useUIStore.getState().setActiveSettingsTab(pending)
+     if (pending) useUIStore.getState().setPendingSettingsTab(null)
+-  }, [pending, selected])
+-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
+-    <nav aria-label={t('sidebar.settings')} className="flex shrink-0 [&_button]:min-h-11 flex-wrap gap-2 border-b border-[var(--color-border)] p-3">
+-      <SettingsPill selected={selected === 'providers'} onClick={() => useUIStore.getState().setActiveSettingsTab('providers')}>{t('settings.tab.providers')}</SettingsPill>
+-      <SettingsPill selected={selected === 'general'} onClick={() => useUIStore.getState().setActiveSettingsTab('general')}>{t('settings.tab.general')}</SettingsPill>
+-    </nav>
+-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6">
+-      <p className="mb-5 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('h5Settings.scope')}</p>
+-      {selected === 'providers' ? <ProviderSettings browserMode /> : <H5GeneralSettings />}
++  }, [pending])
++
++  const navRef = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    // Keep the selected pill visible in the horizontally scrolling strip.
++    navRef.current
++      ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
++      ?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
++  }, [selected])
++
++  return (
++    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
++      <div
++        ref={navRef}
++        aria-label={t('sidebar.settings')}
++        role="navigation"
++        className="flex min-w-0 shrink-0 flex-nowrap gap-2 overflow-x-auto border-b border-[var(--color-border)] p-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&_button]:min-h-11 [&_button]:shrink-0"
++      >
++        {SETTINGS_TABS.map((tab) => (
++          <SettingsPill
++            key={tab.id}
++            selected={selected === tab.id}
++            onClick={() => useUIStore.getState().setActiveSettingsTab(tab.id)}
++          >
++            {t(`settings.tab.${tab.id}`)}
++          </SettingsPill>
++        ))}
++        <SettingsPill
++          className="ml-1 shrink-0"
++          selected={selected === 'about'}
++          onClick={() => useUIStore.getState().setActiveSettingsTab('about')}
++        >          {t('settings.tab.about')}
++        </SettingsPill>
++      </div>
++      <div className={selected === 'trace' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden' : 'min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6'}>
++        {selected === 'providers' && <ProviderSettings browserMode />}
++        {selected === 'activity' && <ActivitySettings />}
++        {selected === 'general' && <GeneralSettings />}
++        {selected === 'h5Access' && <H5AccessSettings />}
++        {selected === 'adapters' && <AdapterSettings />}
++        {selected === 'terminal' && <H5TerminalSettings />}
++        {selected === 'mcp' && <McpSettings />}
++        {selected === 'agents' && <AgentManager />}
++        {selected === 'skills' && <H5SkillSettings />}
++        {selected === 'memory' && <MemorySettings />}
++        {selected === 'plugins' && <H5PluginSettings />}
++        {selected === 'pets' && <PetSettings />}
++        {selected === 'computerUse' && <ComputerUseSettings />}
++        {selected === 'trace' && <TraceList />}
++        {selected === 'diagnostics' && <DiagnosticsSettings />}
++        {selected === 'about' && <AboutSettings />}
++      </div>
++    </div>
++  )
++}
++
++// H5 终端默认落在当前活动会话的工作目录，让手机端能直接操作那个项目；
++// 无活动会话时不传 cwd，由服务端回落 CLAUDE_CONFIG_DIR/HOME。
++function H5TerminalSettings() {
++  const activeSessionId = useSessionStore((s) => s.activeSessionId)
++  const sessions = useSessionStore((s) => s.sessions)
++  const activeSession = useMemo(
++    () => sessions.find((session) => session.id === activeSessionId),
++    [activeSessionId, sessions],
++  )
++  const cwd = activeSession?.workDir ?? activeSession?.projectRoot ?? undefined
++  return <TerminalSettings showPreferences cwd={cwd} />
++}
++
++// Same selected-detail pattern as the desktop Settings rail wrappers, but the
++// header copy matches what H5 users already see on this surface.
++function H5SkillSettings() {
++  const selectedSkill = useSkillStore((s) => s.selectedSkill)
++  const t = useTranslation()
++
++  if (selectedSkill) {
++    return (
++      <div className="w-full min-w-0">
++        <SkillDetail />
++      </div>
++    )
++  }
++
++  return (
++    <div className="w-full min-w-0">
++      <SettingsPageHeader
++        title={t('settings.skills.title')}
++        description={t('settings.skills.description')}
++      />
++      <SkillList />
+     </div>
+-  </div>
++  )
+ }
++
++function H5PluginSettings() {
++  const selectedPlugin = usePluginStore((s) => s.selectedPlugin)
++  const t = useTranslation()
++
++  if (selectedPlugin) {
++    return (
++      <div className="w-full min-w-0">
++        <PluginDetail />
++      </div>
++    )
++  }
++
++  return (
++    <div className="w-full min-w-0">
++      <SettingsPageHeader
++        title={t('settings.plugins.title')}
++        description={t('settings.plugins.description')}
++      />
++      <PluginList />
++    </div>
++  )
++}
++

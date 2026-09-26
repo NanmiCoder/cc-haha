@@ -35,6 +35,15 @@ function healthOkResponse() {
   return Response.json({ status: 'ok' })
 }
 
+// A server that still requires an H5 token: /health is open, but the tokenless
+// capability probe (/api/status) answers 401, forcing the token path.
+async function authRequiredFetchImpl(input: unknown) {
+  if (String(input).endsWith('/api/status')) {
+    return new Response(null, { status: 401 })
+  }
+  return healthOkResponse()
+}
+
 describe('desktopRuntime browser H5 bootstrap', () => {
   const originalFetch = globalThis.fetch
 
@@ -63,7 +72,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'old-secret')
     clientMocks.explicitDefaultBaseUrl = true
     clientMocks.defaultBaseUrl = 'https://configured.example'
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
 
     await expect(initializeDesktopServerUrl()).resolves.toBe(window.location.origin)
     expect(clientMocks.setBaseUrl).toHaveBeenLastCalledWith(window.location.origin)
@@ -96,9 +105,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
   })
 
   it('clears an invalid token but preserves the remembered remote server URL', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(
       Object.assign(new Error('Invalid or missing H5 access token'), { status: 401 }),
     )
@@ -133,9 +140,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     window.localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example/app')
     window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'paired-server-token')
     window.history.pushState({}, '', '/?serverUrl=https%3A%2F%2Fattacker.example%2Fapp')
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
 
     await expect(initializeDesktopServerUrl()).rejects.toMatchObject({
       name: 'H5ConnectionRequiredError',
@@ -151,9 +156,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     window.localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example/app/')
     window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'paired-server-token')
     window.history.pushState({}, '', '/?serverUrl=https%3A%2F%2Fpaired.example%2Fapp')
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockResolvedValueOnce({ ok: true })
 
     await expect(initializeDesktopServerUrl()).resolves.toBe('https://paired.example/app')
@@ -190,9 +193,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
         getLocalAccessToken: vi.fn().mockResolvedValue('desktop-local-token'),
       },
     }
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
 
     await expect(initializeDesktopServerUrl()).resolves.toBe(serverUrl)
 
@@ -219,9 +220,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
         getLocalAccessToken: vi.fn().mockRejectedValue(new Error('ipc channel missing')),
       },
     }
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
 
     await expect(initializeDesktopServerUrl()).resolves.toBe(serverUrl)
 
@@ -411,9 +410,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
   })
 
   it('normalizes remote verify failures like disabled H5 or CORS into recoverable H5 errors', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
     await expect(saveAndVerifyH5Connection('https://public.example.com', 'h5_token')).rejects.toMatchObject({
@@ -430,9 +427,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
 
   it('requires a token when browser WebUI connects to a LAN-bound server', async () => {
     window.history.pushState({}, '', '/?serverUrl=http%3A%2F%2F192.168.0.102%3A28670')
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
 
     await expect(initializeDesktopServerUrl()).rejects.toMatchObject({
       name: 'H5ConnectionRequiredError',
@@ -446,12 +441,30 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     expect(window.localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe('http://192.168.0.102:28670')
   })
 
+  it('connects tokenless when the LAN-bound server does not require an H5 token', async () => {
+    // requireToken=false server: /api/status answers 200 without a Bearer
+    // token, so the client must connect tokenless instead of prompting.
+    window.history.pushState({}, '', '/?serverUrl=http%3A%2F%2F192.168.0.102%3A28670')
+    globalThis.fetch = vi.fn()
+      .mockImplementation(async (input) => {
+        if (String(input).endsWith('/api/status')) {
+          return Response.json({ ok: true })
+        }
+        return healthOkResponse()
+      }) as typeof fetch
+
+    await expect(initializeDesktopServerUrl()).resolves.toBe('http://192.168.0.102:28670')
+
+    expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith(null)
+    expect(clientMocks.postVerify).not.toHaveBeenCalled()
+  })
+
   it('keeps the saved pairing through transient verification failure and reconnects without scanning', async () => {
     const server = 'https://paired.example/app'
     localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
     localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'remembered-token')
     history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server))
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(new TypeError('Network unavailable')).mockResolvedValueOnce({ ok: true })
     await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'verify-failed' })
     expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('remembered-token')
@@ -464,7 +477,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
     localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'current-token')
     history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server) + '&h5Token=old-qr-token&keep=yes')
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockResolvedValueOnce({ ok: true })
     await expect(initializeDesktopServerUrl()).resolves.toBe(server)
     expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('current-token')
@@ -478,7 +491,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, server)
     localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'expired-token')
     history.replaceState(null, '', '/?serverUrl=' + encodeURIComponent(server) + '&h5Token=fresh-token')
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(Object.assign(new Error('Invalid token'), { status: 401 })).mockResolvedValueOnce({ ok: true })
     await expect(initializeDesktopServerUrl()).resolves.toBe(server)
     expect(clientMocks.setAuthToken).toHaveBeenLastCalledWith('fresh-token')
@@ -489,7 +502,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example')
     localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'paired-token')
     history.replaceState(null, '', '/?serverUrl=https%3A%2F%2Funpaired.example')
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'missing-token' })
     expect(localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)).toBe('https://paired.example')
     expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBe('paired-token')
@@ -511,7 +524,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
     localStorage.setItem(H5_SERVER_URL_STORAGE_KEY, 'https://paired.example')
     localStorage.setItem(H5_TOKEN_STORAGE_KEY, 'revoked-token')
     history.replaceState(null, '', '/?serverUrl=https%3A%2F%2Fpaired.example')
-    globalThis.fetch = vi.fn().mockImplementation(async () => healthOkResponse()) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockRejectedValueOnce(Object.assign(new Error('Invalid token'), { status: 401 }))
     await expect(initializeDesktopServerUrl()).rejects.toMatchObject({ reason: 'invalid-token' })
     expect(localStorage.getItem(H5_TOKEN_STORAGE_KEY)).toBeNull()
@@ -520,9 +533,7 @@ describe('desktopRuntime browser H5 bootstrap', () => {
 
   it('uses and persists an H5 token from the QR launch URL', async () => {
     window.history.pushState({}, '', '/?serverUrl=https%3A%2F%2Fpublic.example.com%2Fapp&h5Token=qr-token')
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      healthOkResponse(),
-    ) as typeof fetch
+    globalThis.fetch = vi.fn(authRequiredFetchImpl) as typeof fetch
     clientMocks.postVerify.mockResolvedValueOnce({ ok: true })
 
     await expect(initializeDesktopServerUrl()).resolves.toBe('https://public.example.com/app')

@@ -60,6 +60,7 @@ import {
   resolveModelReasoningProfile,
 } from '../../shared/modelReasoning.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { getTerminalService } from '../services/terminalService.js'
 import {
   buildConversationTitleInput,
   deriveTitle,
@@ -551,7 +552,9 @@ function translateCliUsage(usage: unknown): TokenUsage {
 export type WebSocketData = {
   sessionId: string
   connectedAt: number
-  channel: 'client' | 'sdk'
+  // 'terminal' is the dedicated H5 browser-terminal channel (/ws/terminal);
+  // it is not tied to a chat session, so sessionId is the literal 'terminal'.
+  channel: 'client' | 'sdk' | 'terminal'
   clientKind?: 'full' | 'pet'
   sdkToken: string | null
   serverPort: number
@@ -576,6 +579,14 @@ const sessionTranscriptEpochs = new Map<string, number>()
 export const handleWebSocket = {
   open(ws: SessionConnection) {
     const { sessionId, channel, sdkToken } = ws.data
+
+    if (channel === 'terminal') {
+      // Take over any still-alive PTY (absorbing a flaky phone network) and
+      // replay terminal_sync so the client can re-attach to its shell.
+      getTerminalService().attach(ws)
+      console.log('[WS] Terminal client connected')
+      return
+    }
 
     if (channel === 'sdk') {
       if (!conversationService.authorizeSdkConnection(sessionId, sdkToken)) {
@@ -641,6 +652,11 @@ export const handleWebSocket = {
   },
 
   message(ws: SessionConnection, rawMessage: string | Buffer) {
+    if (ws.data.channel === 'terminal') {
+      handleTerminalMessage(ws, rawMessage)
+      return
+    }
+
     if (ws.data.channel === 'sdk') {
       const { sessionId, sdkToken } = ws.data
       if (!conversationService.authorizeSdkConnection(sessionId, sdkToken)) {
@@ -765,6 +781,12 @@ export const handleWebSocket = {
 
   close(ws: SessionConnection, code: number, reason: string) {
     const { sessionId, channel } = ws.data
+
+    if (channel === 'terminal') {
+      console.log(`[WS] Terminal client disconnected (${code}: ${reason})`)
+      getTerminalService().detach(ws)
+      return
+    }
 
     if (channel === 'sdk') {
       console.log(`[WS] SDK disconnected from session: ${sessionId} (${code}: ${reason})`)
@@ -2996,6 +3018,7 @@ function getStreamState(sessionId: string): SessionStreamState {
       activeMessageIdsByScope: new Map(),
       activeBlockScopesByIndex: new Map(),
       activeBlockTypes: new Map(),
+      thinkingBlockStarts: new Map(),
       activeToolBlocks: new Map(),
       pendingLocalCommand: undefined,
       pendingToolBlocks: new Map(),
@@ -3562,6 +3585,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 
           if (contentBlock.type === 'thinking' || contentBlock.type === 'redacted_thinking') {
             streamState.activeBlockTypes.set(blockKey, 'thinking')
+            // content_block_start is the earliest point the server knows the
+            // thought is generating; anchor the block's wall clock here so the
+            // client can show the elapsed time from the first moment, not from
+            // whenever the first delta happens to arrive.
+            streamState.thinkingBlockStarts.set(blockKey, Date.now())
             return [{ type: 'status', state: 'thinking', verb: 'Thinking' }]
           }
 
@@ -3588,7 +3616,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             return [{ type: 'content_delta', toolInput: delta.partial_json }]
           }
           if (delta.type === 'thinking_delta' && delta.thinking) {
-            return [{ type: 'thinking', text: delta.thinking }]
+            const index = event.index ?? 0
+            const activeBlock = resolveActiveBlockKey(streamState, cliMsg, index)
+            const serverStart = activeBlock
+              ? streamState.thinkingBlockStarts.get(activeBlock.key)
+              : undefined
+            return [{ type: 'thinking', text: delta.thinking, ...(serverStart !== undefined ? { serverStart } : {}) }]
           }
           return []
         }
@@ -3599,6 +3632,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           if (!activeBlock) return []
           const blockType = streamState.activeBlockTypes.get(activeBlock.key)
           streamState.activeBlockTypes.delete(activeBlock.key)
+          streamState.thinkingBlockStarts.delete(activeBlock.key)
           forgetActiveBlockScope(streamState, index, activeBlock.scope)
 
           if (blockType === 'tool_use') {
@@ -3986,6 +4020,114 @@ function sendMessage(ws: SessionConnection, message: ServerMessage) {
     ? toPetServerMessage(message)
     : message
   if (outgoing) ws.send(JSON.stringify(outgoing))
+}
+
+// ─── Terminal channel (/ws/terminal) ─────────────────────────────────────────
+// The H5 browser terminal rides a dedicated channel with a minimal JSON
+// protocol. Spawn correlates by requestId; output/exit frames mirror the
+// desktop TerminalOutputPayload/TerminalExitPayload shapes so the front-end
+// terminalApi can treat both transports identically.
+
+type TerminalClientMessage =
+  | { type: 'terminal_spawn'; requestId?: string; cols?: number; rows?: number; cwd?: string }
+  | { type: 'terminal_write'; sessionId: number; data: string }
+  | { type: 'terminal_resize'; sessionId: number; cols: number; rows: number }
+  | { type: 'terminal_kill'; sessionId: number }
+
+function handleTerminalMessage(ws: SessionConnection, rawMessage: string | Buffer) {
+  let message: TerminalClientMessage
+  try {
+    message = JSON.parse(
+      typeof rawMessage === 'string' ? rawMessage : rawMessage.toString(),
+    ) as TerminalClientMessage
+  } catch {
+    ws.send(JSON.stringify({ type: 'terminal_error', message: 'Invalid JSON in terminal message' }))
+    return
+  }
+
+  const terminalService = getTerminalService()
+
+  switch (message.type) {
+    case 'terminal_spawn': {
+      const correlation = typeof message.requestId === 'string' && message.requestId.length > 0
+        ? { requestId: message.requestId } : {}
+      terminalService
+        .spawn(ws, {
+          requestId: typeof message.requestId === 'string' ? message.requestId : undefined,
+          cols: typeof message.cols === 'number' ? message.cols : undefined,
+          rows: typeof message.rows === 'number' ? message.rows : undefined,
+          cwd: typeof message.cwd === 'string' ? message.cwd : undefined,
+        })
+        .then(result => {
+          ws.send(JSON.stringify({
+            type: 'terminal_spawned',
+            ...correlation,
+            session_id: result.session_id,
+            shell: result.shell,
+            cwd: result.cwd,
+          }))
+        })
+        .catch(error => {
+          ws.send(JSON.stringify({
+            type: 'terminal_error',
+            ...correlation,
+            message: error instanceof Error ? error.message : String(error),
+          }))
+        })
+      return
+    }
+    case 'terminal_write':
+      if (typeof message.sessionId !== 'number' || typeof message.data !== 'string') {
+        ws.send(JSON.stringify({ type: 'terminal_error', message: 'terminal_write requires numeric sessionId and string data' }))
+        return
+      }
+      try {
+        terminalService.write(ws, message.sessionId, message.data)
+      } catch (error) {
+        ws.send(JSON.stringify({
+          type: 'terminal_error',
+          message: error instanceof Error ? error.message : String(error),
+        }))
+      }
+      return
+    case 'terminal_resize':
+      if (
+        typeof message.sessionId !== 'number'
+        || typeof message.cols !== 'number'
+        || typeof message.rows !== 'number'
+      ) {
+        ws.send(JSON.stringify({ type: 'terminal_error', message: 'terminal_resize requires numeric sessionId, cols and rows' }))
+        return
+      }
+      try {
+        terminalService.resize(ws, message.sessionId, message.cols, message.rows)
+      } catch (error) {
+        ws.send(JSON.stringify({
+          type: 'terminal_error',
+          message: error instanceof Error ? error.message : String(error),
+        }))
+      }
+      return
+    case 'terminal_kill':
+      if (typeof message.sessionId !== 'number') {
+        ws.send(JSON.stringify({ type: 'terminal_error', message: 'terminal_kill requires numeric sessionId' }))
+        return
+      }
+      try {
+        terminalService.kill(ws, message.sessionId)
+      } catch (error) {
+        ws.send(JSON.stringify({
+          type: 'terminal_error',
+          message: error instanceof Error ? error.message : String(error),
+        }))
+      }
+      return
+    default:
+      ws.send(JSON.stringify({
+        type: 'terminal_error',
+        message: `Unknown terminal message type: ${(message as { type?: unknown }).type ?? 'unknown'}`,
+      }))
+  }
 }
 
 function sendError(ws: SessionConnection, message: string, code: string) {

@@ -20,6 +20,7 @@ import {
   SESSION_SUMMARY_PARSER_VERSION,
   MAX_PROJECTION_RECORD_BYTES,
   MAX_PROJECTION_RECORDS,
+  MAX_PROJECTION_METADATA_VALUE_BYTES,
   createSessionProjector,
   type SessionSourceCandidate,
 } from './sessionProjector.js'
@@ -988,7 +989,7 @@ describe('session projector', () => {
     const projector = createSessionProjector({ database, index, scope: root })
     try {
       expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
-      await appendFile(candidate.path, line({ ...user('small', '2026-01-01T00:00:01.000Z'), uuid: 'x'.repeat(4097) }))
+      await appendFile(candidate.path, line({ ...user('small', '2026-01-01T00:00:01.000Z'), uuid: 'x'.repeat(MAX_PROJECTION_METADATA_VALUE_BYTES + 1) }))
       await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
     } finally { database.close() }
   })
@@ -997,14 +998,14 @@ describe('session projector', () => {
     const root = await createTempDir('metadata-total-budget')
     const record = (index: number) => line({ ...user('small', '2026-01-01T00:00:00.000Z'), uuid: `${index}:` + 'x'.repeat(3000) })
     const candidate = await createCandidate({ root, projectPath: '-repo-a', sessionId: 'metadata-total',
-      content: Array.from({ length: 3000 }, (_, index) => record(index)).join(''),
+      content: Array.from({ length: 8000 }, (_, index) => record(index)).join(''),
     })
     const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
     const index = createSessionIndex(database)
     const projector = createSessionProjector({ database, index, scope: root })
     try {
       expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
-      await appendFile(candidate.path, Array.from({ length: 3000 }, (_, index) => record(index + 3000)).join(''))
+      await appendFile(candidate.path, Array.from({ length: 4000 }, (_, index) => record(index + 8000)).join(''))
       await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
     } finally { database.close() }
   })

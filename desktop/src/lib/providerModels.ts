@@ -37,9 +37,12 @@ export function groupProviderModels(
     else groups.set(group, [{ ...model, id }])
   }
 
+  // 'en' (not the host default) so ASCII and CJK group names sort the same on
+  // every OS — the host locale is often zh, which orders CJK before Latin and
+  // puts the "其他" fallback above the real provider names.
   return [...groups.entries()]
     .map(([group, groupModels]) => ({ group, models: groupModels }))
-    .sort((a, b) => a.group.localeCompare(b.group, undefined, { sensitivity: 'base' }))
+    .sort((a, b) => a.group.localeCompare(b.group, 'en', { sensitivity: 'base' }))
 }
 
 /**

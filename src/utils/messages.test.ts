@@ -182,6 +182,83 @@ describe('normalizeMessagesForAPI tool-result media', () => {
   })
 })
 
+describe('normalizeMessagesForAPI stripThinking option', () => {
+  const thinkingBlock = {
+    type: 'thinking' as const,
+    thinking: 'internal reasoning',
+    signature: 'sig-123',
+  }
+  const redactedBlock = {
+    type: 'redacted_thinking' as const,
+    data: 'redacted-payload',
+  }
+
+  test('keeps thinking blocks by default', () => {
+    const normalized = normalizeMessagesForAPI([
+      createUserMessage({ content: 'hi' }),
+      assistant('r1', [thinkingBlock, { type: 'text', text: 'answer' }]),
+    ])
+    const content = normalized.find(
+      message => message.type === 'assistant',
+    )?.message.content
+    expect(content?.some(block => block.type === 'thinking')).toBe(true)
+  })
+
+  test('strips thinking and redacted_thinking when enabled', () => {
+    const normalized = normalizeMessagesForAPI(
+      [
+        createUserMessage({ content: 'hi' }),
+        assistant('r1', [
+          thinkingBlock,
+          { type: 'text', text: 'answer' },
+          toolUse('t1'),
+        ]),
+        assistant('r2', [redactedBlock, { type: 'text', text: 'more' }]),
+      ],
+      [],
+      undefined,
+      { stripThinking: true },
+    )
+    const assistants = normalized.filter(
+      (message): message is AssistantMessage => message.type === 'assistant',
+    )
+    const allBlocks = assistants.flatMap(
+      message => message.message.content as ContentBlockParam[],
+    )
+    expect(allBlocks.some(block => block.type === 'thinking')).toBe(false)
+    expect(
+      allBlocks.some(block => block.type === 'redacted_thinking'),
+    ).toBe(false)
+    expect(allBlocks.some(block => block.type === 'text')).toBe(true)
+    expect(allBlocks.some(block => block.type === 'tool_use')).toBe(true)
+  })
+
+  test('handles thinking-only assistant messages without error', () => {
+    const normalized = normalizeMessagesForAPI(
+      [
+        createUserMessage({ content: 'hi' }),
+        assistant('r1', [thinkingBlock]),
+        createUserMessage({ content: 'next' }),
+        assistant('r2', [{ type: 'text', text: 'answer' }]),
+      ],
+      [],
+      undefined,
+      { stripThinking: true },
+    )
+    const assistants = normalized.filter(
+      (message): message is AssistantMessage => message.type === 'assistant',
+    )
+    expect(assistants.length).toBeGreaterThan(0)
+    for (const message of assistants) {
+      expect(
+        (message.message.content as ContentBlockParam[]).some(
+          block => block.type === 'thinking',
+        ),
+      ).toBe(false)
+    }
+  })
+})
+
 describe('stripSignatureBlocksAfterModelChange', () => {
   test('removes protected thinking from history produced by another model', () => {
     const previous = assistant('response-a', [

@@ -48,24 +48,62 @@ describe('deriveSessionUsageMetrics', () => {
     expect(deriveSessionUsageMetrics(usage({ totalOutputTokens: 500 })).cacheHitRate).toBeNull()
   })
 
-  it('derives tokens per second from API wall-clock, including prefill', () => {
+  it('derives tokens per second from the decode-only span (TTFT excluded)', () => {
+    const metrics = deriveSessionUsageMetrics(usage({
+      totalOutputTokens: 1_000,
+      totalTimedOutputTokens: 1_000,
+      totalAPIDuration: 5_000,
+      totalDecodeDuration: 2_000,
+    }))
+
+    // Generation speed divides by the time the model spent emitting tokens — the
+    // 3s of first-token wait in the API span is not generation.
+    expect(metrics.tokensPerSecond).toBe(500)
+  })
+
+  it('divides a decode span only by the tokens that span covered', () => {
+    // Session 60aa321f/f1be2b52 shape: most calls were served by the non-streaming fallback, so
+    // they added output tokens but no decode time. Dividing the session's whole output by the
+    // few measured seconds printed 6044 tok/s for an engine that runs ~120.
+    const metrics = deriveSessionUsageMetrics(usage({
+      totalOutputTokens: 406_799,
+      totalTimedOutputTokens: 6_000,
+      totalAPIDuration: 900_000,
+      totalDecodeDuration: 60_000,
+    }))
+
+    expect(metrics.tokensPerSecond).toBe(100)
+  })
+
+  it('ignores a decode span with no paired tokens and uses the API span instead', () => {
+    // Snapshots written before the pairing existed carry a decode span but no token count for
+    // it; pairing the session total with that partial span is exactly the inflated rate.
     const metrics = deriveSessionUsageMetrics(usage({
       totalOutputTokens: 1_000,
       totalAPIDuration: 5_000,
       totalDecodeDuration: 2_000,
     }))
 
-    // Decode-only would report 500 here and ignore the wait the user actually sat through.
     expect(metrics.tokensPerSecond).toBe(200)
   })
 
-  it('withholds tokens per second when no API duration was reported', () => {
+  it('falls back to the API span when only that was reported', () => {
+    const metrics = deriveSessionUsageMetrics(usage({
+      totalOutputTokens: 1_000,
+      totalAPIDuration: 5_000,
+      totalDecodeDuration: 0,
+    }))
+
+    expect(metrics.tokensPerSecond).toBe(200)
+  })
+
+  it('withholds tokens per second when no duration was reported', () => {
     // Transcript-sourced usage has no request timing. Falling back to session wall clock would
     // divide by a span that includes tool execution and invent a rate.
     const metrics = deriveSessionUsageMetrics(usage({
       totalOutputTokens: 1_000,
       totalAPIDuration: 0,
-      totalDecodeDuration: 5_000,
+      totalDecodeDuration: 0,
     }))
 
     expect(metrics.tokensPerSecond).toBeNull()
@@ -80,11 +118,12 @@ describe('deriveSessionUsageMetrics', () => {
       totalCacheReadInputTokens: 53_480_064,
       totalAPIDuration: 1_480_000,
       totalDecodeDuration: 326_000,
+      totalTimedOutputTokens: 166_998,
     }))
 
     expect(metrics.totalTokens).toBe(392_886)
     expect(metrics.cacheHitRate).toBeCloseTo(53_480_064 / (225_888 + 53_480_064), 10)
-    expect(metrics.tokensPerSecond).toBeCloseTo(166_998 / 1_480, 6)
+    expect(metrics.tokensPerSecond).toBeCloseTo(166_998 / 326, 6)
   })
 
   it('treats missing and non-finite fields as zero rather than NaN', () => {

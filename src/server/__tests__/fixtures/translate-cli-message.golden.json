@@ -84,7 +84,8 @@
       "out": [
         {
           "type": "thinking",
-          "text": "Considering options"
+          "text": "Considering options",
+          "serverStart": "golden:server-start"
         }
       ]
     },

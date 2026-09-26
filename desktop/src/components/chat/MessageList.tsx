@@ -3919,7 +3919,7 @@ export const MessageBlock = memo(function MessageBlock({
     case 'thinking':
       // No wrapper padding: the row's own `-mx-2 … px-2` already lands its text
       // on the column's left edge, the same as one inside a run.
-      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} />
+      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} thinkingDurationMs={message.thinkingDurationMs} liveStartAt={message.timestamp} />
     case 'tool_use':
       if (message.toolName === 'AskUserQuestion' && !message.isPending) {
         return (

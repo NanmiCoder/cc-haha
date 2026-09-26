@@ -4,7 +4,7 @@ import { ActionDialog } from '@/components/ui/ActionDialog'
 type Props = {
   open: boolean
   loading?: boolean
-  platform: 'darwin' | 'win32'
+  platform: 'darwin' | 'win32' | 'linux'
   onClose: () => void
   onConfirm: () => void | Promise<void>
 }

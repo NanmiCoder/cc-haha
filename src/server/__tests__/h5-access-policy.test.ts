@@ -4,11 +4,11 @@ import {
   resolveTrustedRendererOrigin,
   isLocalCredentialOnlyPath,
   isLoopbackHost,
+  isTrustedLocalSourceHost,
   requiresLocalAccessCredential,
   shouldBlockDisabledH5Access,
   shouldRequireH5Token,
 } from '../h5AccessPolicy.js'
-
 function req(url: string, init: RequestInit = {}) {
   return new Request(url, init)
 }
@@ -50,7 +50,7 @@ describe('h5AccessPolicy', () => {
         headers: { Origin: origin },
       })
       expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
-      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
     }
   })
 
@@ -60,20 +60,23 @@ describe('h5AccessPolicy', () => {
         headers: { Origin: origin },
       })
       expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('h5-browser')
-      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(true)
+      // Loopback source is inside the local exemption (source-address based),
+      // so retired Tauri origins served from 127.0.0.1 no longer need a token.
+      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
     }
   })
 
   test('keeps local internal SDK websocket routes tokenless', () => {
+
     const request = req('http://127.0.0.1:3456/sdk/session-1')
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('internal-sdk')
-    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
   })
 
   test('does not trust remote SDK websocket routes by path alone', () => {
     const request = req('http://192.168.0.20:3456/sdk/session-1')
     expect(classifyH5Request(request, new URL(request.url), remoteContext)).toBe('h5-browser')
-    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: remoteContext })).toBe(false)
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: remoteContext })).toBe(false)
   })
 
   test('accepts an SDK route only after its session token is authorized', () => {
@@ -91,7 +94,7 @@ describe('h5AccessPolicy', () => {
   test('keeps adapter API routes tokenless for local integrations', () => {
     const request = req('http://127.0.0.1:3456/api/adapters')
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
-    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
   })
 
   test('requires the local process credential for loopback browser origins when configured', () => {
@@ -118,7 +121,8 @@ describe('h5AccessPolicy', () => {
           headers: { Origin: origin },
         })
         expect(classifyH5Request(request, new URL(request.url), desktopContext)).toBe('h5-browser')
-        expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: desktopContext })).toBe(true)
+        // Localhost source is exempt by source address while requireToken is on.
+        expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: desktopContext })).toBe(false)
         expect(shouldBlockDisabledH5Access({
           request,
           url: new URL(request.url),
@@ -136,7 +140,7 @@ describe('h5AccessPolicy', () => {
     })
 
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
-    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
   })
 
   test('does not trust adapter requests from non-loopback browser origins', () => {
@@ -144,10 +148,13 @@ describe('h5AccessPolicy', () => {
       headers: { Origin: 'https://phone.example' },
     })
     expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('h5-browser')
-    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(true)
+    // h5-browser classification still applies, but the loopback source
+    // address is in the local exemption, so the token gate is skipped.
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
   })
 
   test('does not trust spoofed loopback hosts from remote clients', () => {
+
     const request = req('http://127.0.0.1:3456/api/status', {
       headers: { Origin: 'http://127.0.0.1:5179' },
     })
@@ -165,7 +172,7 @@ describe('h5AccessPolicy', () => {
     for (const init of [{}, { headers: { Origin: 'file://' } }]) {
       const request = req('http://127.0.0.1:3456/ws/session-1', init)
       expect(classifyH5Request(request, new URL(request.url), localContext)).toBe('local-trusted')
-      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
+      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
     }
   })
 
@@ -181,7 +188,8 @@ describe('h5AccessPolicy', () => {
       const url = new URL(request.url)
 
       expect(classifyH5Request(request, url, localContext)).toBe('h5-browser')
-      expect(shouldRequireH5Token({ request, url, h5Enabled: true, context: localContext })).toBe(true)
+      // Loopback source address is exempt from the H5 token (source-based).
+      expect(shouldRequireH5Token({ request, url, h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
       expect(shouldBlockDisabledH5Access({
         request,
         url,
@@ -214,7 +222,9 @@ describe('h5AccessPolicy', () => {
         const url = new URL(request.url)
 
         expect(classifyH5Request(request, url, localContext)).toBe('h5-browser')
-        expect(shouldRequireH5Token({ request, url, h5Enabled: true, context: localContext })).toBe(true)
+        // Proxy traces affect classification, not the source-address
+        // exemption: a loopback socket source is still exempt.
+        expect(shouldRequireH5Token({ request, url, h5Enabled: true, requireToken: true, context: localContext })).toBe(false)
         expect(shouldBlockDisabledH5Access({
           request,
           url,
@@ -248,35 +258,33 @@ describe('h5AccessPolicy', () => {
     expect(requiresLocalAccessCredential('/api/h5-access', { clientAddress: '127.0.0.1' })).toBe(false)
   })
 
-  test('keeps bulk session deletion off the H5 token', () => {
+  test('lets the H5 token drive bulk session deletion like the rest of General settings', () => {
     const unauthorizedContext = {
       clientAddress: '10.0.0.5',
       localAccessTokenConfigured: true,
       localAccessAuthorized: false,
     }
-    const authorizedContext = {
-      ...unauthorizedContext,
-      localAccessAuthorized: true,
-    }
 
-    // One request with days=0 wipes every transcript, so a paired phone's
-    // bearer token is not a strong enough credential for it.
-    expect(isLocalCredentialOnlyPath('/api/settings/session-cleanup')).toBe(true)
-    expect(requiresLocalAccessCredential('/api/settings/session-cleanup', unauthorizedContext)).toBe(true)
-    expect(requiresLocalAccessCredential('/api/settings/session-cleanup', authorizedContext)).toBe(false)
+    // session-cleanup used to sit in LOCAL_CREDENTIAL_ONLY_PATHS so a paired
+    // phone's bearer token could not wipe the history. It now follows the rest
+    // of the General page — the H5 token is sufficient.
+    expect(isLocalCredentialOnlyPath('/api/settings/session-cleanup')).toBe(false)
+    expect(requiresLocalAccessCredential('/api/settings/session-cleanup', unauthorizedContext)).toBe(false)
 
-    // The router splits on '/' and filters empties, so these shapes all reach
-    // the same handler and must be gated identically.
+    // The router splits on '/' and filters empties, so every shape reaches the
+    // same handler and stays un-gated.
     for (const pathname of [
       '/api/settings/session-cleanup/',
       '/api/settings//session-cleanup',
       '//api/settings/session-cleanup//',
     ]) {
-      expect(isLocalCredentialOnlyPath(pathname)).toBe(true)
-      expect(requiresLocalAccessCredential(pathname, unauthorizedContext)).toBe(true)
+      expect(isLocalCredentialOnlyPath(pathname)).toBe(false)
+      expect(requiresLocalAccessCredential(pathname, unauthorizedContext)).toBe(false)
     }
 
-    // Neighbouring settings endpoints stay reachable from the phone.
+    // The control plane is still off-limits to a phone that lacks the process
+    // token, and the H5 token alone is never enough for it.
+    expect(requiresLocalAccessCredential('/api/h5-access', unauthorizedContext)).toBe(true)
     expect(requiresLocalAccessCredential('/api/settings/user', unauthorizedContext)).toBe(false)
     expect(isLocalCredentialOnlyPath('/api/settings/session-cleanup-extra')).toBe(false)
   })
@@ -301,7 +309,7 @@ describe('h5AccessPolicy', () => {
       const url = new URL(request.url)
 
       expect(classifyH5Request(request, url, desktopContext)).toBe('local-trusted')
-      expect(shouldRequireH5Token({ request, url, h5Enabled: true, context: desktopContext })).toBe(false)
+      expect(shouldRequireH5Token({ request, url, h5Enabled: true, requireToken: true, context: desktopContext })).toBe(false)
       expect(shouldBlockDisabledH5Access({
         request,
         url,
@@ -373,6 +381,7 @@ describe('h5AccessPolicy', () => {
         request,
         url,
         h5Enabled: true,
+        requireToken: true,
         context: desktopContext,
       })).toBe(false)
       expect(shouldBlockDisabledH5Access({
@@ -494,11 +503,11 @@ describe('h5AccessPolicy', () => {
       const context = { clientAddress }
 
       expect(classifyH5Request(request, url, context)).toBe('local-trusted')
-      expect(shouldRequireH5Token({ request, url, h5Enabled: true, context })).toBe(false)
+      expect(shouldRequireH5Token({ request, url, h5Enabled: true, requireToken: true, context })).toBe(false)
     }
   })
 
-  test('requires H5 token for LAN browser API, proxy, and chat websocket routes when enabled', () => {
+  test('exempts private-LAN browser sources from the H5 token while requireToken is on', () => {
     for (const pathname of [
       '/api/status',
       '/api/mcp',
@@ -512,8 +521,61 @@ describe('h5AccessPolicy', () => {
       const request = req(`http://192.168.0.20:3456${pathname}`, {
         headers: { Origin: 'http://192.168.0.20:3456' },
       })
+      // Still classified as h5-browser, but the RFC1918 phone source is in
+      // the LAN/home-network exemption.
       expect(classifyH5Request(request, new URL(request.url), remoteContext)).toBe('h5-browser')
-      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: remoteContext })).toBe(true)
+      expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: remoteContext })).toBe(false)
+    }
+  })
+
+  test('requires the H5 token for public-network browser sources while requireToken is on', () => {
+    const request = req('http://192.168.0.20:3456/api/status', {
+      headers: { Origin: 'http://192.168.0.20:3456' },
+    })
+    const publicContext = { clientAddress: '93.184.216.34' }
+    expect(classifyH5Request(request, new URL(request.url), publicContext)).toBe('h5-browser')
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: true, context: publicContext })).toBe(true)
+  })
+
+  test('requireToken=false opens 0.0.0.0/0 for every source including public networks', () => {
+    const request = req('http://192.168.0.20:3456/api/status', {
+      headers: { Origin: 'http://192.168.0.20:3456' },
+    })
+    const publicContext = { clientAddress: '93.184.216.34' }
+    expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, requireToken: false, context: publicContext })).toBe(false)
+  })
+
+  test('classifies trusted local source hosts for the token exemption', () => {
+    for (const host of [
+      '127.0.0.1',
+      '::1',
+      '[::1]',
+      '::ffff:127.0.0.1',
+      '10.1.2.3',
+      '172.16.0.9',
+      '172.31.255.1',
+      '192.168.255.1',
+      '169.254.10.4',
+      'fd12:3456:789a::1',
+      '[fd12::7f]',
+      'fc7f::1',
+      '::ffff:192.168.1.1',
+    ]) {
+      expect(isTrustedLocalSourceHost(host)).toBe(true)
+    }
+    for (const host of [
+      '8.8.8.8',
+      '11.0.0.1',
+      '172.32.0.1',
+      '192.169.0.1',
+      '999.1.1.1',
+      '2001:db8::1',
+      '[fe80::1]',
+      '[fd9a::7f]',
+      '10.1.2.3:8080',
+      '',
+    ]) {
+      expect(isTrustedLocalSourceHost(host)).toBe(false)
     }
   })
 
@@ -593,6 +655,7 @@ describe('h5AccessPolicy', () => {
       request,
       url: new URL(request.url),
       h5Enabled: false,
+      requireToken: true,
       context: localContext,
     })).toBe(false)
   })

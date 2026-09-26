@@ -1,0 +1,868 @@
+diff --git a/desktop/src/api/sessions.ts b/desktop/src/api/sessions.ts
+index 7c0ba3f..e741b01 100644
+--- a/desktop/src/api/sessions.ts
++++ b/desktop/src/api/sessions.ts
+@@ -203,12 +203,19 @@ export type SessionUsageSnapshot = {
+   totalAPIDuration: number
+   /**
+    * Milliseconds the model spent emitting tokens, excluding prefill and tool execution.
+-   * The panel's tok/s uses `totalAPIDuration` instead: decode-only rates ignore TTFT and
+-   * read as a peak the user never felt. Kept so resume snapshots still round-trip.
++   * This is the panel's tok/s denominator, paired with `totalTimedOutputTokens`: only the
++   * calls that report a span may have their tokens divided by it. Kept so resume snapshots
++   * still round-trip.
+    */
+   totalDecodeDuration?: number
+   /** Milliseconds spent waiting for the first token, summed over the session's requests. */
+   totalTtftDuration?: number
++  /**
++   * Output tokens of the calls `totalDecodeDuration` covers. Absent for transcript-sourced
++   * usage (a transcript has no span to pair with) and in snapshots written before the
++   * pairing existed; the panel then falls back to the API span.
++   */
++  totalTimedOutputTokens?: number
+   totalDuration: number
+   totalLinesAdded: number
+   totalLinesRemoved: number
+diff --git a/desktop/src/components/chat/ContextUsageIndicator.test.tsx b/desktop/src/components/chat/ContextUsageIndicator.test.tsx
+index 8e39243..de445b0 100644
+--- a/desktop/src/components/chat/ContextUsageIndicator.test.tsx
++++ b/desktop/src/components/chat/ContextUsageIndicator.test.tsx
+@@ -840,6 +840,10 @@ describe('ContextUsageIndicator session usage', () => {
+     hasUnknownModelCost: false,
+     totalAPIDuration: 42_000,
+     totalDecodeDuration: 12_000,
++    // The tokens the 12s decode span covered. The panel pairs the two: dividing the session's
++    // whole output by a span only some calls reported is what printed 6044 tok/s for an engine
++    // running ~120.
++    totalTimedOutputTokens: 2_400,
+     totalTtftDuration: 3_000,
+     totalDuration: 300,
+     totalLinesAdded: 0,
+@@ -891,8 +895,8 @@ describe('ContextUsageIndicator session usage', () => {
+ 
+     // Cache reads stay in the hit-rate row; they are not a separate headline.
+     expect(await screen.findByTestId('session-cache-hit')).toHaveTextContent('90.0%')
+-    // Generation speed divides by the decode-only span (12s), not the 42s API
+-    // wall-clock that includes 3s of first-token wait.
++    // Generation speed divides the paired tokens by the decode-only span (12s), not the 42s
++    // API wall-clock that includes 3s of first-token wait.
+     expect(screen.getByTestId('session-speed')).toHaveTextContent('200')
+     expect(screen.getByTestId('session-speed')).toHaveTextContent('tok/s')
+     expect(screen.getByTestId('session-cost')).toHaveTextContent('$1.23')
+diff --git a/desktop/src/lib/sessionUsageMetrics.test.ts b/desktop/src/lib/sessionUsageMetrics.test.ts
+index 8983d9a..1deed1d 100644
+--- a/desktop/src/lib/sessionUsageMetrics.test.ts
++++ b/desktop/src/lib/sessionUsageMetrics.test.ts
+@@ -51,6 +51,7 @@ describe('deriveSessionUsageMetrics', () => {
+   it('derives tokens per second from the decode-only span (TTFT excluded)', () => {
+     const metrics = deriveSessionUsageMetrics(usage({
+       totalOutputTokens: 1_000,
++      totalTimedOutputTokens: 1_000,
+       totalAPIDuration: 5_000,
+       totalDecodeDuration: 2_000,
+     }))
+@@ -60,6 +61,32 @@ describe('deriveSessionUsageMetrics', () => {
+     expect(metrics.tokensPerSecond).toBe(500)
+   })
+ 
++  it('divides a decode span only by the tokens that span covered', () => {
++    // Session 60aa321f/f1be2b52 shape: most calls were served by the non-streaming fallback, so
++    // they added output tokens but no decode time. Dividing the session's whole output by the
++    // few measured seconds printed 6044 tok/s for an engine that runs ~120.
++    const metrics = deriveSessionUsageMetrics(usage({
++      totalOutputTokens: 406_799,
++      totalTimedOutputTokens: 6_000,
++      totalAPIDuration: 900_000,
++      totalDecodeDuration: 60_000,
++    }))
++
++    expect(metrics.tokensPerSecond).toBe(100)
++  })
++
++  it('ignores a decode span with no paired tokens and uses the API span instead', () => {
++    // Snapshots written before the pairing existed carry a decode span but no token count for
++    // it; pairing the session total with that partial span is exactly the inflated rate.
++    const metrics = deriveSessionUsageMetrics(usage({
++      totalOutputTokens: 1_000,
++      totalAPIDuration: 5_000,
++      totalDecodeDuration: 2_000,
++    }))
++
++    expect(metrics.tokensPerSecond).toBe(200)
++  })
++
+   it('falls back to the API span when only that was reported', () => {
+     const metrics = deriveSessionUsageMetrics(usage({
+       totalOutputTokens: 1_000,
+@@ -91,6 +118,7 @@ describe('deriveSessionUsageMetrics', () => {
+       totalCacheReadInputTokens: 53_480_064,
+       totalAPIDuration: 1_480_000,
+       totalDecodeDuration: 326_000,
++      totalTimedOutputTokens: 166_998,
+     }))
+ 
+     expect(metrics.totalTokens).toBe(392_886)
+diff --git a/desktop/src/lib/sessionUsageMetrics.ts b/desktop/src/lib/sessionUsageMetrics.ts
+index 0a9408f..a980fdb 100644
+--- a/desktop/src/lib/sessionUsageMetrics.ts
++++ b/desktop/src/lib/sessionUsageMetrics.ts
+@@ -17,6 +17,11 @@ export type SessionUsageLike = {
+   totalCacheCreationInputTokens: number
+   totalDecodeDuration?: number
+   totalAPIDuration?: number
++  /**
++   * Output tokens of exactly the calls `totalDecodeDuration` covers. Absent/0 for
++   * transcript-sourced usage and for snapshots written before the pairing existed.
++   */
++  totalTimedOutputTokens?: number
+ }
+ 
+ export type SessionUsageMetrics = {
+@@ -31,12 +36,19 @@ export type SessionUsageMetrics = {
+   /** `null` when the session has sent no prompt tokens yet. */
+   cacheHitRate: number | null
+   /**
+-   * Output tokens per second of actual generation. Prefers the decode-only span
+-   * (time the model spent emitting tokens, TTFT/prefill excluded) — dividing by
+-   * API wall-clock instead folds the first-token wait into "generation speed"
+-   * and reads ~20-30% low. Falls back to the API span when only that was
+-   * reported (e.g. a transcript that has a span but no decode breakdown).
+-   * `null` when neither duration was reported.
++   * Output tokens per second of actual generation.
++   *
++   * Numerator and denominator must describe the **same calls**. The decode-only span
++   * excludes the first-token wait, so it is the better denominator — but it is only
++   * produced by streamed responses that reached `message_stop`. A session whose calls were
++   * served by the non-streaming fallback (or whose streams were truncated) still counts
++   * their tokens in `totalOutputTokens` while contributing no span at all, so
++   * `totalOutputTokens / totalDecodeDuration` can read hundreds of times too high
++   * (observed: 6044 tok/s on a fallback-heavy session).
++   *
++   * So the decode rate is computed over `totalTimedOutputTokens` — the tokens the same
++   * calls reported — and the API span is used (over every call's tokens) only when no
++   * decode span exists at all. `null` when neither duration was reported.
+    */
+   tokensPerSecond: number | null
+ }
+@@ -48,11 +60,10 @@ function finite(value: number | undefined): number {
+ /**
+  * Derives the panel's headline numbers.
+  *
+- * `tokensPerSecond` is generation speed: output tokens over the time the model
+- * actually spent emitting them (`totalDecodeDuration`, TTFT/prefill excluded).
+- * It falls back to the API span when a transcript only reports that, and is
+- * `null` when neither duration is known rather than computing a rate against
+- * wall clock that includes tool execution.
++ * `tokensPerSecond` is generation speed over the calls that measured a span, so a session
++ * that partly fell back to non-streaming reads as the rate the model actually ran at
++ * instead of dividing every token by the few measured seconds. See the field's doc for why
++ * the numerator is not simply `totalOutputTokens`.
+  */
+ export function deriveSessionUsageMetrics(usage: SessionUsageLike): SessionUsageMetrics {
+   const input = finite(usage.totalInputTokens)
+@@ -61,7 +72,7 @@ export function deriveSessionUsageMetrics(usage: SessionUsageLike): SessionUsage
+   const cacheWrite = finite(usage.totalCacheCreationInputTokens)
+   const decodeMs = finite(usage.totalDecodeDuration)
+   const apiMs = finite(usage.totalAPIDuration)
+-  const generationMs = decodeMs > 0 ? decodeMs : apiMs
++  const timedOutput = finite(usage.totalTimedOutputTokens)
+ 
+   const promptTokens = input + cacheRead + cacheWrite
+   return {
+@@ -69,10 +80,32 @@ export function deriveSessionUsageMetrics(usage: SessionUsageLike): SessionUsage
+     promptTokens,
+     cachedTokens: cacheRead,
+     cacheHitRate: promptTokens > 0 ? cacheRead / promptTokens : null,
+-    tokensPerSecond: generationMs > 0 && output > 0 ? output / (generationMs / 1000) : null,
++    tokensPerSecond: generationSpeed({ output, timedOutput, decodeMs, apiMs }),
+   }
+ }
+ 
++function generationSpeed({
++  output,
++  timedOutput,
++  decodeMs,
++  apiMs,
++}: {
++  output: number
++  timedOutput: number
++  decodeMs: number
++  apiMs: number
++}): number | null {
++  // Paired numerator/denominator: the tokens those same calls reported over the span they
++  // spent emitting them.
++  if (decodeMs > 0 && timedOutput > 0) return timedOutput / (decodeMs / 1000)
++  // No decode span anywhere (a transcript, or a session served entirely by the non-streaming
++  // fallback): the API clock covers every call, so it is the only denominator that matches
++  // the session-wide token total. It includes the first-token wait and so reads low, which
++  // is the honest number when no generation span exists.
++  if (apiMs > 0 && output > 0) return output / (apiMs / 1000)
++  return null
++}
++
+ /**
+  * Formats a cache hit rate without ever rounding a partial hit up to a flat 100%.
+  *
+diff --git a/src/QueryEngine.ts b/src/QueryEngine.ts
+index d1f627c..75611c9 100644
+--- a/src/QueryEngine.ts
++++ b/src/QueryEngine.ts
+@@ -870,10 +870,13 @@ export class QueryEngine {
+             this.totalDecodeMs += message.decodeMs ?? 0
+             this.totalTtftMs += currentMessageTtftMs
+             // Session-scoped twin of the turn totals above: survives across turns so the
+-            // usage snapshot can report generation speed for the whole conversation.
++            // usage snapshot can report generation speed for the whole conversation. The
++            // call's own output tokens ride along so the speed pairs this span with the
++            // tokens it covered — session totals also carry calls that reported no span.
+             addToTotalGenerationDuration(
+               message.decodeMs ?? 0,
+               currentMessageTtftMs,
++              currentMessageUsage.output_tokens,
+             )
+           }
+ 
+diff --git a/src/bootstrap/state.generationTiming.test.ts b/src/bootstrap/state.generationTiming.test.ts
+new file mode 100644
+index 0000000..05cc257
+--- /dev/null
++++ b/src/bootstrap/state.generationTiming.test.ts
+@@ -0,0 +1,39 @@
++import { afterEach, describe, expect, test } from 'bun:test'
++import {
++  addToTotalGenerationDuration,
++  getTotalDecodeDuration,
++  getTotalTimedOutputTokens,
++  resetTotalDurationStateAndCost_FOR_TESTS_ONLY,
++} from './state.js'
++
++afterEach(() => {
++  resetTotalDurationStateAndCost_FOR_TESTS_ONLY()
++})
++
++describe('session generation timing pairs its span with the tokens it covered', () => {
++  test('counts a call that reported a span', () => {
++    addToTotalGenerationDuration(2_000, 300, 250)
++
++    expect(getTotalDecodeDuration()).toBe(2_000)
++    expect(getTotalTimedOutputTokens()).toBe(250)
++  })
++
++  test('a call with no span contributes time to neither side', () => {
++    // A non-streamed fallback reports its usage but never opened a decode span. Its tokens still
++    // reach the session totals, so recording them as "timed" would restore exactly the pairing
++    // bug the counter exists to prevent: 6044 tok/s for an engine running ~120.
++    addToTotalGenerationDuration(0, 0, 9_000)
++
++    expect(getTotalDecodeDuration()).toBe(0)
++    expect(getTotalTimedOutputTokens()).toBe(0)
++  })
++
++  test('accumulates across calls', () => {
++    addToTotalGenerationDuration(1_000, 100, 100)
++    addToTotalGenerationDuration(3_000, 200, 300)
++    addToTotalGenerationDuration(0, 0, 5_000)
++
++    expect(getTotalDecodeDuration()).toBe(4_000)
++    expect(getTotalTimedOutputTokens()).toBe(400)
++  })
++})
+diff --git a/src/bootstrap/state.ts b/src/bootstrap/state.ts
+index 5148f85..8abbe9d 100644
+--- a/src/bootstrap/state.ts
++++ b/src/bootstrap/state.ts
+@@ -56,6 +56,11 @@ type State = {
+   // response, and the prefill wait that precedes it. See QueryEngine's per-turn accumulators.
+   totalDecodeDuration: number
+   totalTtftDuration: number
++  // Output tokens of exactly the calls whose decode span was measured. The numerator that pairs
++  // with `totalDecodeDuration`: a call that reported no span (a non-streamed fallback, a stream
++  // that ended without `message_stop`) contributes tokens to the model totals but no time here, so
++  // dividing the whole session's output by this span would read as a rate nobody ever saw.
++  totalTimedOutputTokens: number
+   turnHookDurationMs: number
+   turnToolDurationMs: number
+   turnClassifierDurationMs: number
+@@ -291,6 +296,7 @@ function getInitialState(): State {
+     totalToolDuration: 0,
+     totalDecodeDuration: 0,
+     totalTtftDuration: 0,
++    totalTimedOutputTokens: 0,
+     turnHookDurationMs: 0,
+     turnToolDurationMs: 0,
+     turnClassifierDurationMs: 0,
+@@ -557,15 +563,25 @@ export function addToTotalDurationState(
+ export function addToTotalGenerationDuration(
+   decodeDuration: number,
+   ttftDuration: number,
++  outputTokens = 0,
+ ): void {
+   STATE.totalDecodeDuration += decodeDuration
+   STATE.totalTtftDuration += ttftDuration
++  // Pair the time with the tokens it actually covered. Only calls that measured a span reach
++  // here, so this is the numerator `totalDecodeDuration` is a denominator for.
++  if (decodeDuration > 0 && outputTokens > 0) {
++    STATE.totalTimedOutputTokens += outputTokens
++  }
+ }
+ 
+ export function getTotalDecodeDuration(): number {
+   return STATE.totalDecodeDuration
+ }
+ 
++export function getTotalTimedOutputTokens(): number {
++  return STATE.totalTimedOutputTokens
++}
++
+ export function getTotalTtftDuration(): number {
+   return STATE.totalTtftDuration
+ }
+@@ -576,6 +592,7 @@ export function resetTotalDurationStateAndCost_FOR_TESTS_ONLY(): void {
+   STATE.totalCostUSD = 0
+   STATE.totalDecodeDuration = 0
+   STATE.totalTtftDuration = 0
++  STATE.totalTimedOutputTokens = 0
+ }
+ 
+ export function addToTotalCostState(
+@@ -910,6 +927,7 @@ export function setCostStateForRestore({
+   totalAPIDurationWithoutRetries,
+   totalDecodeDuration,
+   totalTtftDuration,
++  totalTimedOutputTokens,
+   totalToolDuration,
+   totalLinesAdded,
+   totalLinesRemoved,
+@@ -921,6 +939,7 @@ export function setCostStateForRestore({
+   totalAPIDurationWithoutRetries: number
+   totalDecodeDuration: number
+   totalTtftDuration: number
++  totalTimedOutputTokens?: number
+   totalToolDuration: number
+   totalLinesAdded: number
+   totalLinesRemoved: number
+@@ -932,6 +951,10 @@ export function setCostStateForRestore({
+   STATE.totalAPIDurationWithoutRetries = totalAPIDurationWithoutRetries
+   STATE.totalDecodeDuration = totalDecodeDuration
+   STATE.totalTtftDuration = totalTtftDuration
++  // Absent in snapshots written before the pairing existed: 0 then means "the tokens behind this
++  // span were never recorded", and the panel falls back to the API span rather than pairing a
++  // session-wide numerator with a partial denominator.
++  STATE.totalTimedOutputTokens = totalTimedOutputTokens ?? 0
+   STATE.totalToolDuration = totalToolDuration
+   STATE.totalLinesAdded = totalLinesAdded
+   STATE.totalLinesRemoved = totalLinesRemoved
+diff --git a/src/cost-tracker.ts b/src/cost-tracker.ts
+index b5b9152..bd6e052 100644
+--- a/src/cost-tracker.ts
++++ b/src/cost-tracker.ts
+@@ -14,6 +14,7 @@ import {
+   getTotalCacheReadInputTokens,
+   getTotalCostUSD,
+   getTotalDecodeDuration,
++  getTotalTimedOutputTokens,
+   getTotalDuration,
+   getTotalInputTokens,
+   getTotalLinesAdded,
+@@ -79,6 +80,10 @@ export type SessionUsageSnapshot = {
+   // no streamed response reported a decode span (non-streaming fallback, aborted turn).
+   totalDecodeDuration: number
+   totalTtftDuration: number
++  // Output tokens of the calls `totalDecodeDuration` covers. Generation speed is this over that
++  // span: `totalOutputTokens` also counts calls that reported no span (a non-streamed fallback,
++  // a truncated stream), and pairing it with the partial span reads as a rate nobody saw.
++  totalTimedOutputTokens: number
+   totalDuration: number
+   totalLinesAdded: number
+   totalLinesRemoved: number
+@@ -108,6 +113,7 @@ type StoredCostState = {
+   totalAPIDurationWithoutRetries: number
+   totalDecodeDuration: number
+   totalTtftDuration: number
++  totalTimedOutputTokens?: number
+   totalToolDuration: number
+   totalLinesAdded: number
+   totalLinesRemoved: number
+@@ -152,6 +158,7 @@ export function getStoredSessionCosts(
+       projectConfig.lastAPIDurationWithoutRetries ?? 0,
+     totalDecodeDuration: projectConfig.lastDecodeDuration ?? 0,
+     totalTtftDuration: projectConfig.lastTtftDuration ?? 0,
++    totalTimedOutputTokens: projectConfig.lastTimedOutputTokens ?? 0,
+     totalToolDuration: projectConfig.lastToolDuration ?? 0,
+     totalLinesAdded: projectConfig.lastLinesAdded ?? 0,
+     totalLinesRemoved: projectConfig.lastLinesRemoved ?? 0,
+@@ -186,6 +193,7 @@ export function saveCurrentSessionCosts(fpsMetrics?: FpsMetrics): void {
+     lastAPIDurationWithoutRetries: getTotalAPIDurationWithoutRetries(),
+     lastDecodeDuration: getTotalDecodeDuration(),
+     lastTtftDuration: getTotalTtftDuration(),
++    lastTimedOutputTokens: getTotalTimedOutputTokens(),
+     lastToolDuration: getTotalToolDuration(),
+     lastDuration: getTotalDuration(),
+     lastLinesAdded: getTotalLinesAdded(),
+@@ -291,6 +299,7 @@ export function getSessionUsageSnapshot(): SessionUsageSnapshot {
+     totalAPIDuration: getTotalAPIDuration(),
+     totalDecodeDuration: getTotalDecodeDuration(),
+     totalTtftDuration: getTotalTtftDuration(),
++    totalTimedOutputTokens: getTotalTimedOutputTokens(),
+     totalDuration: getTotalDuration(),
+     totalLinesAdded: getTotalLinesAdded(),
+     totalLinesRemoved: getTotalLinesRemoved(),
+diff --git a/src/server/__tests__/sessions.test.ts b/src/server/__tests__/sessions.test.ts
+index f18ebdf..a6fb3b1 100644
+--- a/src/server/__tests__/sessions.test.ts
++++ b/src/server/__tests__/sessions.test.ts
+@@ -4028,6 +4028,60 @@ describe('Sessions API', () => {
+     expect(body.usage?.totalInputTokens).toBe(20)
+   })
+ 
++  it('bills the last line of a call, not the first, when the transcript repeats its usage', async () => {
++    // Real transcripts write a call twice: the first line carries the prompt with
++    // `output_tokens: 0` and no cache fields, the last carries the final split (uncached input
++    // + cache read + real output). Keeping the first — which the dedup did — reported 0 output
++    // tokens and a 0% cache hit rate for the whole session.
++    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-final-'))
++    const sessionId = '33333333-4444-5555-6666-777777777777'
++    const projectDir = '-tmp-api-session-usage-final'
++    const messageId = 'msg_two_phase'
++    const phase = (usage: Record<string, unknown>) => ({
++      parentUuid: null,
++      isSidechain: false,
++      type: 'assistant',
++      message: {
++        model: 'claude-opus-4-7',
++        id: messageId,
++        type: 'message',
++        role: 'assistant',
++        content: [{ type: 'text', text: 'block' }],
++        usage,
++      },
++      uuid: crypto.randomUUID(),
++      timestamp: '2026-01-01T00:02:00.000Z',
++      sessionId,
++      cwd: workDir,
++    })
++    await writeSessionFile(projectDir, sessionId, [
++      makeSessionMetaEntry(workDir),
++      makeUserEntry('go', crypto.randomUUID()),
++      // message_start: the prompt total, nothing generated yet.
++      phase({ input_tokens: 30_505, output_tokens: 0 }),
++      // message_stop: uncached input + cache read + the tokens actually emitted.
++      phase({
++        input_tokens: 1_129,
++        output_tokens: 67,
++        cache_read_input_tokens: 29_376,
++        cache_creation_input_tokens: 0,
++      }),
++    ])
++
++    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
++    const body = await res.json() as {
++      usage?: {
++        totalInputTokens: number
++        totalOutputTokens: number
++        totalCacheReadInputTokens: number
++      }
++    }
++
++    expect(body.usage?.totalOutputTokens).toBe(67)
++    expect(body.usage?.totalCacheReadInputTokens).toBe(29_376)
++    expect(body.usage?.totalInputTokens).toBe(1_129)
++  })
++
+   it('GET /api/sessions/repository-context should return branch launch metadata', async () => {
+     const workDir = await createCleanGitRepo(tmpDir)
+     const res = await fetch(
+diff --git a/src/server/services/localIndex/transcriptReducer.test.ts b/src/server/services/localIndex/transcriptReducer.test.ts
+index 57eabf5..01ba855 100644
+--- a/src/server/services/localIndex/transcriptReducer.test.ts
++++ b/src/server/services/localIndex/transcriptReducer.test.ts
+@@ -527,6 +527,45 @@ describe('reduceTranscript activity usage', () => {
+     }])
+   })
+ 
++  it('replaces a call\'s partial usage line with its final one', () => {
++    // Real transcripts write a call twice: the first line carries the prompt with
++    // `output_tokens: 0` and no cache read, the last carries the final split. Counting only the
++    // first (what the dedup did) stored `output_tokens: 0` and `cache_read_input_tokens: 0` for
++    // every indexed row, so the activity views had no output and no cache-hit data at all.
++    const entry = (usage: Record<string, unknown>) => ({
++      type: 'assistant',
++      requestId: 'req_two_phase',
++      message: {
++        role: 'assistant',
++        model: 'claude-opus-5',
++        id: 'msg_two_phase',
++        content: [{ type: 'text', text: 'x' }],
++        usage,
++      },
++      timestamp: '2026-01-01T10:00:00.000Z',
++    })
++    const result = reduceTranscript(
++      completeChunks([
++        entry({ input_tokens: 30_505, output_tokens: 0 }),
++        entry({
++          input_tokens: 1_129,
++          output_tokens: 67,
++          cache_read_input_tokens: 29_376,
++          cache_creation_input_tokens: 0,
++        }),
++      ]),
++      initialProjection(),
++    )
++
++    expect(modelTotals(result)).toEqual([{
++      model: 'claude-opus-5',
++      inputTokens: 1_129,
++      outputTokens: 67,
++      cacheReadInputTokens: 29_376,
++      cacheCreationInputTokens: 0,
++    }])
++  })
++
+   it('keeps deduplicating across an incremental read', () => {
+     const [firstLine, ...restLines] = assistantBlockLines({
+       messageId: 'msg_split',
+diff --git a/src/server/services/localIndex/transcriptReducer.ts b/src/server/services/localIndex/transcriptReducer.ts
+index c688f16..1707545 100644
+--- a/src/server/services/localIndex/transcriptReducer.ts
++++ b/src/server/services/localIndex/transcriptReducer.ts
+@@ -109,13 +109,20 @@ type ReducerState = {
+   activityModels: Map<string, ActivityModelProjection>
+   activityTools: Map<string, ActivityNamedUsageProjection>
+   activitySkills: Map<string, ActivityNamedUsageProjection>
+-  // (message.id, requestId) pairs whose usage has already been counted for this source. Claude
+-  // Code writes one JSONL line per content block of an assistant message — a turn with thinking,
+-  // text and 12 tool_use blocks is 14 lines — and every one of them repeats the same complete
+-  // `usage` object. Without this the tokens of a single reply get counted once per block; on real
+-  // transcripts that inflated the total by 2.2x. Lives only in memory alongside the projection
+-  // Maps: a full re-read starts empty (correct), and an incremental read clones it forward.
+-  activityUsageKeys: Set<string>
++  // (message.id, requestId) pairs whose usage has already been counted for this source, mapped to
++  // what each contributed. Claude Code writes one JSONL line per content block of an assistant
++  // message — a turn with thinking, text and 12 tool_use blocks is 14 lines — and every one
++  // repeats `usage`. Without dedup the tokens of a single reply get counted once per block; on
++  // real transcripts that inflated the total by 2.2x.
++  //
++  // The repeats are not identical: measured over 1227 calls, the early lines of a call carry
++  // `output_tokens: 0` and the last line carries the final split (uncached input, cache
++  // read/write, real output). Keeping only the first line is what made every indexed row report
++  // `output_tokens: 0` and `cache_read_input_tokens: 0`; the stored contribution lets a later
++  // line of the same call replace it instead of being dropped. Lives only in memory alongside the
++  // projection Maps: a full re-read starts empty (correct), and an incremental read clones it
++  // forward.
++  activityUsageKeys: Map<string, CountedUsage>
+ }
+ 
+ export type TranscriptReductionOptions = {
+@@ -221,7 +228,7 @@ function cloneState(state: ReducerState): ReducerState {
+     activitySkills: new Map(
+       [...state.activitySkills].map(([key, value]) => [key, { ...value }]),
+     ),
+-    activityUsageKeys: new Set(state.activityUsageKeys),
++    activityUsageKeys: new Map(state.activityUsageKeys),
+   }
+ }
+ 
+@@ -286,7 +293,7 @@ function createInitialState(
+         { ...skill },
+       ]),
+     ),
+-    activityUsageKeys: new Set(),
++    activityUsageKeys: new Map(),
+   }
+ }
+ 
+@@ -328,16 +335,51 @@ function usageIdentity(entry: ReducerEntry) {
+   }
+ }
+ 
++/** What one counted call has already contributed, so a later line can replace it. */
++type CountedUsage = {
++  /** `activityModels` bucket the contribution landed in, `${date}\0${model}`. */
++  bucketKey: string
++  inputTokens: number
++  outputTokens: number
++  cacheReadInputTokens: number
++  cacheCreationInputTokens: number
++  webSearchRequests: number
++  costUSD: number
++}
++
++/** Which call a line's `usage` describes, and what that call has already contributed. */
++type UsageClaim = {
++  /** `null` when the line has no identity to deduplicate on and is counted as-is. */
++  key: string | null
++  /** Non-null means this line supersedes that contribution rather than adding to it. */
++  previous: CountedUsage | null
++}
++
+ /**
+- * Claim this usage record, returning false when its key was already counted — i.e. this line is
+- * another content block of a reply already accounted for.
++ * Claim this usage record. A key already counted comes back with `previous` so the caller can
++ * take that contribution back before adding this line's numbers — the lines of one call are
++ * successive views of the same request, and the last one is the complete one.
+  */
+-function claimUsageRecord(state: ReducerState, entry: ReducerEntry, suffix = ''): boolean {
++function claimUsageRecord(
++  state: ReducerState,
++  entry: ReducerEntry,
++  suffix = '',
++): UsageClaim {
+   const key = usageRecordKey(usageIdentity(entry), suffix)
+-  if (key === null) return true
+-  if (state.activityUsageKeys.has(key)) return false
+-  state.activityUsageKeys.add(key)
+-  return true
++  if (key === null) return { key: null, previous: null }
++  return { key, previous: state.activityUsageKeys.get(key) ?? null }
++}
++
++/** Undo a contribution a later line of the same call is about to replace. */
++function releaseCountedUsage(state: ReducerState, previous: CountedUsage): void {
++  const aggregate = state.activityModels.get(previous.bucketKey)
++  if (!aggregate) return
++  aggregate.inputTokens -= previous.inputTokens
++  aggregate.outputTokens -= previous.outputTokens
++  aggregate.cacheReadInputTokens -= previous.cacheReadInputTokens
++  aggregate.cacheCreationInputTokens -= previous.cacheCreationInputTokens
++  aggregate.webSearchRequests -= previous.webSearchRequests
++  aggregate.costUSD -= previous.costUSD
+ }
+ 
+ function cacheCreationTokens(usage: ReducerUsage): number {
+@@ -353,7 +395,7 @@ function accumulateUsage(
+   date: string,
+   model: string,
+   usage: ReducerUsage,
+-): void {
++): CountedUsage {
+   const key = `${date}\0${model}`
+   let aggregate = state.activityModels.get(key)
+   if (!aggregate) {
+@@ -397,6 +439,16 @@ function accumulateUsage(
+     usage.speed,
+   )
+   if (cost !== null) aggregate.costUSD += cost
++
++  return {
++    bucketKey: key,
++    inputTokens,
++    outputTokens,
++    cacheReadInputTokens,
++    cacheCreationInputTokens,
++    webSearchRequests,
++    costUSD: cost ?? 0,
++  }
+ }
+ 
+ /**
+@@ -421,8 +473,10 @@ function accumulateAdvisorUsage(
+     // key as the first line's Nth advisor rather than shifting by the number already claimed.
+     const index = advisorIndex
+     advisorIndex += 1
+-    if (!claimUsageRecord(state, entry, `\0advisor:${index}`)) continue
+-    accumulateUsage(state, date, record.model, record)
++    const advisorClaim = claimUsageRecord(state, entry, `\0advisor:${index}`)
++    if (advisorClaim.previous) releaseCountedUsage(state, advisorClaim.previous)
++    const contribution = accumulateUsage(state, date, record.model, record)
++    if (advisorClaim.key !== null) state.activityUsageKeys.set(advisorClaim.key, contribution)
+   }
+ }
+ 
+@@ -500,9 +554,13 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
+   const model = entry.message?.model || 'unknown'
+   if (!usage || model === SYNTHETIC_MODEL) return
+   if (!isBillableUsageRecord(usageIdentity(entry))) return
+-  // Every content-block line of this reply carries the same usage; bill only the first one.
+-  if (!claimUsageRecord(state, entry)) return
+-  accumulateUsage(state, timestamp.date, model, usage)
++  // Every content-block line of this reply repeats `usage`, and the last one is the complete
++  // view of the call: bill the line, replacing whatever the earlier lines of the same call
++  // contributed (they carry `output_tokens: 0` and no cache read).
++  const claim = claimUsageRecord(state, entry)
++  if (claim.previous) releaseCountedUsage(state, claim.previous)
++  const contribution = accumulateUsage(state, timestamp.date, model, usage)
++  if (claim.key !== null) state.activityUsageKeys.set(claim.key, contribution)
+   accumulateAdvisorUsage(state, entry, timestamp.date, usage)
+ }
+ 
+diff --git a/src/server/services/sessionService.ts b/src/server/services/sessionService.ts
+index 8fabdaf..31c0a43 100644
+--- a/src/server/services/sessionService.ts
++++ b/src/server/services/sessionService.ts
+@@ -425,19 +425,52 @@ type TranscriptContextAccumulator = {
+   transcriptHasMediaInput: boolean
+ }
+ 
++/** One call's usage as it has already been folded into the running totals. */
++type CountedUsage = {
++  model: string
++  inputTokens: number
++  outputTokens: number
++  cacheReadInputTokens: number
++  cacheCreationInputTokens: number
++  webSearchRequests: number
++  costUSD: number
++}
++
++/** Which call a line's `usage` belongs to, and what that key has already contributed. */
++type UsageClaim = {
++  /** `null` when the line carries no identity to deduplicate on and is counted as-is. */
++  key: string | null
++  /**
++   * The value already counted for this key. Non-null means this line **supersedes** that
++   * contribution rather than adding to it.
++   */
++  previous: CountedUsage | null
++}
++
+ /**
+- * Whether this line's `usage` is the first sighting of its reply.
++ * Resolves which call this line's `usage` describes, or `null` when it must not be counted
++ * (an inherited fork line).
+  *
+  * Claude Code writes one JSONL line per content block of an assistant message and repeats the
+- * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
+- * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
+- * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
+- * inherited only the fork check and so reported inflated totals to the context panel.
++ * `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is 14 lines.
++ * Summing raw lines overstated real transcripts by 2.2x, which is why `stats.ts` and the
++ * activity index both deduplicate.
++ *
++ * The repeats are **not identical**, which is what the dedup has to respect: measured over 1227
++ * calls, a call's early lines carry `output_tokens: 0` (with, per provider, either the prompt
++ * total and no cache fields, or a running prefix), and the last line carries the final split —
++ * uncached input, cache read/write, and the real output count. Keeping the **first** line threw
++ * away every output token and every cache read of the session, which read in the context panel
++ * as 0 tok/s and a 0% cache hit rate on a perfectly healthy session. A later line therefore
++ * replaces its key's earlier contribution instead of being discarded.
+  *
+  * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
+  * agrees about what one session cost.
+  */
+-function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
++function claimUsageRecord(
++  entry: RawEntry,
++  countedUsage: Map<string, CountedUsage>,
++): UsageClaim | null {
+   const record = entry as unknown as Record<string, unknown>
+   const identity = {
+     version: record.version,
+@@ -446,13 +479,14 @@ function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+     messageId: entry.message?.id,
+     forkedFrom: record.forkedFrom,
+   }
+-  if (!isBillableUsageRecord(identity)) return false
++  if (!isBillableUsageRecord(identity)) return null
+   const key = usageRecordKey(identity)
+-  if (key === null) return true
+-  if (countedKeys.has(key)) return false
+-  if (countedKeys.size >= 50_000 || key.length > 4096) throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
+-  countedKeys.add(key)
+-  return true
++  if (key === null) return { key: null, previous: null }
++  const previous = countedUsage.get(key)
++  if (previous === undefined && (countedUsage.size >= 50_000 || key.length > 4096)) {
++    throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
++  }
++  return { key, previous: previous ?? null }
+ }
+ 
+ function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
+@@ -3127,7 +3161,7 @@ export class SessionService {
+     let lastUsageAt: number | null = null
+ 
+     const contextState = createTranscriptContextAccumulator()
+-    const countedUsageKeys = new Set<string>()
++    const countedUsage = new Map<string, CountedUsage>()
+ 
+     await this.streamJsonlFile(found.filePath, (entry) => {
+       if (typeof entry.message?.model === 'string') {
+@@ -3210,9 +3244,10 @@ export class SessionService {
+         ? usage.server_tool_use.web_search_requests
+         : 0
+ 
+-      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
+-      // same class of over-count; `claimUsageRecord` rejects both.
+-      if (!claimUsageRecord(entry, countedUsageKeys)) return
++      // Fork-inherited lines are skipped; a repeated line for a call already counted comes
++      // back with `previous` so it can replace that contribution (see `claimUsageRecord`).
++      const claim = claimUsageRecord(entry, countedUsage)
++      if (claim === null) return
+ 
+       if (
+         inputTokens === 0 &&
+@@ -3259,6 +3294,28 @@ export class SessionService {
+         models.set(model, modelUsage)
+       }
+ 
++      // A newer line for the same call first takes back what the older one contributed: the
++      // early line's numbers are a partial view of the same request, not a separate one.
++      if (claim.previous) {
++        const previous = claim.previous
++        const previousModel = models.get(previous.model)
++        if (previousModel) {
++          previousModel.inputTokens -= previous.inputTokens
++          previousModel.outputTokens -= previous.outputTokens
++          previousModel.cacheReadInputTokens -= previous.cacheReadInputTokens
++          previousModel.cacheCreationInputTokens -= previous.cacheCreationInputTokens
++          previousModel.webSearchRequests -= previous.webSearchRequests
++          previousModel.costUSD -= previous.costUSD
++          previousModel.costDisplay = this.formatCost(previousModel.costUSD)
++        }
++        totalCostUSD -= previous.costUSD
++        totalInputTokens -= previous.inputTokens
++        totalOutputTokens -= previous.outputTokens
++        totalCacheReadInputTokens -= previous.cacheReadInputTokens
++        totalCacheCreationInputTokens -= previous.cacheCreationInputTokens
++        totalWebSearchRequests -= previous.webSearchRequests
++      }
++
+       modelUsage.inputTokens += inputTokens
+       modelUsage.outputTokens += outputTokens
+       modelUsage.cacheReadInputTokens += cacheReadInputTokens
+@@ -3274,6 +3331,18 @@ export class SessionService {
+       totalCacheCreationInputTokens += cacheCreationInputTokens
+       totalWebSearchRequests += webSearchRequests
+ 
++      if (claim.key !== null) {
++        countedUsage.set(claim.key, {
++          model,
++          inputTokens,
++          outputTokens,
++          cacheReadInputTokens,
++          cacheCreationInputTokens,
++          webSearchRequests,
++          costUSD,
++        })
++      }
++
+       if (entry.timestamp) {
+         const time = Date.parse(entry.timestamp)
+         if (!Number.isNaN(time)) {
+@@ -3319,6 +3388,9 @@ export class SessionService {
+           // them from, so callers must treat 0 as "unknown" rather than "instant".
+           totalDecodeDuration: 0,
+           totalTtftDuration: 0,
++          // Nothing to pair with either: a transcript carries no decode span, so the panel
++          // must not divide these tokens by someone else's timing.
++          totalTimedOutputTokens: 0,
+           totalDuration:
+             firstUsageAt !== null && lastUsageAt !== null
+               ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
+diff --git a/src/utils/config.ts b/src/utils/config.ts
+index 6f1259b..72014f6 100644
+--- a/src/utils/config.ts
++++ b/src/utils/config.ts
+@@ -81,6 +81,8 @@ export type ProjectConfig = {
+   lastAPIDurationWithoutRetries?: number
+   lastDecodeDuration?: number
+   lastTtftDuration?: number
++  // Output tokens paired with `lastDecodeDuration`; see the panel's generation-speed pairing.
++  lastTimedOutputTokens?: number
+   lastToolDuration?: number
+   lastCost?: number
+   lastDuration?: number

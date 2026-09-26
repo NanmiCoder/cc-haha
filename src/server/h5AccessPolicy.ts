@@ -216,6 +216,41 @@ function hasProxyTraceHeaders(headers: Headers): boolean {
   return PROXY_TRACE_HEADERS.some((header) => headers.has(header))
 }
 
+function isPrivateIPv4Source(address: string): boolean {
+  const parts = address.split('.')
+  if (parts.length !== 4 || !parts.every((part) => /^\d+$/.test(part))) {
+    return false
+  }
+  const [a = -1, b = -1] = parts.map((part) => Number(part))
+  if (a === 10) return true
+  if (a === 192 && b === 168) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  // Link-local is only reachable on the same LAN segment; treat it as private.
+  if (a === 169 && b === 254) return true
+  return false
+}
+
+/**
+ * Sources exempt from the H5 token while `requireToken` is on — the LAN /
+ * home-network self-use exemption (v0.5.3 §二 re-implementation): loopback,
+ * RFC1918 (10/8, 172.16/12, 192.168/16, plus 169.254 link-local) and IPv6
+ * ULA (fc00::/7). Based purely on the socket source address
+ * (`server.requestIP()`), so a local reverse proxy's own connection
+ * (loopback) is covered too — same posture as the original implementation.
+ * Handles bracketed IPv6 and `::ffff:`-mapped IPv4.
+ */
+export function isTrustedLocalSourceHost(host: string): boolean {
+  const normalized = host.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase()
+  if (!normalized) return false
+  const address = normalized.startsWith('::ffff:') ? normalized.slice('::ffff:'.length) : normalized
+  if (isLoopbackHost(address)) return true
+  if (address.includes(':')) {
+    // fc00::/7: first byte f{c,d}, second byte 0x00-0x7f.
+    return /^f[cd][0-7][0-9a-f]:/.test(address)
+  }
+  return isPrivateIPv4Source(address)
+}
+
 function isLocalTrustedRequest(
   request: Request,
   url: URL,
@@ -286,11 +321,13 @@ export function shouldRequireH5Token({
   request,
   url,
   h5Enabled,
+  requireToken,
   context,
 }: {
   request: Request
   url: URL
   h5Enabled: boolean
+  requireToken: boolean
   context: H5RequestContext
 }): boolean {
   if (!h5Enabled) {
@@ -301,7 +338,19 @@ export function shouldRequireH5Token({
     return false
   }
 
-  return classifyH5Request(request, url, context) === 'h5-browser'
+  if (classifyH5Request(request, url, context) !== 'h5-browser') {
+    return false
+  }
+
+  // requireToken=false opens the full 0.0.0.0/0 (tokenless for everyone).
+  // With the switch on, loopback and private-network sources (same machine,
+  // LAN phones, home/office Wi-Fi) are exempt by source address; public
+  // sources keep needing the token.
+  if (!requireToken) {
+    return false
+  }
+
+  return !isTrustedLocalSourceHost(context.clientAddress ?? '')
 }
 
 export function shouldBlockDisabledH5Access({
@@ -342,14 +391,16 @@ export function isH5AccessControlPath(pathname: string): boolean {
 }
 
 /**
- * Endpoints that irreversibly destroy user data in a single request. The H5
- * token is minted for a paired phone's convenience, not for bulk deletion, so
- * these require the desktop process token even though they sit under the
- * ordinary `/api` surface.
+ * Endpoints that require the desktop process token even though they sit under
+ * the ordinary `/api` surface.
+ *
+ * Previously `/api/settings/session-cleanup` (bulk transcript deletion) lived
+ * here so a paired phone's bearer token could not wipe the history. It now
+ * follows the rest of the General settings page — the H5 token is sufficient —
+ * so this set is empty, but the gate stays so the boundary can be re-added
+ * without plumbing changes.
  */
-const LOCAL_CREDENTIAL_ONLY_PATHS: ReadonlySet<string> = new Set([
-  '/api/settings/session-cleanup',
-])
+const LOCAL_CREDENTIAL_ONLY_PATHS: ReadonlySet<string> = new Set([])
 
 /**
  * Compare paths the way the router routes them (`split('/').filter(Boolean)`)

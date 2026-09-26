@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test'
 
 import { buildPipInstallAttempts } from './pipInstall.js'
 import {
+  bootstrapPipIntoVenv,
   getComputerUsePythonEnv,
   getCursorBadgeCommand,
   installRuntimeDependencies,
+  pythonRuntimeFor,
   runPipInstallWithFallback,
 } from './pythonBridge.js'
 
@@ -86,6 +88,90 @@ describe('Windows virtual cursor Python process identity', () => {
       expect(command.python.endsWith('bin/python3')).toBe(true)
     }
     expect(command.script.endsWith('win_cursor_badge.py')).toBe(true)
+  })
+})
+
+describe('bootstrapPipIntoVenv', () => {
+  test('uses ensurepip when the interpreter has it', async () => {
+    const calls: string[] = []
+    await bootstrapPipIntoVenv({
+      python: '/venv/bin/python3',
+      run: async (file, args) => {
+        calls.push(`${file} ${args.join(' ')}`)
+        return ''
+      },
+      probe: async () => true,
+    })
+    expect(calls).toEqual(['/venv/bin/python3 -m ensurepip --upgrade'])
+  })
+
+  test('falls back to an existing pip when ensurepip is missing', async () => {
+    // Debian/Ubuntu without python3-venv: `-m ensurepip` fails with the module
+    // error, but a pip elsewhere on the machine can install into the venv.
+    const calls: string[] = []
+    await bootstrapPipIntoVenv({
+      python: '/venv/bin/python3',
+      run: async (file, args) => {
+        calls.push(`${file} ${args.join(' ')}`)
+        if (args[0] === '-m') throw new Error("No module named ensurepip")
+        return ''
+      },
+      probe: async file => file === 'pip3',
+    })
+    expect(calls).toEqual([
+      '/venv/bin/python3 -m ensurepip --upgrade',
+      'pip3 --python /venv/bin/python3 install --upgrade pip',
+    ])
+  })
+
+  test('names the Linux remedy when neither ensurepip nor a pip is available', async () => {
+    await expect(
+      bootstrapPipIntoVenv({
+        python: '/venv/bin/python3',
+        platform: 'linux',
+        run: async () => {
+          throw new Error('No module named ensurepip')
+        },
+        probe: async () => false,
+      }),
+    ).rejects.toThrow('python3-venv')
+  })
+
+  test('names the Windows remedy on win32 rather than the Debian package', async () => {
+    // The remedy has to match the host: telling a Windows user to apt-install
+    // python3-venv is the same dead end the raw module error was.
+    const failure = bootstrapPipIntoVenv({
+      python: 'C:\\venv\\Scripts\\python.exe',
+      platform: 'win32',
+      run: async () => {
+        throw new Error('No module named ensurepip')
+      },
+      probe: async () => false,
+    })
+    await expect(failure).rejects.toThrow('ensurepip')
+    await expect(failure).rejects.not.toThrow('python3-venv')
+  })
+})
+
+describe('pythonRuntimeFor', () => {
+  test('maps each Python-backed platform to its own helper and requirements', () => {
+    // The two package sets are not interchangeable: the Windows list carries
+    // pywin32/screeninfo, the Linux one python-xlib.
+    expect(pythonRuntimeFor('win32')).toEqual({
+      helper: 'win_helper.py',
+      requirements: 'requirements-win.txt',
+    })
+    expect(pythonRuntimeFor('linux')).toEqual({
+      helper: 'linux_helper.py',
+      requirements: 'requirements-linux.txt',
+    })
+  })
+
+  test('has no Python components on macOS or an unknown platform', () => {
+    // macOS drives the signed native cu-helper; a two-way "Linux, else
+    // Windows" choice used to hand it the Windows-only package set.
+    expect(pythonRuntimeFor('darwin')).toBeNull()
+    expect(pythonRuntimeFor('freebsd' as NodeJS.Platform)).toBeNull()
   })
 })
 

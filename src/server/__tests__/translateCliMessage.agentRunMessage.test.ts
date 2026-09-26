@@ -114,7 +114,7 @@ describe('translateCliMessage: agent_run_message', () => {
     ]
 
     expect(translated).toEqual(expect.arrayContaining([
-      { type: 'agent_run_event', ...route, event: { type: 'thinking', text: 'checking' } },
+      { type: 'agent_run_event', ...route, event: expect.objectContaining({ type: 'thinking', text: 'checking' }) },
       { type: 'agent_run_event', ...route, event: { type: 'content_delta', text: 'live answer' } },
       {
         type: 'agent_run_event',

@@ -1,0 +1,277 @@
+diff --git a/src/server/index.ts b/src/server/index.ts
+index 5b03cd33..faa3bbeb 100644
+--- a/src/server/index.ts
++++ b/src/server/index.ts
+@@ -16,6 +16,7 @@ import { requireAuth, requireH5Token } from './middleware/auth.js'
+ import { teamWatcher } from './services/teamWatcher.js'
+ import { cronScheduler } from './services/cronScheduler.js'
+ import { handleProxyRequest } from './proxy/handler.js'
++import { withGzipIfEligible } from './responseCompression.js'
+ import { ProviderService } from './services/providerService.js'
+ import { handleHahaOAuthCallback } from './api/haha-oauth.js'
+ import { handleHahaOpenAIOAuthCallback } from './api/haha-openai-oauth.js'
+@@ -624,7 +625,9 @@ export function startServer(port = PORT, host = HOST) {
+               req,
+               handleApiRequest(req, url, { remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
+             )
+-            return withCors(response, cors)
++            // Remote API responses are gzip-compressed (transparent to browser
++            // fetch); loopback desktop traffic stays uncompressed.
++            return withCors(await withGzipIfEligible(req, response, clientAddress), cors)
+           } catch (error) {
+             void diagnosticsService.recordEvent({
+               type: 'api_request_failed',
+diff --git a/src/server/responseCompression.test.ts b/src/server/responseCompression.test.ts
+new file mode 100644
+index 00000000..5064ea12
+--- /dev/null
++++ b/src/server/responseCompression.test.ts
+@@ -0,0 +1,130 @@
++import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
++import { gunzipSync } from 'node:zlib'
++import { shouldGzipResponse, withGzipIfEligible } from './responseCompression.js'
++
++const big = 'x'.repeat(300 * 1024)
++const small = 'x'.repeat(1024)
++
++function jsonReq(acceptEncoding?: string | null) {
++  return new Request('http://127.0.0.1:7788/api/sessions/x/messages', {
++    method: 'GET',
++    headers: acceptEncoding === undefined ? {} : { 'accept-encoding': acceptEncoding },
++  })
++}
++
++function jsonRes(body: string) {
++  return Response.json(JSON.parse(body))
++}
++
++describe('shouldGzipResponse', () => {
++  test('compresses remote large json with gzip advertised', () => {
++    expect(
++      shouldGzipResponse(jsonReq('gzip, deflate'), jsonRes(`{"m":"${big}"}`), '192.168.1.50'),
++    ).toBe(true)
++  })
++
++  test('skips loopback by default', () => {
++    expect(
++      shouldGzipResponse(jsonReq('gzip'), jsonRes(`{"m":"${big}"}`), '127.0.0.1'),
++    ).toBe(false)
++    expect(
++      shouldGzipResponse(jsonReq('gzip'), jsonRes(`{"m":"${big}"}`), '::1'),
++    ).toBe(false)
++  })
++
++  test('skips when client does not advertise gzip', () => {
++    expect(
++      shouldGzipResponse(jsonReq('br'), jsonRes(`{"m":"${big}"}`), '192.168.1.50'),
++    ).toBe(false)
++    expect(
++      shouldGzipResponse(jsonReq(null), jsonRes(`{"m":"${big}"}`), '192.168.1.50'),
++    ).toBe(false)
++  })
++
++  test('skips small payloads with a declared length', () => {
++    const res = new Response(`{"m":"${small}"}`, {
++      status: 200,
++      headers: {
++        'content-type': 'application/json',
++        'content-length': String(Buffer.byteLength(`{"m":"${small}"}`)),
++      },
++    })
++    expect(shouldGzipResponse(jsonReq('gzip'), res, '192.168.1.50')).toBe(false)
++  })
++
++  test('skips non-200 and non-GET', () => {
++    const res = new Response(JSON.stringify({ error: 'x'.repeat(300 * 1024) }), {
++      status: 413,
++      headers: { 'content-type': 'application/json' },
++    })
++    expect(shouldGzipResponse(jsonReq('gzip'), res, '192.168.1.50')).toBe(false)
++
++    const post = new Request('http://127.0.0.1:7788/api/x', {
++      method: 'POST',
++      headers: { 'accept-encoding': 'gzip' },
++    })
++    expect(shouldGzipResponse(post, jsonRes(`{"m":"${big}"}`), '192.168.1.50')).toBe(false)
++  })
++
++  test('skips non-json content type', () => {
++    const res = new Response(big, { headers: { 'content-type': 'text/html' } })
++    expect(shouldGzipResponse(jsonReq('gzip'), res, '192.168.1.50')).toBe(false)
++  })
++
++  test('env CC_HAHA_TRANSPORT_GZIP=0 disables, =1 forces loopback', () => {
++    const orig0 = process.env.CC_HAHA_TRANSPORT_GZIP
++    process.env.CC_HAHA_TRANSPORT_GZIP = '0'
++    expect(
++      shouldGzipResponse(jsonReq('gzip'), jsonRes(`{"m":"${big}"}`), '192.168.1.50'),
++    ).toBe(false)
++    process.env.CC_HAHA_TRANSPORT_GZIP = '1'
++    expect(
++      shouldGzipResponse(jsonReq('gzip'), jsonRes(`{"m":"${big}"}`), '127.0.0.1'),
++    ).toBe(true)
++    if (orig0 === undefined) delete process.env.CC_HAHA_TRANSPORT_GZIP
++    else process.env.CC_HAHA_TRANSPORT_GZIP = orig0
++  })
++})
++
++describe('withGzipIfEligible', () => {
++  let envBackup: string | undefined
++
++  beforeEach(() => {
++    envBackup = process.env.CC_HAHA_TRANSPORT_GZIP
++    delete process.env.CC_HAHA_TRANSPORT_GZIP
++  })
++
++  afterEach(() => {
++    if (envBackup === undefined) delete process.env.CC_HAHA_TRANSPORT_GZIP
++    else process.env.CC_HAHA_TRANSPORT_GZIP = envBackup
++  })
++
++  test('compresses the body and sets content-encoding, client text is identical', async () => {
++    const body = { messages: Array.from({ length: 300 }, (_, i) => ({ id: i, text: big.slice(0, 1000) })) }
++
++    const out = await withGzipIfEligible(jsonReq('gzip'), jsonRes(JSON.stringify(body)), '192.168.1.50')
++
++    expect(out.headers.get('content-encoding')).toBe('gzip')
++    expect(Number(out.headers.get('content-length'))).toBeLessThan(
++      Buffer.byteLength(JSON.stringify(body)),
++    )
++    // 浏览器 fetch 按规范透明解压 gzip（res.text()/res.json() 拿到明文
++    // JSON）；Bun 的 Response 不替我们解压，这里手动 gunzip 模拟客户端视角。
++    const raw = new Uint8Array(await out.arrayBuffer())
++    expect(JSON.parse(gunzipSync(raw).toString())).toEqual(body)
++  })
++
++  test('leaves loopback responses untouched', async () => {
++    const body = { messages: [{ id: 1, text: big }] }
++    const out = await withGzipIfEligible(jsonReq('gzip'), jsonRes(JSON.stringify(body)), '127.0.0.1')
++    expect(out.headers.get('content-encoding')).toBeNull()
++    expect(JSON.parse(await out.text())).toEqual(body)
++  })
++
++  test('leaves small responses untouched', async () => {
++    const body = { ok: true, text: small }
++    const out = await withGzipIfEligible(jsonReq('gzip'), jsonRes(JSON.stringify(body)), '192.168.1.50')
++    expect(out.headers.get('content-encoding')).toBeNull()
++  })
++})
++
+diff --git a/src/server/responseCompression.ts b/src/server/responseCompression.ts
+new file mode 100644
+index 00000000..bcac9d56
+--- /dev/null
++++ b/src/server/responseCompression.ts
+@@ -0,0 +1,112 @@
++import { gzipSync } from 'node:zlib'
++import { isLoopbackHost } from './h5AccessPolicy.js'
++
++/**
++ * Transport compression for non-local API responses.
++ *
++ * Opening a large H5 session transfers the whole transcript paged from the
++ * sidecar (measured: ~140 MB / 701 pages for one 37k-message session).
++ * Loopback desktop traffic stays uncompressed to preserve the local
++ * zero-overhead path; remote (H5) responses are gzip-compressed when the
++ * client advertises `Accept-Encoding: gzip` and the body is large enough
++ * for the CPU cost to pay off.
++ *
++ * Browsers decompress gzip transparently inside `fetch()` — `res.text()` /
++ * `res.json()` see the plain JSON either way — so no client change is
++ * required. Compression is best-effort: any failure returns the original
++ * response untouched.
++ */
++
++// Below this size the win is marginal (a ~200 KB page compresses to ~70 KB).
++const MIN_COMPRESS_BYTES = 128 * 1024
++
++const DEBUG_LOG_LIMIT = 5
++
++let debugLogsEmitted = 0
++
++export function shouldGzipResponse(
++  request: Request,
++  response: Response,
++  clientAddress: string | null,
++): boolean {
++  if (process.env.CC_HAHA_TRANSPORT_GZIP === '0') return false
++  if (request.method !== 'GET' || response.status !== 200) return false
++  if (!response.body) return false
++
++  const acceptEncoding = request.headers.get('accept-encoding')?.toLowerCase() ?? ''
++  if (!acceptEncoding.includes('gzip')) return false
++
++  // Remote by default; loopback only skips compression unless forced on.
++  const isLocal = clientAddress !== null && isLoopbackHost(clientAddress)
++  if (isLocal && process.env.CC_HAHA_TRANSPORT_GZIP !== '1') return false
++
++  const contentType = response.headers.get('content-type') ?? ''
++  if (!contentType.includes('json')) return false
++
++  // Response.json does not always set content-length, so this is a fast skip
++  // only; the authoritative size check happens after the body is read in
++  // withGzipIfEligible.
++  const declared = Number.parseInt(response.headers.get('content-length') ?? '', 10)
++  if (Number.isFinite(declared) && declared > 0 && declared < MIN_COMPRESS_BYTES) {
++    return false
++  }
++  return true
++}
++export async function withGzipIfEligible(
++  request: Request,
++  response: Response,
++  clientAddress: string | null,
++): Promise<Response> {
++  if (!shouldGzipResponse(request, response, clientAddress)) return response
++  let raw: Uint8Array
++  try {
++    raw = new Uint8Array(await response.arrayBuffer())
++  } catch (error) {
++    // Body already consumed (abort mid-read). The caller's abort path owns
++    // that case; surface the original response shape.
++    console.warn(
++      '[Server] gzip transport read failed, sending original response:',
++      error instanceof Error ? error.message : String(error),
++    )
++    return response
++  }
++  // The body was consumed by arrayBuffer(); any non-compressed fallback must
++  // rebuild a Response from `raw` or the client receives an empty body.
++  const passthrough = () =>
++    new Response(raw, {
++      status: response.status,
++      headers: Object.fromEntries(response.headers.entries()),
++    })
++
++  if (raw.length < MIN_COMPRESS_BYTES) return passthrough()
++
++  let compressed: Uint8Array
++  try {
++    compressed = new Uint8Array(gzipSync(raw, { level: 6 }))
++  } catch (error) {
++    console.warn(
++      '[Server] gzip compression failed, sending uncompressed:',
++      error instanceof Error ? error.message : String(error),
++    )
++    return passthrough()
++  }
++  if (compressed.length >= raw.length) return passthrough()
++
++  if (debugLogsEmitted < DEBUG_LOG_LIMIT) {
++    debugLogsEmitted += 1
++    console.log(
++      `[Server] gzip transport: ${(raw.length / 1024 / 1024).toFixed(2)}MB -> ` +
++        `${(compressed.length / 1024 / 1024).toFixed(2)}MB ` +
++        `(${(raw.length / compressed.length).toFixed(1)}x) ${request.method} ${request.url}`,
++    )
++  }
++  return new Response(compressed, {
++    status: response.status,
++    headers: {
++      ...Object.fromEntries(response.headers.entries()),
++      'content-encoding': 'gzip',
++      'content-length': String(compressed.length),
++      'cache-control': 'no-store',
++    },
++  })
++}
