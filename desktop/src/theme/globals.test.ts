@@ -45,17 +45,19 @@ function getCssBetween(startMarker: string, endMarker: string) {
 }
 
 /**
- * The six 「纸 · 墨 · 印」 palettes. Each block holds only raw `--cc-*` color
+ * The eight palettes. Each block holds only raw `--cc-*` color
  * values; the shared `:root` semantic layer turns those into the `--color-*`
  * tokens components consume, so the mapping is written once instead of copied
  * per theme.
  */
 const themes = [
   ':root,\n[data-theme="white"]',
+  '[data-theme="glaze-white"]',
   '[data-theme="paper"]',
   '[data-theme="warm-classic"]',
   '[data-theme="celadon"]',
   '[data-theme="dark"]',
+  '[data-theme="deep-night"]',
   '[data-theme="ink-blue"]',
 ] as const
 
@@ -501,8 +503,8 @@ describe('terminal palette tokens', () => {
 
   function terminalTokens(theme: string) {
     const blocks = [getThemeBlock(':root')]
-    if (theme === 'dark' || theme === 'ink-blue') {
-      blocks.push(getThemeBlock('[data-theme="dark"],\n[data-theme="ink-blue"]'))
+    if (theme === 'dark' || theme === 'deep-night' || theme === 'ink-blue') {
+      blocks.push(getThemeBlock('[data-theme="dark"],\n[data-theme="deep-night"],\n[data-theme="ink-blue"]'))
     }
     blocks.push(getThemeBlock(`[data-theme="${theme}"]`))
     const tokens = new Map(Array.from(blocks.join('\n').matchAll(/(--[\w-]+):\s*([^;]+);/g), (match) => [match[1]!, match[2]!.trim()]))
@@ -592,5 +594,30 @@ describe('pre-paint background constants', () => {
 
   it('covers every palette, so a new one cannot ship without a pre-paint color', () => {
     expect(Object.keys(THEME_BACKGROUNDS).sort()).toEqual([...THEME_MODES].sort())
+  })
+})
+
+describe('nightfall palette', () => {
+  it('keeps the conversation rail, workspace, and selected-session halo distinct', () => {
+    const palette = getThemeBlock('[data-theme="deep-night"]')
+    expect(palette).toContain('--cc-bg: #202020;')
+    expect(palette).toContain('--cc-s0: #363636;')
+
+    expect(normalizedCss).toContain('[data-theme="deep-night"] .sidebar-session-row--selected,\n[data-theme="deep-night"] .sidebar-session-row--active')
+    expect(normalizedCss).toContain('box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.38), 0 0 36px rgba(255, 255, 255, 0.18);')
+  })
+})
+
+describe('glazed white palette', () => {
+  it('keeps the porcelain gradients and selected-session states distinct', () => {
+    const palette = getThemeBlock('[data-theme="glaze-white"]')
+    expect(palette).toContain('--cc-bg: #F9F9F9;')
+    expect(palette).toContain('--cc-s0: #E0E0E0;')
+    expect(palette).toContain('--cc-sidebar-bg-image: linear-gradient(180deg, #E0E0E0 0%, #F7F7F7 100%);')
+    expect(palette).toContain('--cc-sidebar-active: #F7F7F7;')
+
+    expect(normalizedCss).toContain('background-image: linear-gradient(180deg, #F9F9F9 0%, #FDFDFD 100%);')
+    expect(normalizedCss).toContain('background-image: linear-gradient(180deg, #EDEDED 0%, #EDEDED 50%, #E2E2E2 100%);')
+    expect(normalizedCss).toContain('box-shadow: 0 0 0 1px #FFFFFF, 0 10px 26px rgba(204, 204, 204, 0.76);')
   })
 })
