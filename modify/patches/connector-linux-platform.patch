@@ -1,0 +1,105 @@
+diff --git a/src/services/connectors/catalog.ts b/src/services/connectors/catalog.ts
+index 73f32f63..a8fcbe73 100644
+--- a/src/services/connectors/catalog.ts
++++ b/src/services/connectors/catalog.ts
+@@ -3,11 +3,13 @@ import { SKILL_CONNECTORS } from './skillCatalog.js'
+ import { REMOTE_CONNECTORS } from './remoteCatalog.js'
+ 
+ // Native artifacts were inspected at these exact upstream versions. Windows ARM64
+-// is deliberately absent for WeCom: upstream does not publish that target.
++// is deliberately absent for WeCom: upstream does not publish that target. Linux
++// x64/arm64 are declared for all three CLIs because each upstream publishes those
++// targets (larksuite goreleaser, dingtalk CGO build, wecom npm platform packages).
+ export const CONNECTORS: ConnectorDefinition[] = [
+-  { id: 'feishu', pluginId: 'office-feishu@haha-connectors', packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://github.com/larksuite/cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'] },
+-  { id: 'dingtalk', pluginId: 'office-dingtalk@haha-connectors', packageName: 'dingtalk-workspace-cli', version: '1.0.61', homepage: 'https://gitee.com/DingTalk-Real-AI/dingtalk-workspace-cli', credentialMode: 'isolated', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'] },
+-  { id: 'wecom', pluginId: 'office-wecom@haha-connectors', packageName: '@wecom/cli', version: '1.2.1', homepage: 'https://github.com/WecomTeam/wecom-cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64'] },
++  { id: 'feishu', pluginId: 'office-feishu@haha-connectors', packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://github.com/larksuite/cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'] },
++  { id: 'dingtalk', pluginId: 'office-dingtalk@haha-connectors', packageName: 'dingtalk-workspace-cli', version: '1.0.61', homepage: 'https://gitee.com/DingTalk-Real-AI/dingtalk-workspace-cli', credentialMode: 'isolated', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'] },
++  { id: 'wecom', pluginId: 'office-wecom@haha-connectors', packageName: '@wecom/cli', version: '1.2.1', homepage: 'https://github.com/WecomTeam/wecom-cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'linux-x64', 'linux-arm64'] },
+ ]
+ 
+ export const ALL_CONNECTORS: ConnectorDefinition[] = [...CONNECTORS, ...REMOTE_CONNECTORS, ...SKILL_CONNECTORS]
+diff --git a/src/services/connectors/managedRuntime.ts b/src/services/connectors/managedRuntime.ts
+index f90535ff..d36223f5 100644
+--- a/src/services/connectors/managedRuntime.ts
++++ b/src/services/connectors/managedRuntime.ts
+@@ -23,11 +23,15 @@ const larkArchiveHashesV1_0_95: Record<string, string> = {
+   'darwin-x64': 'b8b817e7ffe793c9be2579e0b3f9165610b01ca3d425a7b8ee6fb4d528dc6cef',
+   'win32-x64': 'f2d5c3d6316b19ceec0996871ca4cff89541b82ed0d90220b3643ee0e84890a8',
+   'win32-arm64': '61df77e3692b304959de43950c1b3337ce3d08aef09f73ca936d3afd4e536b0f',
++  'linux-x64': '7da92d426b7d000908c76a36b87a7d0357c270debf4c7149bbc6010b20d2541e',
++  'linux-arm64': '063012a63bb22479855e335d922cc588b883e00d115de51da76a8ffe22db987a',
+ }
+ const wecomArchiveHashesV1_2_1: Record<string, string> = {
+   'darwin-arm64': 'HGNAdyvF48ktcxLaGNcKaXu51k0Wz/GTM2DCr3LiB9QLdJMpVcl/8vsjaFZp6LK7x9K84+I50pOjIteUCxuacg==',
+   'darwin-x64': 'ekrGOIxy7RUvIJ13TNqsxii+Vk29U5vyeBAO0VhTfZGQ2hwxknBXc5Iw5ue7UlKIV0B01uJga/etxbnNjiHZng==',
+   'win32-x64': 'fDiaE3M+BFuGY/nWstbnHgXp3tpjI30IClmVyWmQ7GnMMRHYMGxcCuAbvBZa9q4lQduJyg2AcHRzKTc1FIgBwQ==',
++  'linux-x64': 'rRWW/Z0ZznlyYovImY+VG1wTEv4CCsAjz53BO/RjmIN1XzzNeOM7c40nOniG5uwJFFUkaHrDYwc95jrhUl7JfA==',
++  'linux-arm64': 'ndgR2jV749PAoMpbWm3IpVBHuRpprve4AJiYh+TkTOoIk5RXE1T5ScXmqG4qUjEENcXTdCT2iTVPx9SPG8KDbw==',
+ }
+ // SHA-256 of native members from the pinned upstream release/npm archives.
+ const initialBinaryHashes: Record<string, Record<string, string>> = {
+@@ -36,17 +40,22 @@ const initialBinaryHashes: Record<string, Record<string, string>> = {
+     'darwin-x64': '845dad439b91e67e7154f7e8668ad7f55228578800938ccb68523483de300353',
+     'win32-x64': '403b56ab849b28b4072b46799bd898959dc55382c18d7f4e83cd65f49f570b3f',
+     'win32-arm64': '467578b20b6e0ba8c8512329e933f017474f591db0346403515a45e7415224f7',
+-  },
+-  dingtalk: {
++    'linux-x64': '44356a4351f3175480a4ff0c3e19236d1ace2738aaad468c3cd1e792fa08cc33',
++    'linux-arm64': '8afae147d954288a91e350d410f90d2e83a770576d99dcf864f2643e137fe56c',
++  },  dingtalk: {
+     'darwin-arm64': 'b41b5d3250fc809dbb80e1471b9a3768e0df3af088e296b457bd381f5e1df3de',
+     'darwin-x64': '9522cd8bb1930716ea48fa3a4e13d9d54db28bd19e6551d1d6f64c005d618526',
+     'win32-x64': '134111858af3ed250d294c9ed9c4ccfb6c46dd70df3bc5cefe78bd8f06ca90ef',
+     'win32-arm64': '03e34a3b0229f73f7691626de3cc3e44ed95907dc43ba7a74ad2681a88225674',
++    'linux-x64': '929ad4d0790bf7efe2d65b4926364c591216b81323a60cab0b464f30970f98a8',
++    'linux-arm64': '23c5e06b3175cf3910bf4c9af960545e0f995c621e1ff0aaadf58478fb84d90c',
+   },
+   wecom: {
+     'darwin-arm64': '1c9df0f8f928718e99562ccf10f00e8177e4096d744589290f92dc778d44b747',
+     'darwin-x64': 'f3f52f7da19be2fcf68f5605b806cc03e3f94f37469f97b4fe941e78a3014e72',
+     'win32-x64': 'ea916883a0e4f779dbacaf7fdf99df532b67863062cd1d1bb5a558473e804a89',
++    'linux-x64': 'a93389bd8957c8d719c392df1b42c0c13c3a9cbdd92b56d8434f446c3826b1a6',
++    'linux-arm64': '327faa172ec14d8c1c13a3173cd717fd3dae9c85a56858bfd4e3039db506a172',
+   },
+ }
+ const dingArchiveIntegrityV1_0_61 = 'sha512-lYLLqE3jDRqzf3ekjaOnBqD222fsbRkEiO4GsR6k8aMiybEUTQDr7BC9/4Wtm2KeL+PiukBqfZ9EFULS22jdBA=='
+@@ -222,7 +231,7 @@ export async function prepareManagedRuntime(definition: ConnectorDefinition, roo
+       if (installation.env[key]) await mkdir(installation.env[key]!, { recursive: true, mode: 0o700 })
+     }
+     progress('downloading')
+-    const os = dependencies.platform === 'win32' ? 'windows' : 'darwin'
++    const os = dependencies.platform === 'win32' ? 'windows' : dependencies.platform === 'linux' ? 'linux' : 'darwin'
+     const arch = dependencies.arch === 'x64' ? 'amd64' : 'arm64'
+     const suffix = os === 'windows' ? '.zip' : '.tar.gz'
+     let urls: string[]
+diff --git a/src/services/connectors/remoteCatalog.ts b/src/services/connectors/remoteCatalog.ts
+index 35591161..3cd12876 100644
+--- a/src/services/connectors/remoteCatalog.ts
++++ b/src/services/connectors/remoteCatalog.ts
+@@ -47,7 +47,7 @@ export const REMOTE_CONNECTORS: ConnectorDefinition[] = allEntries.map(entry =>
+   id: entry.id, pluginId: `office-${entry.id}@haha-connectors`, version: '1.0.0', packageName: entry.name,
+   collection: 'services', region: entry.region ?? (domesticIds.has(entry.id) ? 'china' : 'global'),
+   homepage: entry.source, credentialMode: 'isolated', transport: 'mcp',
+-  platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'],
++  platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'],
+   displayName: entry.name, description: entry.description, category: entry.category,
+   capabilities: [entry.description], example: entry.example, requirements: entry.requirements,
+   ...(entry.auth.type === 'api-key' ? { setupFields: [{ key: 'apiKey', label: 'API Key / Token', secret: true }] } : {}),
+diff --git a/src/services/connectors/skillCatalog.ts b/src/services/connectors/skillCatalog.ts
+index 37573642..21e9187f 100644
+--- a/src/services/connectors/skillCatalog.ts
++++ b/src/services/connectors/skillCatalog.ts
+@@ -24,9 +24,8 @@ export const SKILL_CONNECTORS: ConnectorDefinition[] = details.map(item => {
+     collection: 'tools', region: 'global', transport: 'skills', credentialMode: 'isolated',
+     pluginId: `office-${item.id}@haha-connectors`, packageName: item.name, version: recipe.version,
+     homepage: `https://github.com/${recipe.repository}/tree/${recipe.commit}`,
+-    platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'],
+-  }
+-})
++    platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'],
++  }})
+ 
+ export function getSkillRecipe(id: string, version?: string): SkillBundleRecipe | undefined {
+   return SKILL_RECIPES.find(recipe => recipe.id === id && (version === undefined || recipe.version === version))

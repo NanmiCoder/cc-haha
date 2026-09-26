@@ -1,0 +1,464 @@
+diff --git a/desktop/src/components/activity/SessionActivityPanel.test.tsx b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+index d5934b4..bc68a08 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.test.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+@@ -403,8 +403,9 @@ describe('SessionActivityPanel', () => {
+     // The duration is its own right-aligned slot on the detail card's *header*,
+     // not a details field: shell tasks report no usage, so a slot on the usage
+     // row disappeared on exactly the tasks worth timing. It is shown twice on
+-    // purpose: once on the collapsed row and once in the expanded detail.
+-    expect(screen.getAllByText('1m 7s')).toHaveLength(2)
++    // purpose: once on the collapsed row and once in the expanded detail. Both
++    // read in the panel's fixed digits-and-letters form, not a localized one.
++    expect(screen.getAllByText('1m7s')).toHaveLength(2)
+     expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
+     expect(document.querySelector('[data-activity-duration="true"]')).not.toBeNull()
+ 
+@@ -1032,8 +1033,9 @@ describe('SessionActivityPanel', () => {
+       />,
+     )
+ 
+-    // 125 s of wall clock, rendered by the panel's own duration convention.
+-    expect(screen.getByText('2m 5s')).toBeInTheDocument()
++    // 125 s of wall clock, rendered by the panel's own duration convention:
++    // a fixed `2m5s`, not a spelled-out per-language form.
++    expect(screen.getByText('2m5s')).toBeInTheDocument()
+     fireEvent.click(screen.getByRole('button', { name: /open background task/i }))
+     expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
+     // Nothing invented: no token row was conjured for a task that reported none.
+diff --git a/desktop/src/components/activity/SessionActivityPanel.tsx b/desktop/src/components/activity/SessionActivityPanel.tsx
+index 2ca317b..ff862e4 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.tsx
+@@ -118,13 +118,25 @@ function getTaskTypeLabel(taskType: BackgroundAgentTask['taskType'] | undefined,
+   return t('chat.backgroundTasks.type.task')
+ }
+ 
+-function formatBackgroundDuration(ms: number | undefined, t: TranslationFn): string | undefined {
++/**
++ * How long a background task ran, in a compact fixed shape: `43s`, `4m1s`,
++ * `1h2m`.
++ *
++ * Deliberately not localized *here*, unlike the duration readings elsewhere in
++ * the app: this column sits beside a truncated task label and reports machine
++ * work, so a digits-and-letters form keeps it narrow and lets the values line
++ * up down the rail instead of changing width with the language. Past an hour
++ * the seconds stop earning their width. Floored at one second — a sub-second
++ * span still happened, and `0s` reads as "not measured"; a row with no span at
++ * all stays blank instead (see `backgroundTaskDurationMs`).
++ */
++function formatBackgroundDuration(ms: number | undefined): string | undefined {
+   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined
+   const totalSeconds = Math.max(1, Math.round(ms / 1000))
+-  if (totalSeconds < 60) return t('chat.duration.seconds', { seconds: totalSeconds })
+-  const minutes = Math.floor(totalSeconds / 60)
+-  const seconds = totalSeconds % 60
+-  return t('chat.duration.minutesSeconds', { minutes, seconds })
++  if (totalSeconds < 60) return `${totalSeconds}s`
++  const totalMinutes = Math.floor(totalSeconds / 60)
++  if (totalMinutes < 60) return `${totalMinutes}m${totalSeconds % 60}s`
++  return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`
+ }
+ 
+ /**
+@@ -471,7 +483,7 @@ function ActivityRowView({
+   // clicking one opens its run detail, and the floating card is too narrow to
+   // carry another field on every agent line (the row would truncate the label).
+   const rowDuration = row.section === 'tasks' || row.section === 'backgroundTasks'
+-    ? formatBackgroundDuration(backgroundTaskDurationMs(row), t)
++    ? formatBackgroundDuration(backgroundTaskDurationMs(row))
+     : undefined
+   const content = (
+     <>
+@@ -622,7 +634,7 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+   // 关闭扩展信息只令该耗时字段消失，卡片其余字段照常渲染（见下方 return）。
+   const duration = sessionExtendedInfo === false
+     ? undefined
+-    : formatBackgroundDuration(backgroundTaskDurationMs(row), t)
++    : formatBackgroundDuration(backgroundTaskDurationMs(row))
+   const usageTokens = typeof row.usage?.totalTokens === 'number'
+     ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
+     : ''
+diff --git a/desktop/src/components/chat/MessageList.test.tsx b/desktop/src/components/chat/MessageList.test.tsx
+index c2e75c1..5052376 100644
+--- a/desktop/src/components/chat/MessageList.test.tsx
++++ b/desktop/src/components/chat/MessageList.test.tsx
+@@ -317,7 +317,9 @@ describe('MessageList nested tool calls', () => {
+     vi.restoreAllMocks()
+     vi.unstubAllGlobals()
+     resetSessionScrollSnapshotsForTests()
+-    useSettingsStore.setState({ locale: 'en' })
++    // Both are store state a test can flip; reset them together so a test that
++    // turns one off cannot silently change what the next one renders.
++    useSettingsStore.setState({ locale: 'en', sessionExtendedInfo: true })
+     useUIStore.setState({ pendingSettingsTab: null })
+     useTabStore.setState({ activeTabId: ACTIVE_TAB, tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session' as const, status: 'idle' }] })
+     useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
+@@ -1681,6 +1683,39 @@ describe('MessageList nested tool calls', () => {
+     expect(screen.getByTestId('background-task-event-card').textContent).toContain('1 分 5 秒')
+   })
+ 
++  it('hides the background task duration when session detail readouts are off', () => {
++    // This inline card was the one background-task duration the switch missed,
++    // so turning it off still left times on the conversation timeline.
++    useSettingsStore.setState({ locale: 'zh', sessionExtendedInfo: false })
++    useChatStore.setState({
++      sessions: {
++        [ACTIVE_TAB]: makeSessionState({
++          messages: [
++            {
++              id: 'background-task-shell-off',
++              type: 'background_task',
++              timestamp: 2,
++              task: {
++                taskId: 'shell-task-off',
++                toolUseId: 'shell-tool-off',
++                status: 'stopped',
++                taskType: 'local_bash',
++                summary: 'Running Playwright checks',
++                usage: { totalTokens: 1200, toolUses: 4, durationMs: 65000 },
++                startedAt: 2,
++                updatedAt: 2,
++              },
++            },
++          ],
++        }),
++      },
++    })
++
++    render(<MessageList />)
++
++    expect(screen.getByTestId('background-task-event-card').textContent).not.toContain('1 分 5 秒')
++  })
++
+   it('leaves a completed background task to the activity panel, but keeps a failure', () => {
+     const task = (id: string, status: 'completed' | 'failed') => ({
+       id: `background-task-${id}`,
+@@ -6359,9 +6394,14 @@ describe('MessageList nested tool calls', () => {
+     await waitFor(() => expect(container.querySelector('[data-chat-render-item-key="assistant-virtual-file"]')).toBeNull())
+     act(() => useWorkspaceStore.getState().setLayout(ACTIVE_TAB, 'hidden'))
+ 
+-    const remountedOpener = await screen.findByRole('button', { name: 'Open src/virtual.ts in workspace' })
++    // Restore runs on an rAF retry loop (up to 7 frames); give it real headroom
++    // under full-suite load where frames stretch past the 1s findByRole default.
++    const remountedOpener = await waitFor(
++      async () => screen.findByRole('button', { name: 'Open src/virtual.ts in workspace' }),
++      { timeout: 5000 },
++    )
+     expect(remountedOpener).not.toBe(opener)
+-    await waitFor(() => expect(document.activeElement).toBe(remountedOpener))
++    await waitFor(() => expect(document.activeElement).toBe(remountedOpener), { timeout: 5000 })
+     expect(screen.getByRole('button', { name: 'Hide changed files' }).getAttribute('aria-expanded')).toBe('true')
+     expect(useWorkspaceStore.getState().getSession(ACTIVE_TAB).origin).toBeNull()
+   })
+@@ -9128,7 +9168,9 @@ describe('MessageList agent card activity', () => {
+     vi.unstubAllGlobals()
+     resetAgentRunActivityCache()
+     resetSessionScrollSnapshotsForTests()
+-    useSettingsStore.setState({ locale: 'en' })
++    // Both are store state a test can flip; reset them together so a test that
++    // turns one off cannot silently change what the next one renders.
++    useSettingsStore.setState({ locale: 'en', sessionExtendedInfo: true })
+     useUIStore.setState({ pendingSettingsTab: null })
+     useTabStore.setState({
+       activeTabId: ACTIVE_TAB,
+diff --git a/desktop/src/components/chat/MessageList.tsx b/desktop/src/components/chat/MessageList.tsx
+index aa7a2d5..7921c3a 100644
+--- a/desktop/src/components/chat/MessageList.tsx
++++ b/desktop/src/components/chat/MessageList.tsx
+@@ -5,6 +5,7 @@ import { ApiError } from '../../api/client'
+ import { sessionsApi, type SessionRewindMode, type SessionTurnCheckpoint } from '../../api/sessions'
+ import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
+ import { useSessionStore } from '../../stores/sessionStore'
++import { useSettingsStore } from '../../stores/settingsStore'
+ import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
+ import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
+ import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+@@ -402,11 +403,15 @@ function GoalContinuationDivider({ message }: { message: GoalEvent }) {
+ 
+ function BackgroundTaskEventCard({ message }: { message: BackgroundTaskEvent }) {
+   const t = useTranslation()
++  // The switch is documented as covering background-task durations, and this
++  // inline card is such a duration — it was the one readout left ungated, so
++  // turning the switch off still left times on the conversation timeline.
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   const { task } = message
+   const isRunning = task.status === 'running'
+   const isFailed = task.status === 'failed'
+   const isStopped = task.status === 'stopped'
+-  const duration = formatDurationMs(task.usage?.durationMs, t)
++  const duration = sessionExtendedInfo === false ? null : formatDurationMs(task.usage?.durationMs, t)
+   const detail = task.summary || task.lastToolName || task.description || task.outputFile || task.taskId
+   const label = getBackgroundTaskLabel(task.taskType, t)
+ 
+diff --git a/desktop/src/stores/chatStore.test.ts b/desktop/src/stores/chatStore.test.ts
+index 0c327e7..4836ac5 100644
+--- a/desktop/src/stores/chatStore.test.ts
++++ b/desktop/src/stores/chatStore.test.ts
+@@ -188,6 +188,7 @@ import {
+   appendReplayedUserMessage,
+   registerAgentRunSession,
+   getSessionTpsMeter,
++  mergeBackgroundAgentTaskRecords,
+   reconstructAgentNotifications,
+   reconstructRunActivityFromTranscript,
+   settleThinkingDurations,
+@@ -4023,6 +4024,62 @@ describe('chatStore history mapping', () => {
+     })
+   })
+ 
++  it('gives a task known only from its completion report the start of the call that launched it', () => {
++    // A background agent has no shell record: its task row exists only because
++    // its report arrived. The report is also its end, so without the launch
++    // call the row has no span at all and can never show a duration.
++    const restored = reconstructRunActivityFromTranscript([
++      {
++        id: 'agent-use-message',
++        type: 'assistant',
++        timestamp: '2026-04-06T00:00:00.000Z',
++        content: [{
++          type: 'tool_use',
++          id: 'agent-tool-1',
++          name: 'Agent',
++          input: { name: 'explore', prompt: 'Look around the repo' },
++        }],
++      },
++      {
++        id: 'agent-notification-message',
++        type: 'user',
++        timestamp: '2026-04-06T00:05:00.000Z',
++        content: '<task-notification>\n<task-id>agent-task-1</task-id>\n<tool-use-id>agent-tool-1</tool-use-id>\n<status>completed</status>\n<summary>Done</summary>\n</task-notification>',
++      },
++    ])
++
++    expect(restored.backgroundAgentTasks['agent-task-1']).toMatchObject({
++      taskId: 'agent-task-1',
++      toolUseId: 'agent-tool-1',
++      status: 'completed',
++      startedAt: Date.parse('2026-04-06T00:00:00.000Z'),
++      updatedAt: Date.parse('2026-04-06T00:05:00.000Z'),
++    })
++  })
++
++  it('keeps a restored task start through the merge into session state', () => {
++    // The merge hands each restored record to the same upsert a live event
++    // uses, and the upsert used `now` — the record's *end* — as the start when
++    // the task was not already in state. Every restored span then read as zero,
++    // so no background task could show a duration after a reload.
++    const restored = {
++      'shell-task-1': {
++        taskId: 'shell-task-1',
++        toolUseId: 'shell-tool-1',
++        status: 'completed' as const,
++        description: 'Run desktop checks',
++        taskType: 'local_bash',
++        startedAt: Date.parse('2026-04-06T00:00:00.000Z'),
++        updatedAt: Date.parse('2026-04-06T00:10:00.000Z'),
++      },
++    }
++
++    expect(mergeBackgroundAgentTaskRecords({}, restored)['shell-task-1']).toMatchObject({
++      startedAt: Date.parse('2026-04-06T00:00:00.000Z'),
++      updatedAt: Date.parse('2026-04-06T00:10:00.000Z'),
++    })
++  })
++
+   it('recognizes manually backgrounded PowerShell from structured tool output', () => {
+     const restored = reconstructRunActivityFromTranscript([
+       {
+@@ -15712,6 +15769,50 @@ describe('chatStore activity state survival across reload paths', () => {
+     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({ input_tokens: 999, output_tokens: 888 })
+   })
+ 
++  it('restores background task spans from a windowed page without restoring the tail as authoritative', async () => {
++    // A large session never exhausts the page walk, so `historyComplete` is
++    // false on every open. Blanking the window there lost every background task
++    // the window actually held — including the span between its launch and its
++    // completion report, which both sit inside the window.
++    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
++    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({
++      messages: [
++        {
++          id: 'window-use', type: 'assistant', timestamp: '2026-04-06T00:00:00.000Z',
++          content: [{ type: 'tool_use', id: 'window-tool-1', name: 'Bash', input: { command: 'bun run test', description: 'Run the suite', run_in_background: true } }],
++        },
++        {
++          id: 'window-result', type: 'tool_result', timestamp: '2026-04-06T00:00:01.000Z',
++          content: [{ type: 'tool_result', tool_use_id: 'window-tool-1', content: 'Command running in background with ID: window-task-1. Output is being written to: /tmp/window-task-1.output' }],
++        },
++        {
++          id: 'window-notification', type: 'user', timestamp: '2026-04-06T00:10:00.000Z',
++          content: '<task-notification>\n<task-id>window-task-1</task-id>\n<tool-use-id>window-tool-1</tool-use-id>\n<status>completed</status>\n<summary>Suite passed</summary>\n</task-notification>',
++        },
++      ],
++      page,
++    })
++    vi.mocked(sessionsApi.getHistoryRecovery).mockResolvedValueOnce({
++      status: 'incomplete', sourceVersion: 'v1', omittedRecords: 0, messages: [],
++      completeness: { usage: true, goal: false, todos: false, activity: false },
++      tokenUsage: { input_tokens: 0, output_tokens: 0 },
++    })
++    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession() } })
++
++    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
++
++    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.backgroundAgentTasks?.['window-task-1'])
++      .toMatchObject({
++        taskId: 'window-task-1',
++        toolUseId: 'window-tool-1',
++        status: 'completed',
++        startedAt: Date.parse('2026-04-06T00:00:00.000Z'),
++        updatedAt: Date.parse('2026-04-06T00:10:00.000Z'),
++      })
++    // Spans come from the window; the session-wide claims still do not.
++    expect(setTasksFromTodosMock).not.toHaveBeenCalled()
++  })
++
+   it('cancels stale background recovery before an authoritative history reload', async () => {
+     const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 10, omittedOversizedEntries: 0 }
+     vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({ messages: [], page })
+diff --git a/desktop/src/stores/chatStore.ts b/desktop/src/stores/chatStore.ts
+index dc7baee..668bef8 100644
+--- a/desktop/src/stores/chatStore.ts
++++ b/desktop/src/stores/chatStore.ts
+@@ -2410,15 +2410,19 @@ async function fetchAndMapSessionHistory(
+   // narrower: restoring from that joined stream would put a child's shell
+   // jobs and notifications into the parent rail after every reload.
+   const rootRunMessages = messages.filter((message) => !message.parentToolUseId)
+-  const rootToolUseIds = transcriptToolUseIds(rootRunMessages)
+-  const rootRunNotifications = (taskNotifications ?? []).filter(
++  // Notifications this session owns. `ownerAgentId` marks a child run's
++  // terminal, which the parent rail must not adopt.
++  const ownedNotifications = (
++    notifications: typeof response.taskNotifications,
++    toolUseIds: Set<string>,
++  ) => (notifications ?? []).filter(
+     (notification) => (
+       !notification.ownerAgentId && (
+         // workflow_run_id predates owner_agent_id. Keep restoring those
+         // legacy root workflow terminals; newly owned child runs carry an
+         // explicit owner and are rejected by the guard above.
+         Boolean(notification.workflowRunId) ||
+-        rootToolUseIds.has(notification.toolUseId) ||
++        toolUseIds.has(notification.toolUseId) ||
+         existingOwnedToolUseIds.has(notification.toolUseId) ||
+         existingOwnedToolUseIds.has(notification.taskId)
+       )
+@@ -2426,8 +2430,27 @@ async function fetchAndMapSessionHistory(
+   )
+   const restoredActivity = reconstructRunActivityFromTranscript(
+     rootRunMessages,
+-    rootRunNotifications,
++    ownedNotifications(taskNotifications, transcriptToolUseIds(rootRunMessages)),
+   )
++  // Background-task *spans* are per-task facts, so a partial window is enough
++  // to restore them: a task is only reconstructed when both its own start (its
++  // tool call) and its own end (its task notification, or the terminal result
++  // of its tool call) are inside the window, which means a window can omit an
++  // old task but can never invent or stretch a span. Gating them on
++  // completeness bought nothing and cost the entire section: the window was
++  // blanked, so every shell job vanished and a reopened large session showed no
++  // background tasks — with no duration to show — until something ran live.
++  // Goal and todo restoration stays gated below, because those describe the
++  // session as a whole and a tail genuinely cannot support them.
++  const restoredBackgroundTasks = historyComplete
++    ? restoredActivity.backgroundAgentTasks
++    : reconstructRunActivityFromTranscript(
++        response.messages.filter((message) => !message.parentToolUseId),
++        ownedNotifications(
++          response.taskNotifications,
++          transcriptToolUseIds(response.messages),
++        ),
++      ).backgroundAgentTasks
+   const restoredGoalState = deriveActiveGoalStateFromMessages(historyComplete ? uiMessages : [])
+   return {
+     page,
+@@ -2436,7 +2459,7 @@ async function fetchAndMapSessionHistory(
+     activeGoal: restoredGoalState.activeGoal,
+     hasRestoredGoalState: restoredGoalState.hasStateEvidence,
+     restoredNotifications: restoredActivity.agentTaskNotifications,
+-    restoredBackgroundTasks: restoredActivity.backgroundAgentTasks,
++    restoredBackgroundTasks,
+     lastTodos: extractLastTodoWriteFromHistory(messages),
+     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
+     tokenUsage: summarizeTokenUsageFromHistory(messages),
+@@ -6665,7 +6688,12 @@ function upsertBackgroundAgentTask(
+       lastToolName: event.lastToolName ?? existing?.lastToolName,
+       outputFile: event.outputFile ?? existing?.outputFile,
+       usage: event.usage ?? existing?.usage,
+-      startedAt: startsNewLifecycle ? now : existing?.startedAt ?? now,
++      // `now` is only *this* event's time. A caller handing over a whole record
++      // (the restore merge) also knows when the task started, and using `now`
++      // as the start collapsed every restored span to zero — which is why a
++      // background task never showed a duration after a reload. Live events
++      // never set `startedAt`, so this only preserves a reconstructed start.
++      startedAt: startsNewLifecycle ? now : existing?.startedAt ?? event.startedAt ?? now,
+       updatedAt: now,
+     },
+   }
+@@ -7185,6 +7213,49 @@ function reconstructBackgroundShellTasks(
+   return tasks
+ }
+ 
++/**
++ * Give tasks known only from their completion report a start.
++ *
++ * `backgroundTaskRecordFromNotifications` creates such a task with
++ * `startedAt === updatedAt === ` the report's time, because the report is the
++ * only event it has. The span is then zero and the row can never show a
++ * duration, even though the transcript holds the tool call that launched it —
++ * for a background agent the very same window. That call's time is the start.
++ */
++function backfillTaskStartsFromToolCalls(
++  tasks: Record<string, BackgroundAgentTask>,
++  messages: MessageEntry[],
++): Record<string, BackgroundAgentTask> {
++  const launchedAt = new Map<string, number>()
++  for (const message of messages) {
++    if (
++      (message.type !== 'assistant' && message.type !== 'tool_use') ||
++      !Array.isArray(message.content)
++    ) continue
++    for (const block of message.content as AssistantHistoryBlock[]) {
++      if (block.type !== 'tool_use' || !block.id) continue
++      if (!launchedAt.has(block.id)) {
++        launchedAt.set(block.id, transcriptTimestamp(message.timestamp))
++      }
++    }
++  }
++
++  let changed = false
++  const next: Record<string, BackgroundAgentTask> = {}
++  for (const [key, task] of Object.entries(tasks)) {
++    const start = task.toolUseId ? launchedAt.get(task.toolUseId) : undefined
++    // Only when the launch genuinely precedes the report: a start after the
++    // end would invert the span rather than repair it.
++    if (start !== undefined && start < task.updatedAt && start !== task.startedAt) {
++      next[key] = { ...task, startedAt: start }
++      changed = true
++    } else {
++      next[key] = task
++    }
++  }
++  return changed ? next : tasks
++}
++
+ /**
+  * Project the activity owned by one transcript into the same state shape used
+  * by a live session. Callers must pass the complete transcript for that run.
+@@ -7214,9 +7285,12 @@ export function reconstructRunActivityFromTranscript(
+     }
+   }
+ 
+-  const backgroundAgentTasks = mergeBackgroundAgentTaskRecords(
+-    reconstructBackgroundShellTasks(messages),
+-    backgroundTaskRecordFromNotifications(Object.values(agentTaskNotifications)),
++  const backgroundAgentTasks = backfillTaskStartsFromToolCalls(
++    mergeBackgroundAgentTaskRecords(
++      reconstructBackgroundShellTasks(messages),
++      backgroundTaskRecordFromNotifications(Object.values(agentTaskNotifications)),
++    ),
++    messages,
+   )
+ 
+   return { agentTaskNotifications, backgroundAgentTasks }

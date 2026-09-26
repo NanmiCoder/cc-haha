@@ -1,0 +1,1072 @@
+diff --git a/desktop/src/components/chat/TpsIndicator.test.tsx b/desktop/src/components/chat/TpsIndicator.test.tsx
+index 0f4f918..1683721 100644
+--- a/desktop/src/components/chat/TpsIndicator.test.tsx
++++ b/desktop/src/components/chat/TpsIndicator.test.tsx
+@@ -3,6 +3,7 @@ import '@testing-library/jest-dom'
+ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+ import { TpsMeter } from '@/lib/tpsMeter'
+ import * as chatStore from '@/stores/chatStore'
++import { useSettingsStore } from '@/stores/settingsStore'
+ import { TpsIndicator } from './TpsIndicator'
+ 
+ // Drive the real meters with a fake clock so the sliding windows behave
+@@ -22,6 +23,7 @@ beforeEach(() => {
+   now = 1_000_000
+   ownMeter.reset()
+   subMeter.reset()
++  useSettingsStore.setState({ sessionExtendedInfo: true })
+   vi.spyOn(performance, 'now').mockImplementation(() => now)
+   vi.spyOn(chatStore, 'getSessionTpsMeter').mockReturnValue(ownMeter)
+   vi.spyOn(chatStore, 'getSubordinateTpsMeters').mockReturnValue([subMeter])
+@@ -29,6 +31,7 @@ beforeEach(() => {
+ 
+ afterEach(() => {
+   cleanup()
++  useSettingsStore.setState({ sessionExtendedInfo: true })
+   vi.restoreAllMocks()
+ })
+ 
+@@ -83,7 +86,7 @@ it('marks a sampled (non-ids) reading as approximate', () => {
+   pump(ownMeter)
+   const { container } = render(<TpsIndicator sessionId="main" />)
+   const indicator = container.querySelector('[data-testid="tps-indicator"]')!
+-  expect(indicator).toHaveAttribute('data-tps-source', 'chunk')
++  expect(indicator).toHaveAttribute('data-tps-source', 'char')
+   expect(indicator).toHaveAttribute('title', expect.stringContaining('≈'))
+ })
+ 
+@@ -92,5 +95,12 @@ it('stays hidden before anything has streamed', () => {
+   expect(container.querySelector('[data-testid="tps-indicator"]')).toBeNull()
+ })
+ 
++it('renders nothing when session extended info is off, even with a live reading', () => {
++  pump(ownMeter)
++  useSettingsStore.setState({ sessionExtendedInfo: false })
++  const { container } = render(<TpsIndicator sessionId="main" />)
++  expect(container.querySelector('[data-testid="tps-indicator"]')).toBeNull()
++})
++
+ 
+ 
+diff --git a/desktop/src/components/chat/TpsIndicator.tsx b/desktop/src/components/chat/TpsIndicator.tsx
+index 05e1e3d..51f32d0 100644
+--- a/desktop/src/components/chat/TpsIndicator.tsx
++++ b/desktop/src/components/chat/TpsIndicator.tsx
+@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
+ import { getSessionTpsMeter, getSubordinateTpsMeters } from '../../stores/chatStore'
+ import { aggregateMeterReadings, isTpsEnabled, type TpsSource } from '../../lib/tpsMeter'
+ import { useTranslation } from '../../i18n'
++import { useSettingsStore } from '../../stores/settingsStore'
+ 
+ /**
+  * Real-time decode-speed (TPS) indicator.
+@@ -58,14 +59,17 @@ const TIER_STYLE: Record<TpsTier, { color: string }> = {
+ 
+ export function TpsIndicator({ sessionId, vertical = false }: { sessionId: string; vertical?: boolean }) {
+   const t = useTranslation()
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   const [tps, setTps] = useState(0)
+   const [visible, setVisible] = useState(false)
+   const [activeSubs, setActiveSubs] = useState(0)
+-  const [source, setSource] = useState<TpsSource>('chunk')
++  const [source, setSource] = useState<TpsSource>('char')
+ 
+   // Master switch: when disabled the indicator renders nothing and never polls
+   // the meter (the meter itself is also not fed in the content_delta path).
+-  if (!isTpsEnabled()) return null
++  // 会话扩展信息关闭时同样整块隐藏——TPS 是本 fork 新增读数，缺省视为开启。
++  // 两个渲染分支（vertical/横向）都在此处之后，故单次提前返回即可覆盖。
++  if (!isTpsEnabled() || sessionExtendedInfo === false) return null
+ 
+   useEffect(() => {
+     const meter = getSessionTpsMeter(sessionId)
+diff --git a/desktop/src/lib/tpsCalibration.test.ts b/desktop/src/lib/tpsCalibration.test.ts
+index eb9bd4a..b3342de 100644
+--- a/desktop/src/lib/tpsCalibration.test.ts
++++ b/desktop/src/lib/tpsCalibration.test.ts
+@@ -18,28 +18,28 @@ describe('tpsCalibration', () => {
+ 
+   it('round-trips the learned coefficients for a model', () => {
+     expect(loadTpsCalibration('qwen3-coder')).toBeNull()
+-    saveTpsCalibration('qwen3-coder', { kChunk: 2.5, kChar: 1.18 })
+-    expect(loadTpsCalibration('qwen3-coder')).toEqual({ kChunk: 2.5, kChar: 1.18 })
++    saveTpsCalibration('qwen3-coder', { kCjk: 2.5, kAscii: 1.18 })
++    expect(loadTpsCalibration('qwen3-coder')).toEqual({ kCjk: 2.5, kAscii: 1.18 })
+   })
+ 
+   it('keeps models apart so switching re-learns instead of inheriting', () => {
+-    saveTpsCalibration('model-a', { kChunk: 3, kChar: 1.2 })
+-    saveTpsCalibration('model-b', { kChunk: 1, kChar: 1.05 })
+-    expect(loadTpsCalibration('model-a')?.kChunk).toBe(3)
+-    expect(loadTpsCalibration('model-b')?.kChunk).toBe(1)
++    saveTpsCalibration('model-a', { kCjk: 3, kAscii: 1.2 })
++    saveTpsCalibration('model-b', { kCjk: 1, kAscii: 1.05 })
++    expect(loadTpsCalibration('model-a')?.kCjk).toBe(3)
++    expect(loadTpsCalibration('model-b')?.kCjk).toBe(1)
+     expect(loadTpsCalibration('model-c')).toBeNull()
+   })
+ 
+   it('falls back to a shared bucket when the session has no model yet', () => {
+-    saveTpsCalibration(undefined, { kChunk: 4, kChar: 1.1 })
+-    expect(loadTpsCalibration(null)).toEqual({ kChunk: 4, kChar: 1.1 })
+-    expect(loadTpsCalibration('  ')).toEqual({ kChunk: 4, kChar: 1.1 })
++    saveTpsCalibration(undefined, { kCjk: 4, kAscii: 1.1 })
++    expect(loadTpsCalibration(null)).toEqual({ kCjk: 4, kAscii: 1.1 })
++    expect(loadTpsCalibration('  ')).toEqual({ kCjk: 4, kAscii: 1.1 })
+   })
+ 
+   it('discards a payload written by another version instead of trusting it', () => {
+     localStorage.setItem(TPS_CALIBRATION_STORAGE_KEY, JSON.stringify({
+       version: TPS_CALIBRATION_VERSION + 1,
+-      models: { 'qwen3-coder': { kChunk: 9, kChar: 9, n: 1, updatedAt: 1 } },
++      models: { 'qwen3-coder': { kCjk: 9, kAscii: 9, n: 1, updatedAt: 1 } },
+     }))
+     expect(loadTpsCalibration('qwen3-coder')).toBeNull()
+   })
+@@ -50,26 +50,26 @@ describe('tpsCalibration', () => {
+ 
+     localStorage.setItem(TPS_CALIBRATION_STORAGE_KEY, JSON.stringify({
+       version: TPS_CALIBRATION_VERSION,
+-      models: { 'qwen3-coder': { kChunk: 'x', kChar: 1, n: 1, updatedAt: 1 } },
++      models: { 'qwen3-coder': { kCjk: 'x', kAscii: 1, n: 1, updatedAt: 1 } },
+     }))
+     expect(loadTpsCalibration('qwen3-coder')).toBeNull()
+   })
+ 
+   it('never stores a non-positive coefficient and survives a failing storage', () => {
+-    saveTpsCalibration('qwen3-coder', { kChunk: 0, kChar: 1 })
++    saveTpsCalibration('qwen3-coder', { kCjk: 0, kAscii: 1 })
+     expect(loadTpsCalibration('qwen3-coder')).toBeNull()
+ 
+     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+       throw new Error('quota exceeded')
+     })
+-    expect(() => saveTpsCalibration('qwen3-coder', { kChunk: 2, kChar: 1 })).not.toThrow()
++    expect(() => saveTpsCalibration('qwen3-coder', { kCjk: 2, kAscii: 1 })).not.toThrow()
+   })
+ 
+   it('caps how many models it remembers, dropping the stalest', () => {
+     const saving = vi.spyOn(Date, 'now')
+     for (let i = 0; i < 40; i++) {
+       saving.mockReturnValue(1_000 + i)
+-      saveTpsCalibration(`model-${i}`, { kChunk: 1 + i / 100, kChar: 1 })
++      saveTpsCalibration(`model-${i}`, { kCjk: 1 + i / 100, kAscii: 1 })
+     }
+     // The earliest models are gone; the most recent survive.
+     expect(loadTpsCalibration('model-0')).toBeNull()
+@@ -77,7 +77,7 @@ describe('tpsCalibration', () => {
+   })
+ 
+   it('clears every remembered model', () => {
+-    saveTpsCalibration('model-a', { kChunk: 2, kChar: 1 })
++    saveTpsCalibration('model-a', { kCjk: 2, kAscii: 1 })
+     clearTpsCalibration()
+     expect(loadTpsCalibration('model-a')).toBeNull()
+   })
+diff --git a/desktop/src/lib/tpsCalibration.ts b/desktop/src/lib/tpsCalibration.ts
+index f216fd2..1d203bf 100644
+--- a/desktop/src/lib/tpsCalibration.ts
++++ b/desktop/src/lib/tpsCalibration.ts
+@@ -3,26 +3,32 @@
+  *
+  * The meter learns its tokens-per-unit coefficients from the real
+  * `usage.output_tokens` each API call reports (see TpsMeter.endCall). A fresh
+- * session would otherwise start from 1.0 and under-read until its first call
+- * completes, so the coefficients are remembered per model and seeded back.
++ * session would otherwise start from the neutral 1.0 and mis-read until its
++ * first call completes, so the coefficients are remembered per model.
+  *
+- * Keyed by model id because the coefficients describe one model/engine pairing:
+- * its tokens-per-frame batching and its tokenizer's text density. Switching
+- * models therefore re-learns instead of inheriting someone else's numbers.
++ * Keyed by model id because the coefficients describe one model's tokenizer
++ * density — how many tokens a CJK character and a Latin/code character cost
++ * it. Switching models therefore re-learns instead of inheriting the previous
++ * model's numbers.
++ *
++ * Version 2 replaced the previous shape (kChunk/kChar, learned against a
++ * per-frame unit). Those numbers were learned from a unit whose token density
++ * varies by ~40x between content classes and went badly wrong on tool-input
++ * traffic, so a stored v1 payload is discarded rather than reinterpreted.
+  */
+ 
+ import type { TpsCalibration } from './tpsMeter'
+ 
+ export const TPS_CALIBRATION_STORAGE_KEY = 'cc-haha.tpsCalibration'
+-export const TPS_CALIBRATION_VERSION = 1
++export const TPS_CALIBRATION_VERSION = 2
+ 
+ /** Keep the store small; the least recently used models are dropped first. */
+ const MAX_MODELS = 32
+ const UNKNOWN_MODEL = '__default__'
+ 
+ type StoredModelCalibration = {
+-  kChunk: number
+-  kChar: number
++  kCjk: number
++  kAscii: number
+   /** How many completed calls taught this entry (diagnostics). */
+   n: number
+   updatedAt: number
+@@ -71,8 +77,8 @@ function writeStore(store: StoredCalibration): void {
+ /** Learned coefficients for `model`, or null when nothing usable is stored. */
+ export function loadTpsCalibration(model: string | null | undefined): TpsCalibration | null {
+   const entry = readStore().models[modelKey(model)]
+-  if (!entry || !isPositiveFinite(entry.kChunk) || !isPositiveFinite(entry.kChar)) return null
+-  return { kChunk: entry.kChunk, kChar: entry.kChar }
++  if (!entry || !isPositiveFinite(entry.kCjk) || !isPositiveFinite(entry.kAscii)) return null
++  return { kCjk: entry.kCjk, kAscii: entry.kAscii }
+ }
+ 
+ /** Record what this model's calls taught, replacing any earlier entry. */
+@@ -81,14 +87,14 @@ export function saveTpsCalibration(
+   calibration: TpsCalibration,
+   calls = 0,
+ ): void {
+-  if (!isPositiveFinite(calibration.kChunk) || !isPositiveFinite(calibration.kChar)) return
++  if (!isPositiveFinite(calibration.kCjk) || !isPositiveFinite(calibration.kAscii)) return
+   const store = readStore()
+   const key = modelKey(model)
+   const previous = store.models[key]
+   const previousCalls = previous && Number.isFinite(previous.n) ? previous.n : 0
+   store.models[key] = {
+-    kChunk: calibration.kChunk,
+-    kChar: calibration.kChar,
++    kCjk: calibration.kCjk,
++    kAscii: calibration.kAscii,
+     n: Math.max(0, calls) || previousCalls + 1,
+     updatedAt: Date.now(),
+   }
+diff --git a/desktop/src/lib/tpsMeter.test.ts b/desktop/src/lib/tpsMeter.test.ts
+index 9ba9bf7..cec2891 100644
+--- a/desktop/src/lib/tpsMeter.test.ts
++++ b/desktop/src/lib/tpsMeter.test.ts
+@@ -116,14 +116,14 @@ describe('real-token accounting', () => {
+     const ref = clock()
+     const meter = new TpsMeter(1500, 500)
+ 
+-    // The engine batches 2 tokens per frame, so 30 frames really carry 60
+-    // tokens. Before learning, the frame count under-reads badly…
++    // The text is latin, so before learning the neutral 1.0 coefficient
++    // under-reads the real 60 tokens (6 chars = 1.71 units, not 2 tokens)…
+     meter.beginCall()
+     for (let i = 0; i < 30; i++) {
+       ref.now += 50
+       meter.push('x'.repeat(6))
+     }
+-    expect(meter.windowTokens()).toBeLessThan(45)
++    expect(meter.windowTokens()).toBeLessThan(55)
+ 
+     // …and the real usage from that call teaches the coefficients.
+     meter.endCall(60, 1500)
+@@ -170,25 +170,109 @@ describe('real-token accounting', () => {
+   it('rejects a ballooned call (replayed prefix) and clamps the coefficients', () => {
+     const ref = clock()
+     const meter = new TpsMeter(1500, 500)
+-    meter.setCalibration({ kChunk: 1, kChar: 1 })
++    meter.setCalibration({ kCjk: 1, kAscii: 1 })
+ 
+-    // Establish a normal call size first.
++    // Establish a normal call size first (100 latin frames ≈ 171 units).
+     meter.beginCall()
+-    for (let i = 0; i < 10; i++) { ref.now += 20; meter.push('x') }
+-    meter.endCall(10, 200)
+-    const baseline = meter.calibration().kChunk
++    for (let i = 0; i < 100; i++) { ref.now += 5; meter.push('x'.repeat(6)) }
++    meter.endCall(100, 2000)
++    const baseline = meter.calibration().kAscii
+ 
+     // A fallback replay delivers the whole prefix again as one huge unit count.
+     meter.beginCall()
+-    for (let i = 0; i < 500; i++) { ref.now += 1; meter.push('x') }
+-    meter.endCall(500, 500)
+-    expect(meter.calibration().kChunk).toBe(baseline)
++    for (let i = 0; i < 1000; i++) { ref.now += 1; meter.push('x'.repeat(6)) }
++    meter.endCall(100, 2000)
++    expect(meter.calibration().kAscii).toBe(baseline)
+ 
+     // A genuine extreme ratio still lands inside the clamp.
+     meter.beginCall()
+-    for (let i = 0; i < 10; i++) { ref.now += 20; meter.push('x') }
+-    meter.endCall(10_000, 200)
+-    expect(meter.calibration().kChunk).toBeLessThanOrEqual(8)
++    for (let i = 0; i < 100; i++) { ref.now += 5; meter.push('x'.repeat(6)) }
++    meter.endCall(100_000, 2000)
++    expect(meter.calibration().kAscii).toBeLessThanOrEqual(6)
++  })
++
++  it('does not bill sparse prose frames at a dense tool-input call\'s rate', () => {
++    // The reported failure: one call whose frames carried large tool-input
++    // JSON taught the then-per-frame coefficient its ceiling, after which six
++    // subagents writing prose — sparse frames — read ~800 tok/s while the
++    // engine log showed ~250. Learning is per character class now, so the
++    // dense latin call moves only kAscii and CJK prose is untouched by it.
++    const ref = clock()
++    const meter = new TpsMeter(1500, 500)
++
++    // Call 1: 6 frames, but ~2.5k latin characters and 1,320 real tokens
++    // (the measured shape of a 6-subagent Agent tool call).
++    meter.beginCall()
++    for (let i = 0; i < 6; i++) {
++      ref.now += 100
++      meter.push('{"prompt":"' + 'a'.repeat(400) + '"}')
++    }
++    meter.endCall(1320, 600)
++    expect(meter.calibration().kAscii).toBeGreaterThan(1.5)
++    // The dense latin call must not touch the CJK coefficient.
++    expect(meter.calibration().kCjk).toBe(1)
++
++    // Call 2: the subagents' prose. Four CJK characters per frame, so four
++    // tokens per frame — read as such, not at the tool-input density.
++    meter.reset()
++    meter.beginCall()
++    for (let i = 0; i < 10; i++) {
++      ref.now += 100
++      meter.push('你好世界')
++    }
++    expect(meter.windowTokens()).toBeCloseTo(40, 5)
++    expect(meter.value()).toBeCloseTo(40 / 0.9, 1)
++  })
++
++  it('predicts the measured mixed call instead of staying at the neutral 1.0', () => {
++    // Measured on the local vLLM+DFlash engine: one parent call delivered 242
++    // CJK characters of thinking, 65 of prose and a 2,464-character latin
++    // tool-input blob, and the CLI reported 1,627 output tokens. The single
++    // coefficient a mixed call supports reproduces that within a few percent
++    // (the per-class solution needs a second call with a different mix).
++    const ref = clock()
++    const meter = new TpsMeter(1500, 500)
++    meter.beginCall()
++    ref.now += 50
++    meter.push('内容是'.repeat(80) + '内容')      // 242 CJK characters
++    ref.now += 50
++    meter.push('先深'.repeat(32) + '先')          // 65 CJK characters
++    ref.now += 50
++    meter.push('x'.repeat(2464))                  // latin tool-input JSON
++    expect(meter.endCall(1627, 4000)).toBe(true)
++
++    const { kCjk, kAscii } = meter.calibration()
++    const estimate = 307 * kCjk + (2464 / 3.5) * kAscii
++    expect(estimate).toBeGreaterThan(1627 * 0.95)
++    expect(estimate).toBeLessThan(1627 * 1.05)
++  })
++
++  it('separates the CJK and latin densities from mixed traffic', () => {
++    const ref = clock()
++    const meter = new TpsMeter(1500, 500)
++    const PROSE = '这是一段中文说明文字，用于验证密度分离。'.repeat(3)   // 60 CJK chars
++    const CODE = '{"key":"value","n":123},'.repeat(8)                  // 192 latin chars
++
++    // Six calls alternating prose and code, with the real counts their
++    // densities imply: 1 token per CJK char, 1.75 tokens per latin unit.
++    for (let call = 0; call < 6; call++) {
++      meter.beginCall()
++      ref.now += 20
++      if (call % 2 === 0) {
++        meter.push(PROSE)
++        meter.endCall(60, 500)
++      } else {
++        meter.push(CODE)
++        meter.endCall(Math.round((192 / 3.5) * 1.75), 500)
++      }
++      meter.reset()
++    }
++
++    const { kCjk, kAscii } = meter.calibration()
++    expect(kCjk).toBeGreaterThan(0.8)
++    expect(kCjk).toBeLessThan(1.2)
++    expect(kAscii).toBeGreaterThan(1.5)
++    expect(kAscii).toBeLessThan(2.1)
+   })
+ 
+   it('survives reset() with its calibration and needs a fresh call window', () => {
+@@ -202,7 +286,7 @@ describe('real-token accounting', () => {
+     }
+     meter.endCall(60, 600)
+     const learned = meter.calibration()
+-    expect(learned).not.toEqual({ kChunk: 1, kChar: 1 })
++    expect(learned).not.toEqual({ kCjk: 1, kAscii: 1 })
+ 
+     meter.reset()
+     expect(meter.hasStreamed()).toBe(false)
+diff --git a/desktop/src/lib/tpsMeter.ts b/desktop/src/lib/tpsMeter.ts
+index 5048b4d..0006a11 100644
+--- a/desktop/src/lib/tpsMeter.ts
++++ b/desktop/src/lib/tpsMeter.ts
+@@ -1,38 +1,52 @@
+ /**
+  * Real-time decode-speed (TPS) meter.
+  *
+- * Reports output tokens/second for a session's live stream. Three accounting
+- * tiers, picked adaptively so the reading tracks real tokens on any provider:
++ * Reports output tokens/second for a session's live stream, from whichever
++ * signal the backend actually provides:
+  *
+- *  1. `ids`   — the sidecar relayed the engine's real per-chunk token ids
+- *               (`tps_tokens`); the window sums those counts exactly.
+- *  2. `chunk` — no ids, so each streamed frame counts as one unit. The engine's
+- *               average tokens-per-frame (1 for a per-token stream, 3-5 when it
+- *               batches or speculates) is learned as `kChunk`.
+- *  3. `char`  — a whole-block delivery (a replayed `thinking` block, a
+- *               non-streamed answer) has no frame structure to count, so its
+- *               text is weighted by the char heuristic (`estimateTokens`),
+- *               scaled by the learned `kChar`.
++ *  1. `ids`  — the sidecar relayed the engine's real per-chunk token ids
++ *              (`tps_tokens`). Those counts are exact, so they are summed
++ *              as-is and every other signal is ignored for that window.
++ *  2. `char` — no ids, so the streamed text itself is the measurement: CJK
++ *              characters and full-width punctuation weigh one unit each,
++ *              other non-whitespace characters a third of a unit, and each
++ *              unit's tokens-per-unit is learned per model from the real
++ *              `usage.output_tokens` every completed call reports.
+  *
+- * `chunk` and `char` are both accumulated and blended with a weight that
+- * favours whichever has been predicting the real totals better; their error
+- * sources are different (batch-size distribution vs CJK/ASCII mix), so
+- * combining them damps both. Their coefficients are re-learned from the real
+- * `usage.output_tokens` the CLI reports when each API call completes, so a
+- * fixed 3-tokens-per-chunk stream lands on exactly the right rate and a stream
+- * whose batch size varies still reads right on average.
++ * ## Why the text, and not the number of streamed frames
++ *
++ * An earlier version counted frames ("each chunk = one unit") and learned an
++ * average tokens-per-frame. That is unsound for any engine that batches
++ * unevenly, and this one does: measured on the local vLLM+DFlash engine, a
++ * frame carrying streamed *text* holds ~2.5 tokens, a frame carrying
++ * *thinking* ~12, and a frame carrying a tool-input JSON blob ~90-220. The
++ * client also coalesces deltas before the meter sees them, so the observable
++ * frame count is partly a property of the client's throttling.
++ *
++ * One global tokens-per-frame cannot serve densities that differ ~40x, and it
++ * fails loudly rather than quietly: a single call whose frames were dense JSON
++ * taught the local meter ~51 tokens/frame (clamped to the ceiling of 8), after
++ * which six concurrent subagents writing prose — sparse frames, ~2.5 tokens
++ * each — were billed at the JSON density and the indicator read ~800 tok/s
++ * while the engine log showed ~250. The text length has no such failure mode:
++ * it is a direct measure of what was decoded, whatever the batch size, so the
++ * frame count is now used only for liveness and for the window's time span.
++ *
++ * Two coefficients rather than one, because the two character classes really
++ * do tokenize at different rates: measured on the same engine, CJK prose is
++ * ~1.0 token/char-unit while JSON/code is ~1.9 (short tokens, dense
++ * punctuation). Both are learned together (least squares over every completed
++ * call's units and its real token count) and stored per model, so mixed
++ * Chinese-plus-code traffic stays inside a few tens of percent instead of the
++ * factor-of-two a single coefficient would carry between a prose call and a
++ * tool-input call.
+  *
+  * Window smoothing adapts to any emission granularity. Session lifecycle:
+- *  - hasStreamed() is true once any chunk arrived; the UI stays visible.
++ *  - hasStreamed() is true once any content arrived; the UI stays visible.
+  *  - While decoding, value() returns the live window speed.
+  *  - When decoding pauses / a turn ends, value() falls back to the held speed —
+  *    anchored to the real `output_tokens / decode span` when endCall() saw one,
+  *    so the number the user keeps seeing is a real-token rate.
+- *
+- * Char→token heuristic calibrated for the local vLLM engines (Qwen / DeepSeek
+- * tokenizers): CJK chars and full-width punctuation ≈ 1 token each, ASCII ≈ 1
+- * token per 3.5 chars. Whitespace is not counted — tokenizers fold it into
+- * neighbouring tokens, so counting it inflates the estimate.
+  */
+ 
+ const WINDOW_MS = 1500
+@@ -40,12 +54,12 @@ const WINDOW_MS = 1500
+ // emitted chunk, i.e. the speed at which the turn ended.
+ const FALLBACK_WINDOW_MS = 500
+ // Denominator floor for the live-window speed (ms). Mobile ws/event loops can
+-// batch many content_delta chunks so the intra-window span collapses to near-zero
+-// and total/span would read in the hundreds/thousands. A small floor (NOT the full
+-// 1.5s window) keeps that burst suppression while letting a turn's *opening* read
+-// the real speed quickly — the old 1.5s floor spread a fresh turn's first seconds
+-// across the whole window and systematically under-read the start. The UI's 30/70
+-// exponential smoothing then damps any residual spike from a genuine batch.
++// batch many deltas so the intra-window span collapses to near-zero and
++// total/span would read in the hundreds/thousands. A small floor (NOT the full
++// 1.5s window) keeps that burst suppression while letting a turn's *opening*
++// read the real speed quickly — the old 1.5s floor spread a fresh turn's first
++// seconds across the whole window and systematically under-read the start. The
++// UI's 30/70 exponential smoothing then damps any residual spike.
+ const BURST_FLOOR_MS = 400
+ const CJK_RE = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af\u3000-\u303f\uff00-\uffef]/
+ const WHITESPACE_RE = /\s/
+@@ -60,27 +74,30 @@ const SPARSE_SPEED_THRESHOLD = 5
+ // moments — so nothing is skipped.
+ const FALLBACK_SKIP_MS = 0
+ 
+-// ── Real-token calibration ────────────────────────────────────────────────
++// ── Calibration ───────────────────────────────────────────────────────────
+ /**
+- * Learned tokens-per-unit multiplier is clamped to this range. The ceiling
+- * leaves room for engines that batch or speculate (several tokens per frame)
+- * while still bounding the damage a bogus sample could do.
++ * Bounds for a learned tokens-per-unit coefficient. The band spans the
++ * plausible tokenizer densities (a mixed corpus sits near 1.0, dense
++ * code/JSON near 2) with room on either side, while still bounding the damage
++ * a single weird call could do.
+  */
+ const K_MIN = 0.25
+-const K_MAX = 8
++const K_MAX = 6
+ /** A call below this many real output tokens is too small to teach anything. */
+ const MIN_REAL_TOKENS_TO_LEARN = 50
+-/** Nor may a call settle a coefficient from only a handful of units. */
+-const MIN_UNITS_TO_LEARN = 5
+-/** Blend weight for the frame-count estimator until the errors are measured. */
+-const DEFAULT_CHUNK_WEIGHT = 0.7
+-const CHUNK_WEIGHT_MIN = 0.2
+-const CHUNK_WEIGHT_MAX = 0.8
++/** Nor may a call settle coefficients from only a handful of text units. */
++const MIN_UNITS_TO_LEARN = 40
+ /** A call whose unit count dwarfs the running mean is a replay, not a real burst. */
+ const OUTLIER_UNIT_FACTOR = 3
+-const K_EWMA_ALPHA = 0.3
+-const ERROR_EWMA_ALPHA = 0.25
+-const UNIT_MEAN_EWMA_ALPHA = 0.25
++const UNIT_MEAN_EWMA_ALPHA = 0.2
++/**
++ * Forgetting factor on the least-squares accumulators: the engine's density is
++ * stable, but a session that switched models (and kept this meter) should not
++ * be outvoted forever by its first calls.
++ */
++const LEARN_FORGET = 0.9
++/** Below this relative determinant the two classes are not separable yet. */
++const SINGULAR_EPS = 1e-6
+ 
+ /**
+  * Master switch for the TPS indicator. Set to false to disable the meter
+@@ -93,44 +110,61 @@ export function isTpsEnabled(): boolean {
+   return TPS_ENABLED
+ }
+ 
+-/** Which accounting tier the current window is reading from. */
+-export type TpsSource = 'ids' | 'chunk' | 'char'
++export type TpsSource = 'ids' | 'char'
+ 
+-/** Learned tokens-per-unit coefficients for one model. */
+-export type TpsCalibration = { kChunk: number; kChar: number }
++/** Learned tokens-per-unit, per character class (see the module docs). */
++export type TpsCalibration = { kCjk: number; kAscii: number }
+ 
+-type Sample = { t: number; chunk: number; char: number; ids: number }
++/** Text units split by class, the meter's raw measurement. */
++type Sample = {
++  t: number
++  /** CJK / full-width characters, 1 unit each. */
++  cjk: number
++  /** Other non-whitespace characters, 1/3.5 unit each. */
++  ascii: number
++  /** Relayed exact token count (0 for text samples). */
++  ids: number
++}
+ 
+ function clamp(value: number, min: number, max: number): number {
+-  return Math.min(Math.max(value, min), max)
++  if (!Number.isFinite(value)) return min
++  return Math.min(max, Math.max(min, value))
+ }
+ 
+-function ewma(previous: number | null, next: number, alpha: number): number {
+-  return previous === null ? next : previous + alpha * (next - previous)
++function textUnits(text: string): { cjk: number; ascii: number } {
++  let cjk = 0
++  let ascii = 0
++  for (const ch of text) {
++    if (WHITESPACE_RE.test(ch)) continue
++    if (CJK_RE.test(ch)) cjk += 1
++    else ascii += 1
++  }
++  return { cjk, ascii: ascii * NON_CJK_TOKEN_WEIGHT }
+ }
+ 
+ export class TpsMeter {
+   private samples: Sample[] = []
+-  private windowMs: number
+-  private fallbackWindowMs: number
+-  private everStreamed = false
+   private lastPushAt = 0
+   private fallbackTps = 0
+-
+-  // Calibration learned from real usage (survives reset(); it describes the
+-  // model, not this window).
+-  private kChunk = 1
+-  private kChar = 1
+-  private kChunkCount = 0
+-  private kCharCount = 0
+-  private errChunk: number | null = null
+-  private errChar: number | null = null
++  private everStreamed = false
++  private readonly windowMs: number
++  private readonly fallbackWindowMs: number
++
++  // Learned coefficients and the least-squares accumulators behind them. They
++  // describe the model, not this window, so reset() keeps them.
++  private kCjk = 1
++  private kAscii = 1
++  private sCC = 0
++  private sAA = 0
++  private sCA = 0
++  private sCY = 0
++  private sAY = 0
+   private unitMean: number | null = null
+ 
+   // Units observed since beginCall(); reconciled against real tokens in endCall().
+   private callOpen = false
+-  private callChunk = 0
+-  private callChar = 0
++  private callCjk = 0
++  private callAscii = 0
+   private callIds = 0
+   private callFirstAt = 0
+   private callLastAt = 0
+@@ -144,22 +178,23 @@ export class TpsMeter {
+    * Feed a streamed text chunk.
+    *
+    * `wholeBlock` marks a delivery that carries a finished block rather than a
+-   * fragment (a replayed `thinking` block, a non-streamed answer): it has no
+-   * frame to count, so it is weighted by its text instead.
++   * fragment (a replayed `thinking` block, a non-streamed answer). It is
++   * accepted for call-site compatibility but changes nothing: the measurement
++   * is the text itself, which a whole block carries just as well as a
++   * fragment does.
+    */
+   push(text: string, options: { wholeBlock?: boolean; external?: boolean } = {}): void {
+     const now = performance.now()
+     this.lastPushAt = now
+     this.everStreamed = true
+     const external = options.external === true
+-    const chunkUnits = options.wholeBlock === true ? 0 : 1
+-    const charUnits = text ? estimateTokens(text) : 0
+-    if (chunkUnits === 0 && charUnits === 0) {
++    const { cjk, ascii } = text ? textUnits(text) : { cjk: 0, ascii: 0 }
++    if (cjk === 0 && ascii === 0) {
+       if (!external) this.noteCallFrame(now)
+       return
+     }
+-    this.samples.push({ t: now, chunk: chunkUnits, char: charUnits, ids: 0 })
+-    if (!external) this.noteCallFrame(now, chunkUnits, charUnits)
++    this.samples.push({ t: now, cjk, ascii, ids: 0 })
++    if (!external) this.noteCallFrame(now, cjk, ascii)
+     this.fallbackTps = this.computeFallbackTps(now)
+   }
+ 
+@@ -171,7 +206,7 @@ export class TpsMeter {
+     const count = Math.floor(tokens)
+     if (!Number.isFinite(count) || count <= 0) return
+     const now = performance.now()
+-    this.samples.push({ t: now, chunk: 0, char: 0, ids: count })
++    this.samples.push({ t: now, cjk: 0, ascii: 0, ids: count })
+     this.lastPushAt = now
+     this.everStreamed = true
+     this.noteCallFrame(now, 0, 0, count)
+@@ -184,7 +219,7 @@ export class TpsMeter {
+     this.everStreamed = true
+   }
+ 
+-  /** True once this session has ever received streamed text. */
++  /** True once this session has ever received streamed content. */
+   hasStreamed(): boolean {
+     return this.everStreamed
+   }
+@@ -205,22 +240,18 @@ export class TpsMeter {
+     return this.lastPushAt
+   }
+ 
+-  /** Which tier the current window is reading from (for UI/diagnostics). */
++  /** Which signal the current window is reading (for UI/diagnostics). */
+   source(): TpsSource {
+     this.prune()
+-    let ids = 0
+-    let chunk = 0
+     for (const sample of this.samples) {
+-      ids += sample.ids
+-      chunk += sample.chunk
++      if (sample.ids > 0) return 'ids'
+     }
+-    if (ids > 0) return 'ids'
+-    return chunk > 0 ? 'chunk' : 'char'
++    return 'char'
+   }
+ 
+   /** Learned coefficients, for persistence per model (see tpsCalibration). */
+   calibration(): TpsCalibration {
+-    return { kChunk: this.kChunk, kChar: this.kChar }
++    return { kCjk: this.kCjk, kAscii: this.kAscii }
+   }
+ 
+   /**
+@@ -233,32 +264,26 @@ export class TpsMeter {
+   setCalibration(calibration: TpsCalibration | null | undefined): void {
+     if (calibration === undefined) return
+     if (calibration === null) {
+-      this.kChunk = 1
+-      this.kChar = 1
+-      this.kChunkCount = 0
+-      this.kCharCount = 0
+-      this.errChunk = null
+-      this.errChar = null
++      this.kCjk = 1
++      this.kAscii = 1
++      this.sCC = 0
++      this.sAA = 0
++      this.sCA = 0
++      this.sCY = 0
++      this.sAY = 0
+       this.unitMean = null
+       return
+     }
+-    const { kChunk, kChar } = calibration
+-    if (Number.isFinite(kChunk) && kChunk > 0) {
+-      this.kChunk = clamp(kChunk, K_MIN, K_MAX)
+-      // Mark as learned so a stored value is not immediately averaged away.
+-      this.kChunkCount = Math.max(this.kChunkCount, 2)
+-    }
+-    if (Number.isFinite(kChar) && kChar > 0) {
+-      this.kChar = clamp(kChar, K_MIN, K_MAX)
+-      this.kCharCount = Math.max(this.kCharCount, 2)
+-    }
++    const { kCjk, kAscii } = calibration
++    if (Number.isFinite(kCjk) && kCjk > 0) this.kCjk = clamp(kCjk, K_MIN, K_MAX)
++    if (Number.isFinite(kAscii) && kAscii > 0) this.kAscii = clamp(kAscii, K_MIN, K_MAX)
+   }
+ 
+   /** Open a reconciliation window for one API call. */
+   beginCall(): void {
+     this.callOpen = true
+-    this.callChunk = 0
+-    this.callChar = 0
++    this.callCjk = 0
++    this.callAscii = 0
+     this.callIds = 0
+     this.callFirstAt = 0
+     this.callLastAt = 0
+@@ -270,13 +295,12 @@ export class TpsMeter {
+   }
+ 
+   /**
+-   * Close the call opened by beginCall() and reconcile the sampled units with
++   * Close the call opened by beginCall() and reconcile the measured text with
+    * the real output token count the CLI reported.
+    *
+    * Always anchors the held speed to the real rate when a decode span can be
+-   * measured; learns the per-unit coefficients only when the call carried no
+-   * exact ids (those need no calibration) and the sample is big enough to
+-   * trust.
++   * measured; learns the coefficients only when the call carried no exact ids
++   * (those need no calibration) and the sample is big enough to trust.
+    *
+    * @param decodeSpanMs real decode span when the CLI reported one, else the
+    *        caller's observed span (first→last frame of the call).
+@@ -284,14 +308,14 @@ export class TpsMeter {
+    *          whether there is anything new worth persisting).
+    */
+   endCall(realTokens: number, decodeSpanMs?: number): boolean {
+-    const callChunk = this.callChunk
+-    const callChar = this.callChar
++    const callCjk = this.callCjk
++    const callAscii = this.callAscii
+     const callIds = this.callIds
+     const firstAt = this.callFirstAt
+     const lastAt = this.callLastAt
+     this.callOpen = false
+-    this.callChunk = 0
+-    this.callChar = 0
++    this.callCjk = 0
++    this.callAscii = 0
+     this.callIds = 0
+     this.callFirstAt = 0
+     this.callLastAt = 0
+@@ -305,57 +329,65 @@ export class TpsMeter {
+     if (spanMs > 0) this.fallbackTps = real / (spanMs / 1000)
+ 
+     if (callIds > 0) return false
+-    const units = callChunk + callChar
+-    if (units <= 0) return false
++    const units = callCjk + callAscii
++    if (units < MIN_UNITS_TO_LEARN) return false
+     // A fallback/retry replays the prefix, inflating units without inflating
+     // real tokens. Drop the sample instead of teaching the coefficients a lie.
+     if (this.unitMean !== null && units > OUTLIER_UNIT_FACTOR * this.unitMean) return false
+-    this.unitMean = ewma(this.unitMean, units, UNIT_MEAN_EWMA_ALPHA)
+     if (real < MIN_REAL_TOKENS_TO_LEARN) return false
++    this.unitMean = this.unitMean === null
++      ? units
++      : this.unitMean + UNIT_MEAN_EWMA_ALPHA * (units - this.unitMean)
+ 
+-    // Coordinate descent on the blend: solve one coefficient with the other
+-    // held fixed, then re-solve the second against the first's new value — so
+-    // the blend ends up summing to the real token count for this call.
+-    const weight = this.blendWeightFor(callChunk, callChar)
+-    const chunkUnits = weight * callChunk
+-    const charUnits = (1 - weight) * callChar
+-    let learned = false
+-
+-    if (chunkUnits > 0 && callChunk >= MIN_UNITS_TO_LEARN) {
+-      const kCall = (real - charUnits * this.kChar) / chunkUnits
+-      if (kCall > 0) {
+-        this.kChunk = clamp(
+-          this.kChunkCount === 0 ? kCall : ewma(this.kChunk, kCall, K_EWMA_ALPHA),
+-          K_MIN,
+-          K_MAX,
+-        )
+-        this.kChunkCount += 1
+-        learned = true
+-      }
+-    }
+-    const settledChunkPart = chunkUnits * this.kChunk
+-    if (charUnits > 0 && callChar >= MIN_UNITS_TO_LEARN) {
+-      const kCall = (real - settledChunkPart) / charUnits
+-      if (kCall > 0) {
+-        this.kChar = clamp(
+-          this.kCharCount === 0 ? kCall : ewma(this.kChar, kCall, K_EWMA_ALPHA),
+-          K_MIN,
+-          K_MAX,
+-        )
+-        this.kCharCount += 1
+-        learned = true
+-      }
+-    }
++    return this.learn(callCjk, callAscii, real)
++  }
+ 
+-    // Compare the two estimators as full-total predictions (each scaled out of
+-    // its blend share), so the weight reflects which one tracks reality better.
+-    const settledCharPart = charUnits * this.kChar
+-    if (chunkUnits > 0) {
+-      this.errChunk = ewma(this.errChunk, Math.abs(settledChunkPart / weight - real) / real, ERROR_EWMA_ALPHA)
+-    }
+-    if (charUnits > 0) {
+-      this.errChar = ewma(this.errChar, Math.abs(settledCharPart / (1 - weight) - real) / real, ERROR_EWMA_ALPHA)
++  /**
++   * Fold one call's (class units, real tokens) into the two coefficients by
++   * least squares, so the estimator sums to the real count for the calls seen
++   * so far rather than to whichever single call came last.
++   *
++   * Two unknowns need more than one equation: the accumulators keep the normal
++   * equations of every past call, which is what lets a prose-heavy call and a
++   * JSON-heavy call separate the classes. Until both classes have actually
++   * appeared the system is singular, and the class that did appear is fitted on
++   * its own.
++   */
++  private learn(cjk: number, ascii: number, real: number): boolean {
++    const f = LEARN_FORGET
++    this.sCC = f * this.sCC + cjk * cjk
++    this.sAA = f * this.sAA + ascii * ascii
++    this.sCA = f * this.sCA + cjk * ascii
++    this.sCY = f * this.sCY + cjk * real
++    this.sAY = f * this.sAY + ascii * real
++
++    const det = this.sCC * this.sAA - this.sCA * this.sCA
++    const scale = this.sCC * this.sAA
++    if (scale > 0 && det > SINGULAR_EPS * scale) {
++      const kCjk = (this.sCY * this.sAA - this.sAY * this.sCA) / det
++      const kAscii = (this.sAY * this.sCC - this.sCY * this.sCA) / det
++      let learned = false
++      if (kCjk > 0) { this.kCjk = clamp(kCjk, K_MIN, K_MAX); learned = true }
++      if (kAscii > 0) { this.kAscii = clamp(kAscii, K_MIN, K_MAX); learned = true }
++      return learned
+     }
++    // Not separable yet — only one class has appeared, or every call so far
++    // mixed them in the same proportion. Fit the single coefficient the data
++    // does support (kCjk = kAscii = k, whose least-squares solution is the sum
++    // over both classes) so the estimator is not stuck at the neutral 1.0
++    // until the mixes happen to diverge.
++    const denom = this.sCC + this.sAA + 2 * this.sCA
++    if (denom <= 0) return false
++    const k = (this.sCY + this.sAY) / denom
++    if (!(k > 0)) return false
++    const settled = clamp(k, K_MIN, K_MAX)
++    // Only classes that actually appeared may be written: a call of pure
++    // latin tool-input says nothing about what a CJK character costs, and
++    // letting it set that coefficient would bill the next Chinese reply at
++    // code density until some later call happened to correct it.
++    let learned = false
++    if (this.sCC > 0) { this.kCjk = settled; learned = true }
++    if (this.sAA > 0) { this.kAscii = settled; learned = true }
+     return learned
+   }
+ 
+@@ -374,10 +406,10 @@ export class TpsMeter {
+     const first = this.samples[0]!
+     const last = this.samples[this.samples.length - 1]!
+     const span = (last.t - first.t) / 1000
+-    // Burst guard (opt23 §11.27): on mobile a batched ws delivery can collapse the
+-    // intra-window span to near-zero, so a small floor (BURST_FLOOR_MS) prevents
+-    // total/span from reading in the hundreds. Using the full window here instead
+-    // would also under-read a turn's opening — see BURST_FLOOR_MS.
++    // Burst guard: on mobile a batched ws delivery can collapse the
++    // intra-window span to near-zero, so a small floor (BURST_FLOOR_MS)
++    // prevents total/span from reading in the hundreds. Using the full window
++    // here instead would also under-read a turn's opening — see BURST_FLOOR_MS.
+     const elapsed = Math.max(span, BURST_FLOOR_MS / 1000)
+     const result = total / elapsed
+     // Boundary guard: a window whose live speed is below the sparse threshold
+@@ -397,8 +429,8 @@ export class TpsMeter {
+     this.lastPushAt = 0
+     this.fallbackTps = 0
+     this.callOpen = false
+-    this.callChunk = 0
+-    this.callChar = 0
++    this.callCjk = 0
++    this.callAscii = 0
+     this.callIds = 0
+     this.callFirstAt = 0
+     this.callLastAt = 0
+@@ -408,41 +440,26 @@ export class TpsMeter {
+   windowTokens(): number {
+     this.prune()
+     let ids = 0
+-    let chunk = 0
+-    let char = 0
++    let cjk = 0
++    let ascii = 0
+     for (const sample of this.samples) {
+       ids += sample.ids
+-      chunk += sample.chunk
+-      char += sample.char
++      cjk += sample.cjk
++      ascii += sample.ascii
+     }
+-    if (ids > 0 && chunk === 0 && char === 0) return ids
+-    const weight = this.blendWeightFor(chunk, char)
+-    return ids + weight * chunk * this.kChunk + (1 - weight) * char * this.kChar
++    // The relay reports every call on this session's socket, subagents
++    // included (they share the session id), so an ids window is complete and
++    // must not have a text estimate added on top of it.
++    if (ids > 0) return ids
++    return cjk * this.kCjk + ascii * this.kAscii
+   }
+ 
+-  /**
+-   * Weight for the chunk estimator. A window that only saw one kind of unit
+-   * takes that estimator alone; when both are present, prefer whichever has
+-   * been tracking the real totals better.
+-   */
+-  private blendWeightFor(hasChunk: number, hasChar: number): number {
+-    if (hasChunk <= 0) return 0
+-    if (hasChar <= 0) return 1
+-    if (this.errChunk !== null && this.errChar !== null) {
+-      const total = this.errChunk + this.errChar
+-      if (total > 0) return clamp(this.errChar / total, CHUNK_WEIGHT_MIN, CHUNK_WEIGHT_MAX)
+-    }
+-    // Nothing measured yet: chunk-primary, with the text estimator keeping a
+-    // minority share so it can be learned from the same calls.
+-    return DEFAULT_CHUNK_WEIGHT
+-  }
+-
+-  private noteCallFrame(now: number, chunk = 0, char = 0, ids = 0): void {
++  private noteCallFrame(now: number, cjk = 0, ascii = 0, ids = 0): void {
+     if (!this.callOpen) return
+     if (this.callFirstAt === 0) this.callFirstAt = now
+     this.callLastAt = now
+-    this.callChunk += chunk
+-    this.callChar += char
++    this.callCjk += cjk
++    this.callAscii += ascii
+     this.callIds += ids
+   }
+ 
+@@ -471,8 +488,7 @@ export class TpsMeter {
+ 
+   private sampleTokens(sample: Sample): number {
+     if (sample.ids > 0) return sample.ids
+-    const weight = this.blendWeightFor(sample.chunk, sample.char)
+-    return weight * sample.chunk * this.kChunk + (1 - weight) * sample.char * this.kChar
++    return sample.cjk * this.kCjk + sample.ascii * this.kAscii
+   }
+ 
+   private prune(): void {
+@@ -535,12 +551,6 @@ export function aggregateMeterReadings(
+ }
+ 
+ export function estimateTokens(text: string): number {
+-  let cjk = 0
+-  let nonCjk = 0
+-  for (const ch of text) {
+-    if (WHITESPACE_RE.test(ch)) continue
+-    if (CJK_RE.test(ch)) cjk += 1
+-    else nonCjk += 1
+-  }
+-  return cjk + nonCjk * NON_CJK_TOKEN_WEIGHT
++  const { cjk, ascii } = textUnits(text)
++  return cjk + ascii
+ }
+diff --git a/desktop/src/stores/chatStore.test.ts b/desktop/src/stores/chatStore.test.ts
+index 5e94550..0c327e7 100644
+--- a/desktop/src/stores/chatStore.test.ts
++++ b/desktop/src/stores/chatStore.test.ts
+@@ -10531,7 +10531,7 @@ describe('chatStore history mapping', () => {
+       useChatStore.getState().handleServerMessage(sessionId, { type: 'content_delta', text: 'x'.repeat(6) })
+     }
+     const meter = getSessionTpsMeter(sessionId)
+-    expect(meter.calibration()).toEqual({ kChunk: 1, kChar: 1 })
++    expect(meter.calibration()).toEqual({ kCjk: 1, kAscii: 1 })
+ 
+     useChatStore.getState().handleServerMessage(sessionId, {
+       type: 'message_complete',
+@@ -10540,7 +10540,7 @@ describe('chatStore history mapping', () => {
+     })
+ 
+     const learned = meter.calibration()
+-    expect(learned).not.toEqual({ kChunk: 1, kChar: 1 })
++    expect(learned).not.toEqual({ kCjk: 1, kAscii: 1 })
+     // The coefficients are remembered for this model, so the next session does
+     // not start from 1.0 and under-read until its own first call completes.
+     expect(loadTpsCalibration('qwen3-coder')).toEqual(learned)
+@@ -10569,7 +10569,7 @@ describe('chatStore history mapping', () => {
+       type: 'message_complete',
+       usage: { input_tokens: 10, output_tokens: 60 },
+     })
+-    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kChunk: 1, kChar: 1 })
++    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kCjk: 1, kAscii: 1 })
+     expect(loadTpsCalibration('ext-model')).toBeNull()
+   })
+ 
+@@ -10616,7 +10616,7 @@ describe('chatStore history mapping', () => {
+       timing: { duration_ms: 1, duration_api_ms: 1, ttft_ms: 1, decode_ms: 1500 },
+     })
+     const modelA = getSessionTpsMeter(sessionId).calibration()
+-    expect(modelA).not.toEqual({ kChunk: 1, kChar: 1 })
++    expect(modelA).not.toEqual({ kCjk: 1, kAscii: 1 })
+ 
+     // The runtime switches to a model nothing is known about yet.
+     useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'p1', modelId: 'model-b' })
+@@ -10629,7 +10629,7 @@ describe('chatStore history mapping', () => {
+ 
+     // model-a's numbers were banked; model-b re-learns from neutral.
+     expect(loadTpsCalibration('model-a')).toEqual(modelA)
+-    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kChunk: 1, kChar: 1 })
++    expect(getSessionTpsMeter(sessionId).calibration()).toEqual({ kCjk: 1, kAscii: 1 })
+   })
+ 
+   it('does not replay buffered output after an unregistered run has completed', () => {
+diff --git a/desktop/src/stores/chatStore.ts b/desktop/src/stores/chatStore.ts
+index c24e3d2..dc7baee 100644
+--- a/desktop/src/stores/chatStore.ts
++++ b/desktop/src/stores/chatStore.ts
+@@ -1041,9 +1041,10 @@ const tpsCalibrationModelBySession = new Map<string, string | undefined>()
+ 
+ /**
+  * Sessions whose sidecar relays real per-chunk token counts (`tps_tokens`).
+- * Their text frames duplicate those counts, so they must not also be sampled —
+- * the flag is per session, and subagent frames folded into a parent meter skip
+- * it (they come from another stream the relay does not cover).
++ * Their text frames duplicate those counts, so they must not also be sampled.
++ * Subagent frames folded into a parent meter are deliberately NOT gated on this
++ * flag: they are measured by the text-based estimator, which needs no per-stream
++ * coefficient.
+  */
+ const tpsIdsModeBySession = new Map<string, boolean>()
+ 
+@@ -1111,8 +1112,10 @@ function ingestSubagentTps(
+ ): void {
+   if (!isTpsEnabled()) return
+   // `external` keeps these frames out of the parent's call accounting: they
+-  // belong to the subagent's own API calls, whose real usage never reaches
+-  // this socket, so they may only contribute samples to the shared window.
++  // belong to the subagent's own API calls, whose real usage never reaches this
++  // socket, so they may only contribute samples to the shared window. Their
++  // token estimate is text-based, so it is measured the same way the parent's
++  // own prose is — no coefficient has to be guessed for this path.
+   if (event.type === 'content_delta') {
+     if (event.text) getSessionTpsMeter(parentSessionId).push(event.text, { external: true })
+     if (event.toolInput) getSessionTpsMeter(parentSessionId).push(event.toolInput, { external: true })

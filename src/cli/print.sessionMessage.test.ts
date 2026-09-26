@@ -33,7 +33,11 @@ test('headless session inbox acknowledges queued then consumed and deduplicates 
   const payload = { subtype: 'enqueue_session_message', start_if_idle: true, message_id: 'stable', sender_session_id: 'peer', text: '/clear @missing-fixture-file.txt' }
   const input = ['first', 'retry'].map(request_id => JSON.stringify({ type: 'control_request', request_id, request: payload })).join('\n') + '\n'
   try {
-    const child = Bun.spawn(['./bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { env, stdin: new Blob([input]), stdout: 'pipe', stderr: 'pipe' })
+    // stdin: 'pipe' + explicit end — `new Blob([input])` does not deliver a
+    // clean EOF to the stream-json reader, so the child exited 0 with no output.
+    const child = Bun.spawn(['./bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
+    child.stdin.write(input)
+    child.stdin.end()
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     expect({ code, stderr }).toMatchObject({ code: 0 })
     const events = stdout.trim().split('\n').map(line => JSON.parse(line))
@@ -44,7 +48,9 @@ test('headless session inbox acknowledges queued then consumed and deduplicates 
     expect(events.filter(event => event.subtype === 'session_message_receipt')).toMatchObject([{ message_id: 'stable', status: 'consumed' }])
     expect(requests).toBe(1)
     const sessionId = events.find(event => event.subtype === 'session_message_receipt').session_id
-    const resumed = Bun.spawn(['./bin/claude-haha', '--bare', '-p', '--resume', sessionId, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { env, stdin: new Blob([input]), stdout: 'pipe', stderr: 'pipe' })
+    const resumed = Bun.spawn(['./bin/claude-haha', '--bare', '-p', '--resume', sessionId, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
+    resumed.stdin.write(input)
+    resumed.stdin.end()
     const [resumedText, resumedError, resumedCode] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited])
     expect({ code: resumedCode, stderr: resumedError, stdout: resumedText }).toMatchObject({ code: 0 })
     const resumedEvents = resumedText.trim().split('\n').map(line => JSON.parse(line))

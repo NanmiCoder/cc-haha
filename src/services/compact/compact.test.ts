@@ -1,8 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 
-import { buildPostCompactMessages, truncateHeadForPTLRetry, type CompactionResult } from './compact.js'
+import {
+  ERROR_MESSAGE_USER_ABORT,
+  buildPostCompactMessages,
+  maybeVccCompact,
+  maybeVccSliceCompact,
+  truncateHeadForPTLRetry,
+  type CompactionResult,
+} from './compact.js'
 import { getCurrentUsage } from '../../utils/tokens.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
+import { runVccCompaction } from './vcc/vccCompact.js'
 
 const PRE_COMPACT_USAGE = {
   input_tokens: 150_000,
@@ -187,5 +195,87 @@ describe('oversized compaction recovery (#1373)', () => {
     expect(second.length).toBeLessThan(first.length)
     expect(second.at(-1)).toBe(messages.at(-1))
     expect(second[0]?.type).toBe('user')
+  })
+})
+
+describe('vcc compaction degrades instead of stalling the session', () => {
+  // The ported adapter reads `m.message.content` without checking that the
+  // message is there, so a user line carrying no `message` object throws
+  // inside pi-vcc. The throw is not mocked: the assertions below only hold if
+  // the real call chain reaches the catch.
+  const userLineWithoutMessage = { type: 'user', uuid: 'hostile-1' }
+  const throwingLine = (thrown: string) => ({
+    type: 'user',
+    uuid: 'hostile-2',
+    message: {
+      get content(): never {
+        throw new Error(thrown)
+      },
+    },
+  })
+
+  test('returns null so the caller keeps running the LLM summary', () => {
+    // `vccCompactBackend` is unset here, which resolves to 'algorithm' — the
+    // production default — so the algorithmic backend really is the one tried.
+    expect(maybeVccCompact([userLineWithoutMessage] as never[], undefined, 120_000)).toBeNull()
+  })
+
+  test('lets a user abort through untouched', () => {
+    // Aborting is not a vcc defect; swallowing it would stop the user's own
+    // interrupt from propagating.
+    expect(() =>
+      maybeVccCompact([throwingLine(ERROR_MESSAGE_USER_ABORT)] as never[], undefined, 120_000),
+    ).toThrow(ERROR_MESSAGE_USER_ABORT)
+  })
+
+  test('returns null when the window compiles to no summary text', () => {
+    // Assert the premise rather than assume it: this window really does compile
+    // to an empty summary, so the backend is declining a result that would
+    // otherwise replace the conversation with a blank boundary.
+    expect(runVccCompaction({ messages: [], preCompactTokenCount: 120_000 }).summary.trim()).toBe('')
+    expect(maybeVccCompact([] as never[], undefined, 120_000)).toBeNull()
+  })
+})
+
+describe('partial compaction reaches the algorithmic backend', () => {
+  // Half a conversation cannot honestly report the session's goal or standing
+  // preferences, so those sections are suppressed on this path.
+  const half = [
+    {
+      type: 'user',
+      uuid: 'p1',
+      message: { role: 'user', content: 'Fix the streak rendering in the viewer.' },
+    },
+    {
+      type: 'assistant',
+      uuid: 'p2',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Editing the viewer.' },
+          { type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: '/tmp/viewer.html' } },
+        ],
+      },
+    },
+  ] as never[]
+
+  test('a chosen side compiles without the session-wide headers', () => {
+    const result = maybeVccSliceCompact(half, 40_000)
+    expect(result).not.toBeNull()
+    expect(result!.summary).not.toContain('[Session Goal]')
+    expect(result!.summary).not.toContain('[User Preferences]')
+    // The caller keeps the other side; a kept tail here would double-keep.
+    expect(result!.messagesToKeep).toEqual([])
+  })
+
+  test('an empty side reports nothing rather than a blank boundary', () => {
+    // A blank summary would replace one side of the pivot while reporting
+    // success — the LLM path refuses in this situation, so vcc must too.
+    expect(maybeVccSliceCompact([], 40_000)).toBeNull()
+  })
+
+  test('a defective compile degrades to the LLM summary instead of stranding the pivot', () => {
+    const hostile = [{ type: 'user', uuid: 'p3' }] as never[]
+    expect(maybeVccSliceCompact(hostile, 40_000)).toBeNull()
   })
 })

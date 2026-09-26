@@ -1,0 +1,1086 @@
+diff --git a/desktop/src/components/chat/ActivityGroup.test.tsx b/desktop/src/components/chat/ActivityGroup.test.tsx
+index 7e595980..c9649d47 100644
+--- a/desktop/src/components/chat/ActivityGroup.test.tsx
++++ b/desktop/src/components/chat/ActivityGroup.test.tsx
+@@ -28,8 +28,8 @@ function toolResult(overrides: Partial<ToolResult> & Pick<ToolResult, 'id' | 'to
+   }
+ }
+ 
+-function thinkingStep(id: string, content: string, timestamp = 0): ActivityStep {
+-  return { kind: 'thinking', message: { id, type: 'thinking', content, timestamp } }
++function thinkingStep(id: string, content: string, timestamp = 0, thinkingDurationMs?: number): ActivityStep {
++  return { kind: 'thinking', message: { id, type: 'thinking', content, timestamp, ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}) } }
+ }
+ 
+ function resultsOf(results: ToolResult[]): Map<string, ToolResult> {
+@@ -221,7 +221,64 @@ describe('ActivityGroup', () => {
+     expect(screen.getByText(t('toolGroup.failedCount', { count: 1 }))).toBeTruthy()
+   })
+ 
+-  it('reports the run as running while any step is still unresolved', () => {
++  it('times a settled run as thinking + tool work, not the wall-clock span', () => {
++    // Thinking 1.2s, Read 400ms, Bash 700ms → 2.3s of work, even though the
++    // wall-clock span from the first thought (t=500) to the last result
++    // (t=2000) is 1.5s with idle gaps in between.
++    const steps: ActivityStep[] = [
++      thinkingStep('think-1', 'Check the call sites first.', 500, 1200),
++      { kind: 'tool', toolCall: readCall },
++      { kind: 'tool', toolCall: bashCall },
++    ]
++    render(
++      <ActivityGroup
++        steps={steps}
++        resultMap={resultsOf([
++          toolResult({ id: 'res-read', toolUseId: 'read-1', timestamp: 1_400 }),
++          toolResult({ id: 'res-bash', toolUseId: 'bash-1', timestamp: 2_700 }),
++        ])}
++        childToolCallsByParent={new Map()}
++      />,
++    )
++    expect(screen.getByText('2.3s')).toBeTruthy()
++  })
++
++  it('times a run that ends in thought by including the final thinking span', () => {
++    // The old span metric had no "end" for a trailing thought and printed nothing.
++    // Read 1400ms + trailing thought 2500ms → 3.9s of work.
++    const steps: ActivityStep[] = [
++      { kind: 'tool', toolCall: readCall },
++      thinkingStep('think-1', 'Now I understand the layout.', 3_000, 2500),
++    ]
++    render(
++      <ActivityGroup
++        steps={steps}
++        resultMap={resultsOf([toolResult({ id: 'res-read', toolUseId: 'read-1', timestamp: 2_400 })])}
++        childToolCallsByParent={new Map()}
++      />,
++    )
++    expect(screen.getByText('3.9s')).toBeTruthy()
++  })
++
++  it('shows a settled run\'s token usage as thought + tool estimates', () => {
++    // 400 CJK thought chars → 0.40k; "ok" result → 0.00k. Estimated thought,
++    // so the label keeps the two sides joined by `+` rather than a combined
++    // total of two different measurement methods.
++    const steps: ActivityStep[] = [
++      thinkingStep('think-1', '思考'.repeat(200), 500, 1000),
++      { kind: 'tool', toolCall: readCall },
++    ]
++    render(
++      <ActivityGroup
++        steps={steps}
++        resultMap={resultsOf([toolResult({ id: 'res-read', toolUseId: 'read-1', content: 'ok', timestamp: 2_400 })])}
++        childToolCallsByParent={new Map()}
++      />,
++    )
++    expect(screen.getByText('0.40k + 0.00k')).toBeTruthy()
++  })
++
++  it('shows the run as running while any step is still unresolved', () => {
+     render(
+       <ActivityGroup
+         steps={[
+diff --git a/desktop/src/components/chat/ActivityGroup.tsx b/desktop/src/components/chat/ActivityGroup.tsx
+index 2d84ac1b..70c4fbfe 100644
+--- a/desktop/src/components/chat/ActivityGroup.tsx
++++ b/desktop/src/components/chat/ActivityGroup.tsx
+@@ -6,12 +6,15 @@ import { ThinkingBlock } from './ThinkingBlock'
+ import {
+   activityDurationMs,
+   activityStepToolCalls,
++  activityTokenLabel,
++  activityTokenUsage,
+   buildActivitySegments,
+   countFailedToolCalls,
+   hasUnresolvedToolCalls,
+   toolCallDurationMs,
+   type ActivityStep,
+ } from './activityGroupModel'
++
+ import { useTranslation } from '../../i18n'
+ import type { UIMessage } from '../../types/chat'
+ 
+@@ -108,6 +111,7 @@ export const ActivityGroup = memo(function ActivityGroup({
+   const segments = buildActivitySegments(steps, t)
+   const elapsed = activityDurationMs(steps, resultMap)
+   const durationLabel = !isRunning && typeof elapsed === 'number' ? formatDuration(elapsed) : ''
++  const tokenLabel = !isRunning ? activityTokenLabel(activityTokenUsage(steps, resultMap)) : ''
+   const summaryText = segments.map((segment) => segment.label).join(', ')
+ 
+   return (
+@@ -143,8 +147,15 @@ export const ActivityGroup = memo(function ActivityGroup({
+             {durationLabel && (
+               <span className="whitespace-nowrap font-mono tabular-nums">{durationLabel}</span>
+             )}
+-            <span aria-hidden="true" className={`w-3 text-center text-[8px] ${collapsed ? '' : 'rotate-90'}`}>▸</span>
+-          </span>
++            {tokenLabel && (
++              <span
++                data-activity-tokens="true"
++                className="whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
++              >
++                {tokenLabel}
++              </span>
++            )}
++            <span aria-hidden="true" className={`w-3 text-center text-[8px] ${collapsed ? '' : 'rotate-90'}`}>▸</span>          </span>
+         </button>
+ 
+         {/* Rows hang off the summary that names them, so they take the guide
+@@ -157,8 +168,9 @@ export const ActivityGroup = memo(function ActivityGroup({
+                 key={step.message.id}
+                 content={step.message.content}
+                 isActive={step.message.id === activeThinkingId}
+-              />
+-            ) : (
++                thinkingDurationMs={step.message.thinkingDurationMs}
++                liveStartAt={step.message.timestamp}
++              />            ) : (
+               <ActivityToolRow
+                 key={step.toolCall.id}
+                 toolCall={step.toolCall}
+diff --git a/desktop/src/components/chat/MessageList.tsx b/desktop/src/components/chat/MessageList.tsx
+index a76ed46c..aa7a2d56 100644
+--- a/desktop/src/components/chat/MessageList.tsx
++++ b/desktop/src/components/chat/MessageList.tsx
+@@ -3910,7 +3910,7 @@ export const MessageBlock = memo(function MessageBlock({
+     case 'thinking':
+       // No wrapper padding: the row's own `-mx-2 … px-2` already lands its text
+       // on the column's left edge, the same as one inside a run.
+-      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} />
++      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} thinkingDurationMs={message.thinkingDurationMs} liveStartAt={message.timestamp} />
+     case 'tool_use':
+       if (message.toolName === 'AskUserQuestion' && !message.isPending) {
+         return (
+diff --git a/desktop/src/components/chat/ThinkingBlock.test.tsx b/desktop/src/components/chat/ThinkingBlock.test.tsx
+index 1f3d6d46..2e22f464 100644
+--- a/desktop/src/components/chat/ThinkingBlock.test.tsx
++++ b/desktop/src/components/chat/ThinkingBlock.test.tsx
+@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+ import '@testing-library/jest-dom'
+ 
+-import { ThinkingBlock, thinkingPreview } from './ThinkingBlock'
++import { ThinkingBlock, thinkingPreview, formatThinkingDuration, formatThinkingTokens, thinkingBadgeLabel } from './ThinkingBlock'
+ import { useSettingsStore } from '../../stores/settingsStore'
+ import { clearDisclosureMemory } from '../../lib/disclosureMemory'
+ 
+@@ -34,6 +34,51 @@ describe('thinkingPreview', () => {
+   })
+ })
+ 
++describe('formatThinkingDuration', () => {
++  it('shows one-decimal seconds under a minute', () => {
++    expect(formatThinkingDuration(12300)).toBe('12.3s')
++    expect(formatThinkingDuration(59400)).toBe('59.4s')
++  })
++
++  it('switches to whole minutes with zero-padded seconds at one minute', () => {
++    expect(formatThinkingDuration(60000)).toBe('1m00s')
++    expect(formatThinkingDuration(185000)).toBe('3m05s')
++  })
++
++  it('drops the seconds once the span reaches an hour', () => {
++    expect(formatThinkingDuration(3600000)).toBe('1h00m')
++    expect(formatThinkingDuration(7500000)).toBe('2h05m')
++  })
++})
++
++describe('thinkingBadgeLabel', () => {
++  it('joins the token count and duration for a settled block', () => {
++    expect(thinkingBadgeLabel('思考'.repeat(400), 12340, 0, false, undefined)).toBe('0.80k · 12.3s')
++  })
++
++  it('shows nothing for empty content', () => {
++    expect(thinkingBadgeLabel('   ', 12340, 0, false, undefined)).toBe('')
++  })
++
++  it('uses the live elapsed while active and anchored', () => {
++    expect(thinkingBadgeLabel('reasoning', undefined, 20000, true, 1700000000000)).toBe(
++      `${formatThinkingTokens('reasoning')} · 20.0s`,
++    )
++  })
++
++  it('shows nothing for an active block with no start anchor', () => {
++    expect(thinkingBadgeLabel('reasoning', undefined, 0, true, undefined)).toBe('')
++  })
++
++  it('shows the token count alone for a settled block with no recorded duration', () => {
++    // Pre-feature transcripts never measured the wait — keep the token side of
++    // the badge instead of dropping the whole thing.
++    expect(thinkingBadgeLabel('reasoning', undefined, 0, false, undefined)).toBe(
++      formatThinkingTokens('reasoning'),
++    )
++  })
++})
++
+ describe('ThinkingBlock', () => {
+   beforeEach(() => {
+     useSettingsStore.setState({ locale: 'zh' })
+@@ -69,6 +114,35 @@ describe('ThinkingBlock', () => {
+     expect(screen.getByRole('button')).toHaveTextContent('Thought')
+   })
+ 
++  it('shows the token + duration badge once thinking has settled', () => {
++    // 800 CJK chars → estimateTokens ≈ 800 → "0.80k"; 12340ms → "12.3s".
++    const content = '思考'.repeat(400)
++    render(<ThinkingBlock content={content} thinkingDurationMs={12340} />)
++    const badge = screen.getByText(/\d\.\d{2}k · \d+\.\ds/)
++    expect(badge).toHaveTextContent('0.80k')
++    expect(badge).toHaveTextContent('12.3s')
++  })
++
++  it('shows the token-only badge for a block with no recorded duration', () => {
++    // No measured wait → the badge keeps its token side only (pre-feature
++    // transcripts would otherwise render no badge at all).
++    render(<ThinkingBlock content="reasoning..." isActive={false} />)
++    expect(screen.getByText(formatThinkingTokens('reasoning...'))).toBeInTheDocument()
++    expect(screen.queryByText(/\d\.\d{2}k · /)).toBeNull()
++  })
++
++  it('treats a still-active block without a start anchor as not yet showing a badge', () => {
++    render(<ThinkingBlock content="reasoning..." isActive />)
++    expect(screen.queryByText(/\d\.\d{2}k · /)).toBeNull()
++  })
++
++  it('shows a live badge for an active block anchored to a start time', () => {
++    // Active + a start anchor in the past → a non-zero live elapsed renders.
++    render(<ThinkingBlock content="reasoning..." isActive liveStartAt={Date.now() - 20000} />)
++    const badge = screen.getByText(/\d\.\d{2}k · /)
++    expect(badge).toBeInTheDocument()
++  })
++
+   it('keeps the expanded state across a virtualized row unmount and remount', () => {
+     // Virtualization unmounts rows outside the window. Losing the reader's
+     // disclosure choice changes the row height on the way back, which is the
+diff --git a/desktop/src/components/chat/ThinkingBlock.tsx b/desktop/src/components/chat/ThinkingBlock.tsx
+index e18d2884..e48a9dda 100644
+--- a/desktop/src/components/chat/ThinkingBlock.tsx
++++ b/desktop/src/components/chat/ThinkingBlock.tsx
+@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
+ import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
+ import { Brain } from 'lucide-react'
+ import { useTranslation } from '../../i18n'
++import { estimateTokens } from '../../lib/tpsMeter'
+ import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+ 
+ /**
+@@ -20,15 +21,52 @@ export function ThinkingBlock({
+   content,
+   isActive = false,
+   disclosureKey,
++  thinkingDurationMs,
++  liveStartAt,
+ }: {
+   content: string
+   isActive?: boolean
+   /** Stable key that survives virtualized row unmount/remount. */
+   disclosureKey?: string
++  /** Wall-clock ms this block spent generating, once finished (live settle or
++   * transcript replay). */
++  thinkingDurationMs?: number
++  /** Wall-clock epoch the block started generating (the message `timestamp`,
++   * anchored to the server's first sight of the block). While the block is
++   * still active the badge ticks against this, refreshed every 3s. */
++  liveStartAt?: number
+ }) {
+   const t = useTranslation()
+   const [localExpanded, setLocalExpanded] = useState(false)
++  const [liveElapsedMs, setLiveElapsedMs] = useState(0)
+   const expanded = disclosureKey ? (getDisclosure(disclosureKey) ?? localExpanded) : localExpanded
++
++  // The badge's clock anchor. A live block's `timestamp` is already the
++  // server's first sight of it; a history-replayed block's `timestamp` is the
++  // block's *end* (the transcript line time), so back off by its recorded
++  // duration to recover the true start — otherwise a replayed still-active
++  // block would tick up from near zero.
++  const liveAnchorMs = liveStartAt === undefined
++    ? undefined
++    : thinkingDurationMs !== undefined
++      ? Math.max(0, liveStartAt - thinkingDurationMs)
++      : liveStartAt
++
++  // Thinking, unlike a tool, runs for a long time, so its elapsed time is shown
++  // from the very first moment and refreshed on a 3s cadence while it is still
++  // generating (not frozen until the block ends, which would read as "not
++  // doing anything"). The clock is anchored to `liveAnchorMs` — the server's
++  // first sight of the block — not the client's render time.
++  useEffect(() => {
++    if (!isActive || liveAnchorMs === undefined) return
++    const refresh = () => {
++      const elapsed = Date.now() - liveAnchorMs
++      setLiveElapsedMs(Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : 0)
++    }
++    refresh()
++    const timer = setInterval(refresh, LIVE_ELAPSED_REFRESH_MS)
++    return () => clearInterval(timer)
++  }, [isActive, liveAnchorMs])
+   const contentRef = useRef<HTMLDivElement>(null)
+   const displayContent = useMemo(() => content.replace(/\r\n?/g, '\n').trimEnd(), [content])
+   const hasDisplayContent = displayContent.trim().length > 0
+@@ -81,6 +119,14 @@ export function ThinkingBlock({
+         ) : (
+           <span className="flex-1" />
+         )}
++        {thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs) && (
++          <span
++            data-thinking-usage="true"
++            className="shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]"
++          >
++            {thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs)}
++          </span>
++        )}
+         <span aria-hidden="true" className="shrink-0 text-[8px] text-[var(--color-text-tertiary)]">
+           {expanded ? '▾' : '▸'}
+         </span>
+@@ -105,6 +151,59 @@ export function ThinkingBlock({
+   )
+ }
+ 
++/** Cadence for the live thinking-elapsed refresh while a block is generating. */
++export const LIVE_ELAPSED_REFRESH_MS = 3000
++
++/**
++ * Right-end badge of the thinking row: `1.23k · 12.3s` — estimated tokens of
++ * the block plus how long the reader waited for it. Same "deliberately a
++ * whisper" register as the activity digest: mono, tabular, tertiary.
++ *
++ * While the block is still generating the duration is the live elapsed time
++ * (ticking, from `liveElapsedMs`); once settled it is the fixed
++ * `thinkingDurationMs`. A block that is active but has no start anchor shows
++ * nothing yet, so an empty first frame never prints `0.0s`. A settled block
++ * without a recorded duration (pre-feature transcripts) keeps its token count
++ * on its own, so the badge never disappears just because the wait time was
++ * never measured.
++ */
++export function thinkingBadgeLabel(
++  content: string,
++  thinkingDurationMs: number | undefined,
++  liveElapsedMs: number,
++  isActive: boolean,
++  liveStartAt: number | undefined,
++): string {
++  if (content.trim().length === 0) return ''
++  if (isActive) {
++    if (liveStartAt === undefined) return ''
++    return `${formatThinkingTokens(content)} · ${formatThinkingDuration(liveElapsedMs)}`
++  }
++  if (thinkingDurationMs === undefined) return formatThinkingTokens(content)
++  return `${formatThinkingTokens(content)} · ${formatThinkingDuration(thinkingDurationMs)}`
++}
++
++/** Thinking token count as `xx.xk`, two decimals (`1.23k`, `12.50k`). */
++export function formatThinkingTokens(text: string): string {
++  return `${(estimateTokens(text) / 1000).toFixed(2)}k`
++}
++
++/**
++ * Three-ladder duration for the thinking badge, deliberately NOT the tool
++ * `formatDuration`: `<60s` → `12.3s` (one decimal), `60s~1h` → `3m05s`
++ * (whole, zero-padded), `>=1h` → `2h05m` (no seconds). Round the seconds once,
++ * then derive the parts — rounding each part independently can print
++ * impossible values like `1m60s`.
++ */
++export function formatThinkingDuration(durationMs: number): string {
++  const totalSeconds = Math.round(durationMs / 1000)
++  if (totalSeconds < 60) return `${(durationMs / 1000).toFixed(1)}s`
++  const minutes = Math.floor(totalSeconds / 60)
++  const seconds = totalSeconds % 60
++  if (minutes < 60) return `${minutes}m${String(seconds).padStart(2, '0')}s`
++  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
++}
++
+ const THINKING_PREVIEW_MAX_CHARS = 160
+ /** A short line ending in a colon is a heading for what comes after it. */
+ const THINKING_OPENER_MAX_CHARS = 24
+diff --git a/desktop/src/components/chat/activityGroupModel.ts b/desktop/src/components/chat/activityGroupModel.ts
+index a57ad5a5..b459b915 100644
+--- a/desktop/src/components/chat/activityGroupModel.ts
++++ b/desktop/src/components/chat/activityGroupModel.ts
+@@ -13,6 +13,8 @@ import {
+ } from 'lucide-react'
+ import type { TranslationKey } from '../../i18n'
+ import type { UIMessage } from '../../types/chat'
++import { estimateTokens } from '../../lib/tpsMeter'
++import { extractTextContent } from '../../lib/traceViewModel'
+ 
+ type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
+ type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
+@@ -205,28 +207,101 @@ export function hasUnresolvedToolCalls(
+ }
+ 
+ /**
+- * Wall-clock span of the whole run: first step start to last result. Same
+- * transcript-timestamp caveat as {@link toolCallDurationMs} — it is the span the
+- * user waited, not billed execution time.
++ * Combined "work time" of the whole run: the sum of every settled segment —
++ * each thinking block's recorded generation span plus each tool call's
++ * execution span — rather than the wall-clock span from first step to last
++ * result. The span overcounted: it includes the idle gaps between steps, and a
++ * run that ends in thought never had an "end" at all, so its time was not
++ * shown. Summing segments counts exactly what the run worked, which is what
++ * "thinking + tools time" means. Thinking blocks without a recorded duration
++ * (older transcripts) contribute nothing; a run with no measurable segment at
++ * all returns undefined, so the header prints no number instead of `0s`.
+  */
+ export function activityDurationMs(
+   steps: ActivityStep[],
+   resultMap: Map<string, ToolResult>,
+ ): number | undefined {
+-  let start = Number.POSITIVE_INFINITY
+-  let end = Number.NEGATIVE_INFINITY
++  let total = 0
++  let measured = false
+ 
+   for (const step of steps) {
+-    const startedAt = step.kind === 'thinking' ? step.message.timestamp : step.toolCall.timestamp
+-    if (Number.isFinite(startedAt)) start = Math.min(start, startedAt)
+-    if (step.kind === 'tool') {
+-      const result = resultMap.get(step.toolCall.toolUseId)
+-      if (result && Number.isFinite(result.timestamp)) end = Math.max(end, result.timestamp)
++    if (step.kind === 'thinking') {
++      const durationMs = step.message.thinkingDurationMs
++      if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
++        total += durationMs
++        measured = true
++      }
++      continue
++    }
++    const result = resultMap.get(step.toolCall.toolUseId)
++    const durationMs = toolCallDurationMs(step.toolCall, result)
++    if (typeof durationMs === 'number') {
++      total += durationMs
++      measured = true
++    }
++  }
++
++  return measured ? total : undefined
++}
++
++/** Estimated tokens a run spent: thought content plus the tool results it pulled in. */
++export type ActivityTokenUsage = {
++  thinkingTokens: number
++  toolTokens: number
++  /** True when the thought side is an estimate (no real API thinking-token count
++   *  was returned). Drives the label: estimated → `thought + tool`, real → one total. */
++  thinkingIsEstimated: boolean
++}
++
++/**
++ * Token usage of a whole activity run. The model does not return a dedicated
++ * thinking-token count, so the thought side is estimated from content (the same
++ * CJK/ASCII heuristic the per-thought badge and the TPS meter use) and the tool
++ * side from the text of each result — the content that actually entered the
++ * context. A run that produced neither shows `0 + 0` only if it had steps at all;
++ * an empty run returns all zeros with `thinkingIsEstimated` true and the caller
++ * decides whether that warrants a label.
++ */
++export function activityTokenUsage(
++  steps: ActivityStep[],
++  resultMap: Map<string, ToolResult>,
++): ActivityTokenUsage {
++  let thinkingTokens = 0
++  let toolTokens = 0
++  let thinkingIsEstimated = true
++
++  for (const step of steps) {
++    if (step.kind === 'thinking') {
++      if (step.message.content.trim().length > 0) {
++        thinkingTokens += estimateTokens(step.message.content)
++      }
++      continue
++    }
++    const result = resultMap.get(step.toolCall.toolUseId)
++    if (result && typeof result.content !== 'undefined') {
++      toolTokens += estimateTokens(extractTextContent(result.content))
+     }
+   }
+ 
+-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined
+-  return end - start
++  return { thinkingTokens, toolTokens, thinkingIsEstimated }
++}
++
++/**
++ * The run's token label. Estimated thought → `0.80k + 1.20k` (thought first,
++ * tool after, joined by ` +`); a real thought count → one combined total,
++ * because then the number is what the API billed, not two different measurement
++ * methods glued together.
++ */
++export function activityTokenLabel(usage: ActivityTokenUsage): string {
++  if (!usage.thinkingIsEstimated) {
++    return formatActivityTokens(usage.thinkingTokens + usage.toolTokens)
++  }
++  return `${formatActivityTokens(usage.thinkingTokens)} + ${formatActivityTokens(usage.toolTokens)}`
++}
++
++/** Token count as `xx.xxk`, two decimals (`0.80k`, `12.50k`). */
++export function formatActivityTokens(tokens: number): string {
++  return `${(tokens / 1000).toFixed(2)}k`
+ }
+ 
+ export function activityStepToolCalls(steps: ActivityStep[]): ToolCall[] {
+diff --git a/desktop/src/stores/chatStore.test.ts b/desktop/src/stores/chatStore.test.ts
+index 3e411dfe..746b687b 100644
+--- a/desktop/src/stores/chatStore.test.ts
++++ b/desktop/src/stores/chatStore.test.ts
+@@ -188,6 +188,7 @@ import {
+   registerAgentRunSession,
+   reconstructAgentNotifications,
+   reconstructRunActivityFromTranscript,
++  settleThinkingDurations,
+   stripGeneratedImageMetadataLines,
+   type PerSessionState,
+   useChatStore,
+@@ -246,6 +247,41 @@ describe('stripGeneratedImageMetadataLines', () => {
+   })
+ })
+ 
++describe('settleThinkingDurations', () => {
++  it('stamps the elapsed span onto each unsettled thinking block and leaves others alone', () => {
++    const now = 1_000_000
++    const input = [
++      { id: 'a', type: 'thinking', content: 'one', timestamp: now - 2000 },
++      { id: 'b', type: 'assistant_text', content: 'text', timestamp: now - 1000 },
++      { id: 'c', type: 'thinking', content: 'two', timestamp: now - 5000 },
++    ] as const
++    const settled = settleThinkingDurations([...input] as any[], now)
++    expect(settled[0]).toMatchObject({ type: 'thinking', thinkingDurationMs: 2000 })
++    expect(settled[1]).toEqual(input[1])
++    expect(settled[2]).toMatchObject({ type: 'thinking', thinkingDurationMs: 5000 })
++  })
++
++  it('never overwrites a duration that was already settled', () => {
++    const input = [
++      { id: 'a', type: 'thinking', content: 'one', timestamp: 100, thinkingDurationMs: 777 },
++    ] as const
++    const settled = settleThinkingDurations([...input] as any[], 999_999)
++    expect(settled[0]).toMatchObject({ thinkingDurationMs: 777 })
++  })
++
++  it('clamps a negative span (clock skew) to zero and returns the same array when nothing changes', () => {
++    const skew = [
++      { id: 'a', type: 'thinking', content: 'one', timestamp: 5000 },
++    ] as const
++    expect(settleThinkingDurations([...skew] as any[], 4000)[0]).toMatchObject({ thinkingDurationMs: 0 })
++
++    const done = [
++      { id: 'a', type: 'thinking', content: 'one', timestamp: 100, thinkingDurationMs: 1 },
++    ] as UIMessage[]
++    expect(settleThinkingDurations(done, 200)).toBe(done)
++  })
++})
++
+ describe('Agent Teams workbench invalidation', () => {
+   it('binds team creation to the lead session before workbench hydration', () => {
+     handleTeamCreatedMock.mockReset()
+diff --git a/desktop/src/stores/chatStore.ts b/desktop/src/stores/chatStore.ts
+index 7588d8b5..d2bd41da 100644
+--- a/desktop/src/stores/chatStore.ts
++++ b/desktop/src/stores/chatStore.ts
+@@ -4923,6 +4923,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+         }
+         if (msg.blockType === 'text') {
+           update((s) => ({
++            messages: settleThinkingDurations(s.messages, Date.now()),
+             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
+             chatState: 'streaming',
+             activeThinkingId: null,
+@@ -4930,6 +4931,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+             streamingFallback: null,
+           }))
+         } else if (msg.blockType === 'tool_use') {
++
+           clearPendingToolInputDelta(sessionId)
+           rememberPendingToolParentUseId(sessionId, msg.toolUseId, msg.parentToolUseId)
+           const toolUseId = msg.toolUseId ?? null
+@@ -4937,20 +4939,24 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+           update((s) => ({
+             ...(toolUseId
+               ? {
+-                  messages: upsertToolUseMessage(s.messages, toolUseId, (existing) => ({
+-                    id: existing?.id ?? nextId(),
+-                    type: 'tool_use',
+-                    toolName,
++                  messages: upsertToolUseMessage(
++                    settleThinkingDurations(s.messages, Date.now()),
+                     toolUseId,
+-                    originalToolUseId: msg.originalToolUseId ?? existing?.originalToolUseId,
+-                    input: existing?.input ?? {},
+-                    timestamp: existing?.timestamp ?? Date.now(),
+-                    parentToolUseId: msg.parentToolUseId ?? existing?.parentToolUseId,
+-                    isPending: true,
+-                    partialInput: existing?.partialInput ?? '',
+-                  })),
++                    (existing) => ({
++                      id: existing?.id ?? nextId(),
++                      type: 'tool_use',
++                      toolName,
++                      toolUseId,
++                      originalToolUseId: msg.originalToolUseId ?? existing?.originalToolUseId,
++                      input: existing?.input ?? {},
++                      timestamp: existing?.timestamp ?? Date.now(),
++                      parentToolUseId: msg.parentToolUseId ?? existing?.parentToolUseId,
++                      isPending: true,
++                      partialInput: existing?.partialInput ?? '',
++                    }),
++                  ),
+                 }
+-              : {}),
++              : { messages: settleThinkingDurations(s.messages, Date.now()) }),
+             activeToolUseId: toolUseId,
+             activeToolName: toolName,
+             streamingToolInput: '',
+@@ -4969,6 +4975,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+         const maxRetries = Math.max(attempt, Math.trunc(msg.maxRetries))
+         const retryDelayMs = Math.max(0, Math.trunc(msg.retryDelayMs))
+         update((session) => ({
++          messages: settleThinkingDurations(session.messages, Date.now()),
+           apiRetry: {
+             attempt,
+             maxRetries,
+@@ -5161,13 +5168,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+           }
+           const id = nextId()
+           return {
+-            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
++            // Anchor the block's clock to the server's first sight of the block
++            // (serverStart) rather than the client's receive moment, so the
++            // ticking elapsed time starts from "generation began", not from
++            // network arrival.
++            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: typeof msg.serverStart === 'number' ? msg.serverStart : Date.now() }],
+             chatState: 'thinking',
+             activeThinkingId: id,
+             streamingText: '',
+             streamingResponseChars: s.streamingResponseChars + msg.text.length,
+-          }
+-        })
++          }        })
+         if (!skippedThinkingBlock) {
+           // thinking 流式片段同样是 decode 输出 token，必须喂 TPS 米表：不喂的话
+           // thinking 全程零采样，米表窗口排空后 UI 会冻结在正文结束前的旧速度上
+@@ -5464,6 +5474,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+           if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+           const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
+           update((current) => ({
++            messages: settleThinkingDurations(current.messages, Date.now()),
+             tokenUsage: msg.usage,
+             chatState: 'idle',
+             activeThinkingId: null,
+@@ -5505,7 +5516,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
+           update(() => ({ streamingText: text }))
+         }
+         const appendedCompletionMessage = completionMessages !== session.messages
+-        const finalMessages = markPendingToolUseMessagesStopped(completionMessages)
++        const finalMessages = settleThinkingDurations(
++          markPendingToolUseMessagesStopped(completionMessages),
++          completedAt,
++        )
+         const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
+         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+         update((current) => ({
+@@ -7222,11 +7236,34 @@ export function joinThinkingContent(previous: string, next: string, nextIsWholeB
+   return `${previous}\n\n${next}`
+ }
+ 
++/**
++ * Stamp the settled duration onto a finished thinking block.
++ *
++ * A thinking UIMessage's `timestamp` is its first delta (the block's start), so
++ * `now - timestamp` at the moment the block stops growing is its wall-clock
++ * thinking span — the same "time the user waited" reading the tool-duration
++ * badge uses. Called at the settle points where `activeThinkingId` is cleared
++ * (a text/tool_use block_start, or message_complete), so a still-growing block
++ * is never frozen with a partial number. Already-settled blocks keep their
++ * value, which matters for turns that interleave several thinking blocks.
++ */
++export function settleThinkingDurations(messages: UIMessage[], now: number): UIMessage[] {
++  let changed = false
++  const next = messages.map((message) => {
++    if (message.type !== 'thinking' || message.thinkingDurationMs !== undefined) return message
++    changed = true
++    const elapsed = now - message.timestamp
++    return { ...message, thinkingDurationMs: Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : 0 }
++  })
++  return changed ? next : messages
++}
++
+ function pushAssistantHistoryThinking(
+   messages: UIMessage[],
+   id: string,
+   content: string,
+   timestamp: number,
++  thinkingDurationMs?: number,
+ ): void {
+   // 与流式路径（case 'thinking'）保持同等防护：纯空白块不产生空壳气泡。
+   if (!content.trim()) return
+@@ -7238,14 +7275,24 @@ function pushAssistantHistoryThinking(
+     // 合并时保留首个块的确定性 id，保证轮询重映射时 React key 稳定。
+     if (last.content === content) return
+     if (content.startsWith(last.content)) {
++      // 同一块的前缀增长快照：耗时取新值（新快照是该块完整生成后的时长）。
+       last.content = content
++      if (thinkingDurationMs !== undefined) last.thinkingDurationMs = thinkingDurationMs
+       return
+     }
++    // 相邻的不同思考块合并：各自的生成时长求和。
+     last.content = joinThinkingContent(last.content, content, true)
++    if (thinkingDurationMs !== undefined) {
++      last.thinkingDurationMs = (last.thinkingDurationMs ?? 0) + thinkingDurationMs
++    }
+     return
+   }
+ 
+-  messages.push({ id, type: 'thinking', content, timestamp })
++  if (thinkingDurationMs !== undefined) {
++    messages.push({ id, type: 'thinking', content, timestamp, thinkingDurationMs })
++  } else {
++    messages.push({ id, type: 'thinking', content, timestamp })
++  }
+ }
+ 
+ type HistoryMappingOptions = {
+@@ -7881,7 +7928,7 @@ export function mapHistoryMessagesToUiMessages(
+     }
+     if ((msg.type === 'assistant' || msg.type === 'tool_use') && Array.isArray(msg.content)) {
+       for (const [blockIndex, block] of (msg.content as AssistantHistoryBlock[]).entries()) {
+-        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp)
++        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp, msg.thinkingDurationMs)
+         else if (block.type === 'text' && block.text) {
+           pushAssistantHistoryText(
+             uiMessages,
+diff --git a/desktop/src/types/chat.ts b/desktop/src/types/chat.ts
+index 645e6fb6..87f0ae4b 100644
+--- a/desktop/src/types/chat.ts
++++ b/desktop/src/types/chat.ts
+@@ -132,10 +132,11 @@ export type ServerMessage =
+   | { type: 'user_message_replay'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
+   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
+   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
+-  | { type: 'thinking'; text: string; complete?: boolean }
++  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first saw this thinking block; anchors the live elapsed-time tick to "generation began". */ serverStart?: number }
+   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+   | {
+       type: 'runtime_config_applied'
++
+       providerId: string | null
+       modelId: string
+       effortLevel?: string
+@@ -170,7 +171,7 @@ export type AgentRunStreamMessage =
+   | { type: 'content_delta'; text?: string; toolInput?: string }
+   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
+   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+-  | { type: 'thinking'; text: string; complete?: boolean }
++  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first saw this thinking block; anchors the live elapsed-time tick to "generation began". */ serverStart?: number }
+   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
+   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
+@@ -348,7 +349,7 @@ export type UIMessage =
+    */
+   | { id: string; type: 'user_text'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; teammateFrom?: string }
+   | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
+-  | { id: string; type: 'thinking'; content: string; timestamp: number }
++  | { id: string; type: 'thinking'; content: string; timestamp: number; /** Wall-clock ms this block spent generating; set on completion (live) or mapped from the transcript (history). */ thinkingDurationMs?: number }
+   | {
+       id: string
+       type: 'tool_use'
+diff --git a/desktop/src/types/session.ts b/desktop/src/types/session.ts
+index d52ac21b..a6fe46c3 100644
+--- a/desktop/src/types/session.ts
++++ b/desktop/src/types/session.ts
+@@ -62,6 +62,12 @@ export type MessageEntry = {
+    * totals usage must count each key once. Absent means the line carries no id — count it.
+    */
+   usageKey?: string
++  /**
++   * Wall-clock ms this thinking block spent generating (content_block_start →
++   * content_block_stop), persisted on the transcript line. Only on assistant
++   * lines whose single content block is a thinking block.
++   */
++  thinkingDurationMs?: number
+   parentUuid?: string
+   parentToolUseId?: string
+   isSidechain?: boolean
+diff --git a/src/server/__tests__/fixtures/translate-cli-message.golden.json b/src/server/__tests__/fixtures/translate-cli-message.golden.json
+index 672d947d..bdc15c5d 100644
+--- a/src/server/__tests__/fixtures/translate-cli-message.golden.json
++++ b/src/server/__tests__/fixtures/translate-cli-message.golden.json
+@@ -84,7 +84,8 @@
+       "out": [
+         {
+           "type": "thinking",
+-          "text": "Considering options"
++          "text": "Considering options",
++          "serverStart": "golden:server-start"
+         }
+       ]
+     },
+diff --git a/src/server/__tests__/translateCliMessage.agentRunMessage.test.ts b/src/server/__tests__/translateCliMessage.agentRunMessage.test.ts
+index d91700e0..d7c63226 100644
+--- a/src/server/__tests__/translateCliMessage.agentRunMessage.test.ts
++++ b/src/server/__tests__/translateCliMessage.agentRunMessage.test.ts
+@@ -114,7 +114,7 @@ describe('translateCliMessage: agent_run_message', () => {
+     ]
+ 
+     expect(translated).toEqual(expect.arrayContaining([
+-      { type: 'agent_run_event', ...route, event: { type: 'thinking', text: 'checking' } },
++      { type: 'agent_run_event', ...route, event: expect.objectContaining({ type: 'thinking', text: 'checking' }) },
+       { type: 'agent_run_event', ...route, event: { type: 'content_delta', text: 'live answer' } },
+       {
+         type: 'agent_run_event',
+diff --git a/src/server/__tests__/translateCliMessage.golden.test.ts b/src/server/__tests__/translateCliMessage.golden.test.ts
+index cfe76230..5a959d1e 100644
+--- a/src/server/__tests__/translateCliMessage.golden.test.ts
++++ b/src/server/__tests__/translateCliMessage.golden.test.ts
+@@ -17,11 +17,31 @@ type GoldenFile = Record<string, GoldenStep[]>
+  * `sessionStopRequested`, `agentStopRequestedSessions`) are all keyed by session id,
+  * so a unique id per run is full isolation with no production seam.
+  */
++/**
++ * Thinking deltas carry a live `serverStart` (the server's receive clock), so a
++ * byte-exact golden would flake on every replay. Normalise the field to a stable
++ * marker; the presence check below still pins that the anchor is emitted.
++ */
++const GOLDEN_SERVER_START_MARKER = 'golden:server-start'
++function normalizeServerStart(value: unknown): unknown {
++  if (Array.isArray(value)) return value.map(normalizeServerStart)
++  if (value && typeof value === 'object') {
++    const normalized: Record<string, unknown> = {}
++    for (const [key, item] of Object.entries(value)) {
++      normalized[key] = key === 'serverStart' && typeof item === 'number'
++        ? GOLDEN_SERVER_START_MARKER
++        : normalizeServerStart(item)
++    }
++    return normalized
++  }
++  return value
++}
++
+ function replay(scenarioId: string, messages: Array<Record<string, unknown>>, salt: string): GoldenStep[] {
+   const sessionId = `golden-${scenarioId}-${salt}`
+   return messages.map((message) => ({
+     in: describeFrame(message),
+-    out: JSON.parse(JSON.stringify(translateCliMessage(message, sessionId))) as unknown[],
++    out: normalizeServerStart(JSON.parse(JSON.stringify(translateCliMessage(message, sessionId)))) as unknown[],
+   }))
+ }
+ 
+diff --git a/src/server/__tests__/ws-memory-events.test.ts b/src/server/__tests__/ws-memory-events.test.ts
+index cedca612..04e1c379 100644
+--- a/src/server/__tests__/ws-memory-events.test.ts
++++ b/src/server/__tests__/ws-memory-events.test.ts
+@@ -1250,7 +1250,7 @@ describe('WebSocket stream event translation', () => {
+         delta: { type: 'thinking_delta', thinking: 'Let me think' },
+       },
+     }, sessionId)).toEqual([
+-      { type: 'thinking', text: 'Let me think' },
++      expect.objectContaining({ type: 'thinking', text: 'Let me think' }),
+     ])
+ 
+     expect(translateCliMessage({
+diff --git a/src/server/services/sessionService.ts b/src/server/services/sessionService.ts
+index 5904b3ef..a9495492 100644
+--- a/src/server/services/sessionService.ts
++++ b/src/server/services/sessionService.ts
+@@ -238,14 +238,20 @@ export type MessageEntry = {
+    * the line carries no message id, which by the same convention means "always count it".
+    */
+   usageKey?: string
++  /**
++   * Wall-clock ms this thinking block spent generating (content_block_start →
++   * content_block_stop), persisted on the transcript line by the SDK stream.
++   * Only present on assistant lines whose single content block is a thinking
++   * block; lets a reopened session re-show the per-thought timing.
++   */
++  thinkingDurationMs?: number
+   parentUuid?: string
+   parentToolUseId?: string
+   isSidechain?: boolean
+   cwd?: string
+ }
+ 
+-export type SessionMessagesWithEvidence = {
+-  messages: MessageEntry[]
++export type SessionMessagesWithEvidence = {  messages: MessageEntry[]
+   transcriptEvidenceComplete: boolean
+ }
+ 
+@@ -1909,6 +1915,11 @@ export class SessionService {
+       model: msg.model,
+       ...(usage ? { usage } : {}),
+       ...(usageKey ? { usageKey } : {}),
++      ...(typeof entry.thinkingDurationMs === 'number' &&
++      Number.isFinite(entry.thinkingDurationMs) &&
++      entry.thinkingDurationMs >= 0
++        ? { thinkingDurationMs: entry.thinkingDurationMs }
++        : {}),
+       parentUuid: entry.parentUuid ?? undefined,
+       parentToolUseId,
+       isSidechain: entry.isSidechain,
+diff --git a/src/server/ws/events.ts b/src/server/ws/events.ts
+index 558d4b97..37a18751 100644
+--- a/src/server/ws/events.ts
++++ b/src/server/ws/events.ts
+@@ -115,7 +115,7 @@ export type ServerMessage =
+    * kind and separate the second, so the emit site says which it is instead of leaving
+    * the renderer to guess from content.
+    */
+-  | { type: 'thinking'; text: string; complete?: boolean }
++  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first received this thinking block (first delta / block_start). Anchors the block's wall-clock start on the client instead of the client's own receive clock. */ serverStart?: number }
+   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+   | {
+       type: typeof RUNTIME_CONFIG_APPLIED_EVENT
+@@ -155,7 +155,7 @@ export type AgentRunStreamMessage =
+   | { type: 'content_delta'; text?: string; toolInput?: string }
+   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
+   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+-  | { type: 'thinking'; text: string; complete?: boolean }
++  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first received this thinking block (first delta / block_start). Anchors the block's wall-clock start on the client instead of the client's own receive clock. */ serverStart?: number }
+   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
+   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
+diff --git a/src/server/ws/handler.ts b/src/server/ws/handler.ts
+index ffb44f03..3c0fa6d4 100644
+--- a/src/server/ws/handler.ts
++++ b/src/server/ws/handler.ts
+@@ -2996,6 +2996,7 @@ function getStreamState(sessionId: string): SessionStreamState {
+       activeMessageIdsByScope: new Map(),
+       activeBlockScopesByIndex: new Map(),
+       activeBlockTypes: new Map(),
++      thinkingBlockStarts: new Map(),
+       activeToolBlocks: new Map(),
+       pendingLocalCommand: undefined,
+       pendingToolBlocks: new Map(),
+@@ -3562,6 +3563,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
+ 
+           if (contentBlock.type === 'thinking' || contentBlock.type === 'redacted_thinking') {
+             streamState.activeBlockTypes.set(blockKey, 'thinking')
++            // content_block_start is the earliest point the server knows the
++            // thought is generating; anchor the block's wall clock here so the
++            // client can show the elapsed time from the first moment, not from
++            // whenever the first delta happens to arrive.
++            streamState.thinkingBlockStarts.set(blockKey, Date.now())
+             return [{ type: 'status', state: 'thinking', verb: 'Thinking' }]
+           }
+ 
+@@ -3588,7 +3594,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
+             return [{ type: 'content_delta', toolInput: delta.partial_json }]
+           }
+           if (delta.type === 'thinking_delta' && delta.thinking) {
+-            return [{ type: 'thinking', text: delta.thinking }]
++            const index = event.index ?? 0
++            const activeBlock = resolveActiveBlockKey(streamState, cliMsg, index)
++            const serverStart = activeBlock
++              ? streamState.thinkingBlockStarts.get(activeBlock.key)
++              : undefined
++            return [{ type: 'thinking', text: delta.thinking, ...(serverStart !== undefined ? { serverStart } : {}) }]
+           }
+           return []
+         }
+@@ -3599,6 +3610,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
+           if (!activeBlock) return []
+           const blockType = streamState.activeBlockTypes.get(activeBlock.key)
+           streamState.activeBlockTypes.delete(activeBlock.key)
++          streamState.thinkingBlockStarts.delete(activeBlock.key)
+           forgetActiveBlockScope(streamState, index, activeBlock.scope)
+ 
+           if (blockType === 'tool_use') {
+diff --git a/src/server/ws/streamBlocks.ts b/src/server/ws/streamBlocks.ts
+index 193ad1ad..a98e1bbd 100644
+--- a/src/server/ws/streamBlocks.ts
++++ b/src/server/ws/streamBlocks.ts
+@@ -22,6 +22,13 @@ export type SessionStreamState = {
+   activeMessageIdsByScope: Map<string, string>
+   activeBlockScopesByIndex: Map<number, Set<string>>
+   activeBlockTypes: Map<string, 'text' | 'tool_use' | 'thinking'>
++  /** Epoch ms the server first saw each open thinking block's `content_block_start`.
++   *  Attached to the block's `thinking` deltas as `serverStart` so the client can
++   *  anchor the block's wall-clock start on the server's receive clock (the true
++   *  "generation began" moment) instead of its own delta-receive clock, and show
++   *  the elapsed thinking time ticking from the very first block, not after the
++   *  text/tool block that follows it. */
++  thinkingBlockStarts: Map<string, number>
+   activeToolBlocks: Map<string, { toolName: string; toolUseId: string; inputJson: string; parentToolUseId?: string }>
+   pendingLocalCommand?: { name: string; args: string }
+   /** Tool blocks whose input JSON failed to parse in content_block_stop.
+@@ -40,6 +47,7 @@ export function resetCurrentStreamAttempt(state: SessionStreamState): void {
+   state.activeMessageIdsByScope.clear()
+   state.activeBlockScopesByIndex.clear()
+   state.activeBlockTypes.clear()
++  state.thinkingBlockStarts.clear()
+   state.activeToolBlocks.clear()
+   state.pendingToolBlocks.clear()
+   state.toolParentUseIds.clear()
+diff --git a/src/services/api/claude.ts b/src/services/api/claude.ts
+index 8d40b01f..6518c8ff 100644
+--- a/src/services/api/claude.ts
++++ b/src/services/api/claude.ts
+@@ -1997,6 +1997,11 @@ async function* queryModel(
+   let stopReason: BetaStopReason | null = null;
+   const completedBlockIndexes = new Set<number>();
+   const completedToolUseIds = new Set<string>();
++  // Per-block wall-clock start for thinking blocks: content_block_start fires
++  // right before the first thinking delta, so block_start -> block_stop is the
++  // block's pure generation span. Persisted as thinkingDurationMs on the
++  // transcript line so a reopened session can re-show the per-thought timing.
++  const thinkingStartedAtByIndex = new Map<number, number>();
+   const handledStopReasons = new Set<BetaStopReason>();
+   let incompleteStream = false;
+   let didFallBackToNonStreaming = false;
+@@ -2412,6 +2417,7 @@ async function* queryModel(
+                   // initialize signature to ensure field exists even if signature_delta never arrives
+                   signature: "",
+                 };
++                thinkingStartedAtByIndex.set(part.index, Date.now());
+                 break;
+               default:
+                 // even more awkwardly, the sdk mutates the contents of text blocks
+@@ -2589,6 +2595,16 @@ async function* queryModel(
+               type: "assistant",
+               uuid: randomUUID(),
+               timestamp: new Date().toISOString(),
++              ...(contentBlock.type === "thinking" &&
++                (() => {
++                  const startedAt = thinkingStartedAtByIndex.get(part.index);
++                  thinkingStartedAtByIndex.delete(part.index);
++                  const durationMs =
++                    typeof startedAt === "number"
++                      ? Math.max(0, Date.now() - startedAt)
++                      : 0;
++                  return { thinkingDurationMs: durationMs };
++                })()),
+               ...(process.env.USER_TYPE === "ant" &&
+                 research !== undefined && { research }),
+               ...(advisorModel && { advisorModel }),
+diff --git a/desktop/src/stores/__fixtures__/chat-store.golden.json b/desktop/src/stores/__fixtures__/chat-store.golden.json
+index f8fdd6e2..28bd1cb6 100644
+--- a/desktop/src/stores/__fixtures__/chat-store.golden.json
++++ b/desktop/src/stores/__fixtures__/chat-store.golden.json
+@@ -137,7 +137,8 @@
+             "id": "msg#1",
+             "type": "thinking",
+             "content": "Considering options",
+-            "timestamp": 0
++            "timestamp": 0,
++            "thinkingDurationMs": 51
+           }
+         ],
+         "chatState": "streaming",
+@@ -163,7 +164,8 @@
+             "id": "msg#1",
+             "type": "thinking",
+             "content": "Considering options",
+-            "timestamp": 0
++            "timestamp": 0,
++            "thinkingDurationMs": 51
+           }
+         ],
+         "chatState": "streaming",
+@@ -189,7 +191,8 @@
+             "id": "msg#1",
+             "type": "thinking",
+             "content": "Considering options",
+-            "timestamp": 0
++            "timestamp": 0,
++            "thinkingDurationMs": 51
+           },
+           {
+             "id": "msg#2",

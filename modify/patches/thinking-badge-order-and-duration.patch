@@ -1,0 +1,250 @@
+diff --git a/desktop/src/components/chat/ActivityGroup.test.tsx b/desktop/src/components/chat/ActivityGroup.test.tsx
+index c9649d47..0a6a3f71 100644
+--- a/desktop/src/components/chat/ActivityGroup.test.tsx
++++ b/desktop/src/components/chat/ActivityGroup.test.tsx
+@@ -275,7 +275,15 @@ describe('ActivityGroup', () => {
+         childToolCallsByParent={new Map()}
+       />,
+     )
+-    expect(screen.getByText('0.40k + 0.00k')).toBeTruthy()
++    // The two estimates are separate nodes joined by a CSS gap (a literal space
++    // in a monospace font cannot be tightened), so they are no longer one
++    // contiguous text node — assert on the container, not getByText.
++    const tokens = document.querySelector('[data-activity-tokens="true"]')
++    expect(tokens?.textContent).toBe('0.40k+0.00k')
++
++    // Token usage sits before the elapsed time on the right-hand side: the
++    // container that holds the label starts with it.
++    expect(tokens?.parentElement?.textContent).toMatch(/^0\.40k\+0\.00k/)
+   })
+ 
+   it('shows the run as running while any step is still unresolved', () => {
+diff --git a/desktop/src/components/chat/ActivityGroup.tsx b/desktop/src/components/chat/ActivityGroup.tsx
+index 70c4fbf..676851b 100644
+--- a/desktop/src/components/chat/ActivityGroup.tsx
++++ b/desktop/src/components/chat/ActivityGroup.tsx
+@@ -1,4 +1,4 @@
+-import { memo, useMemo, useState } from 'react'
++import { Fragment, memo, useMemo, useState } from 'react'
+ import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
+ import { CircleX } from 'lucide-react'
+ import { ToolCallBlock, formatDuration } from './ToolCallBlock'
+@@ -6,7 +6,7 @@ import { ThinkingBlock } from './ThinkingBlock'
+ import {
+   activityDurationMs,
+   activityStepToolCalls,
+-  activityTokenLabel,
++  activityTokenParts,
+   activityTokenUsage,
+   buildActivitySegments,
+   countFailedToolCalls,
+@@ -16,6 +16,7 @@ import {
+ } from './activityGroupModel'
+ 
+ import { useTranslation } from '../../i18n'
++import { useSettingsStore } from '../../stores/settingsStore'
+ import type { UIMessage } from '../../types/chat'
+ 
+ type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
+@@ -65,6 +66,8 @@ export const ActivityGroup = memo(function ActivityGroup({
+   disclosureKey,
+ }: Props) {
+   const t = useTranslation()
++  // 关闭会话扩展信息时隐藏本 fork 新增的 token/耗时读数；缺省视为开启。
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   /** null = follow the run's own state; set = the reader decided. */
+   const [pinnedCollapsedLocal, setPinnedCollapsedLocal] = useState<boolean | null>(null)
+   const pinnedCollapsed = disclosureKey
+@@ -111,7 +114,7 @@ export const ActivityGroup = memo(function ActivityGroup({
+   const segments = buildActivitySegments(steps, t)
+   const elapsed = activityDurationMs(steps, resultMap)
+   const durationLabel = !isRunning && typeof elapsed === 'number' ? formatDuration(elapsed) : ''
+-  const tokenLabel = !isRunning ? activityTokenLabel(activityTokenUsage(steps, resultMap)) : ''
++  const tokenParts = !isRunning ? activityTokenParts(activityTokenUsage(steps, resultMap)) : []
+   const summaryText = segments.map((segment) => segment.label).join(', ')
+ 
+   return (
+@@ -144,17 +147,22 @@ export const ActivityGroup = memo(function ActivityGroup({
+                 {t('toolGroup.failedCount', { count: failedCount })}
+               </span>
+             )}
+-            {durationLabel && (
+-              <span className="whitespace-nowrap font-mono tabular-nums">{durationLabel}</span>
+-            )}
+-            {tokenLabel && (
++            {sessionExtendedInfo !== false && tokenParts.length > 0 && (
+               <span
+                 data-activity-tokens="true"
+-                className="whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
++                className="flex items-center gap-[3px] whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
+               >
+-                {tokenLabel}
++                {tokenParts.map((part, index) => (
++                  <Fragment key={index}>
++                    {index > 0 ? <span className="opacity-60">+</span> : null}
++                    <span>{part}</span>
++                  </Fragment>
++                ))}
+               </span>
+             )}
++            {sessionExtendedInfo !== false && durationLabel && (
++              <span className="whitespace-nowrap font-mono tabular-nums">{durationLabel}</span>
++            )}
+             <span aria-hidden="true" className={`w-3 text-center text-[8px] ${collapsed ? '' : 'rotate-90'}`}>▸</span>          </span>
+         </button>
+ 
+diff --git a/desktop/src/components/chat/ThinkingBlock.test.tsx b/desktop/src/components/chat/ThinkingBlock.test.tsx
+index 2e22f46..58f8ab2 100644
+--- a/desktop/src/components/chat/ThinkingBlock.test.tsx
++++ b/desktop/src/components/chat/ThinkingBlock.test.tsx
+@@ -77,6 +77,18 @@ describe('thinkingBadgeLabel', () => {
+       formatThinkingTokens('reasoning'),
+     )
+   })
++
++  it('treats a zero duration as unmeasured rather than printing 0.0s', () => {
++    // An unanchored block records no span; a literal `0.0s` would claim a
++    // measurement that never happened.
++    expect(thinkingBadgeLabel('reasoning', 0, 0, false, undefined)).toBe(
++      formatThinkingTokens('reasoning'),
++    )
++    // A real (if short) span still renders with its duration.
++    expect(thinkingBadgeLabel('reasoning', 1200, 0, false, undefined)).toBe(
++      `${formatThinkingTokens('reasoning')} · 1.2s`,
++    )
++  })
+ })
+ 
+ describe('ThinkingBlock', () => {
+@@ -86,7 +98,7 @@ describe('ThinkingBlock', () => {
+ 
+   afterEach(() => {
+     cleanup()
+-    useSettingsStore.setState({ locale: 'zh' })
++    useSettingsStore.setState({ locale: 'zh', sessionExtendedInfo: true })
+   })
+ 
+   it('shows the in-progress label while thinking is active', () => {
+@@ -136,6 +148,14 @@ describe('ThinkingBlock', () => {
+     expect(screen.queryByText(/\d\.\d{2}k · /)).toBeNull()
+   })
+ 
++  it('hides the token + duration badge when session extended info is off', () => {
++    useSettingsStore.setState({ sessionExtendedInfo: false })
++    const { container } = render(<ThinkingBlock content={'思考'.repeat(400)} thinkingDurationMs={12340} />)
++    // 徽标整体消失，思考正文与行标签照常渲染。
++    expect(container.querySelector('[data-thinking-usage="true"]')).toBeNull()
++    expect(screen.getByRole('button')).toHaveTextContent('已思考')
++  })
++
+   it('shows a live badge for an active block anchored to a start time', () => {
+     // Active + a start anchor in the past → a non-zero live elapsed renders.
+     render(<ThinkingBlock content="reasoning..." isActive liveStartAt={Date.now() - 20000} />)
+diff --git a/desktop/src/components/chat/ThinkingBlock.tsx b/desktop/src/components/chat/ThinkingBlock.tsx
+index e48a9dd..183f18d 100644
+--- a/desktop/src/components/chat/ThinkingBlock.tsx
++++ b/desktop/src/components/chat/ThinkingBlock.tsx
+@@ -4,6 +4,7 @@ import { Brain } from 'lucide-react'
+ import { useTranslation } from '../../i18n'
+ import { estimateTokens } from '../../lib/tpsMeter'
+ import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
++import { useSettingsStore } from '../../stores/settingsStore'
+ 
+ /**
+  * One line: the label, a preview of the reasoning, and the full text on demand.
+@@ -37,6 +38,8 @@ export function ThinkingBlock({
+   liveStartAt?: number
+ }) {
+   const t = useTranslation()
++  // 关闭会话扩展信息时隐藏本 fork 新增的思考徽标；思考正文与实时计时不受影响。
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   const [localExpanded, setLocalExpanded] = useState(false)
+   const [liveElapsedMs, setLiveElapsedMs] = useState(0)
+   const expanded = disclosureKey ? (getDisclosure(disclosureKey) ?? localExpanded) : localExpanded
+@@ -119,7 +122,7 @@ export function ThinkingBlock({
+         ) : (
+           <span className="flex-1" />
+         )}
+-        {thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs) && (
++        {sessionExtendedInfo !== false && thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs) && (
+           <span
+             data-thinking-usage="true"
+             className="shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]"
+@@ -179,7 +182,13 @@ export function thinkingBadgeLabel(
+     if (liveStartAt === undefined) return ''
+     return `${formatThinkingTokens(content)} · ${formatThinkingDuration(liveElapsedMs)}`
+   }
+-  if (thinkingDurationMs === undefined) return formatThinkingTokens(content)
++  // Missing or non-positive both mean "never measured": older transcripts, and
++  // blocks whose start anchor was never seen (a length of exactly 0 is not a
++  // real generation span). Either way the token count stands alone rather than
++  // pairing with a confident `0.0s`.
++  if (thinkingDurationMs === undefined || thinkingDurationMs <= 0) {
++    return formatThinkingTokens(content)
++  }
+   return `${formatThinkingTokens(content)} · ${formatThinkingDuration(thinkingDurationMs)}`
+ }
+ 
+diff --git a/desktop/src/components/chat/activityGroupModel.ts b/desktop/src/components/chat/activityGroupModel.ts
+index b459b915..faed376f 100644
+--- a/desktop/src/components/chat/activityGroupModel.ts
++++ b/desktop/src/components/chat/activityGroupModel.ts
+@@ -287,16 +287,28 @@ export function activityTokenUsage(
+ }
+ 
+ /**
+- * The run's token label. Estimated thought → `0.80k + 1.20k` (thought first,
+- * tool after, joined by ` +`); a real thought count → one combined total,
+- * because then the number is what the API billed, not two different measurement
+- * methods glued together.
++ * The run's token label parts. Estimated thought → two numbers (thought, then
++ * tool); a real thought count → one combined total, because then the number is
++ * what the API billed rather than two different measurement methods glued
++ * together.
++ *
++ * Returned as parts rather than a joined string so the separator can be laid
++ * out with CSS: the label renders in a monospace font, where a literal space is
++ * a full character cell and cannot be tightened to an in-between width.
+  */
+-export function activityTokenLabel(usage: ActivityTokenUsage): string {
++export function activityTokenParts(usage: ActivityTokenUsage): string[] {
+   if (!usage.thinkingIsEstimated) {
+-    return formatActivityTokens(usage.thinkingTokens + usage.toolTokens)
++    return [formatActivityTokens(usage.thinkingTokens + usage.toolTokens)]
+   }
+-  return `${formatActivityTokens(usage.thinkingTokens)} + ${formatActivityTokens(usage.toolTokens)}`
++  return [
++    formatActivityTokens(usage.thinkingTokens),
++    formatActivityTokens(usage.toolTokens),
++  ]
++}
++
++/** Plain-string form of {@link activityTokenParts}, for tests and fallbacks. */
++export function activityTokenLabel(usage: ActivityTokenUsage): string {
++  return activityTokenParts(usage).join(' + ')
+ }
+ 
+ /** Token count as `xx.xxk`, two decimals (`0.80k`, `12.50k`). */
+diff --git a/src/services/api/claude.ts b/src/services/api/claude.ts
+index 6518c8ff..0de1939e 100644
+--- a/src/services/api/claude.ts
++++ b/src/services/api/claude.ts
+@@ -2599,11 +2599,13 @@ async function* queryModel(
+                 (() => {
+                   const startedAt = thinkingStartedAtByIndex.get(part.index);
+                   thinkingStartedAtByIndex.delete(part.index);
+-                  const durationMs =
+-                    typeof startedAt === "number"
+-                      ? Math.max(0, Date.now() - startedAt)
+-                      : 0;
+-                  return { thinkingDurationMs: durationMs };
++                  // No anchor (a resumed or partial stream that never saw this
++                  // block's content_block_start) means the span was never
++                  // measured. Omit the field rather than writing 0: absent is
++                  // the contract for "not measured", and a 0 would render as a
++                  // confident `0.0s` next to the token count.
++                  if (typeof startedAt !== "number") return {};
++                  return { thinkingDurationMs: Math.max(0, Date.now() - startedAt) };
+                 })()),
+               ...(process.env.USER_TYPE === "ant" &&
+                 research !== undefined && { research }),

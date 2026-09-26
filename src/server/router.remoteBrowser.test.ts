@@ -103,11 +103,18 @@ describe('remote browser API routing', () => {
   })
 
   test('general reads exclude secrets and valid edits including language reset keep exact requested fields', async () => {
-    expect(await (await request('/api/settings/user')).json()).toEqual({ language: 'en', alwaysThinkingEnabled: true })
-    const patch = { language: '', chatSendBehavior: 'modifierEnter', workflowKeywordTriggerEnabled: true, alwaysThinkingEnabled: false, outputStyle: 'Learning' }
+    // agentTeamsEnabled is always injected by the GET handler (getAgentTeamsEnabled) and is now
+    // projected for H5 so the General teams toggle reflects its real state instead of reverting.
+    expect(await (await request('/api/settings/user')).json()).toEqual({ language: 'en', alwaysThinkingEnabled: true, agentTeamsEnabled: true })
+    const patch = { language: '', chatSendBehavior: 'modifierEnter', workflowKeywordTriggerEnabled: true, alwaysThinkingEnabled: false, outputStyle: 'Learning', skipAutoPermissionPrompt: true }
     const response = await request('/api/settings/user', 'PUT', patch)
     expect(response.status).toBe(200)
     expect(SettingsService.prototype.updateUserSettings).toHaveBeenCalledWith(patch)
+    // The H5 "auto mode" opt-in dialog persists this field from the phone.
+    const autoModeResponse = await request('/api/settings/user', 'PUT', { skipAutoPermissionPrompt: true })
+    expect(autoModeResponse.status).toBe(200)
+    expect(SettingsService.prototype.updateUserSettings).toHaveBeenLastCalledWith({ skipAutoPermissionPrompt: true })
+    expect((await request('/api/settings/user', 'PUT', { skipAutoPermissionPrompt: 'true' })).status).toBe(400)
   })
 
   test('rechecks waiting questions after automatic answer settings are saved', async () => {
@@ -123,7 +130,10 @@ describe('remote browser API routing', () => {
       autoQuestion: { enabled: true, timeoutMinutes: 10 },
       env: { API_KEY: 'fake-never-expose' },
     })
+    // agentTeamsEnabled is in our chapter-九 READ_SETTINGS whitelist and the GET
+    // handler always injects it, so the projection surfaces it alongside autoQuestion.
     expect(await (await request('/api/settings/user')).json()).toEqual({
+      agentTeamsEnabled: true,
       autoQuestion: { enabled: true, timeoutMinutes: 10 },
     })
   })
@@ -138,6 +148,19 @@ describe('remote browser API routing', () => {
     expect(SettingsService.prototype.updateUserSettings).not.toHaveBeenCalled()
     const url = new URL('https://fixture.invalid/api/settings/user')
     expect((await handleApiRequest(new Request(url, { method: 'PUT', body: '{broken' }), url, { remoteBrowser: true })).status).toBe(400)
+  })
+
+  test('allows the General sub-page endpoints (output-style + session-cleanup) from remote', async () => {
+    // The phone's General tab drives the output-style picker and transcript
+    // retention; both must survive the remote-settings route gate (no 403).
+    expect((await request('/api/settings/output-styles')).status).toBe(200)
+    expect((await request('/api/settings/output-style', 'PUT', { outputStyle: 'default' })).status).toBe(200)
+    expect(SettingsService.prototype.updateUserSettings).toHaveBeenLastCalledWith({ outputStyle: 'default' })
+    expect((await request('/api/settings/session-cleanup', 'POST', { days: 0, dryRun: true })).status).toBe(200)
+    // Wrong methods on those sub-routes are still blocked by the route gate.
+    expect((await request('/api/settings/output-styles', 'PUT', {})).status).toBe(403)
+    expect((await request('/api/settings/output-style', 'GET')).status).toBe(403)
+    expect((await request('/api/settings/session-cleanup', 'GET')).status).toBe(403)
   })
 
   test('forwards safe mutation results and preserves downstream validation errors', async () => {

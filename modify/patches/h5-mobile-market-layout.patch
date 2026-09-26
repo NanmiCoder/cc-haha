@@ -1,0 +1,13 @@
+diff --git a/desktop/src/components/market/MarketHome.tsx b/desktop/src/components/market/MarketHome.tsx
+index 0e60f74e..dfa8e3ff 100644
+--- a/desktop/src/components/market/MarketHome.tsx
++++ b/desktop/src/components/market/MarketHome.tsx
+@@ -118,7 +118,7 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
+               cluster: what the shelves are serving on top, what is already on
+               the reader's machine under it, both flush right so the header
+               keeps a single trailing edge. */}
+-          <div className="flex flex-col items-end gap-2.5 pt-2">
++          <div className="flex flex-col items-end gap-2.5 pt-2 max-lg:items-start max-lg:basis-full">
+             <SourceStatusBar sources={sources} />
+             <Button
+               variant="secondary"

@@ -26,9 +26,11 @@ import { hoistToolResultMediaForCompatibility, shouldHoistNestedToolResultMedia 
 import { openaiChatToAnthropic } from './transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from './transform/openaiResponsesToAnthropic.js'
 import { openaiChatStreamToAnthropic } from './streaming/openaiChatStreamToAnthropic.js'
+import { emitTpsTokens } from './tpsTokenSink.js'
 import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStreamToAnthropic.js'
 import type { AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
+import { shouldSendThinkingToAPI } from '../../utils/thinking.js'
 import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
@@ -703,7 +705,14 @@ async function handleOpenaiChat(
   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
   const transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
-    roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
+    // Only ask endpoints we believe are a local engine: the parameter is a
+    // vLLM extension, and a strict OpenAI endpoint would reject it outright.
+    passTokenIds: shouldRequestTokenIds(baseUrl),
+    // Only round-trip reasoning content back to the API when thinking is being
+    // sent back at all; otherwise the previous turn's reasoning is dropped.
+    roundTripReasoningContent:
+      (knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4') &&
+      shouldSendThinkingToAPI(),
     passThinkingToggle: knownDeepSeekHost,
     imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl, body.model) ? 'text_only' : 'vision',
   })
@@ -818,7 +827,15 @@ async function handleOpenaiChat(
     const upstreamBody = withStreamIdleTimeout(upstream.body, networkSettings.aiRequestTimeoutMs)
     const observedBody = traceContext?.protocolTrace
       ? observeProtocolStream(upstreamBody, traceContext.protocolTrace) : upstreamBody
-    const anthropicStream = openaiChatStreamToAnthropic(observedBody, body.model)
+    // Real token counts for the TPS meter ride a side channel: batched so the
+    // client is not woken per chunk, and dropped entirely when the request did
+    // not ask for token ids or no client is attached.
+    const tpsRelay = transformed.return_token_ids === true
+      ? createTpsTokenRelay(traceContext?.sessionId ?? null, baseUrl)
+      : null
+    const anthropicStream = openaiChatStreamToAnthropic(observedBody, body.model, {
+      onTokenIds: tpsRelay?.onTokenIds,
+    })
     const tracedStream = traceContext
       ? captureTraceStream(anthropicStream, async (bodySnapshot, error, protocolTraceEnd) => {
           await recordProxyTrace({
@@ -871,6 +888,100 @@ async function handleOpenaiChat(
     })
   }
   return Response.json(anthropicResponse, { status: policyError ? 403 : 200 })
+}
+
+/** Coalescing window for the TPS token side channel (ms). */
+const TPS_TOKEN_FLUSH_MS = 200
+/** After this long without token ids, the endpoint is marked as not supporting them. */
+const TPS_TOKEN_PROBE_MS = 10_000
+const TPS_TOKEN_PROBE_MISSES = 2
+
+/**
+ * Endpoints that answered a `return_token_ids` request without ever sending
+ * token ids: they ignore the parameter, so stop asking. In-memory only — an
+ * engine upgrade mid-process is not worth persisting a negative about.
+ */
+const tokenIdUnsupportedOrigins = new Set<string>()
+const tokenIdProbeMisses = new Map<string, number>()
+
+function endpointOrigin(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).origin
+  } catch {
+    return baseUrl
+  }
+}
+
+/**
+ * Whether to ask this endpoint for per-chunk token ids. Only engines on the
+ * machine or the local network are asked: that is where vLLM-family servers
+ * live, and where an unknown parameter is harmless, whereas a hosted OpenAI
+ * endpoint would reject the request outright.
+ */
+function shouldRequestTokenIds(baseUrl: string): boolean {
+  const origin = endpointOrigin(baseUrl)
+  if (tokenIdUnsupportedOrigins.has(origin)) return false
+  let hostname: string
+  try {
+    hostname = new URL(baseUrl).hostname
+  } catch {
+    return false
+  }
+  return isLocalEngineHost(hostname)
+}
+
+function isLocalEngineHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host === '::1' || host.endsWith('.local')) return true
+  if (host === '0.0.0.0' || host === '127.0.0.1' || host.startsWith('127.')) return true
+  const octets = host.split('.')
+  if (octets.length !== 4 || octets.some((part) => !/^\d{1,3}$/.test(part))) return false
+  const [a, b] = octets.map(Number) as [number, number, number, number]
+  if (a === 10) return true
+  if (a === 192 && b === 168) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  return false
+}
+
+/**
+ * Batches the real per-chunk token counts of one streamed request and hands
+ * them to the TPS meter over the session's WebSocket. Also remembers when an
+ * endpoint never reported token ids, so the parameter is not asked for again.
+ */
+function createTpsTokenRelay(sessionId: string | null, baseUrl: string) {
+  let pending = 0
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+  let sawTokenIds = false
+  const origin = endpointOrigin(baseUrl)
+  const probeTimer = setTimeout(() => {
+    if (sawTokenIds) return
+    const misses = (tokenIdProbeMisses.get(origin) ?? 0) + 1
+    tokenIdProbeMisses.set(origin, misses)
+    if (misses >= TPS_TOKEN_PROBE_MISSES) tokenIdUnsupportedOrigins.add(origin)
+  }, TPS_TOKEN_PROBE_MS)
+  // Never hold the process open for a diagnostic timer.
+  probeTimer.unref?.()
+
+  const flush = () => {
+    flushTimer = null
+    if (!sessionId || pending <= 0) return
+    const tokens = pending
+    pending = 0
+    emitTpsTokens(sessionId, tokens)
+  }
+
+  return {
+    onTokenIds(count: number) {
+      if (count <= 0) return
+      sawTokenIds = true
+      clearTimeout(probeTimer)
+      pending += count
+      if (flushTimer === null) {
+        flushTimer = setTimeout(flush, TPS_TOKEN_FLUSH_MS)
+        flushTimer.unref?.()
+      }
+    },
+  }
 }
 
 function shouldUseDeepSeekReasoningCompat(baseUrl: string): boolean {

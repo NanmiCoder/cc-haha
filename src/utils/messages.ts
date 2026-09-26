@@ -2023,6 +2023,7 @@ export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
   currentModel?: string,
+  options?: { stripThinking?: boolean },
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2390,11 +2391,24 @@ export function normalizeMessagesForAPI(
     ? relocateToolReferenceSiblings(result)
     : result
 
+  // When the "send thinking back to the API" toggle is OFF (default), strip
+  // the previous turn's thinking / redacted_thinking blocks before the trailing
+  // cleanup chain. Must run here — before filterTrailingThinkingFromLastAssistant
+  // and filterWhitespaceOnlyAssistantMessages — so a thinking-only message that
+  // becomes empty after the strip is absorbed by ensureNonEmptyAssistantContent's
+  // placeholder (the API 400 invariants all still hold). Local history is
+  // untouched; only the outgoing request body is trimmed.
+  const withStrippedThinking = options?.stripThinking
+    ? stripThinkingBlocksForAPI(relocated)
+    : relocated
+
   // Filter orphaned thinking-only assistant messages (likely introduced by
   // compaction slicing away intervening messages between a failed streaming
   // response and its retry). Without this, consecutive assistant messages with
   // mismatched thinking block signatures cause API 400 errors.
-  const withFilteredOrphans = filterOrphanedThinkingOnlyMessages(relocated)
+  const withFilteredOrphans = filterOrphanedThinkingOnlyMessages(
+    withStrippedThinking,
+  )
 
   // Reorder assistant content so any tool_use blocks form a contiguous run.
   // mergeAssistantMessages also reorders, but this pass additionally protects
@@ -5340,12 +5354,44 @@ export function stripSignatureBlocks(messages: Message[]): Message[] {
 }
 
 /**
+ * Strip the previous turn's thinking / redacted_thinking blocks from every
+ * assistant message, for the API request only. Used by normalizeMessagesForAPI
+ * when settings.sendThinkingHistory is OFF (default): replaying full thinking
+ * to a backend without 1P cache retention costs a real prefill per turn.
+ * Local session history (in-memory scroll / jsonl / in-session render) keeps
+ * the blocks — only the request body is trimmed. Mirrors stripSignatureBlocks:
+ * thinking-only messages are reduced to [] and the empty-content placeholder
+ * in normalizeMessagesForAPI (ensureNonEmptyAssistantContent) absorbs them.
+ */
+export function stripThinkingBlocksForAPI(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  let changed = false
+  const result = messages.map(msg => {
+    if (msg.type !== 'assistant') return msg
+
+    const content = msg.message.content
+    if (!Array.isArray(content)) return msg
+
+    const filtered = content.filter(block => !isThinkingBlock(block))
+    if (filtered.length === content.length) return msg
+
+    changed = true
+    return {
+      ...msg,
+      message: { ...msg.message, content: filtered },
+    } as typeof msg
+  })
+
+  return changed ? result : messages
+}
+
+/**
  * Protected thinking signatures are model-bound. When a resumed session moves
  * to another model, replaying those blocks can either fail signature validation
  * or send a block type the new provider does not implement. Keep the transcript
  * intact and clean only the in-memory request history.
- */
-export function stripSignatureBlocksAfterModelChange(
+ */export function stripSignatureBlocksAfterModelChange(
   messages: Message[],
   currentModel: string,
 ): Message[] {

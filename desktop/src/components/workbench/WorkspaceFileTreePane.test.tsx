@@ -496,6 +496,7 @@ describe('file chat references', () => {
     expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toHaveFocus()
     fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Add to chat' }), { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
+
     expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toBeUndefined()
   })
 

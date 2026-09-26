@@ -15,7 +15,7 @@ describe('desktop host contract', () => {
       previewWebview: false,
       workspaceBrowser: false,
       shell: false,
-      terminal: false,
+      terminal: true,
       updates: false,
       windowControls: false,
       zoom: false,
@@ -27,9 +27,8 @@ describe('desktop host contract', () => {
     await expect(browserHost.runtime.getLocalAccessToken()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.dialogs.open({ directory: true })).rejects.toThrow('desktop app runtime')
     await expect(browserHost.shell.openPath('/tmp/report.md')).rejects.toThrow('desktop app runtime')
-    await expect(browserHost.terminal.spawn({ cwd: '/tmp', cols: 80, rows: 24 })).rejects.toThrow(
-      'desktop app runtime',
-    )
+    // terminal 不再是 desktop-only：浏览器端走 /ws/terminal（见 terminalWs.ts），
+    // 这里只验证其余仍抛错的桌面专有调用。
     await expect(browserHost.updates.check()).resolves.toBeNull()
     await expect(browserHost.pets.list()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.pets.createFromImage({

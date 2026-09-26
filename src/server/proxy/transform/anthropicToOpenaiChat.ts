@@ -78,6 +78,12 @@ export function anthropicToOpenaiChat(
   // Many OpenAI-compatible servers omit usage on streams unless asked.
   if (result.stream) {
     result.stream_options = { include_usage: true }
+    // Local vLLM-family engines can report each chunk's token ids, which the
+    // desktop turns into a real-token TPS reading. Only asked of endpoints
+    // expected to accept it — a strict OpenAI endpoint rejects the parameter.
+    if (compatibility.returnTokenIds) {
+      result.return_token_ids = true
+    }
   }
 
   const { outputBudget } = compatibility

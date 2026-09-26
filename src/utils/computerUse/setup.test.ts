@@ -35,11 +35,26 @@ describe('setupComputerUseMCP runtime capability', () => {
     expect(result.allowedTools).not.toContain('mcp__computer-use__js')
   })
 
-  test('does not resolve a helper or advertise tools on unsupported platforms', () => {
-    expect(setupComputerUseMCP({
+  test('keeps the Linux compatibility engine available without a macOS helper', () => {
+    const result = setupComputerUseMCP({
       platform: 'linux',
       resolveMacosNativeBinary: () => {
         throw new Error('must not resolve a macOS helper on Linux')
+      },
+    })
+
+    expect(Object.keys(result.mcpConfig)).toEqual(['computer-use'])
+    expect(result.allowedTools).toContain('mcp__computer-use__screenshot')
+    expect(result.allowedTools).not.toContain('mcp__computer-use__get_app_state')
+    expect(result.allowedTools).not.toContain('mcp__computer-use__sequence')
+    expect(result.allowedTools).not.toContain('mcp__computer-use__js')
+  })
+
+  test('does not resolve a helper or advertise tools on unsupported platforms', () => {
+    expect(setupComputerUseMCP({
+      platform: 'freebsd',
+      resolveMacosNativeBinary: () => {
+        throw new Error('must not resolve a macOS helper on other platforms')
       },
     })).toEqual({ mcpConfig: {}, allowedTools: [] })
   })

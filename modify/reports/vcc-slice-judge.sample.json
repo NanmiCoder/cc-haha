@@ -1,0 +1,50 @@
+[
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/60aa321f-15e9-4b26-87e7-4d0d005a4094.jsonl",
+    "direction": "up_to",
+    "pivot": 24071,
+    "messages": 40119
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/3e0bcac3-4eac-45e7-817d-8e5319bcb3e2.jsonl",
+    "direction": "from",
+    "pivot": 11359,
+    "messages": 18933
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-opencode/3791fdb8-bd0c-4fcd-ba65-331d72dd0fba.jsonl",
+    "direction": "up_to",
+    "pivot": 11449,
+    "messages": 19083
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/1c75db82-369d-4900-83a6-67be891b2b34.jsonl",
+    "direction": "from",
+    "pivot": 1189,
+    "messages": 1983
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/f999e38a-4574-4bf0-ba8d-07bc0686c7bb.jsonl",
+    "direction": "up_to",
+    "pivot": 7512,
+    "messages": 12520
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/5de884c1-a8db-46f9-ac31-94aa7aa7ffc1.jsonl",
+    "direction": "from",
+    "pivot": 5222,
+    "messages": 8704
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/353a69e2-17e0-4451-9747-edfb7364a3f9.jsonl",
+    "direction": "up_to",
+    "pivot": 5096,
+    "messages": 8494
+  },
+  {
+    "file": "/home/zeaxion/.claude/projects/-home-zeaxion-myproject-gov-managerment-plan/11faeccb-e719-4733-a4a1-f075d9736b1d.jsonl",
+    "direction": "from",
+    "pivot": 5592,
+    "messages": 9320
+  }
+]

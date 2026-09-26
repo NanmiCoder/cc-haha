@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { isolateModelDefaultsEnv } from '../../testUtils/modelEnv.js'
 import { getAgentModel } from './agent.js'
+
+isolateModelDefaultsEnv()
 
 const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL
 

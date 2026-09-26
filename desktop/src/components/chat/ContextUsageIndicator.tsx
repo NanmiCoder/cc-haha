@@ -10,7 +10,7 @@ import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useDismissable } from '../../hooks/useDismissable'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
-import { deriveSessionUsageMetrics } from '../../lib/sessionUsageMetrics'
+import { deriveSessionUsageMetrics, formatCacheHitRate, formatCompactTokens, latestTurnCacheHitRate } from '../../lib/sessionUsageMetrics'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import {
   ContextUsageDetails,
@@ -49,7 +49,10 @@ const USAGE_POLL_MS = 3_000
 // still be settling, so retry the event-driven refresh once.
 const FORCED_REFRESH_RETRY_MS = 5_000
 
-const POPOVER_WIDTH = 340
+// 384px (was 340): wide enough that a 6-digit cost ($123.45 · ¥888.84 ≈ 111px
+// at 13px mono) fits the cost column without truncation, and roomy enough that
+// the three stat groups read as evenly spaced when centered in their columns.
+const POPOVER_WIDTH = 384
 const POPOVER_GAP = 8
 const VIEWPORT_MARGIN = 16
 // The collapsed panel is much shorter than the old always-expanded breakdown; the expanded
@@ -439,18 +442,32 @@ export function ContextUsageIndicator({
   // Derived per render rather than memoized on `usage` alone: the session it belongs to lives in
   // a ref, so the guard has to run against the current sessionId every time.
   const displayUsage = usageSessionIdRef.current === sessionId ? usage : null
+  // Latest-turn usage (the most recent assistant request) rides on the context snapshot, not the
+  // lifetime usage poll. The cache hit rate is computed against it — the ratio the cache achieves
+  // on the *current* turn, not a cumulative average diluted by replayed prompts.
+  const latestTurnUsage = displayContext?.apiUsage ?? null
+  // Latest-turn hit rate and absolute cache-read figure, shared by the composer tail and the
+  // detail panel so both read from the same number.
+  const latestCacheRate = latestTurnUsage ? latestTurnCacheHitRate(latestTurnUsage) : null
+  const latestCacheReadTokens = latestTurnUsage ? Math.max(0, latestTurnUsage.cache_read_input_tokens) : 0
   const sessionStats = useMemo<ContextUsageSessionStats | null>(() => {
     if (!displayUsage) return null
     const metrics = deriveSessionUsageMetrics(displayUsage)
     // A session with nothing produced yet has no honest answer for any of these rows; showing an
     // empty block (or a 0 tok/s) would read as a measurement rather than an absence.
     if (metrics.totalTokens === 0) return null
+    // Lead the cache row with the latest turn's hit rate; fall back to the session-cumulative
+    // ratio only when the context snapshot carries no per-turn usage.
     return {
-      cacheHitRate: metrics.cacheHitRate,
+      cacheHitRate: latestCacheRate ?? metrics.cacheHitRate,
+      cacheReadTokens: latestCacheReadTokens > 0
+        ? latestCacheReadTokens
+        : Math.max(0, displayUsage.totalCacheReadInputTokens),
       tokensPerSecond: metrics.tokensPerSecond,
       costDisplay: displayUsage.costDisplay,
+      totalCostUSD: displayUsage.totalCostUSD ?? null,
     }
-  }, [displayUsage])
+  }, [displayUsage, latestCacheRate, latestCacheReadTokens])
 
   const detailsBody = (
     <ContextUsageDetails
@@ -476,8 +493,12 @@ export function ContextUsageIndicator({
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight
     const width = Math.min(POPOVER_WIDTH, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2))
+    // The card's right edge sits 30px left of the ring's right edge: flush
+    // alignment made the panel read as part of the ring and the two-line
+    // session stats crowded against the composer.
+    const LEFT_NUDGE_PX = 30
     const left = Math.min(
-      Math.max(VIEWPORT_MARGIN, rect.right - width),
+      Math.max(VIEWPORT_MARGIN, rect.right - width - LEFT_NUDGE_PX),
       Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
     )
 
@@ -532,8 +553,15 @@ export function ContextUsageIndicator({
   }
 
   return (
-    <div className="relative pointer-events-auto">
+    <div
+      className="relative flex items-center gap-0 pointer-events-auto"
+      // Cumulative right nudge requested for the ring + cache % group. transform (not
+      // margin) because the composer toolbar right-aligns this item: margin-left on the
+      // leading child only widens the empty flex-1 gap and never moves the element.
+      style={{ transform: 'translateX(15px)' }}
+    >
       <button
+
         ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
@@ -568,6 +596,25 @@ export function ContextUsageIndicator({
         </span>
         <span className="sr-only">{displayPercent}</span>
       </button>
+      {latestCacheRate !== null && latestCacheReadTokens > 0 && (
+        <span
+          data-testid="context-cache-hit-tail"
+          className="shrink-0 font-mono text-[8px] font-semibold tabular-nums leading-none"
+          style={{
+            // The tail is positioned against the 32px (desktop) / 44px (mobile) trigger button,
+            // but the visible ring is only 20px / 22px — the button's touch padding eats the
+            // same translate on both, so the mobile shift must compensate its extra 5px.
+            color: '#ea580c',
+            transform: isMobileBrowser ? 'translate(-9px, 3px)' : 'translate(-4px, 3px)',
+          }}
+          title={t('contextIndicator.cacheHint', {
+            percent: formatCacheHitRate(latestCacheRate),
+            tokens: formatCompactTokens(latestCacheReadTokens),
+          })}
+        >
+          {formatCacheHitRate(latestCacheRate)}
+        </span>
+      )}
 
       {!preferSheet && detailsOpen && popoverPosition && createPortal(
         <div
@@ -575,7 +622,10 @@ export function ContextUsageIndicator({
           role="dialog"
           aria-label={t('contextIndicator.title')}
           data-testid="context-usage-popover"
-          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[22px] py-5 text-left shadow-[var(--shadow-overlay)]"
+          // 18px padding (not the usual 22) so the cost readout, which sits
+          // flush against the right content edge, keeps ~19px of breathing
+          // room to the card border.
+          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[18px] py-5 text-left shadow-[var(--shadow-overlay)]"
           style={{
             top: popoverPosition.top,
             bottom: popoverPosition.bottom,

@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom'
 import { Fragment, useCallback, useRef } from 'react'
-import { Globe, ExternalLink, FileText, Copy } from 'lucide-react'
+import { Globe, ExternalLink, FileText, Copy, Download } from 'lucide-react'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { TargetIcon } from './TargetIcon'
@@ -21,6 +21,7 @@ function ItemIcon({ item }: { item: OpenWithItem }) {
   if (item.icon === 'in-app-browser') return <Globe size={18} strokeWidth={1.9} />
   if (item.icon === 'preview') return <FileText size={18} strokeWidth={1.9} />
   if (item.icon === 'copy') return <Copy size={18} strokeWidth={1.9} />
+  if (item.icon === 'download') return <Download size={18} strokeWidth={1.9} />
   return <ExternalLink size={18} strokeWidth={1.9} />
 }
 

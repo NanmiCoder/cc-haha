@@ -17,11 +17,31 @@ type GoldenFile = Record<string, GoldenStep[]>
  * `sessionStopRequested`, `agentStopRequestedSessions`) are all keyed by session id,
  * so a unique id per run is full isolation with no production seam.
  */
+/**
+ * Thinking deltas carry a live `serverStart` (the server's receive clock), so a
+ * byte-exact golden would flake on every replay. Normalise the field to a stable
+ * marker; the presence check below still pins that the anchor is emitted.
+ */
+const GOLDEN_SERVER_START_MARKER = 'golden:server-start'
+function normalizeServerStart(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeServerStart)
+  if (value && typeof value === 'object') {
+    const normalized: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      normalized[key] = key === 'serverStart' && typeof item === 'number'
+        ? GOLDEN_SERVER_START_MARKER
+        : normalizeServerStart(item)
+    }
+    return normalized
+  }
+  return value
+}
+
 function replay(scenarioId: string, messages: Array<Record<string, unknown>>, salt: string): GoldenStep[] {
   const sessionId = `golden-${scenarioId}-${salt}`
   return messages.map((message) => ({
     in: describeFrame(message),
-    out: JSON.parse(JSON.stringify(translateCliMessage(message, sessionId))) as unknown[],
+    out: normalizeServerStart(JSON.parse(JSON.stringify(translateCliMessage(message, sessionId)))) as unknown[],
   }))
 }
 

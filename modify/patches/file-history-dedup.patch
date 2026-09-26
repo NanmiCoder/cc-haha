@@ -1,0 +1,121 @@
+diff --git a/src/utils/fileHistory.security.test.ts b/src/utils/fileHistory.security.test.ts
+index f8ad608a..3f426f55 100644
+--- a/src/utils/fileHistory.security.test.ts
++++ b/src/utils/fileHistory.security.test.ts
+@@ -553,6 +553,57 @@ describe('completed turn checkpoint persistence', () => {
+     await fileHistoryCompleteSnapshot(updateState, randomUUID() as UUID)
+     expect(getState().snapshots[0]?.completedFileBackups).toBeUndefined()
+   })
++
++  test('reuses the previous end-of-turn copy when the file is untouched', async () => {
++    const firstTurn = randomUUID() as UUID
++    const secondTurn = randomUUID() as UUID
++    const trackedPath = join(getOriginalCwd(), 'stable.txt')
++    await writeFile(trackedPath, 'turn one\n')
++    const { getState, updateState } = createHistoryState(firstTurn)
++    await fileHistoryTrackEdit(updateState, trackedPath, firstTurn)
++
++    await fileHistoryCompleteSnapshot(updateState, firstTurn)
++    const firstBackup =
++      getState().snapshots.find(s => s.messageId === firstTurn)!
++        .completedFileBackups!['stable.txt']!
++
++    // Next turn starts, the tracked file set is inherited, and the file is not
++    // touched. Copying again here is what made the backup directory grow with
++    // turns rather than with edits.
++    await fileHistoryMakeSnapshot(updateState, secondTurn)
++    await fileHistoryCompleteSnapshot(updateState, secondTurn)
++    const secondBackup =
++      getState().snapshots.find(s => s.messageId === secondTurn)!
++        .completedFileBackups!['stable.txt']!
++
++    expect(secondBackup.backupFileName).toBe(firstBackup.backupFileName)
++    expect((await readBackupFileSafely(secondBackup.backupFileName!)).content.toString()).toBe('turn one\n')
++  })
++
++  test('still copies when the file changed, and the copy holds the new bytes', async () => {
++    const firstTurn = randomUUID() as UUID
++    const secondTurn = randomUUID() as UUID
++    const trackedPath = join(getOriginalCwd(), 'changing.txt')
++    await writeFile(trackedPath, 'turn one\n')
++    const { getState, updateState } = createHistoryState(firstTurn)
++    await fileHistoryTrackEdit(updateState, trackedPath, firstTurn)
++    await fileHistoryCompleteSnapshot(updateState, firstTurn)
++    const firstBackup =
++      getState().snapshots.find(s => s.messageId === firstTurn)!
++        .completedFileBackups!['changing.txt']!
++
++    await fileHistoryMakeSnapshot(updateState, secondTurn)
++    await writeFile(trackedPath, 'turn two\n')
++    await fileHistoryCompleteSnapshot(updateState, secondTurn)
++    const secondBackup =
++      getState().snapshots.find(s => s.messageId === secondTurn)!
++        .completedFileBackups!['changing.txt']!
++
++    expect(secondBackup.backupFileName).not.toBe(firstBackup.backupFileName)
++    expect((await readBackupFileSafely(secondBackup.backupFileName!)).content.toString()).toBe('turn two\n')
++    // The earlier turn's bytes must survive for rewind.
++    expect((await readBackupFileSafely(firstBackup.backupFileName!)).content.toString()).toBe('turn one\n')
++  })
+ })
+ 
+ 
+diff --git a/src/utils/fileHistory.ts b/src/utils/fileHistory.ts
+index c3701c62..297bdaa1 100644
+--- a/src/utils/fileHistory.ts
++++ b/src/utils/fileHistory.ts
+@@ -382,8 +382,20 @@ export async function fileHistoryCompleteSnapshot(
+ ): Promise<void> {
+   if (!fileHistoryEnabled()) return
+   let captured: FileHistorySnapshot | undefined
++  const priorCompletedByPath = new Map<string, FileHistoryBackup>()
+   updateFileHistoryState(state => {
+-    captured = state.snapshots.find(snapshot => snapshot.messageId === messageId)
++    const index = state.snapshots.findIndex(snapshot => snapshot.messageId === messageId)
++    captured = index >= 0 ? state.snapshots[index] : undefined
++    // Only snapshots *before* this one can hold an earlier end-of-turn copy, so
++    // a path the user has not touched since can reuse that copy instead of
++    // accumulating an identical one per turn.
++    for (let i = 0; i < index; i++) {
++      const prior = state.snapshots[i]?.completedFileBackups
++      if (!prior) continue
++      for (const [trackingPath, backup] of Object.entries(prior)) {
++        if (backup.backupFileName) priorCompletedByPath.set(trackingPath, backup)
++      }
++    }
+     return state
+   })
+   if (!captured || captured.completedFileBackups) return
+@@ -392,13 +404,28 @@ export async function fileHistoryCompleteSnapshot(
+   // cannot collide with the next turn's incrementing before-backup version.
+   for (const [trackingPath, before] of Object.entries(captured.trackedFileBackups)) {
+     try {
+-      completedFileBackups[trackingPath] = await createBackup(maybeExpandFilePath(trackingPath), before.version, `completed-${messageId}-${randomUUID()}`)
++      const expandedPath = maybeExpandFilePath(trackingPath)
++      // This loop runs for every tracked file every turn, and a tracked set only
++      // grows — copying unconditionally made the backup directory O(files x
++      // turns), with the overwhelming majority of copies byte-identical. Reuse
++      // the previous end-of-turn copy when the file is unchanged (same check
++      // `fileHistoryMakeSnapshot` uses), keeping the `-completed-` filename so
++      // rewind's after-boundary semantics are untouched.
++      const prior = priorCompletedByPath.get(trackingPath)
++      if (prior?.backupFileName) {
++        const changed = await checkOriginFileChanged(expandedPath, prior.backupFileName)
++        if (!changed) {
++          completedFileBackups[trackingPath] = prior
++          continue
++        }
++      }
++      completedFileBackups[trackingPath] = await createBackup(expandedPath, before.version, `completed-${messageId}-${randomUUID()}`)
+     } catch (error) { logError(error) }
+   }
+   let completed: FileHistorySnapshot | undefined
+-  updateFileHistoryState(state => ({ ...state, snapshots: state.snapshots.map(snapshot => {
+-    if (snapshot.messageId !== messageId || snapshot.completedFileBackups) return snapshot
+-    completed = { ...migrateFileHistorySnapshot(snapshot), completedFileBackups }
++  updateFileHistoryState(state => ({ ...state, snapshots: state.snapshots.map(s => {
++    if (s.messageId !== messageId || s.completedFileBackups) return s
++    completed = { ...migrateFileHistorySnapshot(s), completedFileBackups }
+     return completed
+   }) }))
+   if (completed) await recordFileHistorySnapshot(messageId, completed, true)

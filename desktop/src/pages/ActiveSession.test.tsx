@@ -2233,6 +2233,96 @@ describe('ActiveSession task polling', () => {
     expect(screen.queryByTestId('workspace-resize-handle')).not.toBeInTheDocument()
     expect(screen.queryByTestId('session-terminal-panel')).not.toBeInTheDocument()
     expect(screen.queryByTestId('terminal-resize-handle')).not.toBeInTheDocument()
+    // A background openTarget must NOT pop the overlay, but the FAB itself is
+    // still available so the user can open it explicitly.
+    expect(screen.queryByTestId('mobile-workspace-overlay')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Quick actions' })).toBeInTheDocument()
+  })
+
+  it('opens the mobile full-screen workspace overlay from the quick actions and closes it again', async () => {
+    const sessionId = 'mobile-quick-actions-session'
+    viewportMocks.isMobile = true
+
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Mobile QA Session',
+        createdAt: '2026-04-10T00:00:00.000Z',
+        modifiedAt: '2026-04-10T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/tmp/project-root',
+        workDir: '/tmp/project-root',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Mobile QA Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'msg-1', type: 'assistant_text', content: 'hello', timestamp: 1 }],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+
+    // The FAB anchors above the composer; entries are hidden until it is tapped.
+    const fab = screen.getByRole('button', { name: 'Quick actions' })
+    expect(fab).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument()
+
+    fireEvent.click(fab)
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument()
+
+    // Tapping "Terminal" opens a terminal tab in the side-dock surface.
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
+    expect(screen.getByTestId('mobile-workspace-overlay')).toBeInTheDocument()
+    expect(screen.getAllByTestId(/^workspace-terminal-/).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByTestId('mobile-workspace-close'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('mobile-workspace-overlay')).not.toBeInTheDocument()
+    })
+
+    // The FAB is back so the next entry can be opened the same way.
+    fireEvent.click(screen.getByRole('button', { name: 'Quick actions' }))
+
+    // Tapping "Files" opens a side-dock file tab and lifts it into the
+    // full-screen overlay (the side dock itself stays mobile-hidden).
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+    expect(screen.getByTestId('mobile-workspace-overlay')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-surface-side')).toBeInTheDocument()
+    expect(screen.queryByTestId('workbench-panel')).not.toBeInTheDocument()
+
+    // Closing hides the overlay and resets the layout back to hidden.
+    fireEvent.click(screen.getByTestId('mobile-workspace-close'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('mobile-workspace-overlay')).not.toBeInTheDocument()
+    })
+    expect(useWorkspaceStore.getState().bySession[sessionId]?.layout).toBe('hidden')
   })
 
   it('renders a bottom terminal panel in the current session cwd and can promote it to a tab', async () => {

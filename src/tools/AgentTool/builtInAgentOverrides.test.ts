@@ -5,6 +5,7 @@ import * as path from 'path'
 import { EFFORT_LEVELS } from '../../utils/effort.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
+import { isolateModelDefaultsEnv } from '../../testUtils/modelEnv.js'
 
 // strictPluginOnlyCustomization comes from managed settings, whose path is
 // memoized without a cache key and cannot be redirected on a non-ant build.
@@ -22,6 +23,8 @@ const { getBuiltInAgents, getBuiltInAgentsWithoutOverrides } = await import(
 )
 const { BUILT_IN_AGENT_OVERRIDE_EFFORT_LEVELS, resolveBuiltInAgentOverrides } =
   await import('./builtInAgentOverrides.js')
+
+isolateModelDefaultsEnv()
 
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 

@@ -1,0 +1,850 @@
+diff --git a/desktop/src/components/activity/SessionActivityPanel.test.tsx b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+index ec84458..d5934b4 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.test.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.test.tsx
+@@ -399,7 +399,14 @@ describe('SessionActivityPanel', () => {
+     expect(screen.getByText('Summary')).toBeInTheDocument()
+     expect(screen.getByText('Task completed with a long markdown report')).toBeInTheDocument()
+     expect(screen.getByText('Usage')).toBeInTheDocument()
+-    expect(screen.getByText('94.3k tokens · 1m 7s')).toBeInTheDocument()
++    expect(screen.getByText('94.3k tokens')).toBeInTheDocument()
++    // The duration is its own right-aligned slot on the detail card's *header*,
++    // not a details field: shell tasks report no usage, so a slot on the usage
++    // row disappeared on exactly the tasks worth timing. It is shown twice on
++    // purpose: once on the collapsed row and once in the expanded detail.
++    expect(screen.getAllByText('1m 7s')).toHaveLength(2)
++    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
++    expect(document.querySelector('[data-activity-duration="true"]')).not.toBeNull()
+ 
+     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
+ 
+@@ -991,6 +998,48 @@ describe('SessionActivityPanel', () => {
+     expect(screen.getByRole('button', { name: /open run a · cached/i })).toBeInTheDocument()
+   })
+ 
++  it('times a shell task that reports no usage at all, from its event clock', () => {
++    // The case that made the old slot useless: a shell background task carries
++    // no `usage`, so the duration had nothing to attach to and the reader saw
++    // no execution time on the rows they most want timed.
++    render(
++      <SessionActivityPanel
++        model={model({
++          sections: {
++            ...model().sections,
++            backgroundTasks: {
++              id: 'backgroundTasks',
++              title: 'Background Tasks',
++              emptyLabel: 'No background tasks',
++              rows: [{
++                id: 'bash-no-usage',
++                section: 'backgroundTasks',
++                label: 'Rebuild renderer dist',
++                status: 'completed',
++                description: 'bun run build:renderer',
++                taskId: 'bash-task-2',
++                taskType: 'local_bash',
++                startedAt: 1_000_000,
++                updatedAt: 1_000_000 + 125_000,
++                openable: false,
++              }],
++            },
++          },
++        })}
++        open
++        onClose={vi.fn()}
++        onOpenSubagent={vi.fn()}
++      />,
++    )
++
++    // 125 s of wall clock, rendered by the panel's own duration convention.
++    expect(screen.getByText('2m 5s')).toBeInTheDocument()
++    fireEvent.click(screen.getByRole('button', { name: /open background task/i }))
++    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
++    // Nothing invented: no token row was conjured for a task that reported none.
++    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
++  })
++
+   it('does not render when closed', () => {
+     render(<SessionActivityPanel model={model()} open={false} onClose={vi.fn()} onOpenSubagent={vi.fn()} />)
+ 
+diff --git a/desktop/src/components/activity/SessionActivityPanel.tsx b/desktop/src/components/activity/SessionActivityPanel.tsx
+index 8287ea4..2ca317b 100644
+--- a/desktop/src/components/activity/SessionActivityPanel.tsx
++++ b/desktop/src/components/activity/SessionActivityPanel.tsx
+@@ -8,6 +8,7 @@ import { useDismissable } from '@/hooks/useDismissable'
+ import { AgentMascot } from './AgentMascot'
+ import { getVisibleActivitySections, type ActivityRow, type ActivitySectionId, type SessionActivityModel } from './sessionActivityModel'
+ import { useTranslation } from '../../i18n'
++import { useSettingsStore } from '../../stores/settingsStore'
+ import type { BackgroundAgentTask } from '../../types/chat'
+ import type { TeamMember } from '../../types/team'
+ import { formatTokenCount } from '../../lib/formatTokenCount'
+@@ -126,6 +127,29 @@ function formatBackgroundDuration(ms: number | undefined, t: TranslationFn): str
+   return t('chat.duration.minutesSeconds', { minutes, seconds })
+ }
+ 
++/**
++ * How long a background task ran, for a row that may carry either measure.
++ *
++ * The CLI reports `usage.durationMs` for agent-backed tasks and nothing at all
++ * for shell tasks, so a reported value is preferred but is absent on exactly
++ * the rows a reader most often wants timed. The client's own event clock
++ * (`startedAt` → `updatedAt`) then supplies the span. A zero span stays
++ * unmeasured rather than rendering as "1s": an instant is not an observation.
++ */
++function backgroundTaskDurationMs(row: ActivityRow): number | undefined {
++  const reported = row.usage?.durationMs
++  if (typeof reported === 'number' && Number.isFinite(reported) && reported > 0) return reported
++  const { startedAt, updatedAt } = row
++  if (
++    typeof startedAt === 'number' && Number.isFinite(startedAt) &&
++    typeof updatedAt === 'number' && Number.isFinite(updatedAt) &&
++    updatedAt > startedAt
++  ) {
++    return updatedAt - startedAt
++  }
++  return undefined
++}
++
+ function hasBackgroundTaskDetails(row: ActivityRow): boolean {
+   return Boolean(
+     row.description ||
+@@ -134,7 +158,7 @@ function hasBackgroundTaskDetails(row: ActivityRow): boolean {
+       row.taskType ||
+       row.workflowName ||
+       row.usage?.totalTokens ||
+-      row.usage?.durationMs,
++      backgroundTaskDurationMs(row),
+   )
+ }
+ 
+@@ -401,6 +425,9 @@ function ActivityRowView({
+   selected?: boolean
+ }) {
+   const t = useTranslation()
++  // 关闭会话扩展信息时隐藏本 fork 新增的行耗时；缺省视为开启。
++  // 必须在下方 groupProgress 提前返回之前读取，避免条件式调用 Hook。
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   // A workflow phase is a heading over its agents, not a row you can open.
+   // Rendering it as one made a fan-out read as a flat list where the stage
+   // boundaries were invisible.
+@@ -440,6 +467,12 @@ function ActivityRowView({
+       : isTask && row.summary && row.summary !== row.label
+         ? row.summary
+         : undefined
++  // Execution time on the right of the row. Deliberately not for subagents:
++  // clicking one opens its run detail, and the floating card is too narrow to
++  // carry another field on every agent line (the row would truncate the label).
++  const rowDuration = row.section === 'tasks' || row.section === 'backgroundTasks'
++    ? formatBackgroundDuration(backgroundTaskDurationMs(row), t)
++    : undefined
+   const content = (
+     <>
+       {isTask ? (
+@@ -463,6 +496,14 @@ function ActivityRowView({
+           </span>
+         ) : null}
+       </span>
++      {sessionExtendedInfo !== false && rowDuration ? (
++        <span
++          data-activity-duration="true"
++          className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
++        >
++          {rowDuration}
++        </span>
++      ) : null}
+       {isTask ? null : (
+         <ActivityStatusIndicator
+           status={displayStatus}
+@@ -573,13 +614,18 @@ function ActivityRowView({
+ 
+ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+   const t = useTranslation()
+-  const duration = formatBackgroundDuration(row.usage?.durationMs, t)
+-  const usageParts = [
+-    typeof row.usage?.totalTokens === 'number'
+-      ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
+-      : '',
+-    duration,
+-  ].filter(Boolean)
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
++  // The card's own header carries the execution time, not a details field: it
++  // belongs to the task as a whole, and putting it on the usage row tied it to
++  // a row that shell tasks never have (they report no usage at all), so the
++  // time silently vanished on exactly the tasks worth timing.
++  // 关闭扩展信息只令该耗时字段消失，卡片其余字段照常渲染（见下方 return）。
++  const duration = sessionExtendedInfo === false
++    ? undefined
++    : formatBackgroundDuration(backgroundTaskDurationMs(row), t)
++  const usageTokens = typeof row.usage?.totalTokens === 'number'
++    ? t('chat.backgroundAgents.tokens', { count: formatTokenCount(row.usage.totalTokens) })
++    : ''
+   const details = [
+     row.taskType || row.workflowName
+       ? { label: t('session.activity.details.type'), value: getTaskTypeLabel(row.taskType, t) }
+@@ -593,17 +639,27 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
+     row.outputFile
+       ? { label: t('session.activity.details.outputFile'), value: row.outputFile }
+       : null,
+-    usageParts.length > 0
+-      ? { label: t('session.activity.details.usage'), value: usageParts.join(' · ') }
++    usageTokens
++      ? { label: t('session.activity.details.usage'), value: usageTokens }
+       : null,
+   ].filter((item): item is { label: string; value: string } => Boolean(item?.value))
+ 
+-  if (details.length === 0) return null
++  if (details.length === 0 && !duration) return null
+ 
+   return (
+     <div className="mx-2 mb-1.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
+-      <div className="mb-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+-        {t('session.activity.details.title')}
++      <div className="mb-2 flex items-baseline justify-between gap-2">
++        <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
++          {t('session.activity.details.title')}
++        </span>
++        {duration ? (
++          <span
++            data-activity-detail-duration="true"
++            className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
++          >
++            {duration}
++          </span>
++        ) : null}
+       </div>
+       <dl className="space-y-2">
+         {details.map((detail) => (
+diff --git a/desktop/src/components/activity/sessionActivityModel.ts b/desktop/src/components/activity/sessionActivityModel.ts
+index 2c616e6..aece933 100644
+--- a/desktop/src/components/activity/sessionActivityModel.ts
++++ b/desktop/src/components/activity/sessionActivityModel.ts
+@@ -48,6 +48,12 @@ export type ActivityRow = {
+   dismissKey?: string
+   outputFile?: string
+   usage?: BackgroundAgentTaskUsage
++  /**
++   * First event that started the task. Together with `updatedAt` this is the
++   * fallback span for tasks that never report `usage.durationMs` — which is
++   * every shell background task, since the CLI sends no usage for them.
++   */
++  startedAt?: number
+   updatedAt?: number | string
+   member?: TeamMember
+   taskHistory?: {
+@@ -546,6 +552,7 @@ function buildBackgroundRow(task: BackgroundAgentTask, section: ActivitySectionI
+     dismissKey: createBackgroundTaskDismissKey(task),
+     outputFile: task.outputFile,
+     usage: task.usage,
++    startedAt: task.startedAt,
+     updatedAt: task.updatedAt,
+     openable: Boolean(task.toolUseId),
+   }
+diff --git a/desktop/src/components/chat/ActivityGroup.test.tsx b/desktop/src/components/chat/ActivityGroup.test.tsx
+index 0a6a3f7..f101e17 100644
+--- a/desktop/src/components/chat/ActivityGroup.test.tsx
++++ b/desktop/src/components/chat/ActivityGroup.test.tsx
+@@ -1,7 +1,7 @@
+ import { beforeEach, describe, expect, it } from 'vitest'
+ import { fireEvent, render, screen, within } from '@testing-library/react'
+ import { ActivityGroup } from './ActivityGroup'
+-import { buildActivitySegments, type ActivityStep } from './activityGroupModel'
++import { agentGroupSpanMs, agentRunDurationMs, agentRunInterval, buildActivitySegments, type ActivityStep } from './activityGroupModel'
+ import { useSettingsStore } from '../../stores/settingsStore'
+ import { translate } from '../../i18n'
+ import type { UIMessage } from '../../types/chat'
+@@ -376,3 +376,53 @@ describe('buildActivitySegments', () => {
+     expect(segments.map((segment) => segment.label)).toEqual(['TaskUpdate', 'SendMessage (2)'])
+   })
+ })
++
++describe('subagent run duration', () => {
++  it('prefers the runtime report, which is the only length a background run has', () => {
++    // A background agent returns from its launch immediately, so the transcript
++    // delta is ~0 while the run itself took three minutes. The report wins, and
++    // it is placed from the call's own start.
++    const interval = agentRunInterval({ timestamp: 1_000 }, { timestamp: 1_050 }, 180_000)
++    expect(interval).toEqual({ startMs: 1_000, endMs: 181_000 })
++    expect(agentRunDurationMs(interval)).toBe(180_000)
++  })
++
++  it('falls back to the tool_use → result delta for a synchronous run', () => {
++    // No report at all (older transcript, or an Explore/Plan agent that emits no
++    // usage block): the blocking call's own span is the run's wall clock.
++    expect(agentRunDurationMs(agentRunInterval({ timestamp: 1_000 }, { timestamp: 121_000 }, undefined))).toBe(120_000)
++    // A zero report is not a measurement — fall through rather than print 0s.
++    expect(agentRunDurationMs(agentRunInterval({ timestamp: 1_000 }, { timestamp: 121_000 }, 0))).toBe(120_000)
++  })
++
++  it('measures nothing until a synchronous run settles', () => {
++    expect(agentRunInterval({ timestamp: 1_000 }, undefined, undefined)).toBeUndefined()
++    // An end before the start is not a span — refuse it rather than print a
++    // negative duration.
++    expect(agentRunInterval({ timestamp: 5_000 }, { timestamp: 1_000 }, undefined)).toBeUndefined()
++  })
++
++  it('spans the group instead of summing it, because a dispatch runs in parallel', () => {
++    // Three agents dispatched together, each taking two minutes. Serial logic
++    // would say 6m; wall clock is 2m.
++    const concurrent = [
++      { startMs: 0, endMs: 120_000 },
++      { startMs: 500, endMs: 120_500 },
++      { startMs: 1_000, endMs: 121_000 },
++    ]
++    expect(agentGroupSpanMs(concurrent)).toBe(121_000)
++    // Summing is the wrong answer for a parallel dispatch; assert the difference
++    // explicitly so a regression to `+=` cannot pass quietly.
++    expect(agentGroupSpanMs(concurrent)).not.toBe(361_500)
++  })
++
++  it('spans from the earliest start to the latest end when runs overlap only partly', () => {
++    expect(agentGroupSpanMs([{ startMs: 0, endMs: 60_000 }, { startMs: 30_000, endMs: 90_000 }])).toBe(90_000)
++  })
++
++  it('ignores unmeasurable members and stays undefined when none were measured', () => {
++    expect(agentGroupSpanMs([{ startMs: 0, endMs: 30_000 }, undefined, { startMs: 10_000, endMs: 60_000 }])).toBe(60_000)
++    expect(agentGroupSpanMs([undefined, undefined])).toBeUndefined()
++    expect(agentGroupSpanMs([])).toBeUndefined()
++  })
++})
+diff --git a/new/desktop/src/components/chat/ToolCallGroup.test.tsx b/desktop/src/components/chat/ToolCallGroup.test.tsx
+new file mode 100644
+index 0000000..a9caed8
+--- /dev/null
++++ b/desktop/src/components/chat/ToolCallGroup.test.tsx
+@@ -0,0 +1,166 @@
++import { afterEach, describe, expect, it } from 'vitest'
++import { cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { ToolCallGroup } from './ToolCallGroup'
++import { useSettingsStore } from '../../stores/settingsStore'
++import type { AgentTaskNotification, UIMessage } from '../../types/chat'
++
++// 会话扩展信息在本 fork 默认开启；用例若关闭后必须复位，避免泄漏到后续用例。
++// cleanup 先卸载，否则仍在挂载的组件会订阅到这里的 setState（act 警告）。
++afterEach(() => {
++  cleanup()
++  useSettingsStore.setState({ sessionExtendedInfo: true })
++})
++
++type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
++type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
++
++function agentCall(id: string, timestamp: number): ToolCall {
++  return {
++    id: `tool-${id}`,
++    type: 'tool_use',
++    toolName: 'Agent',
++    toolUseId: id,
++    input: { description: `Review ${id}` },
++    timestamp,
++  }
++}
++
++function result(id: string, timestamp: number): ToolResult {
++  return {
++    id: `result-${id}`,
++    type: 'tool_result',
++    toolUseId: id,
++    content: 'done',
++    isError: false,
++    timestamp,
++  }
++}
++
++function renderGroup(toolCalls: ToolCall[], results: ToolResult[], notifications: Record<string, AgentTaskNotification> = {}) {
++  return render(
++    <ToolCallGroup
++      sessionId="session-1"
++      toolCalls={toolCalls}
++      resultMap={new Map(results.map((item) => [item.toolUseId, item]))}
++      childToolCallsByParent={new Map()}
++      agentTaskNotifications={notifications}
++    />,
++  )
++}
++
++function rowDurations(): (string | null | undefined)[] {
++  return Array.from(document.querySelectorAll('[data-agent-call-duration="true"]'))
++    .map((node) => node.textContent?.trim())
++}
++
++describe('subagent run duration', () => {
++  it('sums the members into the header and shows each run beside its own actions', () => {
++    // Two synchronous agents, each blocking its own tool call: 120s and 300s.
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 200_000)]
++    const results = [result('a', 121_000), result('b', 500_000)]
++    renderGroup(toolCalls, results)
++
++    // Header is the group's wall-clock SPAN, not the sum: the runs start 199s
++    // apart and the last ends at 500s, so it reads 8m19s — a serial sum would
++    // have said 2m0s + 5m0s = 7m0s.
++    const header = screen.getByRole('button', { name: /dispatched 2 agents/i })
++    const headerDuration = document.querySelector('[data-agent-group-duration="true"]')
++    expect(headerDuration?.textContent?.trim()).toBe('8m19s')
++    expect(header.textContent).toContain('Duration')
++    expect(header.textContent).not.toContain('7m0s')
++    // Rows only mount once the group is expanded, and each stays bare.
++    expect(rowDurations()).toEqual([])
++    fireEvent.click(header)
++    expect(rowDurations()).toEqual(['2m0s', '5m0s'])
++  })
++
++  it('prefers the runtime report for a background agent, whose call returns at launch', () => {
++    // The launch result lands 50ms after the call, but the run itself took
++    // three minutes — only the report knows that.
++    const toolCalls = [agentCall('bg', 1_000)]
++    const results = [result('bg', 1_050)]
++    const notifications: Record<string, AgentTaskNotification> = {
++      bg: {
++        taskId: 'task-bg',
++        toolUseId: 'bg',
++        status: 'completed',
++        usage: { durationMs: 180_000 },
++      },
++    }
++    renderGroup(toolCalls, results, notifications)
++
++    expect(document.querySelector('[data-agent-group-duration="true"]')?.textContent?.trim()).toBe('3m0s')
++    fireEvent.click(screen.getByRole('button', { name: /agent/i }))
++    expect(rowDurations()).toEqual(['3m0s'])
++  })
++
++  it('omits the duration while a synchronous run is still in flight', () => {
++    // No result and no incoming report: there is no trustworthy anchor, so
++    // neither the row nor the header may guess a number.
++    renderGroup([agentCall('a', 1_000)], [])
++
++    const header = screen.getByRole('button', { name: /agent/i })
++    expect(document.querySelector('[data-agent-group-duration="true"]')).toBeNull()
++    fireEvent.click(header)
++    expect(rowDurations()).toEqual([])
++  })
++})
++
++describe('a parallel dispatch is spanned, never summed', () => {
++  it('reports one run\'s length when the agents start together', () => {
++    // Both dispatched at the same instant, each taking two minutes. Summing
++    // would print 4m of work for 2m of wall clock.
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 1_000)]
++    const results = [result('a', 121_000), result('b', 121_000)]
++    renderGroup(toolCalls, results)
++
++    const headerDuration = document.querySelector('[data-agent-group-duration="true"]')
++    expect(headerDuration?.textContent?.trim()).toBe('2m0s')
++  })
++})
++
++describe('subagent group usage', () => {
++  const withUsage = (id: string, timestamp: number, totalTokens: number): ToolResult => ({
++    id: `result-${id}`,
++    type: 'tool_result',
++    toolUseId: id,
++    content: `agentId: ${id} (use SendMessage with to: '${id}')\n<usage>total_tokens: ${totalTokens}\ntool_uses: 3\nduration_ms: 1000</usage>`,
++    isError: false,
++    timestamp,
++  })
++
++  it('adds the members up in the header — work is not shared the way the wall clock is', () => {
++    // Two concurrent runs of 10k and 20k: 30k of work, unlike the span, which
++    // would count the overlap once.
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 1_000)]
++    renderGroup(toolCalls, [withUsage('a', 61_000, 10_000), withUsage('b', 61_000, 20_000)])
++
++    const usage = document.querySelector('[data-agent-group-usage="true"]')
++    expect(usage?.textContent?.trim()).toBe('30.00k')
++  })
++
++  it('omits the number rather than showing zero when nothing reported tokens', () => {
++    renderGroup([agentCall('a', 1_000)], [result('a', 61_000)])
++    expect(document.querySelector('[data-agent-group-usage="true"]')).toBeNull()
++  })
++
++  it('keeps tokens off the individual rows, where only the duration belongs', () => {
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 1_000)]
++    renderGroup(toolCalls, [withUsage('a', 61_000, 10_000), withUsage('b', 61_000, 20_000)])
++    fireEvent.click(screen.getByRole('button', { name: /dispatched 2 agents/i }))
++
++    const rowText = document.querySelector('[data-agent-call-duration="true"]')?.parentElement?.textContent ?? ''
++    expect(rowText).not.toContain('k')
++  })
++
++  it('hides the header usage and duration when session extended info is off', () => {
++    useSettingsStore.setState({ sessionExtendedInfo: false })
++    const toolCalls = [agentCall('a', 1_000), agentCall('b', 1_000)]
++    renderGroup(toolCalls, [withUsage('a', 61_000, 10_000), withUsage('b', 61_000, 20_000)])
++
++    // 收纳栏头部的用量与耗时读数整体消失，但分组本身照常渲染。
++    expect(document.querySelector('[data-agent-group-usage="true"]')).toBeNull()
++    expect(document.querySelector('[data-agent-group-duration="true"]')).toBeNull()
++    expect(screen.getByRole('button', { name: /dispatched 2 agents/i })).toBeTruthy()
++  })
++})
+diff --git a/desktop/src/components/chat/ToolCallGroup.tsx b/desktop/src/components/chat/ToolCallGroup.tsx
+index 7874963..1d5d5b7 100644
+--- a/desktop/src/components/chat/ToolCallGroup.tsx
++++ b/desktop/src/components/chat/ToolCallGroup.tsx
+@@ -6,10 +6,17 @@ import { ActivityGroup } from './ActivityGroup'
+ import { ThinkingBlock } from './ThinkingBlock'
+ import {
+   activityStepToolCalls,
++  agentGroupSpanMs,
++  agentGroupTokens,
++  agentRunDurationMs,
++  agentRunInterval,
++  agentRunTokens,
++  formatActivityTokens,
+   toActivitySteps,
+   toolCallDurationMs,
+   type ActivityStep,
+ } from './activityGroupModel'
++import { formatDuration } from './ToolCallBlock'
+ import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
+ import { isImageGenerationToolName } from './imageGenerationTools'
+ import { useAgentRunActivity } from './useAgentRunActivity'
+@@ -22,6 +29,7 @@ import { useTranslation } from '../../i18n'
+ import type { TranslationKey } from '../../i18n'
+ import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
+ import { useUIStore } from '../../stores/uiStore'
++import { useSettingsStore } from '../../stores/settingsStore'
+ import type { AgentTaskNotification, BackgroundAgentTask, UIMessage } from '../../types/chat'
+ import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
+ 
+@@ -463,6 +471,8 @@ function AgentToolGroup({
+ }: Props) {
+   const { expanded, toggleExpanded } = useExpandableCardState()
+   const t = useTranslation()
++  // 会话扩展信息关闭时，隐藏本 fork 新增的用量/耗时读数；缺省视为开启。
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   const statuses = toolCalls.map((toolCall) =>
+     getAgentStatus({
+       hasResult: resultMap.has(toolCall.toolUseId),
+@@ -476,6 +486,24 @@ function AgentToolGroup({
+   const errorPresent = statuses.some((status) => status === 'failed')
+   const allComplete = statuses.every((status) => status === 'done')
+   const anyStopped = statuses.some((status) => status === 'stopped')
++  // Wall-clock span of the whole dispatch — earliest start to latest end, NOT
++  // the sum of the members: the runtime runs a dispatched group in parallel, so
++  // three concurrent 2-minute agents are 2 minutes, not 6. Members still in
++  // flight contribute nothing until they report or settle, so the number only
++  // ever grows towards the truth.
++  const totalDuration = agentGroupSpanMs(toolCalls.map((toolCall) => agentRunInterval(
++    toolCall,
++    resultMap.get(toolCall.toolUseId),
++    agentTaskNotifications[toolCall.toolUseId]?.usage?.durationMs,
++  )))
++  const totalDurationLabel = totalDuration === undefined ? '' : formatDuration(totalDuration)
++  // Tokens add up where the span does not: a dispatched group runs in parallel,
++  // but the work its members did is not shared between them.
++  const totalTokens = agentGroupTokens(toolCalls.map((toolCall) => agentRunTokens(
++    agentTaskNotifications[toolCall.toolUseId]?.usage?.totalTokens,
++    resultMap.get(toolCall.toolUseId),
++  )))
++  const totalTokensLabel = totalTokens === undefined ? '' : formatActivityTokens(totalTokens)
+ 
+   return (
+     <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+@@ -492,6 +520,27 @@ function AgentToolGroup({
+         <span className="flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
+           {toolCalls.length === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: toolCalls.length })}
+         </span>
++        {/* Flush right, before the status: "dispatched 3 agents · 总耗时5m12s · running".
++            Unlike the per-run number on each row below, this one carries its label —
++            the summary bar has the slack to spend on it. Label and number are two
++            elements joined by a 3px gap rather than one string with a space, because
++            a full space between a CJK label and a digit reads as a hole at this size. */}
++        {sessionExtendedInfo !== false && totalTokensLabel && (
++          <span className="inline-flex shrink-0 items-baseline gap-[3px] whitespace-nowrap text-right text-[12px] text-[var(--color-text-secondary)]">
++            <span>{t('toolGroup.agentTotalUsage')}</span>
++            <span data-agent-group-usage="true" className="tabular-nums">
++              {totalTokensLabel}
++            </span>
++          </span>
++        )}
++        {sessionExtendedInfo !== false && totalDurationLabel && (
++          <span className="inline-flex shrink-0 items-baseline gap-[3px] whitespace-nowrap text-right text-[12px] text-[var(--color-text-secondary)]">
++            <span>{t('toolGroup.agentTotalDuration')}</span>
++            <span data-agent-group-duration="true" className="tabular-nums">
++              {totalDurationLabel}
++            </span>
++          </span>
++        )}
+         {isAnyRunning && (
+           <Badge tone="warning" className="font-semibold">
+             {t('agentStatus.running')}
+@@ -559,6 +608,7 @@ function AgentCallCard({
+   const [expanded, setExpanded] = useState(false)
+   const [previewOpen, setPreviewOpen] = useState(false)
+   const t = useTranslation()
++  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+   const input = toolCall.input && typeof toolCall.input === 'object'
+     ? toolCall.input as Record<string, unknown>
+     : {}
+@@ -614,6 +664,13 @@ function AgentCallCard({
+   const description = typeof input.description === 'string' ? input.description : ''
+   const openRunTitle = description.trim() || 'Agent'
+   const canOpenRun = showOpenRun && !!sessionId && !!toolCall.toolUseId
++  // This run's execution time: the runtime's report for a background agent, the
++  // tool_use → result delta for a synchronous one. Absent while a synchronous
++  // run is still in flight (nothing trustworthy to measure against yet).
++  const durationMs = agentRunDurationMs(
++    agentRunInterval(toolCall, result, agentTaskNotification?.usage?.durationMs),
++  )
++  const durationLabel = durationMs === undefined ? '' : formatDuration(durationMs)
+ 
+   return (
+     <div data-agent-call-layout="row">
+@@ -686,6 +743,15 @@ function AgentCallCard({
+             {t('toolGroup.openRun')}
+           </Button>
+         )}
++        {/* Between the actions and the status: "… · Open run · 5m12s · done". */}
++        {sessionExtendedInfo !== false && durationLabel && (
++          <span
++            data-agent-call-duration="true"
++            className="shrink-0 whitespace-nowrap font-mono text-[11.5px] tabular-nums text-[var(--color-text-tertiary)]"
++          >
++            {durationLabel}
++          </span>
++        )}
+         <Badge tone={statusTone} className="font-semibold">
+           {statusLabel}
+         </Badge>
+diff --git a/desktop/src/components/chat/activityGroupModel.ts b/desktop/src/components/chat/activityGroupModel.ts
+index faed376..5d8e186 100644
+--- a/desktop/src/components/chat/activityGroupModel.ts
++++ b/desktop/src/components/chat/activityGroupModel.ts
+@@ -55,6 +55,119 @@ export function toolCallDurationMs(
+   return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
+ }
+ 
++/**
++ * When one Agent (subagent) run started and ended, on the parent session's clock.
++ *
++ * The runtime dispatches a group's agents **in parallel**, so a group's total is
++ * a span over intervals, never a sum of durations — three concurrent 2-minute
++ * runs are 2 minutes of wall clock, not 6. Measuring that needs both ends of each
++ * run, which is why the interval (not just a duration) is the primitive here.
++ *
++ * `endMs` comes from the runtime's own report when there is one —
++ * `AgentTaskNotification.usage.durationMs`, carried by `task_progress` /
++ * `task_notification` — because a *background* agent returns from its launch
++ * immediately: its tool_result lands ~milliseconds later while the run itself
++ * takes minutes, so the report is the only truthful length. A *synchronous*
++ * agent blocks its tool call, so tool_use → tool_result is that run's real span
++ * (the same measurement `toolCallDurationMs` uses for every other tool) and is
++ * used when nothing was reported: older transcripts, and the one-shot
++ * Explore/Plan agents that emit no `<usage>` block at all.
++ *
++ * `undefined` while a synchronous run is still in flight — there is no
++ * trustworthy anchor to tick from, so the caller shows no number rather than a
++ * guessed one.
++ */
++export type AgentRunInterval = { startMs: number; endMs: number }
++
++export function agentRunInterval(
++  toolCall: Pick<ToolCall, 'timestamp'>,
++  result: Pick<ToolResult, 'timestamp'> | undefined,
++  reportedDurationMs?: number,
++): AgentRunInterval | undefined {
++  const startMs = toolCall.timestamp
++  if (!Number.isFinite(startMs)) return undefined
++  if (typeof reportedDurationMs === 'number' && Number.isFinite(reportedDurationMs) && reportedDurationMs > 0) {
++    return { startMs, endMs: startMs + reportedDurationMs }
++  }
++  const endMs = result?.timestamp
++  if (typeof endMs !== 'number' || !Number.isFinite(endMs) || endMs < startMs) return undefined
++  return { startMs, endMs }
++}
++
++/**
++ * Tokens one subagent run reported.
++ *
++ * A background agent reports them on the task notification; a synchronous one
++ * reports them in the `<usage>` block the Agent tool appends to its own result,
++ * which the transcript keeps as ordinary text. Unlike the duration, this number
++ * cannot be reconstructed from the span, so a run that reported neither is
++ * simply uncounted rather than guessed at.
++ */
++export function agentRunTokens(
++  reportedTokens: number | undefined,
++  result: Pick<ToolResult, 'content'> | undefined,
++): number | undefined {
++  if (typeof reportedTokens === 'number' && Number.isFinite(reportedTokens) && reportedTokens > 0) {
++    return reportedTokens
++  }
++  if (!result || typeof result.content === 'undefined') return undefined
++  const match = /<usage>[\s\S]*?\btotal_tokens:\s*(\d+)/.exec(extractTextContent(result.content))
++  if (!match) return undefined
++  const tokens = Number(match[1])
++  return Number.isFinite(tokens) && tokens > 0 ? tokens : undefined
++}
++
++/**
++ * Tokens a whole subagent group reported: the members' counts added up.
++ *
++ * Summed, unlike {@link agentGroupSpanMs} — tokens are work done, not time
++ * elapsed, so three concurrent runs of 10k are 30k of work rather than 10k.
++ * Returns `undefined` when no member reported one, so the header omits the
++ * number instead of printing `0`.
++ */
++export function agentGroupTokens(
++  tokens: ReadonlyArray<number | undefined>,
++): number | undefined {
++  let total = 0
++  let measured = false
++  for (const value of tokens) {
++    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) continue
++    total += value
++    measured = true
++  }
++  return measured ? total : undefined
++}
++
++/** One run's own length, for the row that shows it. */
++export function agentRunDurationMs(interval: AgentRunInterval | undefined): number | undefined {
++  return interval ? interval.endMs - interval.startMs : undefined
++}
++
++/**
++ * Wall-clock span of a subagent group: earliest start to latest end.
++ *
++ * The union of the members' intervals, so concurrent runs are counted once —
++ * the same reason {@link activityDurationMs} sums its steps: those steps (a
++ * thought, then a tool) genuinely happen in sequence, whereas a dispatched group
++ * genuinely runs at once. Runs that are still in flight, or that carried no
++ * usable timestamps, contribute nothing; a group where none was measurable
++ * returns `undefined` so the header prints no number instead of `0s`.
++ */
++export function agentGroupSpanMs(
++  intervals: ReadonlyArray<AgentRunInterval | undefined>,
++): number | undefined {
++  let spanStart = Infinity
++  let spanEnd = -Infinity
++  for (const interval of intervals) {
++    if (!interval) continue
++    if (!Number.isFinite(interval.startMs) || !Number.isFinite(interval.endMs)) continue
++    if (interval.startMs < spanStart) spanStart = interval.startMs
++    if (interval.endMs > spanEnd) spanEnd = interval.endMs
++  }
++  if (spanStart === Infinity || spanEnd < spanStart) return undefined
++  return spanEnd - spanStart
++}
++
+ const TOOL_VERBS: Record<string, (count: number, t: Translate) => string> = {
+   Read: (n, t) => n === 1 ? t('toolGroup.readOne') : t('toolGroup.readMany', { count: n }),
+   Write: (n, t) => n === 1 ? t('toolGroup.createdOne') : t('toolGroup.createdMany', { count: n }),
+diff --git a/desktop/src/i18n/locales/en.ts b/desktop/src/i18n/locales/en.ts
+index 027ab4f..a0b42ef 100644
+--- a/desktop/src/i18n/locales/en.ts
++++ b/desktop/src/i18n/locales/en.ts
+@@ -2258,6 +2258,9 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
+   'settings.general.thinkingSendBackTitle': 'Send thinking history to the backend API',
+   'settings.general.thinkingSendBackHint': 'When off, prior thinking blocks are stripped from API requests only; they stay in your local session history and remain viewable in the conversation.',
+   'settings.general.compactionTitle': 'Context compaction',
++  'settings.general.sessionExtendedInfoTitle': 'Session detail readouts',
++  'settings.general.sessionExtendedInfoDescription': 'Controls the usage and timing readouts in the session UI. Off keeps only the usage in the turn footer.',
++  'settings.general.sessionExtendedInfoHint': 'Covers: the token usage and duration beside a thinking block, the activity bar\'s total usage and duration, per-subagent durations, background-task durations, and the TPS meter. Tied to “send thinking back”: with it on, the activity bar shows one real total for the whole turn; with it off, thinking tokens can only be estimated, so the figure splits into thinking + tool usage. Timing is the same either way. The usage in the turn footer is not affected and always shows.',
+   'settings.general.compactionDescription': 'Choose which engine compacts the conversation when context runs low. Changes take effect on the next compaction.',
+   'settings.general.compactionBackend.algorithm.label': 'Algorithmic (VCC)',
+   'settings.general.compactionBackend.algorithm.description': 'Transcript-preserving structured summary, no LLM call. Original messages stay retrievable via vcc_recall.',
+@@ -2875,6 +2878,8 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
+   'toolGroup.searchedMany': 'searched {count} patterns',
+   'toolGroup.agentOne': 'dispatched an agent',
+   'toolGroup.agentMany': 'dispatched {count} agents',
++  'toolGroup.agentTotalDuration': 'Duration',
++  'toolGroup.agentTotalUsage': 'Usage',
+   'toolGroup.thought': 'Thinking',
+   'toolGroup.thoughtMany': 'Thought {count} times',
+   'toolGroup.failedCount': '{count} failed',
+diff --git a/desktop/src/i18n/locales/jp.ts b/desktop/src/i18n/locales/jp.ts
+index 4c8ea39..8167063 100644
+--- a/desktop/src/i18n/locales/jp.ts
++++ b/desktop/src/i18n/locales/jp.ts
+@@ -2260,6 +2260,9 @@ export const jp: Record<TranslationKey, string> = {
+   'settings.general.thinkingSendBackTitle': '思考履歴をバックエンド API に送信する',
+   'settings.general.thinkingSendBackHint': 'オフの場合、直前の思考ブロックは API リクエストからのみ除去されます。ローカルのセッション履歴には保存され、会話内で引き続き閲覧できます。',
+   'settings.general.compactionTitle': 'コンテキスト圧縮',
++  'settings.general.sessionExtendedInfoTitle': 'セッション拡張情報',
++  'settings.general.sessionExtendedInfoDescription': 'セッション画面の使用量・所要時間の表示を切り替えます。オフではターンフッターの使用量のみ残ります。',
++  'settings.general.sessionExtendedInfoHint': '対象：思考ブロック右側のトークン使用量と所要時間、集約バーの合計使用量と合計所要時間、サブエージェント行の所要時間、バックグラウンドタスクの所要時間、TPS メーター。「思考の送り返し」と連動します——オンの場合は集約バーにターン全体の実測合計を表示し、オフの場合は思考分を推定するため「思考＋ツール」の2区分表示になります（所要時間の口径は同じ）。ターンフッターの使用量は本スイッチの対象外で、常に表示されます。',
+   'settings.general.compactionDescription': 'コンテキストが逼迫した際の会話圧縮に使うエンジンを指定します。変更は次回圧縮時に反映されます。',
+   'settings.general.compactionBackend.algorithm.label': 'アルゴリズム（VCC）',
+   'settings.general.compactionBackend.algorithm.description': 'トランスクリプト保持の構造化要約で、LLM 呼び出しなし。元のメッセージは vcc_recall で検索可能。',
+@@ -2877,6 +2880,8 @@ export const jp: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '{count} 件のパターンを検索しました',
+   'toolGroup.agentOne': 'エージェントを 1 件起動しました',
+   'toolGroup.agentMany': '{count} 件のエージェントを起動しました',
++  'toolGroup.agentTotalDuration': '合計',
++  'toolGroup.agentTotalUsage': '使用量',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '{count} 回思考',
+   'toolGroup.failedCount': '{count} 件失敗',
+diff --git a/desktop/src/i18n/locales/kr.ts b/desktop/src/i18n/locales/kr.ts
+index 9f49a89..5171705 100644
+--- a/desktop/src/i18n/locales/kr.ts
++++ b/desktop/src/i18n/locales/kr.ts
+@@ -2262,6 +2262,9 @@ export const kr: Record<TranslationKey, string> = {
+   'settings.general.thinkingSendBackTitle': '사고 기록을 백엔드 API로 보내기',
+   'settings.general.thinkingSendBackHint': '끄면 이전 사고 블록이 API 요청에서만 제거됩니다. 로컬 세션 기록에는 그대로 보관되어 대화에서 계속 볼 수 있습니다.',
+   'settings.general.compactionTitle': '컨텍스트 압축',
++  'settings.general.sessionExtendedInfoTitle': '세션 확장 정보',
++  'settings.general.sessionExtendedInfoDescription': '세션 화면의 사용량·소요 시간 표시를 제어합니다. 끄면 턴 하단의 사용량만 남습니다.',
++  'settings.general.sessionExtendedInfoHint': '대상: 사고 블록 오른쪽의 토큰 사용량과 소요 시간, 집계 바의 총 사용량과 총 소요 시간, 서브에이전트 행의 소요 시간, 백그라운드 작업 소요 시간, TPS 미터. 「사고 되돌려보내기」와 연동됩니다——켜면 집계 바에 턴 전체의 실측 합계를 표시하고, 끄면 사고분은 추정치이므로 「사고 + 도구」 두 구간으로 나누어 표시합니다(소요 시간 기준은 동일). 턴 하단의 사용량은 이 스위치의 영향을 받지 않고 항상 표시됩니다.',
+   'settings.general.compactionDescription': '컨텍스트가 부족해졌을 때 대화를 압축할 엔진을 선택합니다. 변경은 다음 압축부터 적용됩니다.',
+   'settings.general.compactionBackend.algorithm.label': '알고리즘 (VCC)',
+   'settings.general.compactionBackend.algorithm.description': '전사문을 보존하는 구조화된 요약으로 LLM 호출이 없습니다. 원본 메시지는 vcc_recall로 검색할 수 있습니다.',
+@@ -2878,6 +2881,8 @@ export const kr: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '패턴 {count}개를 검색했습니다',
+   'toolGroup.agentOne': '에이전트 1개를 디스패치했습니다',
+   'toolGroup.agentMany': '에이전트 {count}개를 디스패치했습니다',
++  'toolGroup.agentTotalDuration': '총',
++  'toolGroup.agentTotalUsage': '사용량',
+   'toolGroup.thought': '사고',
+   'toolGroup.thoughtMany': '{count}번 사고',
+   'toolGroup.failedCount': '{count}건 실패',
+diff --git a/desktop/src/i18n/locales/zh-TW.ts b/desktop/src/i18n/locales/zh-TW.ts
+index fd75d04..6e858af 100644
+--- a/desktop/src/i18n/locales/zh-TW.ts
++++ b/desktop/src/i18n/locales/zh-TW.ts
+@@ -2258,6 +2258,9 @@ export const zh: Record<TranslationKey, string> = {
+   'settings.general.thinkingSendBackTitle': '將思考內容回傳後端 API',
+   'settings.general.thinkingSendBackHint': '關閉後，歷史中的思考內容只從發給後端的請求中剝離；本地會話歷史完整保留，仍可在會話中回看。',
+   'settings.general.compactionTitle': '上下文壓縮',
++  'settings.general.sessionExtendedInfoTitle': '會話擴展資訊',
++  'settings.general.sessionExtendedInfoDescription': '控制會話介面中用量與耗時資訊的顯示，關閉後只保留輪次頁腳的用量。',
++  'settings.general.sessionExtendedInfoHint': '關聯：思考欄右側的 token 用量與耗時、收納欄的總用量與總耗時、子代理列的耗時、後台任務耗時、TPS 速度表。與「思考回傳」聯動——回傳時收納欄顯示整輪總 token 用量與總耗時（口徑為 API 真實計數）；不回傳時思考用量只能估算，故拆為「思考用量 + 工具用量」兩段顯示，耗時口徑不變。輪次頁腳的「用量」不受本開關影響，始終顯示。',
+   'settings.general.compactionDescription': '選擇上下文用盡時壓縮會話的引擎。更改在下一次壓縮時生效。',
+   'settings.general.compactionBackend.algorithm.label': '演算法壓縮（VCC）',
+   'settings.general.compactionBackend.algorithm.description': '保留轉錄的結構化摘要，不呼叫 LLM。原始訊息仍可透過 vcc_recall 檢索。',
+@@ -2874,6 +2877,8 @@ export const zh: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '搜尋了 {count} 個模式',
+   'toolGroup.agentOne': '派遣了一個代理',
+   'toolGroup.agentMany': '派遣了 {count} 個代理',
++  'toolGroup.agentTotalDuration': '總耗時',
++  'toolGroup.agentTotalUsage': '用量',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '思考 {count} 次',
+   'toolGroup.failedCount': '{count} 項失敗',
+diff --git a/desktop/src/i18n/locales/zh.ts b/desktop/src/i18n/locales/zh.ts
+index f51debc..da31c1f 100644
+--- a/desktop/src/i18n/locales/zh.ts
++++ b/desktop/src/i18n/locales/zh.ts
+@@ -2258,6 +2258,9 @@ export const zh: Record<TranslationKey, string> = {
+   'settings.general.thinkingSendBackTitle': '将思考内容回传后端 API',
+   'settings.general.thinkingSendBackHint': '关闭后，历史中的思考内容只从发给后端的请求中剥离；本地会话历史完整保留，仍可在会话中回看。',
+   'settings.general.compactionTitle': '上下文压缩',
++  'settings.general.sessionExtendedInfoTitle': '会话扩展信息',
++  'settings.general.sessionExtendedInfoDescription': '控制会话界面中用量与耗时信息的显示，关闭后只保留轮次页脚的用量。',
++  'settings.general.sessionExtendedInfoHint': '关联：思考栏右侧的 token 用量与耗时、收纳栏的总用量与总耗时、子代理行的耗时、后台任务耗时、TPS 速度表。与「思考回传」联动——回传时收纳栏显示整轮总 token 用量与总耗时（口径为 API 真实计数）；不回传时思考用量只能估算，故拆为「思考用量 + 工具用量」两段显示，耗时口径不变。轮次页脚的「用量」不受本开关影响，始终显示。',
+   'settings.general.compactionDescription': '选择上下文用尽时压缩会话的引擎。更改在下一次压缩时生效。',
+   'settings.general.compactionBackend.algorithm.label': '算法压缩（VCC）',
+   'settings.general.compactionBackend.algorithm.description': '保留转录的结构化摘要，不调用 LLM。原始消息仍可通过 vcc_recall 检索。',
+@@ -2876,6 +2879,8 @@ export const zh: Record<TranslationKey, string> = {
+   'toolGroup.searchedMany': '搜索了 {count} 个模式',
+   'toolGroup.agentOne': '派遣了一个代理',
+   'toolGroup.agentMany': '派遣了 {count} 个代理',
++  'toolGroup.agentTotalDuration': '总耗时',
++  'toolGroup.agentTotalUsage': '用量',
+   'toolGroup.thought': '思考',
+   'toolGroup.thoughtMany': '思考 {count} 次',
+   'toolGroup.failedCount': '{count} 项失败',

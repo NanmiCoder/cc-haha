@@ -367,12 +367,17 @@ describe('Computer Use platform capability', () => {
     })
   })
 
-  it('routes Windows to compatibility and rejects unsupported platforms', async () => {
+  it('routes Windows and Linux to compatibility and rejects unsupported platforms', async () => {
     const { resolveComputerUseCapability } = await importComputerUseApi()
 
     expect(resolveComputerUseCapability('win32', null, false).engine)
       .toBe('windows-compat')
     expect(resolveComputerUseCapability('linux', null, false)).toMatchObject({
+      supported: true,
+      engine: 'linux-x11',
+      cuHelper: { available: false, supported: false, reason: 'unsupported_platform' },
+    })
+    expect(resolveComputerUseCapability('freebsd', null, false)).toMatchObject({
       supported: false,
       engine: 'unsupported',
     })
@@ -383,13 +388,14 @@ describe('runPipInstallWithFallback', () => {
   it('rejects setup on unsupported platforms before writing runtime files', async () => {
     const { getUnsupportedComputerUsePlatformStep } = await importComputerUseApi()
 
-    expect(getUnsupportedComputerUsePlatformStep('linux')).toEqual({
-      name: 'platform',
-      ok: false,
-      message: 'Computer Use does not support platform: linux',
-    })
+    expect(getUnsupportedComputerUsePlatformStep('linux')).toBeNull()
     expect(getUnsupportedComputerUsePlatformStep('darwin')).toBeNull()
     expect(getUnsupportedComputerUsePlatformStep('win32')).toBeNull()
+    expect(getUnsupportedComputerUsePlatformStep('freebsd')).toEqual({
+      name: 'platform',
+      ok: false,
+      message: 'Computer Use does not support platform: freebsd',
+    })
   })
 
   it('builds a clear unsupported Python version step for setup', async () => {

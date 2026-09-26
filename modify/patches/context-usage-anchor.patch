@@ -1,0 +1,166 @@
+diff --git a/src/server/__tests__/conversations.test.ts b/src/server/__tests__/conversations.test.ts
+index c09ddfa5..1d99c8d8 100644
+--- a/src/server/__tests__/conversations.test.ts
++++ b/src/server/__tests__/conversations.test.ts
+@@ -1263,6 +1263,64 @@ describe('ConversationService', () => {
+     }
+   })
+ 
++  it('should anchor displayed context to the last real usage, not full rough accumulation', async () => {
++    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
++    const previousNodeEnv = process.env.NODE_ENV
++    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-usage-anchored-'))
++    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-usage-anchored-'))
++    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
++    process.env.NODE_ENV = 'development'
++
++    try {
++      const svc = new SessionService()
++      const { sessionId } = await svc.createSession(workDir)
++      const found = await svc.findSessionFile(sessionId)
++      expect(found).not.toBeNull()
++
++      // ~600k chars of text ≈ 150k rough tokens, but the provider reports a
++      // modest 1200-token usage. The displayed total must anchor to that real
++      // usage (plus the rough delta after it, which is 0 here) rather than the
++      // full self-since-boundary rough accumulation — otherwise bc-compressed
++      // transcripts stay pinned at a high percentage.
++      await fs.appendFile(found!.filePath, JSON.stringify({
++        type: 'assistant',
++        uuid: crypto.randomUUID(),
++        timestamp: '2026-04-27T12:00:00.000Z',
++        cwd: workDir,
++        version: '999.0.0-test',
++        message: {
++          role: 'assistant',
++          model: 'claude-sonnet-4-6',
++          content: [{ type: 'text', text: 'x'.repeat(600_000) }],
++          usage: {
++            input_tokens: 1000,
++            output_tokens: 200,
++          },
++        },
++      }) + '\n')
++
++      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
++
++      expect(contextEstimate?.rawMaxTokens).toBe(200_000)
++      // 150k rough tokens must NOT dominate: total anchors to the 1200 real usage.
++      expect(contextEstimate?.totalTokens).toBe(1200)
++      expect(contextEstimate?.percentage).toBe(1)
++    } finally {
++      if (previousConfigDir === undefined) {
++        delete process.env.CLAUDE_CONFIG_DIR
++      } else {
++        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
++      }
++      if (previousNodeEnv === undefined) {
++        delete process.env.NODE_ENV
++      } else {
++        process.env.NODE_ENV = previousNodeEnv
++      }
++      await fs.rm(tmpConfigDir, { recursive: true, force: true })
++      await fs.rm(workDir, { recursive: true, force: true })
++    }
++  })
++
+   it('should fall back to transcript estimates when provider usage is empty or zero', async () => {
+     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+     const previousNodeEnv = process.env.NODE_ENV
+diff --git a/src/server/services/localIndex/sessionProjector.test.ts b/src/server/services/localIndex/sessionProjector.test.ts
+index 08013850..5fa9b564 100644
+--- a/src/server/services/localIndex/sessionProjector.test.ts
++++ b/src/server/services/localIndex/sessionProjector.test.ts
+@@ -20,6 +20,7 @@ import {
+   SESSION_SUMMARY_PARSER_VERSION,
+   MAX_PROJECTION_RECORD_BYTES,
+   MAX_PROJECTION_RECORDS,
++  MAX_PROJECTION_METADATA_VALUE_BYTES,
+   createSessionProjector,
+   type SessionSourceCandidate,
+ } from './sessionProjector.js'
+@@ -988,7 +989,7 @@ describe('session projector', () => {
+     const projector = createSessionProjector({ database, index, scope: root })
+     try {
+       expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
+-      await appendFile(candidate.path, line({ ...user('small', '2026-01-01T00:00:01.000Z'), uuid: 'x'.repeat(4097) }))
++      await appendFile(candidate.path, line({ ...user('small', '2026-01-01T00:00:01.000Z'), uuid: 'x'.repeat(MAX_PROJECTION_METADATA_VALUE_BYTES + 1) }))
+       await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+     } finally { database.close() }
+   })
+@@ -997,14 +998,14 @@ describe('session projector', () => {
+     const root = await createTempDir('metadata-total-budget')
+     const record = (index: number) => line({ ...user('small', '2026-01-01T00:00:00.000Z'), uuid: `${index}:` + 'x'.repeat(3000) })
+     const candidate = await createCandidate({ root, projectPath: '-repo-a', sessionId: 'metadata-total',
+-      content: Array.from({ length: 3000 }, (_, index) => record(index)).join(''),
++      content: Array.from({ length: 8000 }, (_, index) => record(index)).join(''),
+     })
+     const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+     const index = createSessionIndex(database)
+     const projector = createSessionProjector({ database, index, scope: root })
+     try {
+       expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
+-      await appendFile(candidate.path, Array.from({ length: 3000 }, (_, index) => record(index + 3000)).join(''))
++      await appendFile(candidate.path, Array.from({ length: 4000 }, (_, index) => record(index + 8000)).join(''))
+       await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+     } finally { database.close() }
+   })
+diff --git a/src/server/services/localIndex/sessionProjector.ts b/src/server/services/localIndex/sessionProjector.ts
+index d047356e..e654f987 100644
+--- a/src/server/services/localIndex/sessionProjector.ts
++++ b/src/server/services/localIndex/sessionProjector.ts
+@@ -124,7 +124,10 @@ type SourceProjectionBundle = {
+ 
+ export const MAX_PROJECTION_RECORD_BYTES = 8 * 1024 * 1024
+ export const MAX_PROJECTION_RECORDS = 50_000
+-export const MAX_PROJECTION_METADATA_BYTES = 16 * 1024 * 1024
++export const MAX_PROJECTION_METADATA_BYTES = 32 * 1024 * 1024
++// Per-retained-string cap. Malformed transcripts can carry thinking text
++// mis-parsed into a tool_use name; 4KB was too tight (observed 12KB outlier).
++export const MAX_PROJECTION_METADATA_VALUE_BYTES = 16 * 1024
+ const projectionMetadataBytes = new WeakMap<TranscriptProjection, number>()
+ const projectionRecordCounts = new WeakMap<TranscriptProjection, number>()
+ const MAX_CACHED_PROJECTIONS = 8
+@@ -306,7 +309,7 @@ async function streamProjection(options: {
+               if (++visited > 16_384) throw new ProjectionLimitError()
+               metadataBytes += 64
+               if (typeof value === 'string') {
+-                if (value.length > 4096) throw new ProjectionLimitError()
++                if (Buffer.byteLength(value) > MAX_PROJECTION_METADATA_VALUE_BYTES) throw new ProjectionLimitError()
+                 metadataBytes += Buffer.byteLength(value)
+               } else if (typeof value === 'object') {
+                 for (const key in value) {
+diff --git a/src/server/services/sessionService.ts b/src/server/services/sessionService.ts
+index df57e890..5904b3ef 100644
+--- a/src/server/services/sessionService.ts
++++ b/src/server/services/sessionService.ts
+@@ -2953,6 +2953,8 @@ export class SessionService {
+     const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
+     const providerTokens = promptTokens + latest.outputTokens
+     const hasProviderUsage = providerTokens > 0
++    // estimatedTokens 仍用全量 rough 累加（媒体信任启发式需要「内容估计」为
++    // 正且小于窗口才能触发），显示总量单独走 usage 锚口径（见 totalTokens）。
+     const estimatedTokens = estimatedTokensFromMessages || promptTokens
+     const contextBudget = calculateContextBudget({
+       estimatedTokens,
+@@ -2968,15 +2970,13 @@ export class SessionService {
+       }),
+       hasMediaInput: transcriptHasMediaInput,
+     })
++    // 显示总量走 usage 锚口径（与 auto-compact 的 tokenCountWithEstimation
++    // 同口径）：最后一条真实 usage 总量 + 其后 rough 累加。bc 中间件压缩后
++    // usage 回落 → 百分比收敛，不再被自 boundary 的全量累加钉死 100%。
++    // 低信任+媒体的可疑 usage 尖峰仍走估计口径（ignoredUsageReason 分支）。
+     const totalTokens =
+       hasProviderUsage && !contextBudget.ignoredUsageReason
+-        ? Math.min(
+-            Math.max(
+-              contextBudget.usedTokens,
+-              providerTokens + estimatedTokensAfterUsage,
+-            ),
+-            rawMaxTokens,
+-          )
++        ? Math.min(providerTokens + estimatedTokensAfterUsage, rawMaxTokens)
+         : contextBudget.usedTokens
+     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
+     const usageCategories: TranscriptContextEstimate['categories'] = [

@@ -8,7 +8,7 @@ const COMPLETED_AT = new Date('2026-07-30T07:20:41Z').getTime()
 
 describe('TurnCompletionStamp', () => {
   beforeEach(() => {
-    useSettingsStore.setState({ locale: 'en' })
+    useSettingsStore.setState({ locale: 'en', sessionExtendedInfo: true })
   })
 
   it('reads as a compact clock time plus how long the turn took', () => {
@@ -24,6 +24,37 @@ describe('TurnCompletionStamp', () => {
 
     expect(screen.getByText(formatMessageHoverTime(COMPLETED_AT, 'en'))).toBeTruthy()
     expect(container.querySelector('[data-turn-completion-duration]')).toBeNull()
+  })
+
+  it('shows what the turn spent, before how long it took', () => {
+    const { container } = render(
+      <TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 739_000, outputTokens: 1_500 }} />,
+    )
+
+    expect(screen.getByText('used 1.50k')).toBeTruthy()
+    // Same order as the activity digest: tokens first, elapsed time last.
+    const text = container.textContent ?? ''
+    expect(text.indexOf('used 1.50k')).toBeLessThan(text.indexOf('took 12m 19s'))
+  })
+
+  it('omits the token total for a turn whose calls reported none', () => {
+    const { container } = render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 1_000 }} />)
+
+    expect(container.querySelector('[data-turn-completion-usage]')).toBeNull()
+    expect(screen.getByText('took 1s')).toBeTruthy()
+  })
+
+  it('keeps usage but drops duration when session extended info is off', () => {
+    // 例外：usage 面向所有会话保留；只有 fork 新增的 duration 受开关控制。
+    useSettingsStore.setState({ sessionExtendedInfo: false })
+    const { container } = render(
+      <TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 739_000, outputTokens: 1_500 }} />,
+    )
+
+    expect(screen.getByText('used 1.50k')).toBeTruthy()
+    expect(container.querySelector('[data-turn-completion-usage]')).not.toBeNull()
+    expect(container.querySelector('[data-turn-completion-duration]')).toBeNull()
+    expect(screen.queryByText('took 12m 19s')).toBeNull()
   })
 
   it('carries the exact timestamp as a title for the rounded clock label', () => {

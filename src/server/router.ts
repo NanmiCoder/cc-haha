@@ -26,6 +26,7 @@ import { handleMcpApi } from './api/mcp.js'
 import { handleDiagnosticsApi } from './api/diagnostics.js'
 import { handleDoctorApi } from './api/doctor.js'
 import { handleH5AccessApi } from './api/h5-access.js'
+import { handleTerminalApi } from './api/terminal.js'
 import { handleActivityStatsApi } from './api/activityStats.js'
 import { handleOpenTargetsApi } from './api/open-targets.js'
 import { handleMemoryApi } from './api/memory.js'
@@ -54,17 +55,20 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
   const parts = url.pathname.split('/').filter(Boolean)
   const isProvider = parts[1] === 'providers'
   const isSettings = parts[1] === 'settings'
+  // Only /settings/user uses the General-settings field whitelist; the
+  // output-style and session-cleanup sub-routes validate their own bodies.
+  const isSettingsUser = isSettings && parts.length === 3 && parts[2] === 'user'
   if (!isProvider && !isSettings) return routeApiRequest(req, url)
   if ((isProvider && !remoteProviderRouteAllowed(parts, req.method)) || (isSettings && !remoteSettingsRouteAllowed(parts, req.method))) {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
   try {
     const createsProvider = isProvider && parts.length === 2 && req.method === 'POST'
-    if (createsProvider || (req.method === 'PUT' && (isSettings || (isProvider && parts.length === 3 && parts[2] !== 'reorder')))) {
+    if (createsProvider || (req.method === 'PUT' && (isSettingsUser || (isProvider && parts.length === 3 && parts[2] !== 'reorder')))) {
       const body: unknown = await req.json()
       if (!body || typeof body !== 'object' || Array.isArray(body)) return Response.json({ error: 'Object required' }, { status: 400 })
       const input = { ...body } as Record<string, unknown>
-      if (isSettings && !validateRemoteSettingsPatch(input)) return Response.json({ error: 'Unsupported General setting' }, { status: 400 })
+      if (isSettingsUser && !validateRemoteSettingsPatch(input)) return Response.json({ error: 'Unsupported General setting' }, { status: 400 })
       if (isProvider) {
         const saved = createsProvider ? undefined : await new ProviderService().getProvider(parts[2]!)
         if (saved && remoteProviderNeedsCredentials(saved, input)) {
@@ -89,7 +93,7 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
     const response = await routeApiRequest(req, url)
     if (!response.ok) return response
     const body = await response.json() as Record<string, unknown>
-    if (isSettings && req.method === 'GET') return Response.json(projectRemoteSettings(body))
+    if (isSettingsUser && req.method === 'GET') return Response.json(projectRemoteSettings(body))
     if (isProvider) {
       if (Array.isArray(body.providers)) body.providers = (body.providers as SavedProvider[]).map(projectRemoteProvider)
       if (body.provider && typeof body.provider === 'object') body.provider = projectRemoteProvider(body.provider as SavedProvider)
@@ -194,6 +198,9 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
 
     case 'h5-access':
       return handleH5AccessApi(req, url, segments)
+
+    case 'terminal':
+      return handleTerminalApi(req, url, segments)
 
     case 'activity-stats':
       return handleActivityStatsApi(req, url, segments)

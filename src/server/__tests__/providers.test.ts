@@ -2136,6 +2136,10 @@ describe('ProviderService', () => {
     })
 
     test('round-trips DeepSeek reasoning by model on generic OpenAI Chat hosts', async () => {
+      // This test verifies the round-trip path, which the thinking-send-back gate
+      // disables by default. Enable the env escape hatch so reasoning is sent back.
+      const originalSendThinking = process.env.CC_HAHA_SEND_THINKING_HISTORY
+      process.env.CC_HAHA_SEND_THINKING_HISTORY = '1'
       const originalFetch = globalThis.fetch
       const calls: Array<Record<string, unknown>> = []
       globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -2215,6 +2219,8 @@ describe('ProviderService', () => {
         expect(genericAssistant?.reasoning_content).toBeUndefined()
       } finally {
         globalThis.fetch = originalFetch
+        if (originalSendThinking === undefined) delete process.env.CC_HAHA_SEND_THINKING_HISTORY
+        else process.env.CC_HAHA_SEND_THINKING_HISTORY = originalSendThinking
       }
     })
 
@@ -3451,6 +3457,10 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
   })
 
   test('streamed tool calls survive the proxy and their result is sent back with DeepSeek reasoning', async () => {
+    // Verifies the DeepSeek reasoning round-trip path, which the thinking-send-back
+    // gate disables by default. Enable the env escape hatch so reasoning is sent back.
+    const originalSendThinking = process.env.CC_HAHA_SEND_THINKING_HISTORY
+    process.env.CC_HAHA_SEND_THINKING_HISTORY = '1'
     const { preset, provider } = await createApiSmart()
     const originalFetch = globalThis.fetch
     const calls: any[] = []
@@ -3521,8 +3531,11 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
       ])
     } finally {
       globalThis.fetch = originalFetch
+      if (originalSendThinking === undefined) delete process.env.CC_HAHA_SEND_THINKING_HISTORY
+      else process.env.CC_HAHA_SEND_THINKING_HISTORY = originalSendThinking
     }
   })
+
 })
 
 /**

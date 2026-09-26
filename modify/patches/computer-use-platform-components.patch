@@ -1,0 +1,263 @@
+diff --git a/src/utils/computerUse/pipInstall.test.ts b/src/utils/computerUse/pipInstall.test.ts
+index 55285ae5..0154b49e 100644
+--- a/src/utils/computerUse/pipInstall.test.ts
++++ b/src/utils/computerUse/pipInstall.test.ts
+@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test'
+ 
+ import { buildPipInstallAttempts } from './pipInstall.js'
+ import {
++  bootstrapPipIntoVenv,
+   getComputerUsePythonEnv,
+   getCursorBadgeCommand,
+   installRuntimeDependencies,
++  pythonRuntimeFor,
+   runPipInstallWithFallback,
+ } from './pythonBridge.js'
+ 
+@@ -89,6 +91,90 @@ describe('Windows virtual cursor Python process identity', () => {
+   })
+ })
+ 
++describe('bootstrapPipIntoVenv', () => {
++  test('uses ensurepip when the interpreter has it', async () => {
++    const calls: string[] = []
++    await bootstrapPipIntoVenv({
++      python: '/venv/bin/python3',
++      run: async (file, args) => {
++        calls.push(`${file} ${args.join(' ')}`)
++        return ''
++      },
++      probe: async () => true,
++    })
++    expect(calls).toEqual(['/venv/bin/python3 -m ensurepip --upgrade'])
++  })
++
++  test('falls back to an existing pip when ensurepip is missing', async () => {
++    // Debian/Ubuntu without python3-venv: `-m ensurepip` fails with the module
++    // error, but a pip elsewhere on the machine can install into the venv.
++    const calls: string[] = []
++    await bootstrapPipIntoVenv({
++      python: '/venv/bin/python3',
++      run: async (file, args) => {
++        calls.push(`${file} ${args.join(' ')}`)
++        if (args[0] === '-m') throw new Error("No module named ensurepip")
++        return ''
++      },
++      probe: async file => file === 'pip3',
++    })
++    expect(calls).toEqual([
++      '/venv/bin/python3 -m ensurepip --upgrade',
++      'pip3 --python /venv/bin/python3 install --upgrade pip',
++    ])
++  })
++
++  test('names the Linux remedy when neither ensurepip nor a pip is available', async () => {
++    await expect(
++      bootstrapPipIntoVenv({
++        python: '/venv/bin/python3',
++        platform: 'linux',
++        run: async () => {
++          throw new Error('No module named ensurepip')
++        },
++        probe: async () => false,
++      }),
++    ).rejects.toThrow('python3-venv')
++  })
++
++  test('names the Windows remedy on win32 rather than the Debian package', async () => {
++    // The remedy has to match the host: telling a Windows user to apt-install
++    // python3-venv is the same dead end the raw module error was.
++    const failure = bootstrapPipIntoVenv({
++      python: 'C:\\venv\\Scripts\\python.exe',
++      platform: 'win32',
++      run: async () => {
++        throw new Error('No module named ensurepip')
++      },
++      probe: async () => false,
++    })
++    await expect(failure).rejects.toThrow('ensurepip')
++    await expect(failure).rejects.not.toThrow('python3-venv')
++  })
++})
++
++describe('pythonRuntimeFor', () => {
++  test('maps each Python-backed platform to its own helper and requirements', () => {
++    // The two package sets are not interchangeable: the Windows list carries
++    // pywin32/screeninfo, the Linux one python-xlib.
++    expect(pythonRuntimeFor('win32')).toEqual({
++      helper: 'win_helper.py',
++      requirements: 'requirements-win.txt',
++    })
++    expect(pythonRuntimeFor('linux')).toEqual({
++      helper: 'linux_helper.py',
++      requirements: 'requirements-linux.txt',
++    })
++  })
++
++  test('has no Python components on macOS or an unknown platform', () => {
++    // macOS drives the signed native cu-helper; a two-way "Linux, else
++    // Windows" choice used to hand it the Windows-only package set.
++    expect(pythonRuntimeFor('darwin')).toBeNull()
++    expect(pythonRuntimeFor('freebsd' as NodeJS.Platform)).toBeNull()
++  })
++})
++
+ describe('installRuntimeDependencies', () => {
+   test('upgrades pip before installing requirements', async () => {
+     const calls: string[] = []
+diff --git a/src/utils/computerUse/pythonBridge.ts b/src/utils/computerUse/pythonBridge.ts
+index 9263cafa..68f7a459 100644
+--- a/src/utils/computerUse/pythonBridge.ts
++++ b/src/utils/computerUse/pythonBridge.ts
+@@ -28,9 +28,37 @@ const isWindows = process.platform === 'win32'
+ const isLinux = process.platform === 'linux'
+ const windowsInputTag = randomBytes(4).readUInt32LE(0) || 0x43434841
+ 
++/**
++ * The Python-backed Computer Use components differ per platform: Windows drives
++ * `win_helper.py` (needs pywin32/screeninfo), Linux drives `linux_helper.py`
++ * (needs python-xlib). macOS runs the signed native `cu-helper` and must never
++ * bootstrap a Python venv, so it has no Python components at all — and neither
++ * does an unrecognised platform.
++ *
++ * Resolved as a table rather than "Linux, else Windows": the old two-way choice
++ * silently handed a macOS (or unknown) host the Windows-only package set.
++ */
++export type PythonRuntimeComponents = { helper: string; requirements: string }
++
++export function pythonRuntimeFor(
++  platform: NodeJS.Platform,
++): PythonRuntimeComponents | null {
++  if (platform === 'win32') {
++    return { helper: 'win_helper.py', requirements: 'requirements-win.txt' }
++  }
++  if (platform === 'linux') {
++    return { helper: 'linux_helper.py', requirements: 'requirements-linux.txt' }
++  }
++  return null
++}
++
++const pythonRuntime = pythonRuntimeFor(process.platform)
++
+ // Always read from ~/.claude/.runtime/ — works in both dev and bundled mode.
+ const requirementsPath = path.join(runtimeStateRoot, 'requirements.txt')
+-const helperFileName = isLinux ? 'linux_helper.py' : 'win_helper.py'
++// Only meaningful on Python-backed platforms; on macOS this file is never
++// synced or executed (ensureBootstrapped refuses first).
++const helperFileName = pythonRuntime?.helper ?? 'win_helper.py'
+ const helperPath = path.join(runtimeStateRoot, helperFileName)
+ // Runs as its own process (the helper is a stateless one-shot CLI and cannot
+ // own a window across actions), so it ships as a separate file. Windows-only:
+@@ -98,6 +126,62 @@ export async function installRuntimeDependencies(
+   await install(['-m', 'pip', 'install', '-r', requirementsPath], 'python dependency install')
+ }
+ 
++/**
++ * Put a `pip` inside the runtime venv.
++ *
++ * `-m ensurepip` is the normal route, but Debian/Ubuntu ship ensurepip in a
++ * separate package (`python3.X-venv`). Without it `python3 -m venv` quietly
++ * produces a pip-less venv and this step dies with "No module named ensurepip"
++ * — exactly what every "install component" attempt hit on such hosts, with no
++ * hint of the remedy. So fall back to any pip already on the machine (a pip can
++ * install into another interpreter via `--python`); when even that is absent,
++ * fail with the actual instruction rather than the raw module error.
++ *
++ * The dependencies are injectable so the fallback chain is testable without a
++ * real broken venv.
++ */
++export async function bootstrapPipIntoVenv(deps: {
++  python?: string
++  platform?: NodeJS.Platform
++  run?: (file: string, args: string[], label: string) => Promise<string>
++  probe?: (file: string) => Promise<boolean>
++} = {}): Promise<void> {
++  const python = deps.python ?? pythonBinPath()
++  const run = deps.run ?? runOrThrow
++  const probe =
++    deps.probe ??
++    (async (file: string) => {
++      const { code } = await execFileNoThrow(file, ['--version'], { useCwd: false })
++      return code === 0
++    })
++
++  let ensurepipError = ''
++  try {
++    await run(python, ['-m', 'ensurepip', '--upgrade'], 'ensurepip')
++    return
++  } catch (error) {
++    ensurepipError = error instanceof Error ? error.message : String(error)
++  }
++
++  for (const candidate of ['pip3', 'pip']) {
++    if (!(await probe(candidate))) continue
++    await run(
++      candidate,
++      ['--python', python, 'install', '--upgrade', 'pip'],
++      `pip bootstrap via ${candidate}`,
++    )
++    return
++  }
++
++  const remedy =
++    (deps.platform ?? process.platform) === 'win32'
++      ? 'Reinstall Python with the "pip" option enabled (python.org installer), or run `python -m ensurepip`.'
++      : 'Install the system Python venv/pip package (Debian/Ubuntu: sudo apt install python3-venv; Fedora/RHEL: sudo dnf install python3-pip) and retry.'
++  throw new Error(
++    `Could not bootstrap pip into the Computer Use venv: ${ensurepipError}. ${remedy}`,
++  )
++}
++
+ async function getVenvCreationPythonCommand(): Promise<string> {
+   const config = await loadStoredComputerUseConfig()
+   if (config.pythonPath) return config.pythonPath
+@@ -112,18 +196,16 @@ async function getVenvCreationPythonCommand(): Promise<string> {
+ async function ensureRuntimeFiles(): Promise<void> {
+   await mkdir(runtimeStateRoot, { recursive: true })
+ 
+-  const devRequirements = path.join(
+-    projectRoot,
+-    'runtime',
+-    isLinux ? 'requirements-linux.txt' : 'requirements-win.txt',
+-  )
++  const devRequirements = pythonRuntime
++    ? path.join(projectRoot, 'runtime', pythonRuntime.requirements)
++    : null
+   const devHelper = path.join(projectRoot, 'runtime', helperFileName)
+ 
+   // Always sync from dev runtime/ so source changes are reflected immediately.
+   // Previously this only copied when the dest was missing, causing stale files
+   // to persist after source updates — breaking mouse/keyboard actions if the
+   // cached copy was from an older version.
+-  if (await pathExists(devRequirements)) {
++  if (devRequirements && (await pathExists(devRequirements))) {
+     await writeFile(requirementsPath, await readFile(devRequirements, 'utf8'), 'utf8')
+   }
+   if (await pathExists(devHelper)) {
+@@ -141,6 +223,15 @@ async function ensureRuntimeFiles(): Promise<void> {
+ export async function ensureBootstrapped(): Promise<void> {
+   if (bootstrapPromise) return bootstrapPromise
+   bootstrapPromise = (async () => {
++    // Platforms without a Python component set must never get here — macOS
++    // drives the native cu-helper, and anything else is unsupported. Refuse
++    // loudly rather than installing the wrong platform's packages.
++    if (!pythonRuntime) {
++      throw new Error(
++        `Computer Use has no Python components on '${process.platform}'. macOS uses the signed native cu-helper; other platforms are unsupported.`,
++      )
++    }
++
+     // Extract runtime files (requirements, helper, badge) to state dir
+     await ensureRuntimeFiles()
+ 
+@@ -154,8 +245,8 @@ export async function ensureBootstrapped(): Promise<void> {
+       ? path.join(venvRoot, 'Scripts', 'pip.exe')
+       : path.join(venvRoot, 'bin', 'pip')
+     if (!(await pathExists(pipBin))) {
+-      logForDebugging('bootstrapping pip with ensurepip', { level: 'debug' })
+-      await runOrThrow(pythonBinPath(), ['-m', 'ensurepip', '--upgrade'], 'ensurepip')
++      logForDebugging('bootstrapping pip into the runtime venv', { level: 'debug' })
++      await bootstrapPipIntoVenv()
+     }
+ 
+     const requirements = await readFile(requirementsPath, 'utf8')

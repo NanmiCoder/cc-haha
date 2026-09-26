@@ -221,3 +221,13 @@ export function shouldEnableThinkingByDefault(): boolean {
 export function shouldSendExplicitDisabledThinking(): boolean {
   return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
 }
+
+// Whether the previous turn's assistant thinking / redacted_thinking blocks
+// should be sent back to the backend API as context.
+//   - Env CC_HAHA_SEND_THINKING_HISTORY=1 forces ON (debug escape hatch).
+//   - Otherwise follows settings.sendThinkingHistory (absent/false = OFF = stripped).
+// Local session history is always preserved regardless of this flag.
+export function shouldSendThinkingToAPI(): boolean {
+  if (isEnvTruthy(process.env.CC_HAHA_SEND_THINKING_HISTORY)) return true
+  return getSettingsWithErrors().settings.sendThinkingHistory === true
+}

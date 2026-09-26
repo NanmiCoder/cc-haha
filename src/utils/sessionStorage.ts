@@ -4713,11 +4713,60 @@ function transformMessagesForExternalTranscript(
   }) as Transcript
 }
 
+/** A transcript message may carry the raw tool output alongside it. */
+type MessageWithToolUseResult = Message & { toolUseResult?: unknown }
+
+/**
+ * Storage-side bound on `toolUseResult.originalFile` (章二十二「优化膨胀源」).
+ *
+ * `originalFile` is the pre-edit file, kept only so the edit card can render a
+ * diff: the model never sees it (`mapToolResultToToolResultBlockParam` is what
+ * goes to the API) and the turn diff itself is read from `structuredPatch`.
+ * Storage nevertheless kept the whole file on every edit, which made transcripts
+ * ~3x larger than the conversation they describe (2.1GB of 3.1GB measured).
+ *
+ * This mirrors the transport clip (`TOOL_USE_RESULT_STRING_LIMIT`, 16KB, in
+ * `src/server/services/boundedSessionHistory.ts`) — the same bound the client
+ * has always been sent — so bounding at the source changes nothing anyone can
+ * see. Only `originalFile` is touched: other `toolUseResult` fields can be
+ * read back by recovery/semantic paths, which must keep the original record.
+ */
+export const ORIGINAL_FILE_STRING_LIMIT = 16 * 1024
+
+/** Trim an oversized `originalFile` to the preview bound, recording the original
+ * length so the record explains its own truncation. */
+export function boundOriginalFileForStorage(
+  message: MessageWithToolUseResult,
+): MessageWithToolUseResult {
+  const result = message.toolUseResult
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return message
+  }
+  const originalFile = (result as Record<string, unknown>).originalFile
+  if (
+    typeof originalFile !== 'string' ||
+    originalFile.length <= ORIGINAL_FILE_STRING_LIMIT
+  ) {
+    return message
+  }
+  return {
+    ...message,
+    toolUseResult: {
+      ...(result as Record<string, unknown>),
+      originalFile: originalFile.slice(0, ORIGINAL_FILE_STRING_LIMIT),
+      originalFileTruncated: true,
+      originalFileBytes: originalFile.length,
+    },
+  }
+}
+
 export function cleanMessagesForLogging(
   messages: Message[],
   allMessages: readonly Message[] = messages,
 ): Transcript {
-  const filtered = messages.filter(isLoggableMessage) as Transcript
+  const filtered = messages
+    .filter(isLoggableMessage)
+    .map(message => boundOriginalFileForStorage(message)) as Transcript
   return getUserType() !== 'ant'
     ? transformMessagesForExternalTranscript(
         filtered,

@@ -6,6 +6,7 @@ import { ApiError } from '../../api/client'
 import { sessionsApi, type SessionRewindMode, type SessionTurnCheckpoint } from '../../api/sessions'
 import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
 import { useWorkspaceReviewStore } from '../../stores/workspaceReviewStore'
@@ -398,11 +399,15 @@ function GoalContinuationDivider({ message }: { message: GoalEvent }) {
 
 function BackgroundTaskEventCard({ message }: { message: BackgroundTaskEvent }) {
   const t = useTranslation()
+  // The switch is documented as covering background-task durations, and this
+  // inline card is such a duration — it was the one readout left ungated, so
+  // turning the switch off still left times on the conversation timeline.
+  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
   const { task } = message
   const isRunning = task.status === 'running'
   const isFailed = task.status === 'failed'
   const isStopped = task.status === 'stopped'
-  const duration = formatDurationMs(task.usage?.durationMs, t)
+  const duration = sessionExtendedInfo === false ? null : formatDurationMs(task.usage?.durationMs, t)
   const detail = task.summary || task.lastToolName || task.description || task.outputFile || task.taskId
   const label = getBackgroundTaskLabel(task.taskType, t)
 
@@ -3919,7 +3924,7 @@ export const MessageBlock = memo(function MessageBlock({
     case 'thinking':
       // No wrapper padding: the row's own `-mx-2 … px-2` already lands its text
       // on the column's left edge, the same as one inside a run.
-      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} />
+      return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} thinkingDurationMs={message.thinkingDurationMs} liveStartAt={message.timestamp} />
     case 'tool_use':
       if (message.toolName === 'AskUserQuestion' && !message.isPending) {
         return (

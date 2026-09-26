@@ -141,3 +141,44 @@ test('nested prompt cache survives zero direct cache creation in streaming usage
     + `data: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`)
   expect(events.find(e => e.type === 'message_delta').usage).toMatchObject({ input_tokens: 1453, output_tokens: 551, cache_read_input_tokens: 147840 })
 })
+
+describe('real token id side channel', () => {
+  async function collectWithTokenIds(input: string) {
+    const counts: number[] = []
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(input))
+        controller.close()
+      },
+    })
+    const output = await new Response(openaiChatStreamToAnthropic(source, 'fixture', {
+      onTokenIds: (count) => counts.push(count),
+    })).text()
+    return { counts, output }
+  }
+
+  function idsChunk(ids: number[], delta: Record<string, unknown> = { content: 'x' }, finish: string | null = null) {
+    return `data: ${JSON.stringify({ id: 'fixture', choices: [{ index: 0, delta, finish_reason: finish, token_ids: ids }] })}\n\n`
+  }
+
+  test('reports each chunk\'s token count without touching the Anthropic stream', async () => {
+    const { counts, output } = await collectWithTokenIds(
+      idsChunk([1, 2, 3]) + idsChunk([4]) + idsChunk([], {}, 'stop') + 'data: [DONE]\n\n',
+    )
+    // Only chunks that actually carried ids are reported.
+    expect(counts).toEqual([3, 1])
+    // The content still streams normally; the ids are a side channel only.
+    const events = output.split('\n\n').filter(Boolean).map(frame => JSON.parse(frame.split('\ndata: ')[1]))
+    expect(events.filter(e => e.delta?.text).map(e => e.delta.text)).toEqual(['x', 'x'])
+  })
+
+  test('reports nothing when the endpoint did not send token ids', async () => {
+    const { counts } = await collectWithTokenIds(chunk({ content: 'hi' }) + chunk({}, 'stop') + 'data: [DONE]\n\n')
+    expect(counts).toEqual([])
+  })
+
+  test('counts ids on the final chunk too (before finish handling)', async () => {
+    const { counts } = await collectWithTokenIds(idsChunk([7, 8], { content: 'x' }, 'stop') + 'data: [DONE]\n\n')
+    expect(counts).toEqual([2])
+  })
+})

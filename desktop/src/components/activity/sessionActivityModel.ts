@@ -48,6 +48,12 @@ export type ActivityRow = {
   dismissKey?: string
   outputFile?: string
   usage?: BackgroundAgentTaskUsage
+  /**
+   * First event that started the task. Together with `updatedAt` this is the
+   * fallback span for tasks that never report `usage.durationMs` — which is
+   * every shell background task, since the CLI sends no usage for them.
+   */
+  startedAt?: number
   updatedAt?: number | string
   member?: TeamMember
   taskHistory?: {
@@ -546,6 +552,7 @@ function buildBackgroundRow(task: BackgroundAgentTask, section: ActivitySectionI
     dismissKey: createBackgroundTaskDismissKey(task),
     outputFile: task.outputFile,
     usage: task.usage,
+    startedAt: task.startedAt,
     updatedAt: task.updatedAt,
     openable: Boolean(task.toolUseId),
   }

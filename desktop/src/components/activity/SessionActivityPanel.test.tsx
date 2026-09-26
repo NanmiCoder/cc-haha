@@ -399,7 +399,15 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByText('Summary')).toBeInTheDocument()
     expect(screen.getByText('Task completed with a long markdown report')).toBeInTheDocument()
     expect(screen.getByText('Usage')).toBeInTheDocument()
-    expect(screen.getByText('94.3k tokens · 1m 7s')).toBeInTheDocument()
+    expect(screen.getByText('94.3k tokens')).toBeInTheDocument()
+    // The duration is its own right-aligned slot on the detail card's *header*,
+    // not a details field: shell tasks report no usage, so a slot on the usage
+    // row disappeared on exactly the tasks worth timing. It is shown twice on
+    // purpose: once on the collapsed row and once in the expanded detail. Both
+    // read in the panel's fixed digits-and-letters form, not a localized one.
+    expect(screen.getAllByText('1m7s')).toHaveLength(2)
+    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
+    expect(document.querySelector('[data-activity-duration="true"]')).not.toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
 
@@ -989,6 +997,49 @@ describe('SessionActivityPanel', () => {
 
     expect(screen.getByText('Cached')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open run a · cached/i })).toBeInTheDocument()
+  })
+
+  it('times a shell task that reports no usage at all, from its event clock', () => {
+    // The case that made the old slot useless: a shell background task carries
+    // no `usage`, so the duration had nothing to attach to and the reader saw
+    // no execution time on the rows they most want timed.
+    render(
+      <SessionActivityPanel
+        model={model({
+          sections: {
+            ...model().sections,
+            backgroundTasks: {
+              id: 'backgroundTasks',
+              title: 'Background Tasks',
+              emptyLabel: 'No background tasks',
+              rows: [{
+                id: 'bash-no-usage',
+                section: 'backgroundTasks',
+                label: 'Rebuild renderer dist',
+                status: 'completed',
+                description: 'bun run build:renderer',
+                taskId: 'bash-task-2',
+                taskType: 'local_bash',
+                startedAt: 1_000_000,
+                updatedAt: 1_000_000 + 125_000,
+                openable: false,
+              }],
+            },
+          },
+        })}
+        open
+        onClose={vi.fn()}
+        onOpenSubagent={vi.fn()}
+      />,
+    )
+
+    // 125 s of wall clock, rendered by the panel's own duration convention:
+    // a fixed `2m5s`, not a spelled-out per-language form.
+    expect(screen.getByText('2m5s')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /open background task/i }))
+    expect(document.querySelector('[data-activity-detail-duration="true"]')).not.toBeNull()
+    // Nothing invented: no token row was conjured for a task that reported none.
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
   })
 
   it('does not render when closed', () => {

@@ -207,7 +207,11 @@ describe('bounded workspace watches', () => {
     await fs.writeFile(path.join(root, 'src/a.ts'), 'one')
     await fs.writeFile(path.join(root, 'src/a.ts'), 'two')
     await fs.rename(path.join(root, 'src/a.ts'), path.join(root, 'src/b.ts'))
-    await until(() => events.some((event) => event.paths.includes('src/b.ts')))
+    // Inotify (Linux) reports the pre-rename name for a rename; fsevents
+    // (macOS) may report the new one. Wait for the name that fires on both —
+    // the writes above produce a `change a.ts` on every platform, so the
+    // coalesced event always carries `src/a.ts`.
+    await until(() => events.some((event) => event.paths.includes('src/a.ts')))
     expect(events.flatMap((event) => event.paths)).toContain('src/a.ts')
     expect(events.every((event) => new Set(event.paths).size === event.paths.length)).toBe(true)
     expect(events.every((event) => event.directories.includes('src'))).toBe(true)

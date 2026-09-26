@@ -1,0 +1,223 @@
+diff --git a/desktop/src/pages/settings/AboutSettings.tsx b/desktop/src/pages/settings/AboutSettings.tsx
+index 67c9b204..109f960c 100644
+--- a/desktop/src/pages/settings/AboutSettings.tsx
++++ b/desktop/src/pages/settings/AboutSettings.tsx
+@@ -4,6 +4,7 @@ import { useTranslation } from '../../i18n'
+ import { Input } from '@/components/ui/Input'
+ import { Button } from '@/components/ui/Button'
+ import { Card } from '@/components/ui/Card'
++import { Switch } from '@/components/ui/Switch'
+ import type { UpdateProxyMode } from '../../types/settings'
+ import { MarkdownRenderer } from '../../components/markdown/MarkdownRenderer'
+ import { useUpdateStore } from '../../stores/updateStore'
+@@ -37,6 +38,8 @@ export function AboutSettings() {
+   const [version, setVersion] = useState('')
+   const updateProxy = useSettingsStore((s) => s.updateProxy)
+   const setUpdateProxy = useSettingsStore((s) => s.setUpdateProxy)
++  const disableUpdates = useSettingsStore((s) => s.disableUpdates)
++  const setDisableUpdates = useSettingsStore((s) => s.setDisableUpdates)
+   const updateStatus = useUpdateStore((s) => s.status)
+   const availableVersion = useUpdateStore((s) => s.availableVersion)
+   const releaseNotes = useUpdateStore((s) => s.releaseNotes)
+@@ -195,11 +198,21 @@ export function AboutSettings() {
+             variant="secondary"
+             onClick={() => void checkForUpdates()}
+             loading={updateStatus === 'checking'}
++            disabled={disableUpdates}
+           >
+             {t('update.checkNow')}
+           </Button>
+         </div>
+ 
++        <div className="mt-3">
++          <Switch
++            checked={disableUpdates}
++            onChange={(enabled) => void setDisableUpdates(enabled)}
++            label={t('update.disableUpdates')}
++            description={t('update.disableUpdatesDescription')}
++          />
++        </div>
++
+         <div className="mt-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+           <div className="flex items-center justify-between gap-3">
+             <div>
+diff --git a/desktop/src/stores/updateStore.test.ts b/desktop/src/stores/updateStore.test.ts
+index f1f47f09..cfacec1c 100644
+--- a/desktop/src/stores/updateStore.test.ts
++++ b/desktop/src/stores/updateStore.test.ts
+@@ -369,6 +369,54 @@ describe('updateStore', () => {
+     expect(useUpdateStore.getState().shouldPrompt).toBe(true)
+   })
+ 
++  it('skips manual checks while disableUpdates is on', async () => {
++    check.mockResolvedValue({
++      version: '0.2.0',
++      body: 'Notes',
++      download: vi.fn().mockResolvedValue(undefined),
++      close: vi.fn().mockResolvedValue(undefined),
++    })
++
++    vi.resetModules()
++    const { useSettingsStore } = await import('./settingsStore')
++    useSettingsStore.setState({ disableUpdates: true })
++    const { useUpdateStore } = await import('./updateStore')
++
++    const result = await useUpdateStore.getState().checkForUpdates()
++
++    expect(result).toBeNull()
++    expect(check).not.toHaveBeenCalled()
++    expect(useUpdateStore.getState().status).toBe('idle')
++    useSettingsStore.setState({ disableUpdates: false })
++  })
++
++  it('does not run the startup check from initialize while disableUpdates is on', async () => {
++    vi.useFakeTimers()
++    try {
++      check.mockResolvedValue({
++        version: '0.2.0',
++        body: 'Notes',
++        download: vi.fn().mockResolvedValue(undefined),
++        close: vi.fn().mockResolvedValue(undefined),
++      })
++
++      vi.resetModules()
++      const { useSettingsStore } = await import('./settingsStore')
++      useSettingsStore.setState({ disableUpdates: true })
++      const { useUpdateStore } = await import('./updateStore')
++
++      await useUpdateStore.getState().initialize()
++      // The startup check is deferred 5s; advance past it and assert nothing fired.
++      await vi.advanceTimersByTimeAsync(6_000)
++
++      expect(check).not.toHaveBeenCalled()
++      expect(useUpdateStore.getState().status).toBe('idle')
++      useSettingsStore.setState({ disableUpdates: false })
++    } finally {
++      vi.useRealTimers()
++    }
++  })
++
+   it('does not download again when the pending update is already downloaded', async () => {
+     const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
+       onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+diff --git a/desktop/src/stores/updateStore.ts b/desktop/src/stores/updateStore.ts
+index 58e767fd..4e9daa86 100644
+--- a/desktop/src/stores/updateStore.ts
++++ b/desktop/src/stores/updateStore.ts
+@@ -195,6 +195,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
+ 
+   initialize: async () => {
+     if (!getUpdateHost()) return
++    // "Disable updates" suppresses the startup check entirely.
++    if (useSettingsStore.getState().disableUpdates) return
+     if (!startupCheckPromise) {
+       startupCheckPromise = (async () => {
+         await new Promise((resolve) => setTimeout(resolve, 5000))
+@@ -210,6 +212,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
+   checkForUpdates: async ({ silent = false, autoDownload = true } = {}) => {
+     const host = getUpdateHost()
+     if (!host) return null
++    // While "disable updates" is on, neither startup nor manual checks run.
++    if (useSettingsStore.getState().disableUpdates) return null
+     if (downloadPromise && get().status === 'downloading' && pendingUpdate) return pendingUpdate
+     clearRelaunchWatchdog()
+ 
+diff --git a/src/server/remoteBrowserPolicy.test.ts b/src/server/remoteBrowserPolicy.test.ts
+index 2518d15d..01569e45 100644
+--- a/src/server/remoteBrowserPolicy.test.ts
++++ b/src/server/remoteBrowserPolicy.test.ts
+@@ -3,7 +3,27 @@ import { mkdtempSync, rmSync } from 'node:fs'
+ import os from 'node:os'
+ import path from 'node:path'
+ import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
+-import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
++import { projectRemoteSettings, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
++
++test('remote settings routes permit the General sub-page endpoints and only those', () => {
++  const p = (pathname: string) => pathname.split('/').filter(Boolean)
++  // /user keeps GET+PUT
++  expect(remoteSettingsRouteAllowed(p('/api/settings/user'), 'GET')).toBe(true)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/user'), 'PUT')).toBe(true)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/user'), 'POST')).toBe(false)
++  // output-style picker + transcript retention are reachable from H5 General
++  expect(remoteSettingsRouteAllowed(p('/api/settings/output-styles'), 'GET')).toBe(true)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/output-style'), 'PUT')).toBe(true)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/session-cleanup'), 'POST')).toBe(true)
++  // wrong method on the new sub-routes stays blocked
++  expect(remoteSettingsRouteAllowed(p('/api/settings/output-styles'), 'PUT')).toBe(false)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/output-style'), 'GET')).toBe(false)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/session-cleanup'), 'GET')).toBe(false)
++  // other General sub-routes stay desktop-only
++  expect(remoteSettingsRouteAllowed(p('/api/settings/project'), 'GET')).toBe(false)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/cli-launcher'), 'GET')).toBe(false)
++  expect(remoteSettingsRouteAllowed(p('/api/settings/output-style/extra'), 'PUT')).toBe(false)
++})
+ 
+ test('remote settings boundary permits only intended provider routes and General fields', () => {
+   const parts = (pathname: string) => pathname.split('/').filter(Boolean)
+@@ -15,6 +35,65 @@ test('remote settings boundary permits only intended provider routes and General
+   expect(validateRemoteSettingsPatch({ alwaysThinkingEnabled: 'true' })).toBe(false)
+   expect(validateRemoteSettingsPatch({ chatSendBehavior: 'modifierEnter' })).toBe(true)
+   expect(validateRemoteSettingsPatch({ language: '' })).toBe(true)
++  expect(validateRemoteSettingsPatch({ disableUpdates: true })).toBe(true)
++  expect(validateRemoteSettingsPatch({ disableUpdates: 'true' })).toBe(false)
++  expect(projectRemoteSettings({ disableUpdates: true })).toEqual({ disableUpdates: true })
++})
++
++test('General settings round-trip (H5 full GeneralSettings)', () => {
++  // booleans the General UI writes
++  expect(validateRemoteSettingsPatch({ agentTeamsEnabled: true })).toBe(true)
++  expect(validateRemoteSettingsPatch({ autoDreamEnabled: false })).toBe(true)
++  expect(validateRemoteSettingsPatch({ skipWebFetchPreflight: true })).toBe(true)
++  expect(validateRemoteSettingsPatch({ desktopNotificationsEnabled: true })).toBe(true)
++  expect(validateRemoteSettingsPatch({ agentTeamsEnabled: 'yes' })).toBe(false)
++  // webSearch shape + mode enum
++  expect(validateRemoteSettingsPatch({ webSearch: { mode: 'tavily', tavilyApiKey: 'k', braveApiKey: '' } })).toBe(true)
++  expect(validateRemoteSettingsPatch({ webSearch: { mode: 'auto' } })).toBe(true)
++  expect(validateRemoteSettingsPatch({ webSearch: { mode: 'bogus' } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ webSearch: { mode: 'tavily', tavilyApiKey: 3 } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ webSearch: 'tavily' })).toBe(false)
++  // updateProxy / network shapes
++  expect(validateRemoteSettingsPatch({ updateProxy: { mode: 'manual', url: 'http://p:1' } })).toBe(true)
++  expect(validateRemoteSettingsPatch({ updateProxy: { mode: 'system', url: '' } })).toBe(true)
++  expect(validateRemoteSettingsPatch({ updateProxy: { mode: 'x', url: '' } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ updateProxy: { mode: 'manual' } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ network: { aiRequestTimeoutMs: 60000, proxy: { mode: 'direct', url: '' } } })).toBe(true)
++  expect(validateRemoteSettingsPatch({ network: { aiRequestTimeoutMs: 29999, proxy: { mode: 'manual', url: '' } } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ network: { aiRequestTimeoutMs: 60000, proxy: { mode: 'x', url: '' } } })).toBe(false)
++  expect(validateRemoteSettingsPatch({ network: { aiRequestTimeoutMs: 60000 } })).toBe(false)
++  // vccCompactBackend string enum
++  expect(validateRemoteSettingsPatch({ vccCompactBackend: 'algorithm' })).toBe(true)
++  expect(validateRemoteSettingsPatch({ vccCompactBackend: 'llm' })).toBe(true)
++  expect(validateRemoteSettingsPatch({ vccCompactBackend: 'bogus' })).toBe(false)
++  expect(validateRemoteSettingsPatch({ vccCompactBackend: 1 })).toBe(false)
++  // cleanupPeriodDays integer [0,3650]
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: 30 })).toBe(true)
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: 0 })).toBe(true)
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: 3650 })).toBe(true)
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: 3651 })).toBe(false)
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: 1.5 })).toBe(false)
++  expect(validateRemoteSettingsPatch({ cleanupPeriodDays: '30' })).toBe(false)
++  // projection keeps object settings so the phone does not lose them on refresh
++  const projected = projectRemoteSettings({
++    webSearch: { mode: 'brave', tavilyApiKey: '', braveApiKey: 'b' },
++    updateProxy: { mode: 'manual', url: 'http://p:1' },
++    network: { aiRequestTimeoutMs: 90000, proxy: { mode: 'manual', url: 'http://n:2' } },
++    cleanupPeriodDays: 14,
++    desktopNotificationsEnabled: true,
++    agentTeamsEnabled: false,
++    vccCompactBackend: 'llm',
++  })
++  expect(projected.webSearch).toEqual({ mode: 'brave', tavilyApiKey: '', braveApiKey: 'b' })
++  expect(projected.updateProxy).toEqual({ mode: 'manual', url: 'http://p:1' })
++  expect(projected.network).toEqual({ aiRequestTimeoutMs: 90000, proxy: { mode: 'manual', url: 'http://n:2' } })
++  expect(projected.cleanupPeriodDays).toBe(14)
++  expect(projected.desktopNotificationsEnabled).toBe(true)
++  expect(projected.agentTeamsEnabled).toBe(false)
++  expect(projected.vccCompactBackend).toBe('llm')
++  expect(projectRemoteSettings({ vccCompactBackend: 'bogus' }).vccCompactBackend).toBe('bogus')
++  expect('network' in projectRemoteSettings({ network: { aiRequestTimeoutMs: 1 } })).toBe(false)
++  // autoQuestion nested object (upstream)
+   expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })).toBe(true)
+   expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 3 } })).toBe(false)
+   expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 5, future: true } })).toBe(false)

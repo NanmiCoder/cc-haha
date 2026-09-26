@@ -3,7 +3,10 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import {
   estimateFallbackFixedContextTokens,
   getAutoCompactThreshold,
+  getAutoCompactTier,
   getEffectiveContextWindowSize,
+  getForcedCompactThreshold,
+  getResolvedContextWindow,
   shouldAutoCompact,
 } from './autoCompact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
@@ -92,7 +95,9 @@ describe('model context window resolution', () => {
     // explicitly configured window states the model's real limit and must win,
     // otherwise auto-compact aims at 1M and the provider hard-caps first.
     expect(getContextWindowForModel('k3[1m]')).toBe(262_144)
-    expect(getAutoCompactThreshold('k3[1m]')).toBe(229_144)
+    // The configured 262,144 wins, so this lands in the <=300K tier (21% left):
+    // 242_144 effective * 0.79 = 191_293.
+    expect(getAutoCompactThreshold('k3[1m]')).toBe(191_293)
   })
 
   test('[1m] marker still wins over built-in table entries', () => {
@@ -126,13 +131,33 @@ describe('model context window resolution', () => {
   })
 
   test('derives auto-compact thresholds from provider context windows', () => {
-    expect(getAutoCompactThreshold('deepseek-v4-pro')).toBe(967_000)
-    expect(getAutoCompactThreshold('zai-org/GLM-5.2')).toBe(967_000)
-    expect(getAutoCompactThreshold('glm-5.1')).toBe(167_000)
-    expect(getAutoCompactThreshold('glm-4.5-air')).toBe(95_000)
-    expect(getAutoCompactThreshold('kimi-k2.6')).toBe(229_144)
-    expect(getAutoCompactThreshold('MiniMax-M2.7')).toBe(171_800)
-    expect(getAutoCompactThreshold('gpt-5.6-terra')).toBe(320_400)
+    // Thresholds now come from the window tier (13/17/21/17/15% left) instead
+    // of a flat 13K buffer, capped by the legacy min(13K, window/3) guard.
+    expect(getAutoCompactThreshold('deepseek-v4-pro')).toBe(833_000)
+    expect(getAutoCompactThreshold('zai-org/GLM-5.2')).toBe(833_000)
+    expect(getAutoCompactThreshold('glm-5.1')).toBe(149_400)
+    expect(getAutoCompactThreshold('glm-4.5-air')).toBe(89_640)
+    expect(getAutoCompactThreshold('kimi-k2.6')).toBe(191_293)
+    expect(getAutoCompactThreshold('MiniMax-M2.7')).toBe(145_992)
+    expect(getAutoCompactThreshold('gpt-5.6-terra')).toBe(276_722)
+  })
+
+  test('tiers compaction by declared window, with the 300K-500K band at 17%/53K', () => {
+    const tierOf = (model: string) => getAutoCompactTier(getResolvedContextWindow(model))
+
+    // >=500K: 15% left, 65K floor.
+    expect(tierOf('deepseek-v4-pro')).toEqual({ pctLeft: 0.15, floorTokens: 65_000 })
+    // The 368,640-token preset sits in the 300K-500K band.
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '368640'
+    expect(tierOf('unconfigured-model')).toEqual({ pctLeft: 0.17, floorTokens: 53_000 })
+    delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+
+    // The hard trigger must never precede the soft one.
+    for (const model of ['deepseek-v4-pro', 'glm-5.1', 'kimi-k2.6', 'gpt-5.6-terra']) {
+      expect(getForcedCompactThreshold(model)).toBeGreaterThanOrEqual(
+        getAutoCompactThreshold(model),
+      )
+    }
   })
 
   test('scales compaction headroom for small context windows', async () => {
@@ -249,9 +274,9 @@ describe('model context window resolution', () => {
       },
     ] as never
 
-    expect(await shouldAutoCompact(messagesAt(320_399), 'gpt-5.6-terra'))
+    expect(await shouldAutoCompact(messagesAt(276_721), 'gpt-5.6-terra'))
       .toBe(false)
-    expect(await shouldAutoCompact(messagesAt(320_400), 'gpt-5.6-terra'))
+    expect(await shouldAutoCompact(messagesAt(276_722), 'gpt-5.6-terra'))
       .toBe(true)
   })
 })

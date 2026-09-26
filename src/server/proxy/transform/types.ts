@@ -56,6 +56,13 @@ export type OpenAIChatRequest = {
   stop?: string | string[]
   stream?: boolean
   stream_options?: { include_usage: boolean }
+  /**
+   * vLLM-family extension: have the engine report each streamed chunk's token
+   * ids, so decode speed can be counted from real tokens instead of estimated
+   * from text. Strict OpenAI endpoints reject the unknown parameter, so this is
+   * only ever set for endpoints that are expected to accept it.
+   */
+  return_token_ids?: boolean
   tools?: OpenAITool[]
   tool_choice?: unknown
   reasoning_effort?: OpenAIReasoningEffort
@@ -120,6 +127,13 @@ export type OpenAIChatStreamChunk = {
       }>
     }
     finish_reason: string | null
+    /**
+     * vLLM-family extension (requested via `return_token_ids`): the token ids
+     * this chunk's delta decodes from. Absent on endpoints that do not
+     * implement it, which is exactly how the TPS meter discovers that the
+     * exact tier is unavailable.
+     */
+    token_ids?: number[] | null
   }>
   usage?: OpenAIChatResponse['usage']
 }

@@ -26,8 +26,18 @@ import { addPermissionRulesToSettings } from './permissionsLoader.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 // permissionSetup imports this module back (`applyPermissionUpdate`), so a
-// static import would close a cycle. Resolve it at call time instead.
-const permissionSetupModule = require('./permissionSetup.js') as typeof import('./permissionSetup.js')
+// static import would close a cycle. Resolve it at call time instead — via a
+// getter, because a require() that runs during the cycle (i.e. at this module's
+// top level) returns permissionSetup's namespace before its exports exist, and
+// it keeps returning that empty object. Deferring until the first call lands
+// after both modules are evaluated.
+const permissionSetupModule: typeof import('./permissionSetup.js') = new Proxy(
+  {},
+  {
+    get: (_target, prop) =>
+      require('./permissionSetup.js')[(prop as string)],
+  },
+)
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 // Re-export for backwards compatibility

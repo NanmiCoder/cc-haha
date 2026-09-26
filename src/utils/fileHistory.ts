@@ -382,8 +382,20 @@ export async function fileHistoryCompleteSnapshot(
 ): Promise<void> {
   if (!fileHistoryEnabled()) return
   let captured: FileHistorySnapshot | undefined
+  const priorCompletedByPath = new Map<string, FileHistoryBackup>()
   updateFileHistoryState(state => {
-    captured = state.snapshots.find(snapshot => snapshot.messageId === messageId)
+    const index = state.snapshots.findIndex(snapshot => snapshot.messageId === messageId)
+    captured = index >= 0 ? state.snapshots[index] : undefined
+    // Only snapshots *before* this one can hold an earlier end-of-turn copy, so
+    // a path the user has not touched since can reuse that copy instead of
+    // accumulating an identical one per turn.
+    for (let i = 0; i < index; i++) {
+      const prior = state.snapshots[i]?.completedFileBackups
+      if (!prior) continue
+      for (const [trackingPath, backup] of Object.entries(prior)) {
+        if (backup.backupFileName) priorCompletedByPath.set(trackingPath, backup)
+      }
+    }
     return state
   })
   if (!captured || captured.completedFileBackups) return
@@ -392,13 +404,28 @@ export async function fileHistoryCompleteSnapshot(
   // cannot collide with the next turn's incrementing before-backup version.
   for (const [trackingPath, before] of Object.entries(captured.trackedFileBackups)) {
     try {
-      completedFileBackups[trackingPath] = await createBackup(maybeExpandFilePath(trackingPath), before.version, `completed-${messageId}-${randomUUID()}`)
+      const expandedPath = maybeExpandFilePath(trackingPath)
+      // This loop runs for every tracked file every turn, and a tracked set only
+      // grows — copying unconditionally made the backup directory O(files x
+      // turns), with the overwhelming majority of copies byte-identical. Reuse
+      // the previous end-of-turn copy when the file is unchanged (same check
+      // `fileHistoryMakeSnapshot` uses), keeping the `-completed-` filename so
+      // rewind's after-boundary semantics are untouched.
+      const prior = priorCompletedByPath.get(trackingPath)
+      if (prior?.backupFileName) {
+        const changed = await checkOriginFileChanged(expandedPath, prior.backupFileName)
+        if (!changed) {
+          completedFileBackups[trackingPath] = prior
+          continue
+        }
+      }
+      completedFileBackups[trackingPath] = await createBackup(expandedPath, before.version, `completed-${messageId}-${randomUUID()}`)
     } catch (error) { logError(error) }
   }
   let completed: FileHistorySnapshot | undefined
-  updateFileHistoryState(state => ({ ...state, snapshots: state.snapshots.map(snapshot => {
-    if (snapshot.messageId !== messageId || snapshot.completedFileBackups) return snapshot
-    completed = { ...migrateFileHistorySnapshot(snapshot), completedFileBackups }
+  updateFileHistoryState(state => ({ ...state, snapshots: state.snapshots.map(s => {
+    if (s.messageId !== messageId || s.completedFileBackups) return s
+    completed = { ...migrateFileHistorySnapshot(s), completedFileBackups }
     return completed
   }) }))
   if (completed) await recordFileHistorySnapshot(messageId, completed, true)

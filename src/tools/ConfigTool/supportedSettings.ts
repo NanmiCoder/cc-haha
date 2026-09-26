@@ -110,6 +110,25 @@ export const SUPPORTED_SETTINGS: Record<string, SettingConfig> = {
     description: 'Enable extended thinking (false to disable)',
     appStateKey: 'thinkingEnabled',
   },
+  sendThinkingHistory: {
+    source: 'settings',
+    type: 'boolean',
+    description:
+      'Send prior thinking blocks back to the backend API as context (true to enable)',
+  },
+  sessionExtendedInfo: {
+    source: 'settings',
+    type: 'boolean',
+    description:
+      'Show the usage/timing readouts added by this fork (thinking badge, activity totals, subagent durations, TPS)',
+  },
+  vccCompactBackend: {
+    source: 'settings',
+    type: 'string',
+    description:
+      'Context compaction engine: "algorithm" (pi-vcc, no LLM call) or "llm" (original summary)',
+    options: ['algorithm', 'llm'],
+  },
   'permissions.defaultMode': {
     source: 'settings',
     type: 'string',

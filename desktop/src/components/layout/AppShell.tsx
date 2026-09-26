@@ -27,7 +27,10 @@ import {
 } from '../../stores/projectDisplayNameStore'
 import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
 import { TabBar } from './TabBar'
+import { TpsIndicator } from '../chat/TpsIndicator'
+import { SessionCostBadge } from '../chat/SessionCostBadge'
 import { WorkspaceHeaderProvider } from './WorkspaceHeaderContext'
+
 import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -91,6 +94,25 @@ export function AppShell() {
     isMobileShell && !effectiveSidebarOpen
       ? { 'aria-hidden': true, inert: '' }
       : {}
+
+  // Soft refresh: drop the WS + in-memory session state, then reconnect. The
+  // server replays pending permission requests on reconnect and the transcript
+  // is reloaded, recovering permission / AskUserQuestion prompts dropped on the
+  // realtime WS path.
+  const [refreshingSession, setRefreshingSession] = useState(false)
+  const handleManualRefresh = useCallback(async () => {
+    if (!activeTabId || !isActiveChatTab || refreshingSession) return
+    setRefreshingSession(true)
+    const chat = useChatStore.getState()
+    try {
+      chat.disconnectSession(activeTabId)
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      chat.connectToSession(activeTabId)
+      await chat.reloadHistory(activeTabId)
+    } finally {
+      setRefreshingSession(false)
+    }
+  }, [activeTabId, isActiveChatTab, refreshingSession])
 
   useEffect(() => {
     const sessionStore = useSessionStore.getState()
@@ -250,7 +272,19 @@ export function AppShell() {
 
   useEffect(() => {
     if (!ready || !isMobileShell) return
-    if (isChatTab(activeTab) || activeTab?.type === 'settings' || (!activeTab && !activeTabId)) return
+    if (
+      isChatTab(activeTab) ||
+      activeTab?.type === 'settings' ||
+      activeTab?.type === 'market' ||
+      activeTab?.type === 'scheduled' ||
+      // Run records count as mobile destinations: ContentRouter renders the
+      // subagent/teammate run pages and both have a mobile layout. Leaving them
+      // out of this list bounced the phone straight back to the chat tab, so a
+      // run opened from the transcript could never be viewed on H5.
+      activeTab?.type === 'subagent' ||
+      activeTab?.type === 'team-member' ||
+      (!activeTab && !activeTabId)
+    ) return
     const nextChatTab = tabs.find(isChatTab)
     if (nextChatTab) {
       setActiveTab(nextChatTab.sessionId)
@@ -373,6 +407,10 @@ export function AppShell() {
             />
             {activeTab?.type === 'settings' ? (
               <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">{t('sidebar.settings')}</h1>
+            ) : activeTab?.type === 'market' ? (
+              <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">{t('sidebar.extensions')}</h1>
+            ) : activeTab?.type === 'scheduled' ? (
+              <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">{t('sidebar.scheduled')}</h1>
             ) : isActiveChatTab ? (
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">
@@ -398,6 +436,31 @@ export function AppShell() {
                     </>
                   ) : null}
                 </div>
+              </div>
+            ) : null}
+            {isActiveChatTab ? (
+              <div className="flex shrink-0 items-center gap-1">
+                {/* 两行块：上=费用，下=TPS。与桌面端同口径——TPS 行水平居中于费用徽章下方
+                    （`items-center`），两行宽度不对等时居中更对仗。 */}
+                <div className="flex h-[36px] shrink-0 flex-col items-center justify-center gap-0.5">
+                  <div className="flex h-[15px] items-center">
+                    {activeTabId ? (
+                      <SessionCostBadge sessionId={activeTabId} active={activeTab?.status === 'running'} compact />
+                    ) : null}
+                  </div>
+                  <div className="flex h-[13px] items-center">
+                    {activeTabId ? <TpsIndicator sessionId={activeTabId} vertical /> : null}
+                  </div>
+                </div>
+                <IconButton
+                  data-testid="session-manual-refresh-mobile"
+                  icon={refreshingSession ? 'progress_activity' : 'refresh'}
+                  label={t('chat.refreshSession')}
+                  onClick={() => void handleManualRefresh()}
+                  disabled={refreshingSession}
+                  size="2xl"
+                  aria-controls="content-area"
+                />
               </div>
             ) : null}
           </div>
