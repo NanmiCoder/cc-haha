@@ -280,7 +280,7 @@ export class InProcessBackend implements TeammateExecutor {
     }
 
     // Kill the teammate via the existing helper function
-    const killed = killInProcessTeammate(task.id, this.context.setAppState)
+    const killed = await killInProcessTeammate(task.id, this.context.setAppState)
 
     logForDebugging(
       `[InProcessBackend] kill() ${killed ? 'succeeded' : 'failed'} for ${agentId}`,

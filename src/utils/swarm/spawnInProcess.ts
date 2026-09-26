@@ -224,10 +224,10 @@ export async function spawnInProcessTeammate(
  * @param setAppState - AppState setter
  * @returns true if killed successfully
  */
-export function killInProcessTeammate(
+export async function killInProcessTeammate(
   taskId: string,
   setAppState: SetAppStateFn,
-): boolean {
+): Promise<boolean> {
   let killed = false
   let teamName: string | null = null
   let agentId: string | null = null
@@ -300,7 +300,7 @@ export function killInProcessTeammate(
 
   // Remove from team file (outside state updater to avoid file I/O in callback)
   if (teamName && agentId) {
-    removeMemberByAgentId(teamName, agentId)
+    await removeMemberByAgentId(teamName, agentId)
   }
 
   if (killed) {

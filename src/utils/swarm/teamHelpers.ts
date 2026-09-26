@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { randomUUID } from 'crypto'
+import { readFileSync } from 'fs'
+import { access, mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import { getSessionCreatedTeams } from '../../bootstrap/state.js'
@@ -12,6 +13,7 @@ import { lazySchema } from '../lazySchema.js'
 import * as lockfile from '../lockfile.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { jsonParse, jsonStringify } from '../slowOperations.js'
+import { sleep } from '../sleep.js'
 import {
   completeTaskListLifecycle,
   getCanonicalTeamTaskListId,
@@ -179,18 +181,60 @@ export async function readTeamFileAsync(
   }
 }
 
-/**
- * Writes a team file (sync — for sync contexts)
- */
-// sync IO: called from sync context
-function writeTeamFile(teamName: string, teamFile: TeamFile): void {
-  const teamDir = getTeamDir(teamName)
-  mkdirSync(teamDir, { recursive: true })
-  writeFileSync(getTeamFilePath(teamName), jsonStringify(teamFile, null, 2))
+// Call only while holding the config lock. Readers need no lock: rename
+// exposes either the complete previous config or the complete replacement.
+async function replaceTeamFileAsync(
+  teamName: string,
+  content: string,
+): Promise<void> {
+  const targetPath = getTeamFilePath(teamName)
+  const temporaryPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, content, {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(temporaryPath, targetPath)
+        break
+      } catch (error) {
+        // Windows readers can briefly prevent replacement. Never unlink the
+        // live file: exhausted retries must leave its previous contents intact.
+        if (
+          process.platform !== 'win32' || attempt >= 5 ||
+          !['EPERM', 'EACCES', 'EBUSY'].includes(getErrnoCode(error) ?? '')
+        ) throw error
+        await sleep(10 * (attempt + 1))
+      }
+    }
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function withTeamFileLock<T>(
+  teamName: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const teamFilePath = getTeamFilePath(teamName)
+  const release = await lockfile.lock(teamFilePath, {
+    lockfilePath: `${teamFilePath}.lock`,
+    // Initial creation must use the same lock before config.json exists.
+    realpath: false,
+    retries: { retries: 10, minTimeout: 5, maxTimeout: 100 },
+  })
+  try {
+    return await action()
+  } finally {
+    await release()
+  }
 }
 
 /**
- * Writes a team file (async — for tool handlers)
+ * Writes the initial team config. Updates must use mutateTeamFileAsync so
+ * their snapshot is read inside the lock, never supplied by the caller.
  */
 export async function writeTeamFileAsync(
   teamName: string,
@@ -198,7 +242,15 @@ export async function writeTeamFileAsync(
 ): Promise<void> {
   const teamDir = getTeamDir(teamName)
   await mkdir(teamDir, { recursive: true })
-  await writeFile(getTeamFilePath(teamName), jsonStringify(teamFile, null, 2))
+  await withTeamFileLock(teamName, () =>
+    replaceTeamFileAsync(teamName, jsonStringify(teamFile, null, 2)),
+  )
+}
+
+class TeamFileNotFoundError extends Error {
+  constructor(teamName: string) {
+    super(`Team "${teamName}" does not exist`)
+  }
 }
 
 /**
@@ -209,34 +261,45 @@ export async function mutateTeamFileAsync(
   teamName: string,
   mutator: (teamFile: TeamFile) => TeamFile | void,
 ): Promise<TeamFile> {
-  const teamFilePath = getTeamFilePath(teamName)
-  const lockFilePath = `${teamFilePath}.lock`
-
-  const existing = await readTeamFileAsync(teamName)
-  if (!isValidTeamFile(existing)) {
-    throw new Error(`Team "${teamName}" does not exist`)
-  }
-
-  const release = await lockfile.lock(teamFilePath, {
-    lockfilePath: lockFilePath,
-    retries: {
-      retries: 10,
-      minTimeout: 5,
-      maxTimeout: 100,
-    },
-  })
-
   try {
-    const current = await readTeamFileAsync(teamName)
-    if (!isValidTeamFile(current)) {
-      throw new Error(`Team "${teamName}" does not exist`)
-    }
+    // Avoid lock retries for an absent directory without opening config.json
+    // outside the lock (open readers can block rename on Windows).
+    await access(getTeamDir(teamName))
+    return await withTeamFileLock(teamName, async () => {
+      const current = await readTeamFileAsync(teamName)
+      if (!isValidTeamFile(current)) {
+        throw new TeamFileNotFoundError(teamName)
+      }
 
-    const next = mutator(current) ?? current
-    await writeFile(teamFilePath, jsonStringify(next, null, 2))
-    return next
-  } finally {
-    await release()
+      const previousContent = jsonStringify(current, null, 2)
+      const next = mutator(current) ?? current
+      const nextContent = jsonStringify(next, null, 2)
+      if (nextContent !== previousContent) {
+        await replaceTeamFileAsync(teamName, nextContent)
+      }
+      return next
+    })
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') throw new TeamFileNotFoundError(teamName)
+    throw error
+  }
+}
+
+// Preserve the boolean helpers' missing-team behavior without swallowing
+// lock or persistence failures, which callers need to handle.
+async function mutateExistingTeamFileAsync(
+  teamName: string,
+  mutator: (teamFile: TeamFile) => boolean,
+): Promise<boolean> {
+  let result = false
+  try {
+    await mutateTeamFileAsync(teamName, teamFile => {
+      result = mutator(teamFile)
+    })
+    return result
+  } catch (error) {
+    if (error instanceof TeamFileNotFoundError) return false
+    throw error
   }
 }
 
@@ -244,10 +307,10 @@ export async function mutateTeamFileAsync(
  * Removes a teammate from the team file by agent ID or name.
  * Used by the leader when processing shutdown approvals.
  */
-export function removeTeammateFromTeamFile(
+export async function removeTeammateFromTeamFile(
   teamName: string,
   identifier: { agentId?: string; name?: string },
-): boolean {
+): Promise<boolean> {
   const identifierStr = identifier.agentId || identifier.name
   if (!identifierStr) {
     logForDebugging(
@@ -256,33 +319,26 @@ export function removeTeammateFromTeamFile(
     return false
   }
 
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    logForDebugging(
-      `[TeammateTool] Cannot remove teammate ${identifierStr}: failed to read team file for "${teamName}"`,
-    )
-    return false
-  }
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const originalLength = teamFile.members.length
+    teamFile.members = teamFile.members.filter(m => {
+      if (identifier.agentId && m.agentId === identifier.agentId) return false
+      if (identifier.name && m.name === identifier.name) return false
+      return true
+    })
 
-  const originalLength = teamFile.members.length
-  teamFile.members = teamFile.members.filter(m => {
-    if (identifier.agentId && m.agentId === identifier.agentId) return false
-    if (identifier.name && m.name === identifier.name) return false
+    if (teamFile.members.length === originalLength) {
+      logForDebugging(
+        `[TeammateTool] Teammate ${identifierStr} not found in team file for "${teamName}"`,
+      )
+      return false
+    }
+
+    logForDebugging(
+      `[TeammateTool] Removed teammate from team file: ${identifierStr}`,
+    )
     return true
   })
-
-  if (teamFile.members.length === originalLength) {
-    logForDebugging(
-      `[TeammateTool] Teammate ${identifierStr} not found in team file for "${teamName}"`,
-    )
-    return false
-  }
-
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed teammate from team file: ${identifierStr}`,
-  )
-  return true
 }
 
 /**
@@ -291,22 +347,21 @@ export function removeTeammateFromTeamFile(
  * @param paneId - The pane ID to hide
  * @returns true if the pane was added to hidden list, false if team doesn't exist
  */
-export function addHiddenPaneId(teamName: string, paneId: string): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-  if (!hiddenPaneIds.includes(paneId)) {
-    hiddenPaneIds.push(paneId)
-    teamFile.hiddenPaneIds = hiddenPaneIds
-    writeTeamFile(teamName, teamFile)
-    logForDebugging(
-      `[TeammateTool] Added ${paneId} to hidden panes for team ${teamName}`,
-    )
-  }
-  return true
+export async function addHiddenPaneId(
+  teamName: string,
+  paneId: string,
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
+    if (!hiddenPaneIds.includes(paneId)) {
+      hiddenPaneIds.push(paneId)
+      teamFile.hiddenPaneIds = hiddenPaneIds
+      logForDebugging(
+        `[TeammateTool] Added ${paneId} to hidden panes for team ${teamName}`,
+      )
+    }
+    return true
+  })
 }
 
 /**
@@ -315,23 +370,22 @@ export function addHiddenPaneId(teamName: string, paneId: string): boolean {
  * @param paneId - The pane ID to show (remove from hidden list)
  * @returns true if the pane was removed from hidden list, false if team doesn't exist
  */
-export function removeHiddenPaneId(teamName: string, paneId: string): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-  const index = hiddenPaneIds.indexOf(paneId)
-  if (index !== -1) {
-    hiddenPaneIds.splice(index, 1)
-    teamFile.hiddenPaneIds = hiddenPaneIds
-    writeTeamFile(teamName, teamFile)
-    logForDebugging(
-      `[TeammateTool] Removed ${paneId} from hidden panes for team ${teamName}`,
-    )
-  }
-  return true
+export async function removeHiddenPaneId(
+  teamName: string,
+  paneId: string,
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
+    const index = hiddenPaneIds.indexOf(paneId)
+    if (index !== -1) {
+      hiddenPaneIds.splice(index, 1)
+      teamFile.hiddenPaneIds = hiddenPaneIds
+      logForDebugging(
+        `[TeammateTool] Removed ${paneId} from hidden panes for team ${teamName}`,
+      )
+    }
+    return true
+  })
 }
 
 /**
@@ -341,38 +395,34 @@ export function removeHiddenPaneId(teamName: string, paneId: string): boolean {
  * @param tmuxPaneId - The pane ID of the teammate to remove
  * @returns true if the member was removed, false if team or member doesn't exist
  */
-export function removeMemberFromTeam(
+export async function removeMemberFromTeam(
   teamName: string,
   tmuxPaneId: string,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
-
-  const memberIndex = teamFile.members.findIndex(
-    m => m.tmuxPaneId === tmuxPaneId,
-  )
-  if (memberIndex === -1) {
-    return false
-  }
-
-  // Remove from members array
-  teamFile.members.splice(memberIndex, 1)
-
-  // Also remove from hiddenPaneIds if present
-  if (teamFile.hiddenPaneIds) {
-    const hiddenIndex = teamFile.hiddenPaneIds.indexOf(tmuxPaneId)
-    if (hiddenIndex !== -1) {
-      teamFile.hiddenPaneIds.splice(hiddenIndex, 1)
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const memberIndex = teamFile.members.findIndex(
+      m => m.tmuxPaneId === tmuxPaneId,
+    )
+    if (memberIndex === -1) {
+      return false
     }
-  }
 
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed member with pane ${tmuxPaneId} from team ${teamName}`,
-  )
-  return true
+    // Remove from members array
+    teamFile.members.splice(memberIndex, 1)
+
+    // Also remove from hiddenPaneIds if present
+    if (teamFile.hiddenPaneIds) {
+      const hiddenIndex = teamFile.hiddenPaneIds.indexOf(tmuxPaneId)
+      if (hiddenIndex !== -1) {
+        teamFile.hiddenPaneIds.splice(hiddenIndex, 1)
+      }
+    }
+
+    logForDebugging(
+      `[TeammateTool] Removed member with pane ${tmuxPaneId} from team ${teamName}`,
+    )
+    return true
+  })
 }
 
 /**
@@ -382,28 +432,24 @@ export function removeMemberFromTeam(
  * @param agentId - The agent ID of the teammate to remove (e.g., "researcher@my-team")
  * @returns true if the member was removed, false if team or member doesn't exist
  */
-export function removeMemberByAgentId(
+export async function removeMemberByAgentId(
   teamName: string,
   agentId: string,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const memberIndex = teamFile.members.findIndex(m => m.agentId === agentId)
+    if (memberIndex === -1) {
+      return false
+    }
 
-  const memberIndex = teamFile.members.findIndex(m => m.agentId === agentId)
-  if (memberIndex === -1) {
-    return false
-  }
+    // Remove from members array
+    teamFile.members.splice(memberIndex, 1)
 
-  // Remove from members array
-  teamFile.members.splice(memberIndex, 1)
-
-  writeTeamFile(teamName, teamFile)
-  logForDebugging(
-    `[TeammateTool] Removed member ${agentId} from team ${teamName}`,
-  )
-  return true
+    logForDebugging(
+      `[TeammateTool] Removed member ${agentId} from team ${teamName}`,
+    )
+    return true
+  })
 }
 
 /**
@@ -413,38 +459,35 @@ export function removeMemberByAgentId(
  * @param memberName - The name of the member to update
  * @param mode - The new permission mode
  */
-export function setMemberMode(
+export async function setMemberMode(
   teamName: string,
   memberName: string,
   mode: PermissionMode,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    const member = teamFile.members.find(m => m.name === memberName)
+    if (!member) {
+      logForDebugging(
+        `[TeammateTool] Cannot set member mode: member ${memberName} not found in team ${teamName}`,
+      )
+      return false
+    }
 
-  const member = teamFile.members.find(m => m.name === memberName)
-  if (!member) {
-    logForDebugging(
-      `[TeammateTool] Cannot set member mode: member ${memberName} not found in team ${teamName}`,
+    // Only write if the value is actually changing
+    if (member.mode === mode) {
+      return true
+    }
+
+    // Create updated members array immutably
+    const updatedMembers = teamFile.members.map(m =>
+      m.name === memberName ? { ...m, mode } : m,
     )
-    return false
-  }
-
-  // Only write if the value is actually changing
-  if (member.mode === mode) {
+    teamFile.members = updatedMembers
+    logForDebugging(
+      `[TeammateTool] Set member ${memberName} in team ${teamName} to mode: ${mode}`,
+    )
     return true
-  }
-
-  // Create updated members array immutably
-  const updatedMembers = teamFile.members.map(m =>
-    m.name === memberName ? { ...m, mode } : m,
-  )
-  writeTeamFile(teamName, { ...teamFile, members: updatedMembers })
-  logForDebugging(
-    `[TeammateTool] Set member ${memberName} in team ${teamName} to mode: ${mode}`,
-  )
-  return true
+  })
 }
 
 /**
@@ -453,15 +496,15 @@ export function setMemberMode(
  * @param mode - The permission mode to sync
  * @param teamNameOverride - Optional team name override (uses env var if not provided)
  */
-export function syncTeammateMode(
+export async function syncTeammateMode(
   mode: PermissionMode,
   teamNameOverride?: string,
-): void {
+): Promise<void> {
   if (!isTeammate()) return
   const teamName = teamNameOverride ?? getTeamName()
   const agentName = getAgentName()
   if (teamName && agentName) {
-    setMemberMode(teamName, agentName, mode)
+    await setMemberMode(teamName, agentName, mode)
   }
 }
 
@@ -471,36 +514,33 @@ export function syncTeammateMode(
  * @param teamName - The name of the team
  * @param modeUpdates - Array of {memberName, mode} to update
  */
-export function setMultipleMemberModes(
+export async function setMultipleMemberModes(
   teamName: string,
   modeUpdates: Array<{ memberName: string; mode: PermissionMode }>,
-): boolean {
-  const teamFile = readTeamFile(teamName)
-  if (!teamFile) {
-    return false
-  }
+): Promise<boolean> {
+  return mutateExistingTeamFileAsync(teamName, teamFile => {
+    // Build a map of updates for efficient lookup
+    const updateMap = new Map(modeUpdates.map(u => [u.memberName, u.mode]))
 
-  // Build a map of updates for efficient lookup
-  const updateMap = new Map(modeUpdates.map(u => [u.memberName, u.mode]))
+    // Create updated members array immutably
+    let anyChanged = false
+    const updatedMembers = teamFile.members.map(member => {
+      const newMode = updateMap.get(member.name)
+      if (newMode !== undefined && member.mode !== newMode) {
+        anyChanged = true
+        return { ...member, mode: newMode }
+      }
+      return member
+    })
 
-  // Create updated members array immutably
-  let anyChanged = false
-  const updatedMembers = teamFile.members.map(member => {
-    const newMode = updateMap.get(member.name)
-    if (newMode !== undefined && member.mode !== newMode) {
-      anyChanged = true
-      return { ...member, mode: newMode }
+    if (anyChanged) {
+      teamFile.members = updatedMembers
+      logForDebugging(
+        `[TeammateTool] Set ${modeUpdates.length} member modes in team ${teamName}`,
+      )
     }
-    return member
+    return true
   })
-
-  if (anyChanged) {
-    writeTeamFile(teamName, { ...teamFile, members: updatedMembers })
-    logForDebugging(
-      `[TeammateTool] Set ${modeUpdates.length} member modes in team ${teamName}`,
-    )
-  }
-  return true
 }
 
 /**

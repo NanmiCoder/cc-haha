@@ -111,7 +111,7 @@ describe('Task tool execution ordering', () => {
         message: expect.stringContaining('registered teammate'),
       })
       expect((await readTaskListLifecycleState('my-tool-team')).deleted).toBe(false)
-      expect(removeTeammateFromTeamFile('My Tool Team', {
+      expect(await removeTeammateFromTeamFile('My Tool Team', {
         agentId: 'idle-worker@My Tool Team',
       })).toBe(true)
 

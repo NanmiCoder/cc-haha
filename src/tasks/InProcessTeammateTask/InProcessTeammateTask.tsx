@@ -25,7 +25,7 @@ export const InProcessTeammateTask: Task = {
   name: 'InProcessTeammateTask',
   type: 'in_process_teammate',
   async kill(taskId, setAppState) {
-    killInProcessTeammate(taskId, setAppState);
+    await killInProcessTeammate(taskId, setAppState);
   }
 };
 

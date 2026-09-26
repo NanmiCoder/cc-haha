@@ -96,12 +96,14 @@ export function TeamsDialog({
   const handleCycleMode = useCallback(() => {
     if (dialogLevel.type === 'teammateDetail' && currentTeammate) {
       // Detail view: cycle just this teammate
-      cycleTeammateMode(currentTeammate, dialogLevel.teamName, isBypassAvailable);
-      setRefreshKey(k => k + 1);
+      void cycleTeammateMode(currentTeammate, dialogLevel.teamName, isBypassAvailable)
+        .then(() => setRefreshKey(k => k + 1))
+        .catch(error => logForDebugging(`[TeamsDialog] Failed to change teammate mode: ${error}`))
     } else if (dialogLevel.type === 'teammateList' && teammateStatuses.length > 0) {
       // List view: cycle all teammates in tandem
-      cycleAllTeammateModes(teammateStatuses, dialogLevel.teamName, isBypassAvailable);
-      setRefreshKey(k => k + 1);
+      void cycleAllTeammateModes(teammateStatuses, dialogLevel.teamName, isBypassAvailable)
+        .then(() => setRefreshKey(k => k + 1))
+        .catch(error => logForDebugging(`[TeamsDialog] Failed to change teammate modes: ${error}`))
     }
   }, [dialogLevel, currentTeammate, teammateStatuses, isBypassAvailable]);
 
@@ -154,10 +156,11 @@ export function TeamsDialog({
           setRefreshKey(k => k + 1);
           // Adjust selection if needed
           setSelectedIndex(prev => Math.max(0, Math.min(prev, teammateStatuses.length - 2)));
-        });
+        }).catch(error => logForDebugging(`[TeamsDialog] Failed to remove teammate: ${error}`))
       } else if (dialogLevel.type === 'teammateDetail' && currentTeammate) {
-        void killTeammate(currentTeammate.tmuxPaneId, currentTeammate.backendType, dialogLevel.teamName, currentTeammate.agentId, currentTeammate.name, setAppState);
-        goBackToList();
+        void killTeammate(currentTeammate.tmuxPaneId, currentTeammate.backendType, dialogLevel.teamName, currentTeammate.agentId, currentTeammate.name, setAppState)
+          .then(goBackToList)
+          .catch(error => logForDebugging(`[TeamsDialog] Failed to remove teammate: ${error}`))
       }
       return;
     }
@@ -211,7 +214,7 @@ export function TeamsDialog({
         void Promise.all(idleTeammates.map(t => killTeammate(t.tmuxPaneId, t.backendType, dialogLevel.teamName, t.agentId, t.name, setAppState))).then(() => {
           setRefreshKey(k => k + 1);
           setSelectedIndex(prev => Math.max(0, Math.min(prev, teammateStatuses.length - idleTeammates.length - 1)));
-        });
+        }).catch(error => logForDebugging(`[TeamsDialog] Failed to remove idle teammates: ${error}`))
       }
       return;
     }
@@ -565,7 +568,7 @@ async function killTeammate(paneId: string, backendType: PaneBackendType | undef
     logForDebugging(`[TeamsDialog] Skipping pane kill for ${paneId}: no backendType recorded`);
   }
   // Remove from team config file
-  removeMemberFromTeam(teamName, paneId);
+  await removeMemberFromTeam(teamName, paneId)
 
   // Unassign tasks and build notification message
   const {
@@ -642,16 +645,16 @@ async function showTeammate(teammate: TeammateStatus, teamName: string): Promise
  * Send a mode change message to a single teammate
  * Also updates config.json directly so the UI reflects the change immediately
  */
-function sendModeChangeToTeammate(teammateName: string, teamName: string, targetMode: PermissionMode): void {
+async function sendModeChangeToTeammate(teammateName: string, teamName: string, targetMode: PermissionMode): Promise<void> {
   // Update config.json directly so UI shows the change immediately
-  setMemberMode(teamName, teammateName, targetMode);
+  await setMemberMode(teamName, teammateName, targetMode)
 
   // Also send message so teammate updates their local permission context
   const message = createModeSetRequestMessage({
     mode: targetMode,
     from: 'team-lead'
   });
-  void writeToMailbox(teammateName, {
+  await writeToMailbox(teammateName, {
     from: 'team-lead',
     text: jsonStringify(message),
     timestamp: new Date().toISOString()
@@ -662,7 +665,7 @@ function sendModeChangeToTeammate(teammateName: string, teamName: string, target
 /**
  * Cycle a single teammate's mode
  */
-function cycleTeammateMode(teammate: TeammateStatus, teamName: string, isBypassAvailable: boolean): void {
+async function cycleTeammateMode(teammate: TeammateStatus, teamName: string, isBypassAvailable: boolean): Promise<void> {
   const currentMode = teammate.mode ? permissionModeFromString(teammate.mode) : 'default';
   const context = {
     ...getEmptyToolPermissionContext(),
@@ -670,7 +673,7 @@ function cycleTeammateMode(teammate: TeammateStatus, teamName: string, isBypassA
     isBypassPermissionsModeAvailable: isBypassAvailable
   };
   const nextMode = getNextPermissionMode(context);
-  sendModeChangeToTeammate(teammate.name, teamName, nextMode);
+  await sendModeChangeToTeammate(teammate.name, teamName, nextMode)
 }
 
 /**
@@ -679,7 +682,7 @@ function cycleTeammateMode(teammate: TeammateStatus, teamName: string, isBypassA
  * If same, cycle all to next mode
  * Uses batch update to avoid race conditions
  */
-function cycleAllTeammateModes(teammates: TeammateStatus[], teamName: string, isBypassAvailable: boolean): void {
+async function cycleAllTeammateModes(teammates: TeammateStatus[], teamName: string, isBypassAvailable: boolean): Promise<void> {
   if (teammates.length === 0) return;
   const modes = teammates.map(t => t.mode ? permissionModeFromString(t.mode) : 'default');
   const allSame = modes.every(m => m === modes[0]);
@@ -696,7 +699,7 @@ function cycleAllTeammateModes(teammates: TeammateStatus[], teamName: string, is
     memberName: t.name,
     mode: targetMode
   }));
-  setMultipleMemberModes(teamName, modeUpdates);
+  await setMultipleMemberModes(teamName, modeUpdates)
 
   // Send mailbox messages to each teammate
   for (const teammate of teammates) {
@@ -704,7 +707,7 @@ function cycleAllTeammateModes(teammates: TeammateStatus[], teamName: string, is
       mode: targetMode,
       from: 'team-lead'
     });
-    void writeToMailbox(teammate.name, {
+    await writeToMailbox(teammate.name, {
       from: 'team-lead',
       text: jsonStringify(message),
       timestamp: new Date().toISOString()

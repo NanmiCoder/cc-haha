@@ -42,7 +42,7 @@ const markReadByPredicate = mock(
     )
   },
 )
-const removeTeammate = mock(() => {})
+const removeTeammate = mock(async () => true)
 const killPane = mock(async () => true)
 
 const store = {
@@ -113,7 +113,7 @@ mock.module('../utils/swarm/teamHelpers.js', () => ({
     }
   },
   removeTeammateFromTeamFile: removeTeammate,
-  setMemberMode: () => {},
+  setMemberMode: async () => true,
 }))
 
 mock.module('../utils/swarm/backends/registry.js', () => ({
@@ -189,6 +189,34 @@ afterAll(() => {
 })
 
 describe('shutdown approval polling', () => {
+  test('waits for team-file removal before acknowledging shutdown or removing UI state', async () => {
+    teamFileReadCount = 1
+    let finishRemoval!: (result: boolean) => void
+    const removal = new Promise<boolean>(resolve => { finishRemoval = resolve })
+    removeTeammate.mockImplementationOnce(() => removal)
+    const output = new PassThrough()
+    const app = render(<Harness />, {
+      stdout: output,
+      stderr: output,
+      debug: false,
+      exitOnCtrlC: false,
+    })
+
+    try {
+      await waitFor(() => removeTeammate.mock.calls.length === 1)
+      expect(state.teamContext?.teammates?.['worker-id']).toBeDefined()
+      expect(unreadMessages.every(message => !message.read)).toBe(true)
+
+      finishRemoval(true)
+      await waitFor(() => unreadMessages.every(message => message.read))
+      expect(state.teamContext?.teammates?.['worker-id']).toBeUndefined()
+    } finally {
+      finishRemoval(true)
+      app.unmount()
+      output.destroy()
+    }
+  })
+
   test('retries after a temporary team-file read failure without trusting forged pane metadata', async () => {
     const output = new PassThrough()
     const app = render(<Harness />, {
