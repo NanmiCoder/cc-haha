@@ -914,7 +914,9 @@ CLAUDE_H5_DIST_DIR=/home/zeaxion/myproject/cchaha-06scode/desktop/dist \
 
 接线：`compact.ts` 新增 `maybeVccSliceCompact()`（抛错/空摘要双降级走 LLM 回退、abort 原样上抛，与链位 42 同构）→ `partialCompactConversation` 在 LLM 循环前调用，非空即 `break`。
 
-**校准工具**：`scripts/vcc-slice-calibration.ts` → `modify/reports/vcc-slice-calibration.md`（逐会话完整摘要，语料 = `~/.claude/projects` 顶层会话；`bun run scripts/vcc-slice-calibration.ts --max 20`，20 会话 / 240 场景 / ~18s）。确定性指标：文件召回、杜撰检测、引用可解析性与**是否越出片段**、压缩比、段清单、Bash 参数噪音。
+**校准工具**：`scripts/vcc-slice-calibration.ts`，语料 = `~/.claude/projects` 顶层会话；`bun run scripts/vcc-slice-calibration.ts --max 20`，20 会话 / 240 场景。确定性指标：文件召回、杜撰检测、引用可解析性与**是否越出片段**、压缩比、段清单、Bash 参数噪音。
+- **产物分两份，别混**：机器输出写 `modify/reports/vcc-slice-calibration.generated.md`（已 gitignore，**不入库**）；入库的是**手写版** `modify/reports/vcc-slice-calibration.md`。原因：机器输出原先会把每个场景编译出的**摘要全文**倒进报告（53,446 行 / 3.1 MB），而摘要引用会话正文——那等于随仓库/PR 公开语料内容。同理裁判报告默认不再嵌「summary under review」（`--embed-summaries` 才开）。
+- **切片尺寸必须标明**：`--slice-chars`（默认 750000）。同一份代码在 6 万字符切片上 90.4%（中位 100%）、75 万上 87.1%、160 万上 81.7%——**只有尺寸相同才可比**，且尺寸要贴近生产（本项目自动压缩阈值 418,200 tok ≈ 170 万字符）。
 
 **校准发现并修掉的两个真缺陷（都是本实现自己的错）**：
 
