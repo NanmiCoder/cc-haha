@@ -53,7 +53,14 @@ const parseArgs = (argv: string[]): Options => {
     const v = get(name)
     return v === undefined ? dflt : Number(v)
   }
-  const outArg = get("--out") ?? "modify/reports/vcc-slice-calibration.md"
+  // Machine output lands in a `.generated.md` sibling, never in the report a
+  // reader is meant to read. The two have different jobs: this file is a raw
+  // measurement that is overwritten on every run, while
+  // `vcc-slice-calibration.md` is the hand-written account that ships. Writing
+  // them to the same path meant a run silently replaced the account, and it is
+  // also how 3 MB of session prose ended up committed -- the per-session dump
+  // embeds each compiled summary verbatim, and a summary quotes the session.
+  const outArg = get("--out") ?? "modify/reports/vcc-slice-calibration.generated.md"
   return {
     corpus: get("--corpus") ?? "/home/zeaxion/.claude/projects",
     out: isAbsolute(outArg) ? outArg : resolve(REPO_ROOT, outArg),
@@ -71,7 +78,11 @@ const parseArgs = (argv: string[]): Options => {
       .split(",")
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0 && n < 1),
-    fullSummaries: !argv.includes("--no-full-summaries"),
+    // Off by default. A compiled summary quotes the session it was built from,
+    // so dumping one per scenario publishes the transcripts the corpus is made
+    // of. Opt in locally when the summaries themselves are what is being
+    // inspected.
+    fullSummaries: argv.includes("--full-summaries"),
     // Slice size, in the characters the compactor actually sees. Sized in text
     // rather than message count: one tool result can outweigh a hundred short
     // turns, so a message cap gave spans of wildly different sizes -- measured
@@ -1049,15 +1060,10 @@ const main = (): void => {
     }
   }
 
-  let report = buildReport(opts, discovered, runs, startedAt, Date.now() - startedAt)
-  // A hand-written analysis lives beside the output so a re-run regenerates the
-  // measured sections without discarding the reading.
-  const appendix = opts.out.replace(/\.md$/, "") + ".appendix.md"
-  try {
-    report += "\n" + readFileSync(appendix, "utf8")
-  } catch {
-    // No appendix: the measured report stands alone.
-  }
+  // Pure machine output, with no analysis spliced in. This file is overwritten
+  // on every run and is gitignored; the account a reader is meant to read lives
+  // in `vcc-slice-calibration.md` and is never written by this script.
+  const report = buildReport(opts, discovered, runs, startedAt, Date.now() - startedAt)
   mkdirSync(dirname(opts.out), { recursive: true })
   writeFileSync(opts.out, report)
   process.stderr.write(

@@ -26,6 +26,9 @@ e2e-*.png
 # Local/generated artifacts
 artifacts/
 
+# Raw measurement dumps (they embed session prose; the hand-written report ships instead)
+modify/reports/*.generated.md
+
 # Desktop build output
 desktop/dist/
 desktop/electron-dist/

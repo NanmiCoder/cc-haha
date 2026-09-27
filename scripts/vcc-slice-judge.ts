@@ -170,6 +170,7 @@ const render = (messages: Cc[]): string => {
 // paragraphs -- stated verbatim, so nothing is inferred -- to test whether the
 // hypothesis is worth implementing in the compiler at all.
 const AUGMENT_CONCLUSIONS = args.includes('--augment-conclusions')
+const EMBED_SUMMARIES = args.includes('--embed-summaries')
 
 const closingConclusions = (messages: Cc[]): string[] => {
   const out: string[] = []
@@ -390,14 +391,13 @@ async function main() {
           ? `- Judge: ${parsed ? '```json\n' + JSON.stringify(parsed, null, 2) + '\n```' : 'raw: ' + judged.raw.slice(0, 1200)}`
           : `- Judge FAILED: ${judged.raw}`,
         '',
-        '<details><summary>summary under review</summary>',
-        '',
-        '````',
-        result.summary,
-        '````',
-        '',
-        '</details>',
-        '',
+        // The summary under review is off by default: it quotes the session it
+        // was compiled from, so committing the report would publish transcripts.
+        // The verdicts below stay -- they are the measurement. Opt in with
+        // --embed-summaries when the summary text itself is what is being read.
+        ...(EMBED_SUMMARIES
+          ? ['<details><summary>summary under review</summary>', '', '````', result.summary, '````', '', '</details>', '']
+          : []),
       ].join('\n'),
     )
   }
